@@ -1,0 +1,15 @@
+{
+  "type": "assistant",
+  "uuid": "a3",
+  "parentUuid": "u1",
+  "timestamp": "2026-01-01T00:00:07.000Z",
+  "message": {
+    "role": "assistant",
+    "model": "claude-opus-4-8",
+    "content": [
+      { "type": "text", "text": "Running it." },
+      { "type": "tool_use", "id": "toolu_001", "name": "Bash", "input": { "command": "pnpm test" } }
+    ],
+    "usage": { "input_tokens": 5, "output_tokens": 2 }
+  }
+}

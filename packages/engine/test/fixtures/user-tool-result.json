@@ -1,0 +1,12 @@
+{
+  "type": "user",
+  "uuid": "u2",
+  "parentUuid": "a3",
+  "timestamp": "2026-01-01T00:00:08.000Z",
+  "message": {
+    "role": "user",
+    "content": [
+      { "type": "tool_result", "tool_use_id": "toolu_001", "content": "All 7 tests passed", "is_error": false }
+    ]
+  }
+}

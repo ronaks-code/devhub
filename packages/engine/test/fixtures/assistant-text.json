@@ -1,0 +1,13 @@
+{
+  "type": "assistant",
+  "uuid": "a1",
+  "parentUuid": "u1",
+  "timestamp": "2026-01-01T00:00:05.000Z",
+  "cwd": "/home/dev/sample-project",
+  "message": {
+    "role": "assistant",
+    "model": "claude-opus-4-8",
+    "content": [{ "type": "text", "text": "Add it to the router file." }],
+    "usage": { "input_tokens": 12, "output_tokens": 6, "cache_read_input_tokens": 3, "cache_creation_input_tokens": 1 }
+  }
+}

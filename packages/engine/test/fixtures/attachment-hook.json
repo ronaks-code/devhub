@@ -1,0 +1,7 @@
+{
+  "type": "attachment",
+  "uuid": "att1",
+  "parentUuid": null,
+  "timestamp": "2026-01-01T00:00:02.000Z",
+  "attachment": { "type": "hook_success", "hookName": "SessionStart:startup", "content": "environment ready" }
+}

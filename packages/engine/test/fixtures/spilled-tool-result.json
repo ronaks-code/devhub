@@ -1,0 +1,17 @@
+{
+  "type": "user",
+  "uuid": "u3",
+  "parentUuid": "a3",
+  "timestamp": "2026-01-01T00:00:09.000Z",
+  "message": {
+    "role": "user",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_002",
+        "content": [{ "type": "text", "text": "[tool result spilled to toolu_002.txt]" }],
+        "is_error": false
+      }
+    ]
+  }
+}

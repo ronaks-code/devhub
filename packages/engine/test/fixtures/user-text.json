@@ -1,0 +1,8 @@
+{
+  "type": "user",
+  "uuid": "u1",
+  "parentUuid": null,
+  "timestamp": "2026-01-01T00:00:00.000Z",
+  "cwd": "/home/dev/sample-project",
+  "message": { "role": "user", "content": "how do I add a route?" }
+}

@@ -1,0 +1,15 @@
+{
+  "type": "assistant",
+  "uuid": "a2",
+  "parentUuid": "u1",
+  "timestamp": "2026-01-01T00:00:06.000Z",
+  "message": {
+    "role": "assistant",
+    "model": "claude-opus-4-8",
+    "content": [
+      { "type": "thinking", "thinking": "the user wants a new route, check the router" },
+      { "type": "text", "text": "Here is the plan." }
+    ],
+    "usage": { "input_tokens": 8, "output_tokens": 4 }
+  }
+}

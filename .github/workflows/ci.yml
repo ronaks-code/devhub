@@ -1,0 +1,47 @@
+name: CI
+
+# Run on every push and pull request. Concurrency cancels superseded runs on the
+# same ref so a quick succession of pushes doesn't pile up redundant CI.
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: typecheck + test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      # Don't abort the whole matrix if one Node version fails — see both results.
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Install pnpm BEFORE setup-node so setup-node's pnpm cache can resolve the
+      # store. Version is read from the root package.json "packageManager" field.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # turbo's typecheck/test tasks dependsOn ^build, so each package's TS sources are
+      # built first. A package without a typecheck/test script is simply skipped by
+      # turbo (so a missing test script never fails CI).
+      - name: Typecheck (all packages)
+        run: pnpm run typecheck
+
+      - name: Test (engine + server + web vitest suites)
+        run: pnpm run test
