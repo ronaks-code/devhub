@@ -9,6 +9,7 @@ import path from "node:path";
 import { Engine, watchTranscripts, paths } from "@claude-ui/engine";
 import type { EngineEvent } from "@claude-ui/engine/types";
 import { registerWs } from "./ws.js";
+import { registerSettingsRoutes } from "./routes/settings.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -76,6 +77,8 @@ export function buildApp(opts: BuildOptions = {}): {
   app.get("/api/stats", async () => engine.getStats());
 
   app.get("/api/projects", async () => engine.getProjects());
+
+  registerSettingsRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

@@ -7,6 +7,7 @@ import path from "node:path";
 import { stat, readdir, readFile } from "node:fs/promises";
 import { TranscriptIndex } from "./index-db.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
+import { hasArchive, archiveSession, readArchived } from "./archive.js";
 import { liveSessionsDir } from "./paths.js";
 import { readSessionMessages, listSubagentFiles, normalizeLine, streamRawLines } from "./parser.js";
 import type { SettingsStore } from "./settings.js";
@@ -90,6 +91,18 @@ export class Engine {
           await this.index.indexSession(f);
         } catch (err) {
           console.warn(`[engine] skipping unindexable session ${f}:`, err);
+        }
+        // One-time backfill: indexSession only archives when a file is new/changed,
+        // so a session indexed before archiving existed would never get a copy.
+        // Archive any discovered session still lacking one, independent of index
+        // freshness. archiveSession is a cheap no-op skip when the source is huge.
+        try {
+          const sessionId = path.basename(f, ".jsonl");
+          if (!(await hasArchive(sessionId))) {
+            await archiveSession(f, sessionId);
+          }
+        } catch (err) {
+          console.warn(`[engine] failed to backfill archive for ${f}:`, err);
         }
         done++;
         if (done % 10 === 0 || done === sorted.length) {
@@ -225,10 +238,38 @@ export class Engine {
   ): Promise<SessionMessagesPage | undefined> {
     const summary = this.index.getSessionSummary(sessionId);
     if (!summary) return undefined;
-    const { messages, truncatedFromStart } = await readSessionMessages(summary.filePath, opts);
-    const sessionDir = path.join(path.dirname(summary.filePath), sessionId);
-    const subagents = summary.hasSubagents ? await listSubagentFiles(sessionDir) : [];
-    return { session: summary, messages, truncatedFromStart, subagents };
+
+    // Live path: read the on-disk transcript. If stat() fails (Claude Code deleted
+    // it after ~30 days, or the file moved), fall back to our gzip archive so the
+    // session stays viewable.
+    let sourceExists = true;
+    try {
+      await stat(summary.filePath);
+    } catch {
+      sourceExists = false;
+    }
+
+    if (sourceExists) {
+      const { messages, truncatedFromStart } = await readSessionMessages(summary.filePath, opts);
+      const sessionDir = path.join(path.dirname(summary.filePath), sessionId);
+      const subagents = summary.hasSubagents ? await listSubagentFiles(sessionDir) : [];
+      return { session: summary, messages, truncatedFromStart, subagents };
+    }
+
+    const archived = await readArchived(sessionId);
+    if (!archived) return undefined; // source gone AND no archive — nothing to show
+    const messages: NormalizedMessage[] = [];
+    let seq = 0;
+    for (const raw of archived) {
+      const m = normalizeLine(raw, seq);
+      if (m) {
+        messages.push(m);
+        seq++;
+      }
+    }
+    // Subagent files live next to the (now-deleted) source, so they're unavailable
+    // here; the archive holds the main transcript only.
+    return { session: summary, messages, truncatedFromStart: false, subagents: [] };
   }
 
   /** Read a single subagent transcript file (already-discovered path). */
@@ -269,6 +310,11 @@ export { TranscriptIndex } from "./index-db.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";
+export { detectSourceKind } from "./discovery.js";
+export type { SourceKind } from "./discovery.js";
+export { archiveSession, hasArchive, readArchived, archiveDir, archivePath } from "./archive.js";
+export { costUsd, pricingForModel, MODEL_PRICING, FALLBACK_PRICING } from "./pricing.js";
+export type { ModelPricing } from "./pricing.js";
 export * as paths from "./paths.js";
 export * from "./types.js";
 export type * from "./driver/types.js";

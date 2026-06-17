@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { MessageSquarePlus, Send, Square, Sparkles } from "lucide-react";
+import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "../lib/types";
@@ -51,6 +53,9 @@ export function ChatPane({
   const keyRef = useRef(0);
   const liveKeyRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Tracks whether the user is parked at the bottom; auto-scroll only follows
+  // new content when they haven't scrolled up to read history.
+  const stickToBottomRef = useRef(true);
 
   const nextKey = () => ++keyRef.current;
 
@@ -144,12 +149,6 @@ export function ChatPane({
     };
   }, []);
 
-  // Auto-scroll to newest whenever the list grows, deltas flow, or a turn ends.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [items, running]);
-
   const send = useCallback(() => {
     const prompt = draft.trim();
     if (!prompt || running) return;
@@ -165,6 +164,8 @@ export function ChatPane({
     };
     push(localUser);
 
+    // A fresh prompt always snaps back to the bottom to follow the reply.
+    stickToBottomRef.current = true;
     setDraft("");
     setErrorMsg(null);
     setLastResult(null);
@@ -194,6 +195,7 @@ export function ChatPane({
     keyRef.current = 0;
     liveKeyRef.current = null;
     setLiveKey(null);
+    stickToBottomRef.current = true;
     setItems([]);
     setSessionId(undefined);
     setRunning(false);
@@ -224,6 +226,42 @@ export function ChatPane({
     }
     return out;
   }, [items]);
+
+  const virtualizer = useVirtualizer({
+    count: view.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 120,
+    overscan: 10,
+  });
+
+  // Note whether the user is pinned to the bottom; if they scroll up to read
+  // older messages we stop auto-following so we don't yank them back down.
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottomRef.current = distance < 64;
+  }, []);
+
+  // Follow the newest message as the list grows, deltas stream into the live
+  // bubble, or a turn ends — but only while the user is parked at the bottom.
+  // liveLen captures the streamed text length so each delta re-triggers the
+  // scroll (deltas mutate the live bubble in place, not the list length).
+  const lastIndex = view.length - 1;
+  const liveLen =
+    liveKey == null
+      ? 0
+      : (view[lastIndex]?.message.blocks ?? []).reduce(
+          (n, b) => n + (b.type === "text" ? b.text.length : 0),
+          0,
+        );
+  useEffect(() => {
+    if (lastIndex < 0 || !stickToBottomRef.current) return;
+    const id = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(lastIndex, { align: "end" }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [lastIndex, running, liveKey, liveLen, virtualizer]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
@@ -275,7 +313,7 @@ export function ChatPane({
       </div>
 
       {/* Message stream */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
         {view.length === 0 ? (
           <EmptyState
             icon={<Sparkles className="h-12 w-12" />}
@@ -287,12 +325,29 @@ export function ChatPane({
             }
           />
         ) : (
-          <div>
-            {view.map((it) => (
-              <div key={it.key} className="border-b border-zinc-900/70">
-                <MessageView m={it.message} streaming={running && it.key === liveKey} />
-              </div>
-            ))}
+          <div
+            style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => {
+              const it = view[vi.index]!;
+              return (
+                <div
+                  key={it.key}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vi.start}px)`,
+                  }}
+                  className="border-b border-zinc-900/70"
+                >
+                  <MessageView m={it.message} streaming={running && it.key === liveKey} />
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -309,7 +364,7 @@ export function ChatPane({
           {!running && lastResult && (
             <span className="flex items-center gap-2 text-zinc-500">
               <span className={cn(lastResult.isError && "text-red-400")}>
-                ${lastResult.costUsd.toFixed(4)}
+                {formatUsd(lastResult.costUsd)}
               </span>
               {lastResult.denials.length > 0 && (
                 <span className="text-amber-400">

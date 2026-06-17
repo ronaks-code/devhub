@@ -17,6 +17,7 @@ import path from "node:path";
 import { appDataDir, projectIdFromCwd, projectName } from "./paths.js";
 import { streamRawLines, usageFromMessage, isCommandOrMetaPrompt } from "./parser.js";
 import { runMigrations } from "./migrations.js";
+import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
 import type {
   ProjectSummary,
@@ -574,6 +575,15 @@ export class TranscriptIndex {
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
+    }
+
+    // Durably archive a gzipped copy so the session stays viewable after Claude
+    // Code's ~30-day transcript auto-delete. Best-effort and isolated from the
+    // index transaction: an archive failure must not fail indexing.
+    try {
+      await archiveSession(filePath, sessionId);
+    } catch (err) {
+      console.warn(`[engine] failed to archive session ${sessionId}:`, err);
     }
 
     return existing ? "updated" : "added";

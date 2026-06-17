@@ -19,6 +19,37 @@ export function isInternalFolder(folderPath: string): boolean {
   return INTERNAL_FOLDER_PATTERNS.some((p) => base.includes(p));
 }
 
+/**
+ * Which CLI/agent produced a session. Today everything we scan is "claude" (these
+ * files live under ~/.claude/projects); the other kinds exist so future ingestion
+ * of Codex/Gemini/Cursor logs can tag their sessions without a schema change.
+ */
+export type SourceKind = "claude" | "codex" | "gemini" | "cursor" | "unknown";
+
+/**
+ * Substring hints for detecting a non-Claude source from a folder name or cwd.
+ * Order matters only for display; matching is independent per kind.
+ */
+const SOURCE_HINTS: Array<{ kind: SourceKind; patterns: string[] }> = [
+  { kind: "codex", patterns: [".codex", "/codex/", "codex-"] },
+  { kind: "gemini", patterns: [".gemini", "/gemini/", "gemini-cli"] },
+  { kind: "cursor", patterns: [".cursor", "/cursor/"] },
+];
+
+/**
+ * Best-effort source detection from a project folder path or a session's true cwd.
+ * Defaults to "claude" (current behavior) since everything we scan today comes from
+ * ~/.claude/projects. Exposed so future multi-source ingestion can label sessions.
+ */
+export function detectSourceKind(folderOrCwd: string | null | undefined): SourceKind {
+  if (!folderOrCwd) return "claude";
+  const lower = folderOrCwd.toLowerCase();
+  for (const { kind, patterns } of SOURCE_HINTS) {
+    if (patterns.some((p) => lower.includes(p))) return kind;
+  }
+  return "claude";
+}
+
 export async function scanProjectFolders(): Promise<string[]> {
   try {
     const entries = await readdir(projectsDir(), { withFileTypes: true });

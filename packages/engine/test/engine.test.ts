@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync, appendFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -13,6 +13,9 @@ import { encodeCwd, projectIdFromCwd } from "../src/paths.js";
 import { TranscriptIndex } from "../src/index-db.js";
 import { Engine } from "../src/index.js";
 import { DEFAULT_SETTINGS } from "../src/types.js";
+import { archiveSession, hasArchive, readArchived } from "../src/archive.js";
+import { costUsd, pricingForModel, MODEL_PRICING } from "../src/pricing.js";
+import { detectSourceKind } from "../src/discovery.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-test-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
@@ -556,5 +559,152 @@ describe("Engine.getStats", () => {
     expect(stats.activity.reduce((a, d) => a + d.sessions, 0)).toBe(3);
 
     engine.close();
+  });
+});
+
+describe("archive (durable gzip round-trip)", () => {
+  // archiveDir()/archivePath() derive from appDataDir(), which honors CLAUDE_UI_DATA.
+  // Point it at a temp dir per test and restore afterward so we never touch ~/.claude-ui.
+  const withArchiveDir = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_UI_DATA;
+    process.env.CLAUDE_UI_DATA = tmp();
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_UI_DATA;
+      else process.env.CLAUDE_UI_DATA = prev;
+    }
+  };
+
+  it("archives a session and reads the exact same lines back", async () => {
+    await withArchiveDir(async () => {
+      const dir = tmp();
+      const file = path.join(dir, "round.jsonl");
+      const lines = [
+        { type: "user", message: { role: "user", content: "hello archive" } },
+        {
+          type: "assistant",
+          message: { role: "assistant", content: [{ type: "text", text: "hi back" }] },
+        },
+        { type: "ai-title", aiTitle: "Archived Session" },
+      ];
+      writeFileSync(file, lines.map(jl).join(""));
+
+      expect(await hasArchive("round")).toBe(false);
+      expect(await archiveSession(file, "round")).toBe("archived");
+      expect(await hasArchive("round")).toBe(true);
+
+      const back = await readArchived("round");
+      expect(back).toEqual(lines); // exact round-trip, line for line
+    });
+  });
+
+  it("returns undefined for an unknown session and skips a missing source", async () => {
+    await withArchiveDir(async () => {
+      expect(await readArchived("nope")).toBeUndefined();
+      expect(await hasArchive("nope")).toBe(false);
+      // Missing source file is a best-effort skip, not a throw.
+      expect(await archiveSession(path.join(tmp(), "gone.jsonl"), "gone")).toBe("skipped");
+    });
+  });
+
+  it("Engine.getSessionMessages falls back to the archive when the source is gone", async () => {
+    await withArchiveDir(async () => {
+      const dir = tmp();
+      const proj = path.join(dir, "-proj");
+      mkdirSync(proj);
+      const file = path.join(proj, "fallback.jsonl");
+      const cwd = "/home/me/fallback";
+      writeFileSync(
+        file,
+        jl({ type: "user", cwd, message: { role: "user", content: "before delete" } }) +
+          jl({
+            type: "assistant",
+            cwd,
+            message: { role: "assistant", content: [{ type: "text", text: "answer" }] },
+          }),
+      );
+
+      const engine = new Engine(path.join(dir, "i.db"));
+      // Indexing archives the file (new), so an archive exists after this.
+      await engine.index.indexSession(file);
+      expect(await hasArchive("fallback")).toBe(true);
+
+      // Live read works.
+      const live = await engine.getSessionMessages("fallback");
+      expect(live!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+
+      // Delete the source transcript; index row + archive remain.
+      rmSync(file);
+      const fromArchive = await engine.getSessionMessages("fallback");
+      expect(fromArchive).toBeDefined();
+      expect(fromArchive!.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
+      expect(fromArchive!.truncatedFromStart).toBe(false);
+      engine.close();
+    });
+  });
+});
+
+describe("pricing (approximate cost estimates)", () => {
+  it("has rows for the known models with sensible cache multipliers", () => {
+    const opus = MODEL_PRICING["claude-opus-4-8"]!;
+    expect(opus.inputPerMtok).toBe(5);
+    expect(opus.outputPerMtok).toBe(25);
+    expect(opus.cacheReadPerMtok).toBe(0.5); // 0.1x input
+    expect(opus.cacheWritePerMtok).toBe(6.25); // 1.25x input
+
+    expect(MODEL_PRICING["claude-sonnet-4-6"]!.inputPerMtok).toBe(3);
+    expect(MODEL_PRICING["claude-haiku-4-5"]!.outputPerMtok).toBe(5);
+    expect(MODEL_PRICING["claude-fable-5"]!.outputPerMtok).toBe(50);
+  });
+
+  it("resolves dated/suffixed ids by prefix and falls back for unknown models", () => {
+    expect(pricingForModel("claude-opus-4-8[1m]")).toBe(MODEL_PRICING["claude-opus-4-8"]);
+    expect(pricingForModel("claude-opus-4-8-20260101")).toBe(MODEL_PRICING["claude-opus-4-8"]);
+    // Unknown model -> fallback row (sonnet-tier), not zero.
+    const unknown = pricingForModel("some-future-model");
+    expect(unknown.inputPerMtok).toBe(3);
+    expect(pricingForModel(null).inputPerMtok).toBe(3);
+  });
+
+  it("costUsd multiplies each token bucket by its per-Mtok rate", () => {
+    // 1M input + 1M output on opus = $5 + $25 = $30.
+    const cost = costUsd("claude-opus-4-8", {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    expect(cost).toBeCloseTo(30, 6);
+
+    // Cache buckets are priced too: 1M cache-read ($0.50) + 1M cache-write ($6.25).
+    const cacheCost = costUsd("claude-opus-4-8", {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 1_000_000,
+      cacheCreationTokens: 1_000_000,
+    });
+    expect(cacheCost).toBeCloseTo(6.75, 6);
+
+    // Zero usage is always zero.
+    expect(
+      costUsd("claude-opus-4-8", {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+      }),
+    ).toBe(0);
+  });
+});
+
+describe("detectSourceKind (multi-source labeling)", () => {
+  it("defaults to claude and detects other CLIs by folder/cwd hints", () => {
+    expect(detectSourceKind("/home/me/.claude/projects/-proj")).toBe("claude");
+    expect(detectSourceKind("/home/me/code/widget")).toBe("claude"); // plain cwd
+    expect(detectSourceKind(null)).toBe("claude");
+    expect(detectSourceKind("/home/me/.codex/sessions")).toBe("codex");
+    expect(detectSourceKind("/home/me/.gemini/logs")).toBe("gemini");
+    expect(detectSourceKind("/home/me/.cursor/chats")).toBe("cursor");
   });
 });

@@ -42,6 +42,27 @@ export interface PermissionDenial {
   toolInput?: unknown;
 }
 
+/**
+ * A request from the agent to approve/deny a single tool call. Surfaced over the
+ * persistent (stream-json) control protocol — NOT the per-turn `runTurn` path,
+ * which has no inline approval channel. Types only for now (no behavior wired).
+ */
+export interface PermissionRequest {
+  /** Correlates the response back to this request. */
+  id: string;
+  toolName: string;
+  toolInput: unknown;
+  /** Optional pre-baked decisions/edits the agent proposes (e.g. "allow once"). */
+  suggestions?: string[];
+}
+
+export interface PermissionResponse {
+  id: string;
+  decision: "allow" | "deny";
+  /** Optional human-readable note shown to the agent (e.g. a deny reason). */
+  message?: string;
+}
+
 export interface TurnResult {
   sessionId: string | null;
   subtype: string; // "success" | "error_max_turns" | "error_*"
@@ -60,6 +81,12 @@ export interface TurnHandlers {
   onStatus?: (status: { kind: string; data?: unknown }) => void;
   onResult?: (r: TurnResult) => void;
   onError?: (err: string) => void;
+  /**
+   * Inline tool-permission request from the agent. Only fired by the persistent
+   * (stream-json) session path; the per-turn `runTurn` driver never calls it.
+   * Not yet wired — present so faces/server can type against it.
+   */
+  onPermissionRequest?: (req: PermissionRequest) => void;
 }
 
 export interface RunningTurn {
@@ -82,7 +109,15 @@ export type ClientMsg =
       model?: string;
       permissionMode?: PermissionMode;
     }
-  | { t: "interrupt" };
+  | { t: "interrupt" }
+  // Inline approve/deny reply. Future use: only meaningful on the persistent
+  // (stream-json) session path; ignored by the per-turn driver.
+  | {
+      t: "permission-response";
+      id: string;
+      decision: "allow" | "deny";
+      message?: string;
+    };
 
 export type ServerMsg =
   | { t: "session"; sessionId: string; init: SessionInit }
@@ -91,4 +126,13 @@ export type ServerMsg =
   | { t: "status"; kind: string }
   | { t: "result"; result: TurnResult }
   | { t: "error"; message: string }
-  | { t: "turn-end" };
+  | { t: "turn-end" }
+  // Agent asks the user to approve/deny a tool call. Future use: emitted only by
+  // the persistent session path, answered by a "permission-response" ClientMsg.
+  | {
+      t: "permission-request";
+      id: string;
+      toolName: string;
+      toolInput: unknown;
+      suggestions?: string[];
+    };

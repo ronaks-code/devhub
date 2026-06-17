@@ -29,6 +29,26 @@ export function formatBytes(b: number): string {
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
+/**
+ * Format a dollar amount. Small values keep more decimals so a $0.0042 turn
+ * still reads as nonzero; larger totals round to cents.
+ */
+export function formatUsd(n: number): string {
+  if (!Number.isFinite(n)) return "$0.00";
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (abs === 0) return "$0.00";
+  if (abs < 0.01) return `${sign}$${abs.toFixed(4)}`;
+  if (abs < 1) return `${sign}$${abs.toFixed(3)}`;
+  return `${sign}$${abs.toFixed(2)}`;
+}
+
+/** Group an integer with thousands separators, e.g. 12345 -> "12,345". */
+export function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  return Math.round(n).toLocaleString("en-US");
+}
+
 /** Total tokens that count as "context used" for a quick badge. */
 export function totalTokens(u: {
   inputTokens: number;

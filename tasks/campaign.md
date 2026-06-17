@@ -11,7 +11,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 
 ## Wave progress
 - [x] W1 Foundations: settings store, schema/migrations, PRAGMAs, error-safety, localStorage, rAF deltas ✅
-- [ ] W2 Enablers: persistent driver, durable archive, multi-source, pricing, permission WS frames, /settings
+- [x] W2 Enablers: persistent driver scaffold, durable archive, multi-source, pricing, permission WS frames, /settings ✅
 - [ ] W3 Settings UI, GitService, config module, LCS diff, draft persistence
 - [ ] W4 Inline permissions, faceted search, git panel, projects keyboard nav
 - [ ] W5 Search ranking, MCP manager, permission rules, transcript outline
@@ -37,4 +37,5 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W2** ✅ (4 lanes, green: tc×4 + 34 tests + build + live-chat-stream smoke) — engine-driver: permission-request/response WS frames + `PersistentSession` stream-json scaffold (runTurn unchanged). engine-data: `archive.ts` durable gzip archive + deleted-session fallback in getSessionMessages + watcher unlink; `pricing.ts` model→USD + costUsd(); `detectSourceKind()` multi-source. server: `/api/settings` GET/PUT. web: `formatUsd()`; ChatPane virtualized.
 - **W1** ✅ (3 lanes, green: tc×4 + 27 tests + build) — engine: `settings.ts` SettingsStore + `migrations.ts` (PRAGMA user_version) + sqlite PRAGMAs + indexAll per-file try/catch + AppSettings type. server: Fastify route schemas + WS ClientMsg guard. web: localStorage UI-state restore + rAF delta coalescing. New engine API: `engine.getSettings()/setSettings()`.
