@@ -13,6 +13,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
 import { registerGitActionRoutes } from "./routes/git-actions.js";
 import { registerPermissionsRoutes } from "./routes/permissions.js";
+import { registerAllowlistSuggestRoutes } from "./routes/allowlist-suggest.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerConfigLintRoutes } from "./routes/config-lint.js";
 import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
@@ -119,6 +120,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerGitActionRoutes(app, engine);
 
   registerPermissionsRoutes(app, engine);
+
+  registerAllowlistSuggestRoutes(app, engine);
 
   registerConfigRoutes(app, engine);
 

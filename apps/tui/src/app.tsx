@@ -5,10 +5,11 @@
 import React, { useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { Engine } from "@claude-ui/engine";
-import type { NormalizedMessage, ProjectSummary, SearchHit, SessionSummary } from "@claude-ui/engine/types";
+import type { ProjectSummary, SearchHit, SessionSummary } from "@claude-ui/engine/types";
 import { Chat } from "./screens/Chat.js";
 import { Search } from "./screens/Search.js";
 import { Dashboard } from "./screens/Dashboard.js";
+import { Transcript, flattenMessages, type Row } from "./components/Transcript.js";
 
 type Mode = "projects" | "sessions" | "transcript" | "chat" | "search" | "dashboard";
 
@@ -23,24 +24,6 @@ function clampWindow(idx: number, len: number): number {
   return Math.min(idx - VISIBLE + 1, Math.max(0, len - VISIBLE));
 }
 
-function flattenMessage(m: NormalizedMessage): string[] {
-  const lines: string[] = [];
-  const label = m.role === "assistant" ? "Claude" : m.role === "user" ? "You" : m.role;
-  const head = m.blocks
-    .map((b) => {
-      if (b.type === "text") return b.text;
-      if (b.type === "thinking") return "(thinking…)";
-      if (b.type === "tool_use") return `⚙ ${b.name}`;
-      if (b.type === "tool_result") return `↳ ${b.isError ? "error" : "result"}`;
-      return "";
-    })
-    .filter(Boolean)
-    .join(" ")
-    .replace(/\s+/g, " ");
-  lines.push(`${label}: ${head}`.slice(0, 1000));
-  return lines;
-}
-
 export function App({ engine }: { engine: Engine }) {
   const { exit } = useApp();
   const [mode, setMode] = useState<Mode>("projects");
@@ -51,7 +34,9 @@ export function App({ engine }: { engine: Engine }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   // Header bits for the open transcript (from a SessionSummary or a SearchHit).
   const [head, setHead] = useState<TranscriptHead | null>(null);
-  const [lines, setLines] = useState<string[]>([]);
+  // Rich transcript flattened to styled rows (see components/Transcript.tsx). The
+  // app windows over these with the same VISIBLE/scroll math the list views use.
+  const [rows, setRows] = useState<Row[]>([]);
   const [scroll, setScroll] = useState(0);
   const [loading, setLoading] = useState(false);
   // Which browse screen the chat screen returns to on Esc (set when launched).
@@ -70,7 +55,7 @@ export function App({ engine }: { engine: Engine }) {
     setScroll(0);
     engine
       .getSessionMessages(h.sessionId)
-      .then((page) => setLines((page?.messages ?? []).flatMap(flattenMessage)))
+      .then((page) => setRows(flattenMessages(page?.messages ?? [])))
       .finally(() => setLoading(false));
   };
 
@@ -129,9 +114,9 @@ export function App({ engine }: { engine: Engine }) {
           if (s) openTranscript({ sessionId: s.sessionId, title: s.title, cwd: s.cwd }, "sessions");
         }
       } else if (mode === "transcript") {
-        if (key.downArrow || input === "j") setScroll((s) => Math.min(s + 1, Math.max(0, lines.length - VISIBLE)));
+        if (key.downArrow || input === "j") setScroll((s) => Math.min(s + 1, Math.max(0, rows.length - VISIBLE)));
         else if (key.upArrow || input === "k") setScroll((s) => Math.max(0, s - 1));
-        else if (input === " ") setScroll((s) => Math.min(s + VISIBLE, Math.max(0, lines.length - VISIBLE)));
+        else if (input === " ") setScroll((s) => Math.min(s + VISIBLE, Math.max(0, rows.length - VISIBLE)));
         else if (key.escape || input === "h") setMode(transcriptReturn);
       }
     },
@@ -211,16 +196,12 @@ export function App({ engine }: { engine: Engine }) {
             {loading ? (
               <Text color="gray">loading…</Text>
             ) : (
-              lines.slice(scroll, scroll + VISIBLE).map((l, i) => (
-                <Text key={scroll + i} wrap="truncate-end">
-                  {l}
-                </Text>
-              ))
+              <Transcript rows={rows} scroll={scroll} visible={VISIBLE} />
             )}
           </Box>
           <Text color="gray">
             {"\n"}
-            {lines.length ? `${scroll + 1}-${Math.min(scroll + VISIBLE, lines.length)} / ${lines.length}` : ""}
+            {rows.length ? `${scroll + 1}-${Math.min(scroll + VISIBLE, rows.length)} / ${rows.length}` : ""}
           </Text>
         </Box>
       )}

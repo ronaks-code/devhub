@@ -7,6 +7,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { normalizeLine, usageFromMessage } from "../parser.js";
 import { createLineSplitter } from "./buffer.js";
 import { gracefulInterrupt } from "./interrupt.js";
+import { applySandbox } from "./sandbox.js";
+import { forkCliArgs } from "./fork.js";
 import type {
   AgentDriver,
   PermissionMode,
@@ -203,13 +205,25 @@ export class CliDriver implements AgentDriver {
     const includePartial = req.includePartial !== false;
     if (includePartial) args.push("--include-partial-messages");
     if (req.sessionId) args.push("--resume", req.sessionId);
+    // Fork into a NEW conversation that inherits the resumed context (CLI
+    // --fork-session). No-op unless req.fork && req.sessionId — non-fork turns keep
+    // the exact same argv as before. See driver/fork.ts.
+    args.push(...forkCliArgs(req));
     if (req.model) args.push("--model", req.model);
     args.push("--permission-mode", req.permissionMode ?? "acceptEdits");
 
-    const child = spawn(CLAUDE_BIN, args, {
+    // Optionally sandbox the spawn (env-scrub always; macOS Seatbelt wrapper when
+    // available). With no sandbox option this returns the command/args/env unchanged,
+    // so the default spawn is byte-for-byte identical to before. See driver/sandbox.ts.
+    const { spec } = applySandbox(
+      { command: CLAUDE_BIN, args, env: { ...process.env } },
+      req.sandbox,
+    );
+
+    const child = spawn(spec.command, spec.args, {
       cwd: req.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: spec.env,
     });
 
     const state = { sessionId: req.sessionId ?? null, seq: 0, finalResult: null as TurnResult | null };

@@ -38,6 +38,7 @@ import {
   tokenizerOf,
 } from "./fts-schema.js";
 import type { FtsTokenizer } from "./fts-schema.js";
+import { writeFtsRows } from "./fts-write.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import { AggregateCache } from "./aggregates.js";
@@ -507,19 +508,15 @@ export class TranscriptIndex {
    * Persist mirrored message text for one session. `full` (startByte===0) clears
    * any prior rows for the session first; incremental runs append. Works against
    * whichever store is active (FTS5 virtual table or plain table) — same columns.
+   *
+   * Delegates to {@link writeFtsRows}, which maps each row to a STABLE rowid (a
+   * deterministic key per session row) so an incremental append only inserts the new
+   * rows and a re-index is idempotent — no full DELETE+reinsert churn. The external
+   * behavior (and search results) are identical to the old full-replace write.
    */
   private writeSearchText(sessionId: string, rows: SearchText[], full: boolean): void {
     const table = this.searchMode === "fts5" ? "messages_fts" : "messages_text";
-    if (full) {
-      this.db.prepare(`DELETE FROM ${table} WHERE sessionId = ?`).run(sessionId);
-    }
-    if (rows.length === 0) return;
-    const insert = this.db.prepare(
-      `INSERT INTO ${table} (sessionId, role, seq, toolName, text) VALUES (?, ?, ?, ?, ?)`,
-    );
-    for (const r of rows) {
-      insert.run(sessionId, r.role, r.seq, r.toolName, r.text);
-    }
+    writeFtsRows(this.db, table, sessionId, rows, full);
   }
 
   /**

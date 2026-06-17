@@ -1,8 +1,8 @@
 /**
  * Live-chat WebSocket. One connection drives at most one turn at a time; the
  * engine's driver does the real work and we just relay its events to the socket
- * as ServerMsg JSON. Interrupting (explicit message or socket close) cancels the
- * running turn so we never leak a child process.
+ * as ServerMsg JSON. An EXPLICIT interrupt cancels the running turn so we never
+ * leak a child process.
  *
  * MESSAGE QUEUE: a `{t:"prompt"}` that arrives while a turn is running is no
  * longer rejected as "busy" — it is appended to a FIFO queue and run as soon as
@@ -10,6 +10,14 @@
  * session each time (the freshly-minted sessionId from the first turn flows into
  * every queued turn, so context carries forward). The pending count is surfaced
  * to the client via the existing `{t:"status"}` frame as `kind:"queued:N"`.
+ *
+ * REATTACH ACROSS RELOAD: a socket `close` no longer always interrupts the active
+ * turn. If the turn has a resolved sessionId we DETACH it into a server-side
+ * {@link LiveTurnRegistry} that keeps the child alive and buffers its streamed
+ * events. A reconnecting client sends `{ t: "attach", sessionId }`; we replay the
+ * buffered events and resume the live stream — so a browser reload no longer kills
+ * an in-progress turn. A turn with no sessionId yet (or an explicit interrupt) is
+ * still cancelled as before. See live-turns.ts.
  *
  * The `socket` param type is supplied by @fastify/websocket's `{ websocket: true }`
  * route overload (it's a `ws` WebSocket), so we let it be inferred here.
@@ -25,6 +33,7 @@ import type {
   ServerMsg,
   TurnHandlers,
 } from "@claude-ui/engine/driver";
+import { LiveTurnRegistry } from "./live-turns.js";
 
 type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
 
@@ -38,15 +47,19 @@ type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
  *
  * NOTE (missing engine symbols): if these become first-class, add to
  * `@claude-ui/engine/driver` `ClientMsg`: an optional `keepQueue?: boolean` on
- * the `interrupt` variant, and a `{ t: "clear-queue" }` variant. Until then they
- * live here.
+ * the `interrupt` variant, a `{ t: "clear-queue" }` variant, and a
+ * `{ t: "attach"; sessionId: string }` variant (reattach to a detached turn).
+ * Until then they live here.
  */
 type IncomingMsg =
   // Engine frames minus the bare interrupt, which we re-add below with an
   // optional `keepQueue` so a single narrowed interrupt shape carries the field.
   | Exclude<ClientMsg, { t: "interrupt" }>
   | { t: "interrupt"; keepQueue?: boolean }
-  | { t: "clear-queue" };
+  | { t: "clear-queue" }
+  // Opt-in reattach to a turn left running on the server after this client's prior
+  // socket closed (e.g. a browser reload). Carries the sessionId to reattach to.
+  | { t: "attach"; sessionId: string };
 
 /**
  * Frames the server emits. The engine's `ServerMsg` is the source of truth but
@@ -110,6 +123,10 @@ function parseClientMsg(raw: unknown): IncomingMsg | null {
     return { t: "interrupt", keepQueue: m.keepQueue === true };
   }
   if (m.t === "clear-queue") return { t: "clear-queue" };
+  if (m.t === "attach") {
+    if (typeof m.sessionId !== "string" || m.sessionId.length === 0) return null;
+    return { t: "attach", sessionId: m.sessionId };
+  }
   if (m.t === "prompt") {
     if (typeof m.cwd !== "string" || m.cwd.length === 0) return null;
     if (typeof m.prompt !== "string" || m.prompt.length === 0) return null;
@@ -137,6 +154,12 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
   // Resolved once: a best-effort denial-audit helper, if the engine exposes one.
   const auditDenials = resolveDenialAudit(engine);
 
+  // One registry shared by every connection on this plugin: it holds turns whose
+  // socket closed but that we keep alive for a reattach (browser reload). Cleaned
+  // up with the plugin so parked turns don't outlive the server.
+  const liveTurns = new LiveTurnRegistry();
+  app.addHook("onClose", async () => liveTurns.shutdown());
+
   app.get("/api/ws/session", { websocket: true }, (socket, req) => {
     // Auth: when a token is configured, the REST onRequest hook deliberately
     // skips the WS upgrade (browsers can't set an Authorization header on a
@@ -155,6 +178,18 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
 
     /** The turn currently being driven, or null when idle. */
     let activeTurn: RunningTurn | null = null;
+    /**
+     * Resolved sessionId of the ACTIVE turn (from `onSession`), or undefined until
+     * it arrives. Distinct from {@link resumeSessionId} (which seeds the NEXT turn):
+     * this is the key we detach the *current* turn under on a socket close.
+     */
+    let activeTurnSessionId: string | undefined;
+    /**
+     * True once this socket has closed and its active turn was handed to the live-turn
+     * registry. While detached, the turn's events route into the registry buffer (for
+     * a future reattach) rather than this dead socket.
+     */
+    let detached = false;
     /** Pending prompts, oldest first. Drained one-at-a-time on turn-end. */
     const queue: PromptMsg[] = [];
     /**
@@ -168,6 +203,21 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
       if (socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify(msg));
       }
+    };
+
+    /**
+     * Deliver an ACTIVE-TURN event. While the socket is live it goes straight out;
+     * once detached (socket closed, turn kept alive) it is routed into the live-turn
+     * registry's buffer for the eventual reattach. Control frames unrelated to the
+     * turn stream (queue status) keep using {@link send} directly — they are
+     * meaningless to a detached, socketless turn.
+     */
+    const deliver = (msg: OutgoingMsg) => {
+      if (detached && activeTurnSessionId) {
+        liveTurns.emit(activeTurnSessionId, msg);
+        return;
+      }
+      send(msg);
     };
 
     /** Reflect the current pending count to the client via the status frame. */
@@ -185,21 +235,25 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
 
       // `onThinkingDelta` isn't on `TurnHandlers` yet; cast through the local
       // widening so the field type-checks. Ignored by an engine that never fires it.
+      // All turn-stream events route through `deliver` so they reach the socket while
+      // attached and the registry buffer once detached.
       const handlers: TurnHandlersWithThinking = {
         onSession: (sessionId, init) => {
-          // Resume this same session for every subsequent queued turn.
+          // Resume this same session for every subsequent queued turn, AND record it
+          // as the active turn's key so a socket close can detach THIS turn under it.
           resumeSessionId = sessionId;
-          send({ t: "session", sessionId, init });
+          activeTurnSessionId = sessionId;
+          deliver({ t: "session", sessionId, init });
         },
-        onMessage: (message) => send({ t: "message", message }),
-        onDelta: (text) => send({ t: "delta", text }),
-        onThinkingDelta: (text) => send({ t: "thinking-delta", text }),
-        onStatus: ({ kind }) => send({ t: "status", kind }),
+        onMessage: (message) => deliver({ t: "message", message }),
+        onDelta: (text) => deliver({ t: "delta", text }),
+        onThinkingDelta: (text) => deliver({ t: "thinking-delta", text }),
+        onStatus: ({ kind }) => deliver({ t: "status", kind }),
         onResult: (result) => {
           denials = result.denials;
-          send({ t: "result", result });
+          deliver({ t: "result", result });
         },
-        onError: (message) => send({ t: "error", message }),
+        onError: (message) => deliver({ t: "error", message }),
       };
 
       const turn = createDriver().runTurn(
@@ -223,8 +277,17 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
             // ignore — auditing is non-essential
           }
         }
-        send({ t: "turn-end" });
+        deliver({ t: "turn-end" });
+        const endedSessionId = activeTurnSessionId;
         activeTurn = null;
+        activeTurnSessionId = undefined;
+        if (detached) {
+          // Socket is gone: there is nothing to drain to. The turn-end was buffered
+          // above; tell the registry the turn is done so it switches to the short
+          // result-TTL and the final frames await a reattach (then evict).
+          if (endedSessionId) liveTurns.markFinished(endedSessionId);
+          return;
+        }
         drainQueue();
       });
     };
@@ -280,6 +343,45 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
           queue.length = 0;
           emitQueued();
         }
+      } else if (msg.t === "attach") {
+        // Reattach to a turn this client left running on a prior socket (e.g. a
+        // browser reload). Only honored when idle on THIS socket — a connection
+        // already driving a turn has nothing to reattach. The registry replays the
+        // buffered events to us and, if the turn is still running, streams the rest
+        // live; if it already finished we just get the buffered result + replay-done.
+        if (activeTurn) {
+          send({ t: "error", message: "busy" });
+          return;
+        }
+        // Raw sender: the replay/marker frames are widened past OutgoingMsg, so we
+        // serialize whatever the registry hands us straight to the socket.
+        const sink = (m: OutgoingMsg | Record<string, unknown>) => {
+          if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(m));
+        };
+        // When the adopted turn later ends while we're attached, the registry calls
+        // this: resume normal direct delivery and drain anything we queued meanwhile.
+        const onAdoptedEnd = () => {
+          detached = false;
+          activeTurn = null;
+          activeTurnSessionId = undefined;
+          drainQueue();
+        };
+        const resumed = liveTurns.attach(msg.sessionId, sink, onAdoptedEnd);
+        if (resumed) {
+          // Adopt the still-running turn. While it runs, its events (emitted by the
+          // ORIGINAL turn's handlers via `deliver`) route through the registry to our
+          // `sink`, so we mark this connection detached-routed and point the active
+          // keys at the resumed turn. `onAdoptedEnd` flips us back on turn-end.
+          activeTurn = resumed;
+          activeTurnSessionId = msg.sessionId;
+          resumeSessionId = msg.sessionId;
+          detached = true;
+        } else {
+          // The turn was unknown or already finished (its result was just replayed).
+          // Nothing is active; resume normal direct delivery and drain any queue.
+          detached = false;
+          drainQueue();
+        }
       }
     });
 
@@ -287,6 +389,36 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
       // No more turns can be driven on a dead socket; drop the queue too so
       // drainQueue (were it somehow reached) has nothing to start.
       queue.length = 0;
+
+      if (detached && activeTurn && activeTurnSessionId) {
+        // Already routing the active turn through the registry (this was a reattached
+        // connection). The registry still owns it; just sever our sink so the turn's
+        // events buffer again until the next reattach. Don't interrupt.
+        liveTurns.detach({
+          sessionId: activeTurnSessionId,
+          turn: activeTurn,
+          finished: false,
+        });
+        return;
+      }
+
+      if (activeTurn && activeTurnSessionId) {
+        // A turn is running with a resolved sessionId: keep it ALIVE for a reattach
+        // (browser reload) instead of interrupting. Hand it to the registry, then
+        // flip this connection to detached-routing so the turn's remaining events
+        // (still emitted by its handlers via `deliver`) buffer for the next client.
+        liveTurns.detach({
+          sessionId: activeTurnSessionId,
+          turn: activeTurn,
+          finished: false,
+        });
+        detached = true;
+        return;
+      }
+
+      // No reattachable turn (idle, or a turn whose sessionId never resolved): we
+      // can't key a buffer, so fall back to the original behavior — interrupt so we
+      // never leak a child process.
       activeTurn?.interrupt();
     });
   });

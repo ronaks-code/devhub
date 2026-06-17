@@ -9,6 +9,7 @@ import { useStatsPolling } from "../hooks/useStatsPolling";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
+import { ActivityChart } from "./dashboard/ActivityChart";
 import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
@@ -364,23 +365,11 @@ function DashboardBody({
               <Spinner className="h-5 w-5" />
             </div>
           ) : usage.days.length > 0 ? (
-            <div className="flex h-28 items-end gap-0.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-              {usage.days.map((d) => {
-                const t = dayTokens(d);
-                return (
-                  <div
-                    key={d.date}
-                    className="group flex h-full min-w-0 flex-1 items-end"
-                    title={`${d.date}: ${compactNumber(t)} tokens · ${formatUsd(d.costUsd)} · ${d.sessions} session${d.sessions === 1 ? "" : "s"}`}
-                  >
-                    <div
-                      className="w-full rounded-sm bg-clay-500/70 transition group-hover:bg-clay-400"
-                      style={{ height: `${Math.max(t > 0 ? 6 : 2, (t / usage.maxTokens) * 100)}%` }}
-                    />
-                  </div>
-                );
-              })}
-            </div>
+            <ActivityChart
+              days={usage.days}
+              maxTokens={usage.maxTokens}
+              onOpenSession={onOpenSession}
+            />
           ) : (
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
               No usage in this period.

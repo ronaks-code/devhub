@@ -1,6 +1,29 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cn } from "../lib/utils";
 
+// Remember which primitives we've already nagged so a re-rendering icon button
+// doesn't spam the console every frame.
+const labelWarned = new Set<string>();
+
+/**
+ * Dev-only a11y nudge: an icon-only control (no visible text) should carry an
+ * accessible name via `aria-label` (or `aria-labelledby`/`title`), or a screen
+ * reader just announces "button". No-op in production and de-duped per component
+ * so it never affects rendering — it only logs guidance during development.
+ */
+function warnMissingLabel(component: string, props: ButtonHTMLAttributes<HTMLButtonElement>): void {
+  const labelled =
+    props["aria-label"] != null ||
+    props["aria-labelledby"] != null ||
+    props.title != null;
+  if (labelled || labelWarned.has(component)) return;
+  labelWarned.add(component);
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[a11y] <${component}> is icon-only — pass an \`aria-label\` (or \`title\`) so it has an accessible name.`,
+  );
+}
+
 export function Spinner({ className }: { className?: string }) {
   return (
     <div
@@ -39,10 +62,15 @@ export function IconButton({
   children,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement>) {
+  // Icon-only buttons have no text label, so a screen reader announces them as a
+  // bare "button". Nudge (dev-only, once per offender) toward an explicit
+  // `aria-label`/`title`. `props` already forwards `aria-label` to the <button>,
+  // so consumers only need to pass it — nothing here changes the rendering.
+  if (import.meta.env?.DEV) warnMissingLabel("IconButton", props);
   return (
     <button
       className={cn(
-        "inline-flex items-center justify-center rounded-md p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-100 disabled:pointer-events-none disabled:opacity-40",
+        "inline-flex items-center justify-center rounded-md p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50 disabled:pointer-events-none disabled:opacity-40",
         className,
       )}
       {...props}

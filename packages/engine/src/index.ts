@@ -755,6 +755,21 @@ export { startConfigWatcher, configWatchPaths } from "./config/watcher.js";
 export type { ConfigWatcherOptions } from "./config/watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";
 export {
+  buildSandboxConfig,
+  applySandbox,
+  scrubEnv,
+  networkEnvKeys,
+  sandboxExecAvailable,
+  NETWORK_ENV_VARS,
+  SANDBOX_ENV_MARKER,
+  SEATBELT_NO_NETWORK_PROFILE,
+} from "./driver/sandbox.js";
+export type { SandboxOptions, SandboxConfig, SpawnSpec } from "./driver/sandbox.js";
+export { forkTurn, forkCliArgs } from "./driver/fork.js";
+export type { ForkedTurn } from "./driver/fork.js";
+export { writeFtsRows, assignStableRowids, stableRowid } from "./fts-write.js";
+export type { FtsRow } from "./fts-write.js";
+export {
   gracefulInterrupt,
   DEFAULT_GRACE_MS,
   DEFAULT_KILL_MS,

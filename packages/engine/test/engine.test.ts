@@ -63,6 +63,21 @@ import { scanSubagents, SUBAGENT_ROLE } from "../src/subagents.js";
 import { listPlugins } from "../src/config/index.js";
 import { setMcpEnabled, listMcpToggles } from "../src/config/mcp-toggle.js";
 import { computeAutoTags, branchTag } from "../src/auto-tag.js";
+import {
+  buildSandboxConfig,
+  applySandbox,
+  scrubEnv,
+  networkEnvKeys,
+  NETWORK_ENV_VARS,
+  SANDBOX_ENV_MARKER,
+  SEATBELT_NO_NETWORK_PROFILE,
+} from "../src/driver/sandbox.js";
+import type { SpawnSpec } from "../src/driver/sandbox.js";
+import { forkCliArgs, forkTurn } from "../src/driver/fork.js";
+import type { ForkedTurn } from "../src/driver/fork.js";
+import { writeFtsRows, assignStableRowids, stableRowid } from "../src/fts-write.js";
+import type { AgentDriver, RunningTurn, TurnHandlers, TurnRequest } from "../src/driver/types.js";
+import type { SearchText } from "../src/parse-session.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -6089,5 +6104,301 @@ describe("computeAutoTags (suggested tags from project + branch)", () => {
     // Unknown session -> [].
     expect(engine.autoTagSession("nope")).toEqual([]);
     engine.close();
+  });
+});
+
+describe("driver sandbox (headless isolation)", () => {
+  const base: SpawnSpec = {
+    command: "/usr/local/bin/claude",
+    args: ["-p", "hi", "--output-format", "stream-json"],
+    env: { HOME: "/home/me", PATH: "/usr/bin", HTTPS_PROXY: "http://proxy:8080", no_proxy: "localhost" },
+  };
+
+  it("is a complete no-op when sandboxing is off (absent / disabled)", () => {
+    for (const opts of [undefined, {}, { enabled: false }]) {
+      const { spec, config } = buildSandboxConfig(base, opts);
+      expect(spec).toBe(base); // same object reference — nothing rewritten
+      expect(config.enabled).toBe(false);
+      expect(config.network).toBe("none");
+      expect(config.scrubbedEnv).toEqual([]);
+      expect(config.osWrapped).toBe(false);
+    }
+  });
+
+  it("scrubEnv removes proxy/network vars (case-insensitive) and stamps the marker without mutating input", () => {
+    const env = { ...base.env };
+    const out = scrubEnv(env);
+    expect(out.HTTPS_PROXY).toBeUndefined();
+    expect(out.no_proxy).toBeUndefined();
+    expect(out.HOME).toBe("/home/me"); // unrelated vars preserved
+    expect(out[SANDBOX_ENV_MARKER]).toBe("1"); // documented marker set
+    // input untouched (pure)
+    expect(env.HTTPS_PROXY).toBe("http://proxy:8080");
+    expect(env[SANDBOX_ENV_MARKER]).toBeUndefined();
+  });
+
+  it("networkEnvKeys matches the configured network vars present in an env", () => {
+    expect(networkEnvKeys(base.env).sort()).toEqual(["HTTPS_PROXY", "no_proxy"].sort());
+    expect(networkEnvKeys({ HOME: "/x" })).toEqual([]);
+    // every advertised var is recognized when present
+    const all: NodeJS.ProcessEnv = {};
+    for (const k of NETWORK_ENV_VARS) all[k] = "v";
+    expect(networkEnvKeys(all).length).toBe(NETWORK_ENV_VARS.length);
+  });
+
+  it("enabled sandbox always scrubs env + sets the marker; reports honest network level", () => {
+    const { spec, config } = buildSandboxConfig(base, { enabled: true });
+    // Env is scrubbed regardless of platform.
+    expect(spec.env.HTTPS_PROXY).toBeUndefined();
+    expect(spec.env[SANDBOX_ENV_MARKER]).toBe("1");
+    expect(config.enabled).toBe(true);
+    expect(config.scrubbedEnv.sort()).toEqual(["HTTPS_PROXY", "no_proxy"].sort());
+    // network is "blocked" only with the macOS OS wrapper, else "scrubbed" — never
+    // overclaimed. On this CI host it is one of the two.
+    expect(["blocked", "scrubbed"]).toContain(config.network);
+    if (config.network === "blocked") {
+      // macOS + sandbox-exec: wrapped, original command becomes an arg of sandbox-exec.
+      expect(config.osWrapped).toBe(true);
+      expect(spec.command).toBe("/usr/bin/sandbox-exec");
+      expect(spec.args[0]).toBe("-p");
+      expect(spec.args).toContain(base.command);
+      expect(spec.args).toContain("hi"); // original args carried through
+    } else {
+      // env-scrub only: command/args unchanged, just a scrubbed env.
+      expect(config.osWrapped).toBe(false);
+      expect(spec.command).toBe(base.command);
+      expect(spec.args).toEqual(base.args);
+    }
+  });
+
+  it("osWrapper:false forces env-scrub only even where the OS wrapper exists", () => {
+    const { spec, config } = buildSandboxConfig(base, { enabled: true, osWrapper: false });
+    expect(config.osWrapped).toBe(false);
+    expect(config.network).toBe("scrubbed");
+    expect(spec.command).toBe(base.command);
+    expect(spec.args).toEqual(base.args);
+    expect(spec.env[SANDBOX_ENV_MARKER]).toBe("1");
+  });
+
+  it("the Seatbelt profile denies network (the layer that actually blocks sockets)", () => {
+    expect(SEATBELT_NO_NETWORK_PROFILE).toContain("(deny network*)");
+    expect(SEATBELT_NO_NETWORK_PROFILE).toContain("(version 1)");
+  });
+
+  it("applySandbox is an alias of buildSandboxConfig", () => {
+    const a = applySandbox(base, { enabled: true });
+    const b = buildSandboxConfig(base, { enabled: true });
+    expect(a.config).toEqual(b.config);
+    expect(a.spec.command).toBe(b.spec.command);
+    expect(a.spec.args).toEqual(b.spec.args);
+  });
+});
+
+describe("driver fork (branch a turn into a new conversation)", () => {
+  it("forkCliArgs adds --fork-session only with both fork && sessionId", () => {
+    expect(forkCliArgs({ fork: true, sessionId: "abc" })).toEqual(["--fork-session"]);
+    expect(forkCliArgs({ fork: true })).toEqual([]); // no session to fork from
+    expect(forkCliArgs({ sessionId: "abc" })).toEqual([]); // not forking
+    expect(forkCliArgs({})).toEqual([]);
+  });
+
+  // A fake driver that records the request and emits an init line with a NEW session id
+  // (mimicking what --fork-session does) so we can assert the helper without spawning.
+  const fakeDriver = (newId: string, captured: { req?: TurnRequest } = {}): AgentDriver => ({
+    runTurn(req: TurnRequest, handlers: TurnHandlers): RunningTurn {
+      captured.req = req;
+      const done = Promise.resolve(null).then(() => {
+        handlers.onSession?.(newId, {
+          sessionId: newId,
+          model: null,
+          cwd: null,
+          tools: [],
+          permissionMode: null,
+          slashCommands: [],
+        });
+        return { sessionId: newId, subtype: "success", isError: false, costUsd: 0, denials: [] };
+      });
+      return { interrupt() {}, done };
+    },
+  });
+
+  it("forkTurn sets fork:true and resolves the NEW session id from the init line", async () => {
+    const captured: { req?: TurnRequest } = {};
+    const driver = fakeDriver("new-session-2", captured);
+    const seen: string[] = [];
+    const forked: ForkedTurn = forkTurn(
+      driver,
+      { cwd: "/repo", prompt: "continue elsewhere", sessionId: "orig-1" },
+      { onSession: (id) => seen.push(id) },
+    );
+    await forked.done;
+    // request carried the fork flag and the source session id
+    expect(captured.req?.fork).toBe(true);
+    expect(captured.req?.sessionId).toBe("orig-1");
+    // the new id is surfaced (and differs from the source)
+    await expect(forked.newSessionId).resolves.toBe("new-session-2");
+    // the caller's own onSession still fired
+    expect(seen).toEqual(["new-session-2"]);
+  });
+
+  it("forkTurn resolves newSessionId to null when the turn ends without an init line", async () => {
+    const driver: AgentDriver = {
+      runTurn: (_req, _handlers) => ({ interrupt() {}, done: Promise.resolve(null) }),
+    };
+    const forked = forkTurn(driver, { cwd: "/repo", prompt: "x", sessionId: "orig-1" });
+    await forked.done;
+    await expect(forked.newSessionId).resolves.toBeNull();
+  });
+});
+
+describe("fts-write (stable rowid mapping)", () => {
+  const row = (role: SearchText["role"], seq: number, text: string, toolName: string | null = null): SearchText => ({
+    role,
+    seq,
+    text,
+    toolName,
+  });
+
+  it("stableRowid is deterministic, positive, fits a safe-integer rowid, and varies with identity", () => {
+    const a = stableRowid("s1", "user", 0, 0, "hello");
+    expect(a).toBe(stableRowid("s1", "user", 0, 0, "hello")); // deterministic
+    expect(a > 0n).toBe(true);
+    expect(a <= BigInt(Number.MAX_SAFE_INTEGER)).toBe(true); // 52-bit: safe to read as a JS number
+    // any identity component changing moves the id
+    expect(stableRowid("s2", "user", 0, 0, "hello")).not.toBe(a);
+    expect(stableRowid("s1", "assistant", 0, 0, "hello")).not.toBe(a);
+    expect(stableRowid("s1", "user", 1, 0, "hello")).not.toBe(a);
+    expect(stableRowid("s1", "user", 0, 1, "hello")).not.toBe(a);
+    expect(stableRowid("s1", "user", 0, 0, "world")).not.toBe(a);
+  });
+
+  it("assignStableRowids disambiguates rows sharing (seq, role) via ordinal", () => {
+    const rows = assignStableRowids([
+      { sessionId: "s", role: "tool", seq: 5, toolName: "Bash", text: "cmd a" },
+      { sessionId: "s", role: "tool", seq: 5, toolName: "Read", text: "cmd b" },
+    ]);
+    expect(rows[0]!.rowid).not.toBe(rows[1]!.rowid); // distinct despite same (seq, role)
+  });
+
+  // Drive the writer against a real in-memory-ish FTS5 DB to prove append-only + idempotency.
+  const freshDb = () => {
+    const db = new DatabaseSync(":memory:");
+    const tok = detectFtsTokenizer(db);
+    const table = "messages_fts";
+    if (tok) {
+      db.exec(`CREATE VIRTUAL TABLE ${table} USING fts5(sessionId UNINDEXED, role UNINDEXED, seq UNINDEXED, toolName UNINDEXED, text)`);
+    } else {
+      db.exec(`CREATE TABLE ${table} (sessionId TEXT, role TEXT, seq INTEGER, toolName TEXT, text TEXT)`);
+    }
+    return { db, table };
+  };
+  const allRows = (db: InstanceType<typeof DatabaseSync>, table: string) =>
+    db.prepare(`SELECT rowid AS rowid, role, seq, text FROM ${table} ORDER BY seq, text`).all() as Array<{
+      rowid: number | bigint;
+      role: string;
+      seq: number;
+      text: string;
+    }>;
+
+  it("(a) an incremental append inserts ONLY new rows, leaving prior rows (and rowids) untouched", () => {
+    const { db, table } = freshDb();
+    const sid = "sessX";
+    writeFtsRows(db, table, sid, [row("user", 0, "first prompt"), row("assistant", 0, "first answer")], true);
+    const before = allRows(db, table);
+    expect(before.length).toBe(2);
+    const beforeIds = new Map(before.map((r) => [r.text, r.rowid]));
+
+    // incremental: append one NEW row (full=false)
+    const inserted = writeFtsRows(db, table, sid, [row("assistant", 1, "second answer")], false);
+    expect(inserted).toBe(1);
+    const after = allRows(db, table);
+    expect(after.length).toBe(3); // prior 2 + 1 new
+    // prior rows kept their exact rowids (no delete/reinsert churn)
+    for (const r of after) {
+      if (beforeIds.has(r.text)) expect(r.rowid).toBe(beforeIds.get(r.text));
+    }
+    expect(after.some((r) => r.text === "second answer")).toBe(true);
+    db.close();
+  });
+
+  it("(b) re-writing the same rows (full re-index) is idempotent — no duplicate rows", () => {
+    const { db, table } = freshDb();
+    const sid = "sessY";
+    const rows = [row("user", 0, "alpha"), row("assistant", 0, "beta"), row("tool", 0, "Bash: ls", "Bash")];
+    writeFtsRows(db, table, sid, rows, true);
+    const first = allRows(db, table);
+    // re-index the identical session again (full=true): same end state, no dups
+    writeFtsRows(db, table, sid, rows, true);
+    const second = allRows(db, table);
+    expect(second.length).toBe(first.length);
+    expect(second.map((r) => r.text).sort()).toEqual(first.map((r) => r.text).sort());
+    // a full re-write reuses the same stable rowids
+    expect(second.map((r) => r.rowid).sort()).toEqual(first.map((r) => r.rowid).sort());
+    db.close();
+  });
+
+  it("(b2) an idempotent INCREMENTAL re-insert of an already-present row does not duplicate it", () => {
+    const { db, table } = freshDb();
+    const sid = "sessZ";
+    writeFtsRows(db, table, sid, [row("assistant", 3, "same text")], true);
+    // re-insert the very same row incrementally (full=false) — stable rowid => replace
+    writeFtsRows(db, table, sid, [row("assistant", 3, "same text")], false);
+    expect(allRows(db, table).length).toBe(1);
+    db.close();
+  });
+
+  it("(c) search results match the previous full-replace approach for a fixture", async () => {
+    // Build the same fixture twice: once via the live TranscriptIndex (which now uses
+    // the stable-rowid writer), once via an explicit legacy DELETE+INSERT writer, and
+    // assert search() returns the identical session/role/snippet hits.
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/fixture";
+    const f = path.join(proj, "fix.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd, message: { role: "user", content: "How do I deploy the gateway?" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Run the deploy script for the payment gateway." },
+              { type: "tool_use", id: "t1", name: "Bash", input: { command: "./deploy.sh gateway" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+
+    const idx = new TranscriptIndex(path.join(dir, "stable.db"));
+    await idx.indexSession(f); // stable-rowid write path
+    const stableHits = idx.search("gateway").map((h) => ({ sessionId: h.sessionId, role: h.role }));
+
+    // Reference: same mirrored rows written with the legacy full DELETE+INSERT path.
+    const refIdx = new TranscriptIndex(path.join(dir, "ref.db"));
+    // mirror the same session row so the search join (sessions) is satisfied
+    await refIdx.indexSession(f);
+    const refTable = refIdx.searchMode === "fts5" ? "messages_fts" : "messages_text";
+    // wipe + legacy re-insert (no explicit rowid) for the same logical rows
+    const rawDb = (refIdx as unknown as { db: InstanceType<typeof DatabaseSync> }).db;
+    rawDb.exec("BEGIN");
+    rawDb.prepare(`DELETE FROM ${refTable} WHERE sessionId = ?`).run("fix");
+    const legacyRows: SearchText[] = [
+      row("user", 0, "How do I deploy the gateway?"),
+      row("assistant", 1, "Run the deploy script for the payment gateway."),
+      row("tool", 1, "Bash: ./deploy.sh gateway", "Bash"),
+    ];
+    const ins = rawDb.prepare(`INSERT INTO ${refTable} (sessionId, role, seq, toolName, text) VALUES (?, ?, ?, ?, ?)`);
+    for (const r of legacyRows) ins.run("fix", r.role, r.seq, r.toolName, r.text);
+    rawDb.exec("COMMIT");
+    const refHits = refIdx.search("gateway").map((h) => ({ sessionId: h.sessionId, role: h.role }));
+
+    expect(stableHits.length).toBeGreaterThan(0);
+    expect(stableHits).toEqual(refHits); // identical hits — stable rowid is invisible to search
+    idx.close();
+    refIdx.close();
   });
 });

@@ -8,6 +8,9 @@
  * over the raw CLI), so permissions are governed by a permission-mode toggle.
  */
 import type { NormalizedMessage, TokenUsage } from "../types.js";
+// Type-only import: `SandboxOptions` is a plain interface, so this carries no runtime
+// (Node) dependency into this browser-safe types module.
+import type { SandboxOptions } from "./sandbox.js";
 
 export type PermissionMode = "default" | "acceptEdits" | "plan" | "bypassPermissions";
 
@@ -26,6 +29,23 @@ export interface TurnRequest {
   model?: string;
   permissionMode?: PermissionMode;
   includePartial?: boolean;
+  /**
+   * Optional sandbox for a headless turn (isolated / no configured network). When
+   * absent the turn spawns exactly as before; when `{ enabled: true }` the spawn is
+   * env-scrubbed (proxy vars removed + marker set) and, on macOS where `sandbox-exec`
+   * exists, wrapped in a Seatbelt profile that denies outbound network. See
+   * `driver/sandbox.ts` for exactly what isolation each layer provides (it does not
+   * overclaim). Additive: omitting it preserves the original behavior.
+   */
+  sandbox?: SandboxOptions;
+  /**
+   * Branch this turn into a NEW conversation that inherits the resumed session's
+   * context, instead of continuing the original. Maps to the CLI's `--fork-session`
+   * (only meaningful together with `sessionId`). The new session id arrives on the
+   * init system line. Additive: absent/false keeps the original resume-in-place
+   * behavior. See `driver/fork.ts` for the forking helpers.
+   */
+  fork?: boolean;
 }
 
 export interface SessionInit {
