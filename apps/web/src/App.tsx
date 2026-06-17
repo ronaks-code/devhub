@@ -31,6 +31,7 @@ import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
+import { ToastStack, type ToastItem } from "./components/Toast";
 import { EmptyState, Spinner } from "./components/ui";
 import { cn } from "./lib/utils";
 
@@ -204,6 +205,13 @@ export default function App() {
   // once it loads. Bumped each pick (via a nonce) so re-picking the SAME hit
   // re-triggers the jump even when seq is unchanged. Null = no pending jump.
   const [jumpTarget, setJumpTarget] = useState<{ seq: number; nonce: number } | null>(null);
+  // Transient notification toasts (from the SSE `notify` event). Capped so a burst
+  // never stacks endlessly; each toast also auto-dismisses on its own timer.
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastSeq = useRef(0);
+  const dismissToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
 
   // Persist UI state (active tab + selected project) so a reload lands the user
   // back where they were. Merge over any existing keys (e.g. theme/density) so
@@ -263,6 +271,57 @@ export default function App() {
     };
   }, [sessionId, tailBytes]);
 
+  // Handle a `notify` SSE event: show a transient toast, and (when the tab is
+  // hidden) fire a browser Notification so a finished/waiting session is noticed
+  // even when the app isn't focused. Stable identity so the SSE effect below need
+  // not re-subscribe; it reads latest navigation via openSessionRef.
+  const handleNotify = useCallback(
+    (e: import("./lib/types").NotifyEvent) => {
+      const title = e.title || (e.level === "warning" ? "Session waiting for you" : "Session update");
+      const body = e.body || (e.project ? `in ${e.project}` : undefined);
+      const onClick =
+        e.projectId && e.sessionId
+          ? () => openSessionRef.current(e.projectId!, e.sessionId!)
+          : undefined;
+      const id = ++toastSeq.current;
+      // Cap the visible stack at 4 (drop the oldest) so a burst stays unobtrusive.
+      setToasts((prev) => [...prev.slice(-3), { id, title, body, level: e.level, onClick }]);
+
+      // Fire an OS notification only when the tab is hidden and the user granted it.
+      if (
+        typeof document !== "undefined" &&
+        document.hidden &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          const n = new Notification(title, { body, tag: e.sessionId ?? undefined });
+          if (onClick) {
+            n.onclick = () => {
+              window.focus();
+              onClick();
+              n.close();
+            };
+          }
+        } catch {
+          /* Notification construction can throw on some platforms — non-fatal */
+        }
+      }
+    },
+    [],
+  );
+
+  // Opportunistically request OS-notification permission once, after mount. Only
+  // when it's still "default" (never re-prompts a user who denied/granted).
+  useEffect(() => {
+    if (typeof Notification === "undefined" || Notification.permission !== "default") return;
+    // Defer slightly so the request doesn't fire during the initial render burst.
+    const t = window.setTimeout(() => {
+      void Notification.requestPermission().catch(() => {});
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, []);
+
   // live updates via SSE
   useEffect(() => {
     return subscribeEvents((e) => {
@@ -275,9 +334,11 @@ export default function App() {
       } else if (e.kind === "session-added" || e.kind === "session-changed") {
         void refreshProjects();
         if (projectId && e.projectId === projectId) void refreshSessions(projectId);
+      } else if (e.kind === "notify") {
+        handleNotify(e);
       }
     });
-  }, [refreshProjects, refreshSessions, projectId]);
+  }, [refreshProjects, refreshSessions, projectId, handleNotify]);
 
   // Global hotkeys: ⌘K search, ⌘⇧P command palette, ⌘P project switcher.
   // Opening any one closes the others so they never stack. The ⌘⇧P (shift)
@@ -404,6 +465,31 @@ export default function App() {
       setProjectId(hit.projectId);
     }
   };
+
+  // Open a session in the Browse transcript from elsewhere (e.g. the dashboard's
+  // Top Spenders, or a notification toast). Mirrors onPickHit's project-switch
+  // handling but without a message jump: same project selects directly; a
+  // different one stages the session for the project-change effect to pick up.
+  const openSession = useCallback(
+    (pid: string, sid: string) => {
+      setTab("browse");
+      setTailBytes(undefined);
+      setJumpTarget(null);
+      if (pid === projectId) {
+        setSessionId(sid);
+      } else {
+        pendingSessionRef.current = sid;
+        setChatSeed(null);
+        setProjectId(pid);
+      }
+    },
+    [projectId],
+  );
+
+  // Latest openSession, read by the SSE notify handler so it can navigate without
+  // forcing the EventSource to re-subscribe whenever openSession's identity changes.
+  const openSessionRef = useRef(openSession);
+  openSessionRef.current = openSession;
 
   const handleRename = async (id: string, title: string | null) => {
     await api.rename(id, title);
@@ -577,7 +663,7 @@ export default function App() {
         {tab === "settings" ? (
           <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
         ) : tab === "dashboard" ? (
-          <DashboardPane />
+          <DashboardPane onOpenSession={openSession} />
         ) : tab === "browse" ? (
           <>
             <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
@@ -664,6 +750,8 @@ export default function App() {
           setTab("browse");
         }}
       />
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

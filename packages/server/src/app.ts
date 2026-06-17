@@ -22,6 +22,20 @@ import { registerPrRoutes } from "./routes/pr.js";
 import { registerSavedViewsRoutes } from "./routes/saved-views.js";
 import { registerSummaryRoutes } from "./routes/summary.js";
 import { registerSymbolsRoutes } from "./routes/symbols.js";
+import {
+  startNotificationsWatcher,
+  type NotificationsWatcher,
+  type NotifyEvent,
+} from "./notifications.js";
+
+/**
+ * Per-engine notifications watcher, populated by {@link startEngineLifecycle}. The
+ * /api/events SSE handler (built in {@link buildApp}, before the lifecycle starts)
+ * looks the watcher up here AT CONNECTION TIME, so it forwards notify events without
+ * needing the watcher to exist when the route was registered. A WeakMap keeps this
+ * from pinning a closed engine in memory.
+ */
+const notificationsByEngine = new WeakMap<Engine, NotificationsWatcher>();
 
 export interface BuildOptions {
   engine?: Engine;
@@ -256,12 +270,18 @@ export function buildApp(opts: BuildOptions = {}): {
       Connection: "keep-alive",
     });
     raw.write(": connected\n\n");
-    const send = (e: EngineEvent) => raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    const send = (e: EngineEvent | NotifyEvent) =>
+      raw.write(`data: ${JSON.stringify(e)}\n\n`);
     const unsub = engine.on(send);
+    // ALSO forward session notifications (finished/stalled) when a watcher is
+    // running for this engine — same SSE stream, distinguished by `kind: "notify"`.
+    const notifications = notificationsByEngine.get(engine);
+    const unsubNotify = notifications?.on(send);
     const hb = setInterval(() => raw.write(": ping\n\n"), 25000);
     req.raw.on("close", () => {
       clearInterval(hb);
       unsub();
+      unsubNotify?.();
     });
   });
 
@@ -271,7 +291,16 @@ export function buildApp(opts: BuildOptions = {}): {
 /** Wire up the engine lifecycle (watcher + background index) around an app. */
 export function startEngineLifecycle(engine: Engine): () => void {
   const stopWatch = watchTranscripts(engine);
+  // Poll running sessions for finished/stalled transitions and publish them on a
+  // server-local bus; /api/events forwards them to clients (looked up via the
+  // WeakMap above). Registered here, after the transcript watcher.
+  const notifications = startNotificationsWatcher(engine);
+  notificationsByEngine.set(engine, notifications);
   // First index runs in the background; SSE pushes progress. Incremental afterward.
   void engine.indexAll();
-  return stopWatch;
+  return () => {
+    notifications.stop();
+    notificationsByEngine.delete(engine);
+    stopWatch();
+  };
 }

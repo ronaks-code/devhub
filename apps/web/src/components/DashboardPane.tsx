@@ -9,6 +9,7 @@ import { useStatsPolling } from "../hooks/useStatsPolling";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
+import { TopSpenders } from "./dashboard/TopSpenders";
 import { Badge, EmptyState, Spinner } from "./ui";
 
 /** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
@@ -116,7 +117,12 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
-export function DashboardPane() {
+export function DashboardPane({
+  onOpenSession,
+}: {
+  /** Open a session in the Browse view: (projectId, sessionId). From the App. */
+  onOpenSession?: (projectId: string, sessionId: string) => void;
+} = {}) {
   // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
   // to a 30-day window (resolved by PeriodSelector's first onChange below).
   const [period, setPeriod] = useState<PeriodRange>({ id: "30d" });
@@ -201,6 +207,7 @@ export function DashboardPane() {
       yearRollups={yearRollups}
       heatmapMetric={heatmapMetric}
       onHeatmapMetric={setHeatmapMetric}
+      onOpenSession={onOpenSession}
     />
   );
 }
@@ -224,6 +231,7 @@ function DashboardBody({
   yearRollups,
   heatmapMetric,
   onHeatmapMetric,
+  onOpenSession,
 }: {
   stats: Stats;
   tokens: number;
@@ -240,6 +248,8 @@ function DashboardBody({
   yearRollups: DailyUsage[] | null;
   heatmapMetric: HeatmapMetric;
   onHeatmapMetric: (m: HeatmapMetric) => void;
+  /** Open a session in the Browse view: (projectId, sessionId). */
+  onOpenSession?: (projectId: string, sessionId: string) => void;
 }) {
   // Period totals: sum the in-range days client-side. Oldest→newest for the chart.
   const usage = useMemo(() => {
@@ -431,6 +441,12 @@ function DashboardBody({
           ) : (
             <div className="text-[12px] text-zinc-600">No project usage yet.</div>
           )}
+        </section>
+
+        {/* Top spenders — most expensive sessions (est. cost, click to open) */}
+        <section>
+          <SectionTitle icon={<Coins className="h-3.5 w-3.5" />}>Top spenders</SectionTitle>
+          <TopSpenders onOpenSession={onOpenSession} />
         </section>
 
         {/* Activity (30 days) */}

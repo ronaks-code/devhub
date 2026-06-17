@@ -1,17 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Check, FileText, Loader2, Save, Server, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
+import { Bot, Check, FileText, Loader2, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";
 import { HooksEditor } from "./config/HooksEditor";
+import { PermissionsEditor } from "./config/PermissionsEditor";
 import { AgentsLibrary } from "./config/AgentsLibrary";
 import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 
 /** Sub-tabs within the Settings view. */
-type SettingsSection = "preferences" | "memory" | "mcp" | "hooks" | "agents" | "skills";
+type SettingsSection = "preferences" | "memory" | "mcp" | "hooks" | "permissions" | "agents" | "skills";
 
 const MODELS = [
   "claude-opus-4-8",
@@ -309,13 +310,18 @@ export function SettingsPane({
     { id: "memory", label: "Memory", icon: <FileText className="h-3.5 w-3.5" /> },
     { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
     { id: "hooks", label: "Hooks", icon: <Webhook className="h-3.5 w-3.5" /> },
+    { id: "permissions", label: "Permissions", icon: <Shield className="h-3.5 w-3.5" /> },
     { id: "agents", label: "Agents", icon: <Bot className="h-3.5 w-3.5" /> },
     { id: "skills", label: "Skills", icon: <Sparkles className="h-3.5 w-3.5" /> },
   ];
 
+  // Permissions uses a 3-column bucket grid, so it gets a wider container than the
+  // form-style sections (which read best narrow).
+  const wide = section === "permissions";
+
   return (
     <div className="flex-1 overflow-y-auto bg-zinc-950">
-      <div className="mx-auto max-w-2xl px-8 py-8">
+      <div className={cn("mx-auto px-8 py-8", wide ? "max-w-5xl" : "max-w-2xl")}>
         <header className="mb-5">
           <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
           <p className="mt-1 text-[12.5px] text-zinc-500">
@@ -323,13 +329,15 @@ export function SettingsPane({
               ? "Manage the Model Context Protocol servers Claude Code can use."
               : section === "hooks"
                 ? "Commands Claude Code runs on lifecycle events, edited as JSON."
-                : section === "agents"
-                  ? "Subagents installed globally and in this project (read-only)."
-                  : section === "skills"
-                    ? "Skills installed globally and in this project (read-only)."
-                    : section === "memory"
-                    ? "Your CLAUDE.md memory file — instructions prepended to every session."
-                    : "Defaults for new sessions and your spend budget. Saved on the server."}
+                : section === "permissions"
+                  ? "Allow / ask / deny rules that decide which tool calls run automatically."
+                  : section === "agents"
+                    ? "Subagents installed globally and in this project (read-only)."
+                    : section === "skills"
+                      ? "Skills installed globally and in this project (read-only)."
+                      : section === "memory"
+                        ? "Your CLAUDE.md memory file — instructions prepended to every session."
+                        : "Defaults for new sessions and your spend budget. Saved on the server."}
           </p>
         </header>
 
@@ -359,6 +367,8 @@ export function SettingsPane({
           <McpManager projectCwd={projectCwd} />
         ) : section === "hooks" ? (
           <HooksEditor projectCwd={projectCwd} />
+        ) : section === "permissions" ? (
+          <PermissionsEditor projectCwd={projectCwd} />
         ) : section === "agents" ? (
           <AgentsLibrary projectCwd={projectCwd} />
         ) : (

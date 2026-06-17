@@ -37,6 +37,7 @@ import { searchSymbols } from "../src/symbols.js";
 import { tokenizerOf, detectFtsTokenizer, FTS_TABLE } from "../src/fts-schema.js";
 import { normalizeProjectDefault } from "../src/project-settings.js";
 import { AuditStore } from "../src/audit.js";
+import { redactSecrets, redactDeep } from "../src/redact.js";
 import { selectCommitsInWindow, getSessionCommits } from "../src/session-commits.js";
 import { makeLineHandler } from "../src/driver/cli.js";
 import type { TurnHandlers, TurnResult } from "../src/driver/types.js";
@@ -600,6 +601,110 @@ describe("TranscriptIndex faceted search", () => {
       "sessB",
     ]);
     idx.close();
+  });
+});
+
+describe("file facet (sessions touching a path)", () => {
+  // Two sessions: sessE Edits src/index-db.ts, sessR Reads src/search.ts. Both
+  // mention "refactor" so the text match is constant and only the file path differs.
+  const buildFiles = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    writeFileSync(
+      path.join(proj, "sessE.jsonl"),
+      jl({
+        type: "user",
+        cwd: "/home/me/app",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "refactor the index" },
+      }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/app",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Editing now." },
+              { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "src/index-db.ts" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    writeFileSync(
+      path.join(proj, "sessR.jsonl"),
+      jl({
+        type: "user",
+        cwd: "/home/me/app",
+        timestamp: "2026-02-01T00:00:00.000Z",
+        message: { role: "user", content: "refactor the search" },
+      }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/app",
+          timestamp: "2026-02-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Reading first." },
+              { type: "tool_use", id: "t2", name: "Read", input: { file_path: "src/search.ts" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(path.join(proj, "sessE.jsonl"));
+    await idx.indexSession(path.join(proj, "sessR.jsonl"));
+    return idx;
+  };
+
+  it("file facet narrows to sessions whose tool I/O referenced that path", async () => {
+    const idx = await buildFiles(tmp());
+    // Facet-only (no free text): the file: facet alone lists matching sessions.
+    expect(idx.search("file:index-db.ts").map((h) => h.sessionId)).toEqual(["sessE"]);
+    expect(idx.search("file:search.ts").map((h) => h.sessionId)).toEqual(["sessR"]);
+    // A path nobody touched yields nothing.
+    expect(idx.search("file:nope.ts")).toEqual([]);
+    idx.close();
+  });
+
+  it("file facet is case-insensitive and matches a path substring", async () => {
+    const idx = await buildFiles(tmp());
+    expect(idx.search("", { file: "INDEX-DB.TS" }).map((h) => h.sessionId)).toEqual(["sessE"]);
+    // Common dir prefix matches both.
+    expect(idx.search("", { file: "src/" }).map((h) => h.sessionId).sort()).toEqual([
+      "sessE",
+      "sessR",
+    ]);
+    idx.close();
+  });
+
+  it("file facet composes with free text (session-level filter, hit is the text match)", async () => {
+    const idx = await buildFiles(tmp());
+    // Both sessions contain "refactor", but file:index-db.ts keeps only sessE. The
+    // facet is session-level, so the returned hit is the best free-text match within
+    // that session (a chat row), NOT necessarily the tool row that referenced the file.
+    const hits = idx.search("file:index-db.ts refactor");
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessE"]);
+    // Filtering to the search.ts file instead keeps only sessR.
+    expect(idx.search("file:search.ts refactor").map((h) => h.sessionId)).toEqual(["sessR"]);
+    idx.close();
+  });
+
+  it("backward-compatible: a plain query is unaffected", async () => {
+    const idx = await buildFiles(tmp());
+    expect(idx.search("refactor").map((h) => h.sessionId).sort()).toEqual(["sessE", "sessR"]);
+    idx.close();
+  });
+
+  it("query parser lifts the file: token into the file facet", () => {
+    const { text, facets } = parseSearchQuery("file:index-db.ts refactor");
+    expect(facets.file).toBe("index-db.ts");
+    expect(text).toBe("refactor");
+    // Quoted value with a space survives.
+    expect(parseSearchQuery('file:"my file.ts"').facets.file).toBe("my file.ts");
   });
 });
 
@@ -1187,6 +1292,99 @@ describe("pricing (approximate cost estimates)", () => {
   });
 });
 
+describe("redactSecrets (credential masking)", () => {
+  const REDACTED = "[REDACTED]";
+
+  it("masks provider API keys but keeps surrounding text", () => {
+    const out = redactSecrets("use key sk-abcdEFGH1234567890zz to call openai");
+    expect(out).toContain("use key");
+    expect(out).toContain("to call openai");
+    expect(out).not.toContain("sk-abcdEFGH1234567890zz");
+    expect(out).toContain(REDACTED);
+  });
+
+  it("masks GitHub, Slack, Google and AWS key shapes", () => {
+    expect(redactSecrets("token ghp_" + "a".repeat(36))).not.toContain("ghp_aaaa");
+    expect(redactSecrets("xoxb-123456789012-abcdefghijkl")).not.toContain("xoxb-1234");
+    expect(redactSecrets("AIza" + "b".repeat(35))).not.toContain("AIzab");
+    expect(redactSecrets("id AKIAIOSFODNN7EXAMPLE here")).toBe(`id ${REDACTED} here`);
+  });
+
+  it("masks JWTs and Bearer tokens, keeping the scheme word", () => {
+    const jwt =
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
+    expect(redactSecrets(`auth ${jwt}`)).toBe(`auth ${REDACTED}`);
+    const bear = redactSecrets("Authorization: Bearer abcDEF1234567890");
+    expect(bear).toContain("Bearer");
+    expect(bear).not.toContain("abcDEF1234567890");
+    expect(bear).toContain(REDACTED);
+  });
+
+  it("masks the password inside a connection string, keeping the rest", () => {
+    const out = redactSecrets("postgres://admin:s3cr3tPass@db.host:5432/app");
+    expect(out).toBe(`postgres://admin:${REDACTED}@db.host:5432/app`);
+  });
+
+  it("masks .env-style KEY=secret and quoted JSON assignments", () => {
+    expect(redactSecrets("API_TOKEN=supersecretvalue123")).toBe(`API_TOKEN=${REDACTED}`);
+    const json = redactSecrets('{"password": "hunter2hunter2", "name": "ok"}');
+    expect(json).not.toContain("hunter2hunter2");
+    expect(json).toContain(REDACTED);
+    // The non-secret field is preserved verbatim.
+    expect(json).toContain('"name": "ok"');
+  });
+
+  it("is a pure no-op on benign text and on nullish input", () => {
+    expect(redactSecrets("just a normal sentence about index-db.ts")).toBe(
+      "just a normal sentence about index-db.ts",
+    );
+    expect(redactSecrets("")).toBe("");
+    expect(redactSecrets(null)).toBe("");
+    expect(redactSecrets(undefined)).toBe("");
+  });
+
+  it("redactDeep walks nested objects/arrays masking only string leaves", () => {
+    const out = redactDeep({
+      toolName: "Bash",
+      ok: true,
+      n: 42,
+      input: { command: "export API_KEY=topsecretvalue99", note: "harmless" },
+      tags: ["plain", "Bearer abcDEF1234567890"],
+    });
+    expect(out.toolName).toBe("Bash");
+    expect(out.ok).toBe(true);
+    expect(out.n).toBe(42);
+    expect(out.input.command).toContain(REDACTED);
+    expect(out.input.command).not.toContain("topsecretvalue99");
+    expect(out.input.note).toBe("harmless");
+    expect(out.tags[0]).toBe("plain");
+    expect(out.tags[1]).toContain(REDACTED);
+  });
+
+  it("audit log redacts the free-text reason before storing it", () => {
+    const db = new DatabaseSync(path.join(tmp(), "a.db"));
+    db.exec(`CREATE TABLE permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT, toolName TEXT NOT NULL,
+      decision TEXT NOT NULL, scope TEXT, reason TEXT, ts INTEGER NOT NULL
+    );`);
+    const audit = new AuditStore(db);
+    const entry = audit.logDecision({
+      sessionId: "s1",
+      toolName: "Bash",
+      decision: "deny",
+      reason: "blocked: leaked sk-abcdEFGH1234567890zz in command",
+      ts: 1,
+    });
+    // Returned + persisted reason is masked; the structured fields are untouched.
+    expect(entry.reason).toContain(REDACTED);
+    expect(entry.reason).not.toContain("sk-abcdEFGH1234567890zz");
+    expect(entry.toolName).toBe("Bash");
+    const stored = audit.list({ sessionId: "s1" })[0]!;
+    expect(stored.reason).toBe(entry.reason);
+    db.close();
+  });
+});
+
 describe("detectSourceKind (multi-source labeling)", () => {
   it("defaults to claude and detects other CLIs by folder/cwd hints", () => {
     expect(detectSourceKind("/home/me/.claude/projects/-proj")).toBe("claude");
@@ -1357,6 +1555,32 @@ describe("listAllSessions (cross-project listing)", () => {
     const { idx } = await buildAll(tmp());
     expect(idx.listAllSessions({ sort: "tokens" }).map((s) => s.sessionId)).toEqual(["beta", "alpha"]);
     expect(idx.listAllSessions({ sort: "messages" }).map((s) => s.sessionId)).toEqual(["alpha", "beta"]);
+    idx.close();
+  });
+
+  it("sort by cost ranks highest estimated spend first (per-model pricing)", async () => {
+    const { idx } = await buildAll(tmp());
+    // alpha: 100 input tokens on opus ($5/Mtok) = $0.0005.
+    // beta:  9000 input tokens on sonnet ($3/Mtok) = $0.027 — higher despite the
+    // cheaper model, because it has far more tokens. Cost sort must surface beta.
+    expect(idx.listAllSessions({ sort: "cost" }).map((s) => s.sessionId)).toEqual(["beta", "alpha"]);
+    idx.close();
+  });
+
+  it("cost sort honors limit/offset paging", async () => {
+    const { idx } = await buildAll(tmp());
+    const top = idx.listAllSessions({ sort: "cost", limit: 1 });
+    expect(top.map((s) => s.sessionId)).toEqual(["beta"]);
+    const next = idx.listAllSessions({ sort: "cost", limit: 1, offset: 1 });
+    expect(next.map((s) => s.sessionId)).toEqual(["alpha"]);
+    idx.close();
+  });
+
+  it("cost sort respects filters (only the matching project is ranked)", async () => {
+    const { idx, alphaId } = await buildAll(tmp());
+    expect(idx.listAllSessions({ sort: "cost", projectId: alphaId }).map((s) => s.sessionId)).toEqual([
+      "alpha",
+    ]);
     idx.close();
   });
 

@@ -17,6 +17,7 @@
  */
 import type { DatabaseSync as SqliteDatabase, StatementSync } from "node:sqlite";
 import type { PermissionDenial } from "./driver/types.js";
+import { redactSecrets } from "./redact.js";
 
 /** An allow/deny verdict for a tool call. */
 export type AuditDecision = "allow" | "deny";
@@ -100,15 +101,20 @@ export class AuditStore {
 
   /**
    * Record one permission decision. `toolName` is trimmed (falls back to "tool"
-   * when blank); `decision` is normalized to allow/deny; `ts` defaults to now.
-   * Returns the stored entry (with its assigned id).
+   * when blank); `decision` is normalized to allow/deny; the free-text `reason` is
+   * run through {@link redactSecrets} so a leaked key/token/connection-string never
+   * lands in the log; `ts` defaults to now. Returns the stored entry (the returned
+   * `reason` is the redacted value that was persisted).
    */
   logDecision(input: AuditDecisionInput): AuditEntry {
     const toolName = (input.toolName ?? "").trim() || "tool";
     const decision: AuditDecision = input.decision === "allow" ? "allow" : "deny";
     const sessionId = input.sessionId ?? null;
     const scope = input.scope ?? null;
-    const reason = input.reason ?? null;
+    // `reason` is the only free-text field a caller passes through; mask any
+    // credential-shaped substrings before it lands in the durable log. The other
+    // fields (toolName/decision/scope) are constrained vocabularies and safe.
+    const reason = input.reason != null ? redactSecrets(input.reason) : null;
     const ts = typeof input.ts === "number" ? input.ts : Date.now();
     const res = this.insert.run(sessionId, toolName, decision, scope, reason, ts);
     return { id: Number(res.lastInsertRowid), sessionId, toolName, decision, scope, reason, ts };

@@ -1,5 +1,5 @@
 import type {
-  EngineEvent,
+  AppEvent,
   ProjectSummary,
   RunningSession,
   SessionMessagesPage,
@@ -27,6 +27,9 @@ import type {
   Worktree,
   ClaudeMdDoc,
   ClaudeMdWriteResult,
+  PermissionsResult,
+  PermissionsWriteResult,
+  RuleAction,
 } from "./types";
 
 async function get<T>(url: string): Promise<T> {
@@ -251,6 +254,32 @@ export const api = {
   ) => send<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, "PATCH", patch),
   sessions: (projectId: string) =>
     get<SessionSummary[]>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
+  // Cross-project session listing (GET /api/all-sessions). Sorts server-side by
+  // recent | tokens | messages (NOT cost — cost isn't a stored column), with
+  // optional facet narrowing + paging. Backs the dashboard's TopSpenders, which
+  // fetches by `tokens` and re-ranks by estimated cost client-side.
+  allSessions: (opts: {
+    sort?: "recent" | "tokens" | "messages";
+    projectId?: string;
+    tag?: string;
+    model?: string;
+    limit?: number;
+    offset?: number;
+  } = {}) =>
+    get<SessionSummary[]>(
+      "/api/all-sessions" +
+        ((): string => {
+          const qs = new URLSearchParams();
+          if (opts.sort) qs.set("sort", opts.sort);
+          if (opts.projectId) qs.set("projectId", opts.projectId);
+          if (opts.tag) qs.set("tag", opts.tag);
+          if (opts.model) qs.set("model", opts.model);
+          if (opts.limit != null) qs.set("limit", String(opts.limit));
+          if (opts.offset != null) qs.set("offset", String(opts.offset));
+          const s = qs.toString();
+          return s ? `?${s}` : "";
+        })(),
+    ),
   messages: (sessionId: string, tailBytes?: number) =>
     get<SessionMessagesPage>(
       `/api/sessions/${encodeURIComponent(sessionId)}/messages` +
@@ -375,6 +404,18 @@ export const api = {
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>
     send<AppSettings>("/api/settings", "PUT", patch),
+  // The merged allow/ask/deny permission rules across the settings.json layers
+  // (+ the contributing source paths). A known project `cwd` adds that project's
+  // layers; without one it's the global layer only. Backs the PermissionsEditor.
+  getPermissions: (cwd?: string) =>
+    get<PermissionsResult>(
+      "/api/permissions" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+    ),
+  // Add or remove ONE rule in a bucket, persisted to the USER settings.json
+  // (~/.claude/settings.json) via the server's safe-write (validate -> .bak -> atomic).
+  // Returns that file's three buckets after the write. The web side only wires the call.
+  putPermissionRule: (action: RuleAction, rule: string, op: "add" | "remove") =>
+    send<PermissionsWriteResult>("/api/permissions", "PUT", { action, rule, op }),
   // Fuzzy file lookup within a project cwd, backing the composer's "@" mention
   // picker. The server allowlists `cwd` to known project roots (so an arbitrary
   // path can't be enumerated) and ranks matches for `q` server-side. The web
@@ -416,12 +457,16 @@ export function assetUrl(path: string): string {
 
 export type { AppSettings };
 
-/** Subscribe to server-sent engine events. Returns an unsubscribe fn. */
-export function subscribeEvents(onEvent: (e: EngineEvent) => void): () => void {
+/**
+ * Subscribe to server-sent engine events. Returns an unsubscribe fn. The callback
+ * receives the engine union widened with the web-only `notify` event ({@link AppEvent}),
+ * so toast handling type-checks without an engine edit; unknown kinds are simply ignored.
+ */
+export function subscribeEvents(onEvent: (e: AppEvent) => void): () => void {
   const es = new EventSource("/api/events");
   es.onmessage = (ev) => {
     try {
-      onEvent(JSON.parse(ev.data) as EngineEvent);
+      onEvent(JSON.parse(ev.data) as AppEvent);
     } catch {
       /* ignore malformed */
     }

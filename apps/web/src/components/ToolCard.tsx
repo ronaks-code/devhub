@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FileDiff, Loader2, Terminal, Wrench, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { DiffView, parseEditInput } from "./DiffView";
+import { ResultBody } from "./ResultBody";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
 import { ReadCard } from "./tools/ReadCard";
@@ -16,23 +17,6 @@ function prettyInput(input: unknown): string {
   } catch {
     return String(input);
   }
-}
-
-/** Compact, scrollable rendering of a tool_result's body. */
-function ResultBody({ result }: { result: ToolResultBlock }) {
-  const content = result.content ?? "";
-  const long = content.length > 600;
-  const head = long ? content.slice(0, 600) : content;
-  return (
-    <pre
-      className={cn(
-        "overflow-x-auto whitespace-pre-wrap break-words border-t px-3 py-2 font-mono text-[12px] leading-relaxed",
-        result.isError ? "border-red-900/60 text-red-300" : "border-zinc-800 text-zinc-400",
-      )}
-    >
-      {long ? `${head}\n…` : head || "(empty)"}
-    </pre>
-  );
 }
 
 function StatusChip({ isError }: { isError: boolean }) {

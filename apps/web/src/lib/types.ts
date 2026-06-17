@@ -1,4 +1,4 @@
-import type { SearchHit, Stats } from "@claude-ui/engine/types";
+import type { EngineEvent, SearchHit, Stats } from "@claude-ui/engine/types";
 
 export type {
   ProjectSummary,
@@ -35,6 +35,38 @@ export interface SearchHitWithSeq extends SearchHit {
   /** 0-based message sequence index within the session window of the match. */
   seq?: number;
 }
+
+/**
+ * A transient user notification pushed over the /api/events SSE stream. The engine
+ * `EngineEvent` union does not (yet) carry this kind, and we can't edit that
+ * package — so, like {@link SearchHitWithSeq}, we widen it at the web boundary
+ * instead of shimming the engine. Every field beyond `kind` is optional and read
+ * defensively, so whatever the engine/server lane ends up emitting still parses.
+ *
+ * Typical payloads: a session finishing ("Session finished in <project>") or a
+ * session blocking on the user ("Session waiting for you").
+ */
+export interface NotifyEvent {
+  kind: "notify";
+  /** Short headline (falls back to a generic title when absent). */
+  title?: string;
+  /** Longer body line. */
+  body?: string;
+  /** Severity hint for the toast tint; defaults to "info". */
+  level?: "info" | "success" | "warning";
+  /** When present, the toast/notification deep-links to this session on click. */
+  sessionId?: string;
+  projectId?: string;
+  /** Project name/cwd for a nicer message, when the server includes it. */
+  project?: string;
+}
+
+/**
+ * The events the web app actually subscribes to: the engine's union widened with
+ * the web-only {@link NotifyEvent}. Used by the SSE subscriber so a `notify` event
+ * type-checks without an engine edit.
+ */
+export type AppEvent = EngineEvent | NotifyEvent;
 
 // Read-only git result shapes used by the GitPanel. Defined here (rather than
 // imported from the engine root, which bundles Node-only code) to keep the web
@@ -123,6 +155,45 @@ export interface HooksConfig {
 export interface HooksInput {
   /** Full hooks map to persist (event -> matcher entries). */
   hooks: Record<string, unknown[]>;
+}
+
+/**
+ * The three permission rule buckets Claude Code enforces (deny wins, then ask,
+ * then allow). Mirrors the engine config module's `PermissionsConfig`; defined
+ * locally so the web bundle stays free of the Node-only engine config code.
+ * Kept in lockstep with packages/engine/src/config/index.ts.
+ */
+export interface PermissionsConfig {
+  allow: string[];
+  ask: string[];
+  deny: string[];
+}
+
+/** Which bucket a rule lives in. */
+export type RuleAction = "allow" | "ask" | "deny";
+
+/**
+ * Response from GET /api/permissions — the merged allow/ask/deny rules across the
+ * settings.json layers, plus the contributing source paths. `scope` is "project"
+ * when a project cwd narrowed the read, else "global". Mirrors the server route.
+ */
+export interface PermissionsResult {
+  permissions: PermissionsConfig;
+  /** settings.json paths that fed the merged view, lowest precedence first. */
+  sources: string[];
+  scope: ConfigScope;
+}
+
+/**
+ * Response from PUT /api/permissions — the rule was added/removed in the USER
+ * settings.json (~/.claude/settings.json). `permissions` is that file's three
+ * buckets after the write (NOT the merged layered view).
+ */
+export interface PermissionsWriteResult {
+  ok: boolean;
+  /** Absolute path of the settings.json that was written. */
+  file: string;
+  permissions: PermissionsConfig;
 }
 
 /**

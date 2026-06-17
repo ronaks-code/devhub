@@ -154,7 +154,8 @@ export class Engine {
   /**
    * Cross-project session listing for a global "All Sessions" view: every project's
    * sessions in one list, with optional projectId/tag/model filters, a sort
-   * ("recent" | "tokens" | "messages"), and limit/offset paging. Reuses the index
+   * ("recent" | "tokens" | "messages" | "cost"), and limit/offset paging. The "cost"
+   * sort ranks by estimated per-session spend (top-spenders first). Reuses the index
    * (no transcript reads).
    */
   listAllSessions(opts: ListAllSessionsOptions = {}): SessionSummary[] {
@@ -643,6 +644,7 @@ export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";
 export { AuditStore } from "./audit.js";
 export type { AuditDecision, AuditDecisionInput, AuditEntry } from "./audit.js";
+export { redactSecrets, redactDeep } from "./redact.js";
 export { getSessionCommits, selectCommitsInWindow } from "./session-commits.js";
 export type { SessionCommit } from "./session-commits.js";
 export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";

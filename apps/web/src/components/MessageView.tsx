@@ -5,6 +5,7 @@ import { cn } from "../lib/utils";
 import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
+import { ResultBody } from "./ResultBody";
 import { ImageBlock, type ImageBlockData } from "./ImageBlock";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
@@ -46,23 +47,6 @@ function HighlightText({ text }: { text: string }): ReactNode {
     i = at + needle.length;
   }
   return <>{out}</>;
-}
-
-/** Compact, scrollable rendering of a standalone tool_result's body. */
-function ResultBody({ result }: { result: ToolResultBlock }) {
-  const content = result.content ?? "";
-  const long = content.length > 600;
-  const head = long ? content.slice(0, 600) : content;
-  return (
-    <pre
-      className={cn(
-        "overflow-x-auto whitespace-pre-wrap break-words border-t px-3 py-2 font-mono text-[12px] leading-relaxed",
-        result.isError ? "border-red-900/60 text-red-300" : "border-zinc-800 text-zinc-400",
-      )}
-    >
-      {long ? `${head}\n…` : head || "(empty)"}
-    </pre>
-  );
 }
 
 /** Standalone tool_result (its tool_use is outside this window). */

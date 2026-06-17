@@ -129,6 +129,19 @@ body {
 }
 
 /*
+ * A diff line's content span carries `.hljs` so the github-dark TOKEN colors
+ * (.hljs-keyword, .hljs-string, …) apply to the highlighted spans inside it. But
+ * the theme's base `.hljs` rule also paints a background + a base text color — we
+ * neutralize both here so the row's red/green +/- tint and its emerald/red text
+ * color stay intact, and only the syntax token colors layer on top.
+ */
+.diff-syntax.hljs {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/*
  * Permalink flash — applied briefly to a message when it's deep-linked via the
  * URL hash (#<uuid>|#seq-<n>). A clay-tinted background + inset ring fades out
  * over ~2s so the eye lands on the target without a jarring persistent style.

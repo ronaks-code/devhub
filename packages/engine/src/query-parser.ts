@@ -38,6 +38,8 @@ export interface ParsedQuery {
  * `model:` sets `modelLike` (a forgiving substring match) so `model:opus` matches a
  * stored id like `claude-opus-4-8`; the exact-match `model` facet stays reserved for
  * programmatic callers. `project:` maps to `projectId` (callers pass a stable id).
+ * `file:` maps to the `file` facet — a substring match against the mirrored tool-I/O
+ * paths, so `file:index-db.ts` narrows to sessions that Edited/Read that file.
  * Keys are matched case-insensitively. Each handler receives the already-unquoted,
  * trimmed value and writes onto `f`; an empty value is treated as "no token" by the
  * caller (the raw text is kept) so a stray `tool:` doesn't silently drop a word.
@@ -78,6 +80,9 @@ const TOKEN_HANDLERS: Record<string, (f: SearchFacets, value: string) => void> =
   },
   tag: (f, v) => {
     f.tag = v;
+  },
+  file: (f, v) => {
+    f.file = v;
   },
 };
 

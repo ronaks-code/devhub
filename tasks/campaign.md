@@ -24,7 +24,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W12 CLAUDE.md editor, deny-with-feedback, calendar heatmap, code-symbols, query syntax, AI summary, stats poll, Read card ✅mbol
 - [x] W13 Skills manager, branch switcher, retry, mini-map, FTS trigram, Task card, per-project defaults, desktop auto-server ✅
 - [x] W14 TUI live chat, audit log, edit approvals, project detail header, session↔commits, notes, live thinking, reading mode ✅
-- [ ] W15 TUI search, push notifications, secret redaction, syntax diff
+- [x] W15 TUI search, finish/stall notifications, secret redaction, syntax diffs, show-more, permissions editor, top-spenders ✅
 - [ ] W16 Live Ops board, config watcher, keyboard approvals, prompt templates
 - [ ] W17 Effective config, ahead/behind sync, config linter, semantic search
 - [ ] W18 Stop running session, restore-from-backup, transcript timestamps
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W15** ✅ (green: tc×4 + 218 tests + build + tui + file-facet/cost-sort/chat). engine: `redact.ts` secret masking (audit-applied), `file:` search facet, listAllSessions sort:"cost". server: notifications watcher (finish/stall) → `{kind:"notify"}` on /api/events SSE. web: syntax-highlighted diffs, ResultBody show-more, PermissionsEditor (+tester), TopSpenders, notify toasts + browser Notification. tui: Search screen. FIXES: restarted a wedged dev server (15 waves of hot-reload); added "cost" to the all-sessions sort enum (runtime smoke caught it).
 - **W14** ✅ (green: tc×4 + 202 tests + build + tui-smoke + notes/chat). engine: `audit.ts` permission audit log (v10), `session-commits.ts` link sessions→commits, thinking-delta in driver, session notes (v11). server: ws thinking-delta forward + notes in PATCH. web: EditableApproval, ProjectDetailHeader, SessionNotes, useReadingMode, live thinking in LiveBubble. tui: live Chat screen (in-process driver). TECH-DEBT noted: server uses some local type-widening / runtime duck-typing for engine symbols that landed same-wave (functional + typechecks); reconcile in a cleanup pass.
 - **W13** ✅ (green: tc×4 + 182 tests + build + search-survives-migration + substring + cargo check). engine: FTS5 **trigram** tokenizer via data-preserving copy-migration (v8) → substring search now works; per-project default model/permission (v9). server: projects PATCH forwards defaults. web: SkillsManager, BranchSwitcher, TurnError retry, TranscriptMinimap, TaskCard (inline subagent), per-project default selects. desktop: lib.rs auto-spawns the server on launch (compiles).
 - **W12** ✅ (green: tc×4 + 170 tests + build + symbols + query-syntax + chat). engine: `symbols.ts` on-demand code-symbol search (allowlisted), `query-parser.ts` inline `tool:`/`role:`/`after:`/`model:` tokens integrated into search. server: `/api/summary` (AI recap) + `/api/symbols`. web: ClaudeMdEditor (+preview/token-count), DenyFeedback, 12-month CalendarHeatmap, useStatsPolling, ReadCard.

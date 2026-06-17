@@ -5,10 +5,14 @@
 import React, { useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { Engine } from "@claude-ui/engine";
-import type { NormalizedMessage, ProjectSummary, SessionSummary } from "@claude-ui/engine/types";
+import type { NormalizedMessage, ProjectSummary, SearchHit, SessionSummary } from "@claude-ui/engine/types";
 import { Chat } from "./screens/Chat.js";
+import { Search } from "./screens/Search.js";
 
-type Mode = "projects" | "sessions" | "transcript" | "chat";
+type Mode = "projects" | "sessions" | "transcript" | "chat" | "search";
+
+/** Just the bits the transcript header renders — works for a SessionSummary or a SearchHit. */
+type TranscriptHead = { sessionId: string; title: string; cwd: string | null };
 
 const VISIBLE = 16; // list/transcript window height
 
@@ -44,18 +48,43 @@ export function App({ engine }: { engine: Engine }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sIdx, setSIdx] = useState(0);
   const [project, setProject] = useState<ProjectSummary | null>(null);
-  const [session, setSession] = useState<SessionSummary | null>(null);
+  // Header bits for the open transcript (from a SessionSummary or a SearchHit).
+  const [head, setHead] = useState<TranscriptHead | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [scroll, setScroll] = useState(0);
   const [loading, setLoading] = useState(false);
   // Which browse screen the chat screen returns to on Esc (set when launched).
   const [chatReturn, setChatReturn] = useState<"projects" | "sessions">("projects");
+  // Which screen the transcript returns to on Esc (sessions list, or search results).
+  const [transcriptReturn, setTranscriptReturn] = useState<"sessions" | "search">("sessions");
+
+  // Open a session's transcript from anywhere (sessions list or search). Loads the
+  // mirrored messages in-process and flips to the transcript view; `from` is where
+  // Esc returns to.
+  const openTranscript = (h: TranscriptHead, from: "sessions" | "search") => {
+    setHead(h);
+    setTranscriptReturn(from);
+    setLoading(true);
+    setMode("transcript");
+    setScroll(0);
+    engine
+      .getSessionMessages(h.sessionId)
+      .then((page) => setLines((page?.messages ?? []).flatMap(flattenMessage)))
+      .finally(() => setLoading(false));
+  };
 
   useInput(
     (input, key) => {
       if (input === "q") {
         exit();
         return;
+      }
+      if (input === "/") {
+        // Open full-text search from either browse screen.
+        if (mode === "projects" || mode === "sessions") {
+          setMode("search");
+          return;
+        }
       }
       if (mode === "projects") {
         if (key.downArrow || input === "j") setPIdx((i) => Math.min(i + 1, projects.length - 1));
@@ -89,27 +118,19 @@ export function App({ engine }: { engine: Engine }) {
         } else if (key.escape || input === "h") setMode("projects");
         else if (key.return) {
           const s = sessions[sIdx];
-          if (s) {
-            setSession(s);
-            setLoading(true);
-            setMode("transcript");
-            setScroll(0);
-            engine
-              .getSessionMessages(s.sessionId)
-              .then((page) => setLines((page?.messages ?? []).flatMap(flattenMessage)))
-              .finally(() => setLoading(false));
-          }
+          if (s) openTranscript({ sessionId: s.sessionId, title: s.title, cwd: s.cwd }, "sessions");
         }
       } else if (mode === "transcript") {
         if (key.downArrow || input === "j") setScroll((s) => Math.min(s + 1, Math.max(0, lines.length - VISIBLE)));
         else if (key.upArrow || input === "k") setScroll((s) => Math.max(0, s - 1));
         else if (input === " ") setScroll((s) => Math.min(s + VISIBLE, Math.max(0, lines.length - VISIBLE)));
-        else if (key.escape || input === "h") setMode("sessions");
+        else if (key.escape || input === "h") setMode(transcriptReturn);
       }
     },
-    // While the Chat screen is mounted it owns keyboard input; the browse
-    // handler is disabled so typed characters (incl. "q"/"c") go to the prompt.
-    { isActive: mode !== "chat" },
+    // While the Chat or Search screen is mounted it owns keyboard input; the
+    // browse handler is disabled so typed characters (incl. "q"/"c"/"/") go to
+    // that screen's input instead of triggering browse shortcuts.
+    { isActive: mode !== "chat" && mode !== "search" },
   );
 
   if (mode === "chat" && project) {
@@ -118,6 +139,20 @@ export function App({ engine }: { engine: Engine }) {
     return (
       <Box flexDirection="column" paddingX={1}>
         <Chat project={project} onExit={() => setMode(chatReturn)} />
+      </Box>
+    );
+  }
+
+  if (mode === "search") {
+    // The Search screen owns its own input. A hit opens the session's transcript
+    // (Esc from there returns to the search results); Esc here returns to browse.
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <Search
+          engine={engine}
+          onOpen={(hit) => openTranscript({ sessionId: hit.sessionId, title: hit.title, cwd: hit.cwd }, "search")}
+          onExit={() => setMode("projects")}
+        />
       </Box>
     );
   }
@@ -151,9 +186,9 @@ export function App({ engine }: { engine: Engine }) {
       {mode === "transcript" && (
         <Box flexDirection="column">
           <Text color="cyan" bold>
-            {session?.title}
+            {head?.title}
           </Text>
-          <Text color="gray">{session?.cwd ?? ""}</Text>
+          <Text color="gray">{head?.cwd ?? ""}</Text>
           <Box flexDirection="column" marginTop={1}>
             {loading ? (
               <Text color="gray">loading…</Text>
@@ -175,9 +210,9 @@ export function App({ engine }: { engine: Engine }) {
       <Box marginTop={1}>
         <Text color="gray" dimColor>
           {mode === "projects"
-            ? "↑↓/jk move · ⏎ open · c chat · q quit"
+            ? "↑↓/jk move · ⏎ open · c chat · / search · q quit"
             : mode === "sessions"
-              ? "↑↓/jk move · ⏎ open · c chat · esc/h back · q quit"
+              ? "↑↓/jk move · ⏎ open · c chat · / search · esc/h back · q quit"
               : "↑↓/jk scroll · space page · esc/h back · q quit"}
         </Text>
       </Box>

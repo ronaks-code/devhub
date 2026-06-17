@@ -1,7 +1,162 @@
-import { memo, type ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
+import hljs from "highlight.js/lib/common";
 
 /** One line of a unified diff. " " = unchanged context, "-" = removed, "+" = added. */
 export type DiffLine = { sign: " " | "-" | "+"; text: string };
+
+/**
+ * A flat run of syntax-colored text: `text` carries the characters, `cls` the
+ * highlight.js class to color it (empty = plain). Producing a FLAT stream (rather
+ * than nested spans) lets us re-split it at word-diff boundaries so syntax colors
+ * and the intra-line +/- background can coexist on the same characters.
+ */
+type SyntaxSpan = { text: string; cls: string };
+
+/**
+ * Map a file extension to a highlight.js language id, mirroring ReadCard's table.
+ * Returns undefined for unknown/extension-less files so we skip highlighting
+ * entirely (cheaper, and avoids mis-detection on diff fragments).
+ */
+function langFromPath(filePath: string | undefined): string | undefined {
+  if (!filePath) return undefined;
+  const ext = filePath.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (!ext) return undefined;
+  const map: Record<string, string> = {
+    ts: "typescript",
+    tsx: "typescript",
+    mts: "typescript",
+    cts: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    mjs: "javascript",
+    cjs: "javascript",
+    json: "json",
+    py: "python",
+    rb: "ruby",
+    go: "go",
+    rs: "rust",
+    java: "java",
+    kt: "kotlin",
+    swift: "swift",
+    c: "c",
+    h: "c",
+    cpp: "cpp",
+    cc: "cpp",
+    hpp: "cpp",
+    cs: "csharp",
+    php: "php",
+    sh: "bash",
+    bash: "bash",
+    zsh: "bash",
+    yml: "yaml",
+    yaml: "yaml",
+    toml: "ini",
+    ini: "ini",
+    md: "markdown",
+    markdown: "markdown",
+    css: "css",
+    scss: "scss",
+    less: "less",
+    html: "xml",
+    xml: "xml",
+    sql: "sql",
+    diff: "diff",
+    dockerfile: "dockerfile",
+  };
+  return map[ext];
+}
+
+/**
+ * Highlight ONE line of code into a flat list of syntax spans. We highlight per
+ * line (not the whole file) because a diff hunk's removed/added sides aren't
+ * contiguous source — feeding them as one blob would mis-color. `ignoreIllegals`
+ * keeps a partial line (common in diffs) from throwing. On any failure we return
+ * a single plain span so the line still renders (just uncolored).
+ *
+ * The hljs HTML is parsed into spans via a tiny tag walker: each `<span class>`
+ * pushes its class, `</span>` pops, and text between tags becomes a SyntaxSpan
+ * carrying the innermost class. hljs escapes its text output, so we unescape the
+ * handful of entities it emits to recover the literal characters.
+ */
+function highlightLine(text: string, language: string | undefined): SyntaxSpan[] {
+  if (text === "") return [{ text: "", cls: "" }];
+  let html: string;
+  try {
+    html =
+      language && hljs.getLanguage(language)
+        ? hljs.highlight(text, { language, ignoreIllegals: true }).value
+        : text; // no language → leave plain (don't pay for auto-detect per line)
+  } catch {
+    return [{ text, cls: "" }];
+  }
+  if (html === text) return [{ text, cls: "" }];
+  return parseHljsSpans(html);
+}
+
+function unescapeHtml(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/** Parse a single line of highlight.js HTML into a flat list of class-tagged runs. */
+function parseHljsSpans(html: string): SyntaxSpan[] {
+  const out: SyntaxSpan[] = [];
+  const classStack: string[] = [];
+  const tagRe = /<span class="([^"]*)">|<\/span>/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  const pushText = (raw: string) => {
+    if (!raw) return;
+    out.push({ text: unescapeHtml(raw), cls: classStack[classStack.length - 1] ?? "" });
+  };
+  while ((m = tagRe.exec(html)) !== null) {
+    pushText(html.slice(last, m.index));
+    if (m[0].startsWith("</")) classStack.pop();
+    else classStack.push(m[1] ?? "");
+    last = tagRe.lastIndex;
+  }
+  pushText(html.slice(last));
+  return out.length ? out : [{ text: unescapeHtml(html), cls: "" }];
+}
+
+/**
+ * Slice a flat syntax-span stream to the half-open character range [start, end),
+ * preserving each covered run's class. Used to color a word-diff part with the
+ * syntax classes that fall under it, so syntax + diff highlighting compose.
+ */
+function sliceSpans(spans: SyntaxSpan[], start: number, end: number): SyntaxSpan[] {
+  const out: SyntaxSpan[] = [];
+  let pos = 0;
+  for (const s of spans) {
+    const sStart = pos;
+    const sEnd = pos + s.text.length;
+    pos = sEnd;
+    if (sEnd <= start) continue;
+    if (sStart >= end) break;
+    const from = Math.max(start, sStart) - sStart;
+    const to = Math.min(end, sEnd) - sStart;
+    out.push({ text: s.text.slice(from, to), cls: s.cls });
+  }
+  return out;
+}
+
+/** Render a flat syntax-span stream as React nodes (hljs class → color). */
+function renderSpans(spans: SyntaxSpan[], keyPrefix: string): ReactNode[] {
+  return spans.map((s, i) =>
+    s.cls ? (
+      <span key={`${keyPrefix}-${i}`} className={s.cls}>
+        {s.text}
+      </span>
+    ) : (
+      <span key={`${keyPrefix}-${i}`}>{s.text}</span>
+    ),
+  );
+}
 
 /**
  * One token of an intra-line word diff. `changed` marks the run as an edit
@@ -161,30 +316,57 @@ function wordDiff(oldLine: string, newLine: string, side: "-" | "+"): WordPart[]
 }
 
 /**
- * One side of a rendered line, optionally enriched with a word-level diff. When
- * `pairedWith` is given, intra-line edits get a brighter inline background; the
- * unchanged spans stay plain so the precise change reads at a glance.
+ * One side of a rendered line, syntax-highlighted and optionally enriched with a
+ * word-level diff. Composition of the two signals:
+ *
+ *  - The line text is highlighted once into a flat {@link SyntaxSpan} stream so
+ *    keywords/strings/etc. get their hljs colors.
+ *  - With no word pairing (whole-line change or context), we just render those
+ *    syntax spans.
+ *  - With a paired counterpart, we walk the word-diff runs over the SAME stream:
+ *    each run is sliced out of the syntax spans (so its tokens keep their colors)
+ *    and a CHANGED run additionally gets the bright +/- intra-line background.
+ *
+ * The red/green whole-line background is owned by the row wrapper (LineRow), so
+ * this function only adds syntax color + the brighter intra-line emphasis.
  */
-function lineContent(line: DiffLine, pairedWith: string | null): ReactNode {
+function lineContent(line: DiffLine, pairedWith: string | null, language: string | undefined): ReactNode {
+  const spans = highlightLine(line.text, language);
+
+  // Context lines, or changed lines with no counterpart: syntax colors only.
   if (pairedWith == null || (line.sign !== "+" && line.sign !== "-")) {
-    return line.text || " ";
+    if (line.text === "") return " ";
+    return <>{renderSpans(spans, "s")}</>;
   }
+
   const oldLine = line.sign === "-" ? line.text : pairedWith;
   const newLine = line.sign === "+" ? line.text : pairedWith;
   const parts = wordDiff(oldLine, newLine, line.sign);
-  if (!parts.some((p) => p.changed)) return line.text || " ";
+  // No actual intra-line change → fall back to plain syntax-colored line.
+  if (!parts.some((p) => p.changed)) {
+    if (line.text === "") return " ";
+    return <>{renderSpans(spans, "s")}</>;
+  }
+
+  // wordDiff returns runs for THIS side in order, so their lengths tile the line;
+  // we track the running char offset to slice the matching syntax spans per run.
   const hl = line.sign === "+" ? "bg-emerald-400/25 text-emerald-100" : "bg-red-400/25 text-red-100";
+  let offset = 0;
   return (
     <>
-      {parts.map((p, i) =>
-        p.changed ? (
+      {parts.map((p, i) => {
+        const start = offset;
+        const end = offset + p.text.length;
+        offset = end;
+        const inner = renderSpans(sliceSpans(spans, start, end), `p${i}`);
+        return p.changed ? (
           <span key={i} className={`rounded-sm ${hl}`}>
-            {p.text}
+            {inner}
           </span>
         ) : (
-          <span key={i}>{p.text}</span>
-        ),
-      )}
+          <span key={i}>{inner}</span>
+        );
+      })}
     </>
   );
 }
@@ -276,6 +458,7 @@ export function countEditLines(edit: EditInput): { added: number; removed: numbe
 export function LineRow({
   line,
   pairedWith = null,
+  language,
 }: {
   line: DiffLine;
   /**
@@ -284,6 +467,12 @@ export function LineRow({
    * (the default) renders the line as a plain whole-line change.
    */
   pairedWith?: string | null;
+  /**
+   * highlight.js language id for the file being diffed (from its extension), or
+   * undefined to skip syntax coloring. Threaded down so the same DiffLine renders
+   * with file-appropriate colors without re-deriving the language per line.
+   */
+  language?: string | undefined;
 }) {
   const bg =
     line.sign === "+"
@@ -296,26 +485,42 @@ export function LineRow({
   return (
     <div className={`flex ${bg}`}>
       <span className={`w-4 shrink-0 select-none text-center ${marker}`}>{line.sign}</span>
-      <span className="whitespace-pre-wrap break-words pr-3">{lineContent(line, pairedWith)}</span>
+      {/* `hljs` enables the github-dark token colors (.hljs-keyword/.hljs-string/…)
+          on the inner spans. `diff-syntax` (see index.css) neutralizes the hljs
+          theme's own base background + text color so the row's red/green tint and
+          text color show through — only the syntax TOKEN colors are layered on. */}
+      <span className="hljs diff-syntax whitespace-pre-wrap break-words pr-3">
+        {lineContent(line, pairedWith, language)}
+      </span>
     </div>
   );
 }
 
 /** Render an already-parsed unified diff (e.g. a raw git patch) in the same
- *  red/green styling as {@link DiffView}, without the LCS synthesis step. */
-export const DiffLines = memo(function DiffLines({ lines }: { lines: DiffLine[] }) {
+ *  red/green styling as {@link DiffView}, without the LCS synthesis step.
+ *  `filePath` (optional) drives syntax highlighting by extension. */
+export const DiffLines = memo(function DiffLines({
+  lines,
+  filePath,
+}: {
+  lines: DiffLine[];
+  filePath?: string;
+}) {
   const paired = pairChangedLines(lines);
+  const language = useMemo(() => langFromPath(filePath), [filePath]);
   return (
     <div className="font-mono text-[12px] leading-relaxed">
       {lines.map((line, i) => (
-        <LineRow key={i} line={line} pairedWith={paired[i]!} />
+        <LineRow key={i} line={line} pairedWith={paired[i]!} language={language} />
       ))}
     </div>
   );
 });
 
-/** Red/green unified LCS diff for a parsed file edit, with intra-line word diff. */
+/** Red/green unified LCS diff for a parsed file edit, with intra-line word diff
+ *  and file-extension syntax highlighting. */
 export const DiffView = memo(function DiffView({ edit }: { edit: EditInput }) {
+  const language = useMemo(() => langFromPath(edit.filePath), [edit.filePath]);
   return (
     <div className="font-mono text-[12px] leading-relaxed">
       {edit.hunks.map((h, i) => {
@@ -324,7 +529,7 @@ export const DiffView = memo(function DiffView({ edit }: { edit: EditInput }) {
         return (
           <div key={i} className={i > 0 ? "mt-2 border-t border-zinc-800 pt-2" : ""}>
             {lines.map((line, j) => (
-              <LineRow key={j} line={line} pairedWith={paired[j]!} />
+              <LineRow key={j} line={line} pairedWith={paired[j]!} language={language} />
             ))}
           </div>
         );

@@ -35,6 +35,17 @@ export interface SearchFacets {
   until?: string;
   /** Only sessions on this git branch. */
   gitBranch?: string;
+  /**
+   * Only sessions that TOUCHED a file path matching this value. A SESSION-LEVEL
+   * filter (an EXISTS over the session's mirrored tool-I/O rows, role="tool", whose
+   * text is stored as `"<Tool>: <path>"` — e.g. `Edit: src/index-db.ts`). A
+   * case-insensitive substring match, so `file:index-db.ts` keeps sessions whose
+   * Edit/Read/Write/etc. referenced a path containing `index-db.ts`. Being
+   * session-level, it composes with a free-text query that matches a DIFFERENT row
+   * of the same session (the returned hit is still the best text match). Set by the
+   * inline `file:` query token.
+   */
+  file?: string;
   /** Only sessions carrying this tag (case-insensitive; matched against session_meta.tags). */
   tag?: string;
   /** Only sessions that ran on this model id (exact match against sessions.model). */
@@ -240,6 +251,34 @@ function tagClause(
 }
 
 /**
+ * SQL clause + bound param for the `file` facet: keep only sessions whose mirrored
+ * tool-I/O references a path matching `file`. The tool rows store `"<Tool>: <path>"`
+ * (e.g. `Edit: src/index-db.ts`), so this is a SESSION-LEVEL `EXISTS` over the
+ * mirrored-text `table` (FTS5 virtual table or plain table — both carry role/text)
+ * for a row with role="tool" whose text contains the value. Session-level (not
+ * row-level) so it composes with a free-text match that lands on a different row of
+ * the same session. `sessionAlias` is the outer session row to correlate against.
+ * LIKE is ASCII-case-insensitive; `\`/`%`/`_` are escaped so a value can't smuggle
+ * wildcards. Returns null when the facet is unset/blank.
+ */
+function fileClause(
+  file: string | undefined,
+  table: string,
+  sessionAlias: string,
+  placeholder: string,
+): { clause: string; param: string } | null {
+  const f = (file ?? "").trim();
+  if (!f) return null;
+  const escaped = f.replace(/[\\%_]/g, (c) => `\\${c}`);
+  return {
+    clause:
+      `EXISTS (SELECT 1 FROM ${table} ft WHERE ft.sessionId = ${sessionAlias}.sessionId ` +
+      `AND ft.role = 'tool' AND ft.text LIKE ${placeholder} ESCAPE '\\')`,
+    param: `%${escaped}%`,
+  };
+}
+
+/**
  * Search over a session-index DB's mirrored message text. Owns no schema — it is
  * handed the live db connection and the active search backend by `TranscriptIndex`.
  */
@@ -269,10 +308,13 @@ export class MessageSearch {
     const q = text.trim();
     const lim = Math.max(1, Math.min(merged.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
     if (!q) {
-      // No free text left. If the user typed facet-only tokens (e.g. "tool:Bash"),
-      // list the sessions matching those facets, newest first; a truly blank query
-      // (no text AND no recognized tokens) still returns nothing, as before.
-      if (Object.keys(parsed).length === 0) return [];
+      // No free text left. If there are any FILTER facets to narrow on — whether
+      // typed as inline tokens (e.g. "tool:Bash") or passed programmatically by the
+      // caller (e.g. { file }) — list the sessions matching those facets, newest
+      // first. `limit` alone is not a filter, so a blank query with only a limit
+      // still returns nothing (preserving the legacy `search("", n)` behavior).
+      const hasFilter = Object.keys(merged).some((k) => k !== "limit");
+      if (!hasFilter) return [];
       return this.searchFacetsOnly(lim, merged);
     }
     return this.searchMode === "fts5"
@@ -300,6 +342,13 @@ export class MessageSearch {
     if (tag) {
       clauses.push(tag.clause);
       params.push(tag.param);
+    }
+    // `file` is a session-level EXISTS over the same mirrored-text table (alias `s`
+    // is the session row here). Anonymous `?` placeholder, like the rest of this path.
+    const file = fileClause(facets.file, textTable, "s", "?");
+    if (file) {
+      clauses.push(file.clause);
+      params.push(file.param);
     }
     const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = t.sessionId" : "";
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
@@ -462,8 +511,22 @@ export class MessageSearch {
     // numbering after the regular facet params (?3..?(2+N) -> next is ?(3+N)).
     const tag = tagClause(facets.tag, "tm", `?${params.length + 3}`);
     const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = f.sessionId" : "";
-    const allClauses = tag ? [...clauses, tag.clause] : clauses;
-    const allParams = tag ? [...params, tag.param] : params;
+    const extraClauses = [...clauses];
+    const extraParams = [...params];
+    if (tag) {
+      extraClauses.push(tag.clause);
+      extraParams.push(tag.param);
+    }
+    // `file` is a session-level EXISTS over messages_fts (the active table here),
+    // correlated to the session row `s` in the scored CTE. Its numbered placeholder
+    // continues after the tag param.
+    const file = fileClause(facets.file, "messages_fts", "s", `?${extraParams.length + 3}`);
+    if (file) {
+      extraClauses.push(file.clause);
+      extraParams.push(file.param);
+    }
+    const allClauses = extraClauses;
+    const allParams = extraParams;
     const facetWhere = allClauses.length ? ` AND ${allClauses.join(" AND ")}` : "";
 
     // Per-role bm25 weight as an inline CASE. Weights are trusted module constants
@@ -573,6 +636,13 @@ export class MessageSearch {
     if (tag) {
       clauses.push(tag.clause);
       params.push(tag.param);
+    }
+    // `file` is a session-level EXISTS over messages_text (the active table here),
+    // correlated to the session row `s` in the CTE. Anonymous `?` placeholder.
+    const file = fileClause(facets.file, "messages_text", "s", "?");
+    if (file) {
+      clauses.push(file.clause);
+      params.push(file.param);
     }
     const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = t.sessionId" : "";
     const where = clauses.join(" AND ");

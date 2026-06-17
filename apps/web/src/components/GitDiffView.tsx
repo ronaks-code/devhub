@@ -99,7 +99,7 @@ export function GitDiffView({ cwd, file }: { cwd: string; file: string }) {
           <div className="bg-zinc-900/60 px-2 py-0.5 font-mono text-[11px] text-clay-300/80">
             {h.header}
           </div>
-          <DiffLines lines={h.lines} />
+          <DiffLines lines={h.lines} filePath={file} />
         </div>
       ))}
     </div>

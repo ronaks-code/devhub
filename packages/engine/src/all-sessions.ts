@@ -9,6 +9,7 @@
  * db handle and runs the query via {@link listAllSessions}.
  */
 import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
+import { costUsd } from "./pricing.js";
 import type { SessionSummary } from "./types.js";
 
 /** Options for a cross-project session listing. All fields optional. */
@@ -18,8 +19,11 @@ export interface ListAllSessionsOptions {
    *  - "recent"   (default) — newest last activity first (lastTs desc).
    *  - "tokens"   — most total tokens first.
    *  - "messages" — most messages first.
+   *  - "cost"     — highest estimated spend first (per-session {@link costUsd} over
+   *    the stored token usage, evaluated per the session's model). Useful for a
+   *    "top-spending sessions" dashboard.
    */
-  sort?: "recent" | "tokens" | "messages";
+  sort?: "recent" | "tokens" | "messages" | "cost";
   /** Only sessions in this project (stable projectId / sha1 of cwd). */
   projectId?: string;
   /** Only sessions carrying this tag (case-insensitive; matched against session_meta.tags). */
@@ -37,8 +41,13 @@ export interface ListAllSessionsOptions {
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 
-/** ORDER BY fragment per sort mode. Pinned never floats here (this is a flat global list). */
-const ORDER_BY: Record<NonNullable<ListAllSessionsOptions["sort"]>, string> = {
+/**
+ * ORDER BY fragment per SQL-sortable mode. Pinned never floats here (this is a flat
+ * global list). "cost" is intentionally absent: it can't be expressed as a SQL
+ * column order (it depends on per-model pricing), so {@link listAllSessions} sorts
+ * those rows in JS instead — see that function.
+ */
+const ORDER_BY: Record<"recent" | "tokens" | "messages", string> = {
   recent: "s.lastTs DESC",
   tokens:
     "(s.inputTokens + s.outputTokens + s.cacheReadTokens + s.cacheCreationTokens) DESC",
@@ -87,11 +96,30 @@ export function listAllSessions<Row>(
   rowToSummary: (row: Row) => SessionSummary,
   opts: ListAllSessionsOptions = {},
 ): SessionSummary[] {
-  const order = ORDER_BY[opts.sort ?? "recent"];
   const limit = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
   const offset = Math.max(0, opts.offset ?? 0);
   const { sql: where, params } = whereClause(opts);
 
+  // "cost" can't be a SQL ORDER BY (it needs per-model pricing applied to the token
+  // buckets), so fetch the full filtered set, map to summaries, compute each cost
+  // with the same `costUsd` the rest of the engine uses, sort desc, then page in JS.
+  // The result row count stays bounded by `limit`, matching the SQL paths.
+  if (opts.sort === "cost") {
+    const all = db
+      .prepare(
+        `SELECT ${selectCols} FROM sessions s LEFT JOIN session_meta m USING (sessionId)${where}`,
+      )
+      .all(...params) as unknown as Row[];
+    return all
+      .map(rowToSummary)
+      .map((s) => ({ s, cost: costUsd(s.model, s.usage) }))
+      // Highest spend first; ties broken by sessionId for stable paging.
+      .sort((a, b) => b.cost - a.cost || (a.s.sessionId < b.s.sessionId ? -1 : 1))
+      .slice(offset, offset + limit)
+      .map((x) => x.s);
+  }
+
+  const order = ORDER_BY[opts.sort ?? "recent"];
   const rows = db
     .prepare(
       `SELECT ${selectCols} FROM sessions s LEFT JOIN session_meta m USING (sessionId)${where}

@@ -15,7 +15,7 @@ import type { Engine, ListAllSessionsOptions } from "@claude-ui/engine";
  * the route's enum can never drift from what `listAllSessions` actually accepts.
  */
 type SortKey = NonNullable<ListAllSessionsOptions["sort"]>;
-const SORT_VALUES: SortKey[] = ["recent", "tokens", "messages"];
+const SORT_VALUES: SortKey[] = ["recent", "tokens", "messages", "cost"];
 
 /**
  * Querystring for the all-sessions listing. Everything is optional: with no
