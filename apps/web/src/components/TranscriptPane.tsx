@@ -11,6 +11,7 @@ import {
   ArrowDown,
   ListTree,
   FileDiff,
+  Map as MapIcon,
   MessageSquarePlus,
   AlertCircle,
   ChevronUp,
@@ -21,6 +22,8 @@ import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { TranscriptOutline } from "./TranscriptOutline";
+import { TranscriptMinimap } from "./TranscriptMinimap";
+import { SubagentProvider } from "./tools/TaskCard";
 import { FileChangeSummary } from "./FileChangeSummary";
 import { useErrorNav } from "../hooks/useErrorNav";
 import {
@@ -68,6 +71,14 @@ export function TranscriptPane({
   const [filters, setFilters] = useState<TranscriptFilterState>(EMPTY_FILTERS);
   const messages = useMemo(() => applyFilters(paired, filters), [paired, filters]);
 
+  // The subagent files for this session, threaded to any Task cards in the
+  // transcript so their "view subagent transcript" expander can load them.
+  // Stable per (session, refs) so the context value doesn't churn each render.
+  const subagentSource = useMemo(
+    () => ({ sessionId: page?.session.sessionId ?? null, refs: page?.subagents ?? [] }),
+    [page?.session.sessionId, page?.subagents],
+  );
+
   // In-transcript find (Cmd/Ctrl-F): the bar owns its query/cursor and reports
   // the active match's message index + live query back up here for scroll+highlight.
   const [findOpen, setFindOpen] = useState(false);
@@ -78,6 +89,9 @@ export function TranscriptPane({
   // Collapsible "what changed" side-rail: files touched by edits with +/- counts.
   // Mutually exclusive with the outline so two rails never crowd the viewer.
   const [changesOpen, setChangesOpen] = useState(false);
+  // Thin minimap/overview scrollbar beside the transcript (message density +
+  // role color ticks, click-to-scroll). On by default; toggleable from the header.
+  const [minimapOpen, setMinimapOpen] = useState(true);
   const onFindQueryChange = useCallback((q: string) => setFindQuery(q), []);
   const onActiveMatchChange = useCallback((i: number | null) => setActiveMatch(i), []);
 
@@ -266,6 +280,7 @@ export function TranscriptPane({
 
   const s = page.session;
   return (
+    <SubagentProvider value={subagentSource}>
     <div className="relative flex min-w-0 flex-1 flex-col bg-zinc-950">
       <FindBar
         open={findOpen}
@@ -346,6 +361,19 @@ export function TranscriptPane({
           >
             <ListTree className="h-3.5 w-3.5" />
             Outline
+          </button>
+          <button
+            onClick={() => setMinimapOpen((v) => !v)}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              minimapOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={minimapOpen ? "Hide minimap" : "Show minimap"}
+            aria-label={minimapOpen ? "Hide minimap" : "Show minimap"}
+          >
+            <MapIcon className="h-3.5 w-3.5" />
           </button>
           {onContinue && s.cwd ? (
             <button
@@ -489,7 +517,22 @@ export function TranscriptPane({
           onClose={() => setChangesOpen(false)}
         />
       ) : null}
+
+      {/* Thin overview minimap. Click a tick to jump; tracks the active find
+          match. Hidden while an outline/changes rail is open (they'd crowd the
+          viewer) and toggleable from the header. */}
+      {minimapOpen && !outlineOpen && !changesOpen ? (
+        <TranscriptMinimap
+          messages={messages}
+          activeIndex={findOpen ? activeMatch : jumpIndex}
+          onJump={(i) => {
+            stick.unpin();
+            jumpToIndex(i);
+          }}
+        />
+      ) : null}
       </div>
     </div>
+    </SubagentProvider>
   );
 }

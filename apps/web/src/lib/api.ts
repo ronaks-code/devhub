@@ -5,6 +5,7 @@ import type {
   SessionMessagesPage,
   SessionSummary,
   Stats,
+  NormalizedMessage,
 } from "./types";
 import type { AppSettings } from "@claude-ui/engine/types";
 // Git result shapes. Mirrored locally (not imported from the engine root, which
@@ -14,12 +15,14 @@ import type {
   GitStatus,
   GitLogEntry,
   GitDiff,
+  GitBranch,
   ConfigScope,
   McpServerDef,
   McpServerInput,
   HooksConfig,
   HooksInput,
   AgentDef,
+  SkillDef,
   DailyUsage,
   Worktree,
   ClaudeMdDoc,
@@ -183,6 +186,18 @@ const config = {
     ),
 
   /**
+   * Skills: the global set, plus (when a known project `cwd` is given) that
+   * project's. Backed by the read-only GET /api/config/skills (engine
+   * `listSkills`). The web side only wires the call; discovery/parsing of the
+   * `skills/<dir>/SKILL.md` files (name/description/version frontmatter) lives in
+   * the engine.
+   */
+  skills: (cwd?: string) =>
+    get<SkillDef[]>(
+      "/api/config/skills" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+    ),
+
+  /**
    * Read a CLAUDE.md. Global scope reads ~/.claude/CLAUDE.md; with `scope:
    * "project"` and a (known) project `cwd` it reads <cwd>/CLAUDE.md. The server
    * returns `{ scope, filePath: null, content: "" }` when the file doesn't exist
@@ -216,13 +231,38 @@ const config = {
 
 export const api = {
   health: () => get<Health>("/api/health"),
+  // Projects. ProjectSummary carries the per-project chat defaults
+  // (defaultModel/defaultPermissionMode), null when the user hasn't set them.
   projects: () => get<ProjectSummary[]>("/api/projects"),
+  // Patch a project's UI/meta. Forwards only the present keys (the server's
+  // PATCH /api/projects/:id applies a partial patch). Used to persist the
+  // per-project chat defaults from the ChatPane header. Returns the raw server
+  // ack ({ ok, id, meta }); callers re-fetch projects to pick up the change.
+  patchProject: (
+    id: string,
+    patch: {
+      defaultModel?: string | null;
+      defaultPermissionMode?: string | null;
+      favorite?: boolean;
+      archived?: boolean;
+      sortOrder?: number;
+      color?: string | null;
+    },
+  ) => send<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, "PATCH", patch),
   sessions: (projectId: string) =>
     get<SessionSummary[]>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
   messages: (sessionId: string, tailBytes?: number) =>
     get<SessionMessagesPage>(
       `/api/sessions/${encodeURIComponent(sessionId)}/messages` +
         (tailBytes ? `?tailBytes=${tailBytes}` : ""),
+    ),
+  // Read a single subagent transcript by its on-disk path (the SubagentRef
+  // `filePath` from a SessionMessagesPage). The server allowlists the path to
+  // ~/.claude/projects and only reads .jsonl files; the web side only wires the
+  // call. Backs the TaskCard's inline subagent-transcript expander.
+  subagentMessages: (sessionId: string, filePath: string) =>
+    get<NormalizedMessage[]>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/subagent?path=${encodeURIComponent(filePath)}`,
     ),
   rename: (sessionId: string, customTitle: string | null) =>
     send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
@@ -266,6 +306,16 @@ export const api = {
   // GitService server-side; the web side only POSTs the intent.
   gitCommit: (cwd: string, message: string, all = true) =>
     send<GitCommitResult>("/api/git/commit", "POST", { cwd, message, all }),
+  // The repo's local branches (current flagged). [] when `cwd` is not a git repo.
+  // Backs the BranchSwitcher dropdown near the chat header.
+  gitBranches: (cwd: string) =>
+    get<GitBranch[]>(`/api/git/branches?cwd=${encodeURIComponent(cwd)}`),
+  // Switch to (or create + switch to) a branch. `checkout` checks out the
+  // branch; combined with `name` of a NEW branch the server creates it first
+  // (git branch + checkout). The server returns the refreshed branch list, so
+  // the switcher updates from the response without a separate re-fetch.
+  gitBranch: (cwd: string, name: string, checkout = true) =>
+    send<GitBranch[]>("/api/git/branch", "POST", { cwd, name, checkout }),
   // Per-day token/cost/session time series for a usage window. `since`/`until`
   // are inclusive `YYYY-MM-DD` dates; omit both for the full history. Backed by
   // GET /api/rollups (engine `dailyUsage`). The PeriodSelector sums the in-range

@@ -29,6 +29,14 @@ import { SavedViewStore } from "./saved-views.js";
 import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
+import {
+  FTS_TABLE,
+  createFtsTableSql,
+  createLikeTableSql,
+  detectFtsTokenizer,
+  tokenizerOf,
+} from "./fts-schema.js";
+import type { FtsTokenizer } from "./fts-schema.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import { AggregateCache } from "./aggregates.js";
@@ -182,6 +190,11 @@ export class TranscriptIndex {
   readonly savedViews: SavedViewStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
+  /**
+   * The FTS5 tokenizer actually in effect (trigram > porter > unicode61), or null in
+   * LIKE mode. Reported for diagnostics — trigram gives substring/code-token search.
+   */
+  readonly ftsTokenizer: FtsTokenizer | null;
   /** Full-text search over mirrored message text (shares this DB + searchMode). */
   private readonly searcher: MessageSearch;
   /** Memoized project/stats rollups, invalidated on every session write. */
@@ -208,7 +221,9 @@ export class TranscriptIndex {
     this.projectMeta = new ProjectMetaStore(this.db);
     this.tags = new TagStore(this.db);
     this.savedViews = new SavedViewStore(this.db);
-    this.searchMode = this.initSearchStore();
+    const store = this.initSearchStore();
+    this.searchMode = store.mode;
+    this.ftsTokenizer = store.tokenizer;
     this.searcher = new MessageSearch(this.db, this.searchMode);
     this.aggregates = new AggregateCache(this.db);
     this.upsert = this.db.prepare(`
@@ -235,34 +250,30 @@ export class TranscriptIndex {
 
   /**
    * Stand up the message-text mirror used by search. Prefer FTS5 (fast MATCH +
-   * built-in snippet/rank), but node:sqlite's bundled SQLite may be compiled
-   * without it — if CREATE VIRTUAL TABLE throws, fall back to a plain table we
-   * scan with LIKE. Returns the mode actually in effect.
+   * built-in snippet/rank), but node:sqlite's bundled SQLite may be compiled without
+   * it — if no FTS5 tokenizer can be created, fall back to a plain table we scan with
+   * LIKE. The FTS DDL + tokenizer detection live in fts-schema.ts (single source of
+   * truth); migration v8 has already rebuilt any LEGACY messages_fts onto the best
+   * tokenizer by the time we get here, so on an existing DB we just adopt that table
+   * (and report its tokenizer). On a fresh DB we CREATE it directly on the best
+   * tokenizer (trigram > porter > unicode61) so substring/code-token search works
+   * from the first index pass. Returns the mode + active tokenizer.
    */
-  private initSearchStore(): "fts5" | "like" {
-    try {
-      // toolName is UNINDEXED (carried for display, not matched). FTS5 columns are
-      // fixed at create time, so a fresh index.db is required to pick this up.
-      this.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-           sessionId UNINDEXED, role UNINDEXED, seq UNINDEXED, toolName UNINDEXED, text
-         )`,
-      );
-      return "fts5";
-    } catch {
-      this.db.exec(
-        `CREATE TABLE IF NOT EXISTS messages_text (
-           sessionId TEXT NOT NULL,
-           role TEXT,
-           seq INTEGER,
-           toolName TEXT,
-           text TEXT
-         );
-         CREATE INDEX IF NOT EXISTS idx_messages_text_session ON messages_text(sessionId);
-         CREATE INDEX IF NOT EXISTS idx_messages_text_text ON messages_text(text);`,
-      );
-      return "like";
+  private initSearchStore(): { mode: "fts5" | "like"; tokenizer: FtsTokenizer | null } {
+    // If a messages_fts already exists (created earlier, possibly rebuilt by v8),
+    // adopt it and report its tokenizer — don't recreate.
+    const existing = tokenizerOf(this.db, FTS_TABLE);
+    if (existing) return { mode: "fts5", tokenizer: existing };
+
+    const tokenizer = detectFtsTokenizer(this.db);
+    if (tokenizer) {
+      // Fresh DB (or one that lost its FTS table): create on the best tokenizer.
+      this.db.exec(createFtsTableSql(FTS_TABLE, tokenizer, { ifNotExists: true }));
+      return { mode: "fts5", tokenizer };
     }
+    // FTS5 unavailable in this build — fall back to a plain LIKE-scanned table.
+    this.db.exec(createLikeTableSql());
+    return { mode: "like", tokenizer: null };
   }
 
   close(): void {
@@ -548,6 +559,8 @@ export class TranscriptIndex {
         archived: m?.archived ?? false,
         sortOrder: m?.sortOrder ?? 0,
         color: m?.color ?? null,
+        defaultModel: m?.defaultModel ?? null,
+        defaultPermissionMode: m?.defaultPermissionMode ?? null,
       });
     }
     projects.sort((a, b) => {

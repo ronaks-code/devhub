@@ -329,6 +329,22 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Persist a project's per-project chat defaults (PATCH /api/projects/:id), then
+  // refresh the project list so the open ChatPane picks them up. Throws on
+  // failure so the ChatPane control can show a failed state. A server that
+  // doesn't persist these keys still ACKs the PATCH (it forwards present keys),
+  // so this degrades to a no-op rather than an error there.
+  const saveProjectDefaults = useCallback(
+    async (id: string, model: string, permissionMode: string) => {
+      await api.patchProject(id, {
+        defaultModel: model,
+        defaultPermissionMode: permissionMode,
+      });
+      await refreshProjects();
+    },
+    [refreshProjects],
+  );
+
   const cycleTheme = useCallback(() => {
     const order: AppSettings["theme"][] = ["dark", "light", "system"];
     const current = settings?.theme ?? "system";
@@ -573,6 +589,11 @@ export default function App() {
                 defaultPermissionMode={
                   settings?.defaultPermissionMode as PermissionMode | undefined
                 }
+                projectDefaultModel={project.defaultModel}
+                projectDefaultPermissionMode={
+                  project.defaultPermissionMode as PermissionMode | null | undefined
+                }
+                onSaveProjectDefaults={(m, pm) => saveProjectDefaults(project.id, m, pm)}
                 model={chatModel}
                 onModelChange={setChatModel}
               />

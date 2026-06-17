@@ -56,6 +56,17 @@ export interface GitLogEntry {
   date: string;
 }
 
+/**
+ * One branch from GET /api/git/branches. Mirrors the engine's `GitBranch`
+ * (git.ts); defined locally so the web bundle stays free of Node-only engine
+ * code. Kept in lockstep with packages/engine/src/git.ts.
+ */
+export interface GitBranch {
+  name: string;
+  /** True for the currently checked-out branch. */
+  current: boolean;
+}
+
 /** A unified diff for one file, or the whole working tree when `file` is null. */
 export interface GitDiff {
   file: string | null;
@@ -135,6 +146,24 @@ export interface ClaudeMdWriteResult {
   ok: boolean;
   scope: ConfigScope;
   /** Absolute path of the CLAUDE.md that was written. */
+  filePath: string;
+}
+
+/**
+ * One skill from GET /api/config/skills (a `skills/<dir>/SKILL.md` file with
+ * frontmatter). Mirrors the engine's `SkillDef` (config/index.ts); defined
+ * locally so the web bundle stays free of the Node-only engine config code.
+ * Kept in lockstep with packages/engine/src/config/index.ts.
+ */
+export interface SkillDef {
+  name: string;
+  description: string | null;
+  /** Version string from frontmatter, if set. */
+  version: string | null;
+  scope: ConfigScope;
+  /** Absolute path to the directory holding SKILL.md. */
+  dirPath: string;
+  /** Absolute path to the SKILL.md source file (used for the open/copy affordance). */
   filePath: string;
 }
 

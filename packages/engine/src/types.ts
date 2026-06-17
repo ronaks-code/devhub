@@ -137,12 +137,23 @@ export interface ProjectSummary {
   sortOrder: number;
   /** Optional UI accent color (free-form, e.g. a hex string), or null. */
   color: string | null;
+  /**
+   * Per-project DEFAULT model id for new sessions (e.g. "claude-opus-4-8"), or null
+   * to fall back to the app-wide `AppSettings.defaultModel`. User-owned preference.
+   */
+  defaultModel: string | null;
+  /**
+   * Per-project DEFAULT permission mode for new sessions (e.g. "default",
+   * "acceptEdits", "plan"), or null to fall back to the app-wide setting.
+   */
+  defaultPermissionMode: string | null;
 }
 
 /**
- * Per-project UI metadata we own (the user's pins/archive/order/color). Keyed by
- * the stable projectId; never derived from the transcript. All fields have sane
- * defaults so a project with no row behaves like an unpinned, unarchived one.
+ * Per-project UI metadata we own (the user's pins/archive/order/color + per-project
+ * default model/permission mode). Keyed by the stable projectId; never derived from
+ * the transcript. All fields have sane defaults so a project with no row behaves
+ * like an unpinned, unarchived one with no project-specific defaults.
  */
 export interface ProjectMeta {
   projectId: string;
@@ -150,6 +161,10 @@ export interface ProjectMeta {
   archived: boolean;
   sortOrder: number;
   color: string | null;
+  /** Per-project default model id, or null = use the app-wide default. */
+  defaultModel: string | null;
+  /** Per-project default permission mode, or null = use the app-wide default. */
+  defaultPermissionMode: string | null;
 }
 
 /** Baseline project metadata for a project that has no stored row yet. */
@@ -158,6 +173,8 @@ export const DEFAULT_PROJECT_META: Omit<ProjectMeta, "projectId"> = {
   archived: false,
   sortOrder: 0,
   color: null,
+  defaultModel: null,
+  defaultPermissionMode: null,
 };
 
 export interface RunningSession {

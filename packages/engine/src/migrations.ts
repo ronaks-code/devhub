@@ -11,6 +11,13 @@
  * user_version. Never reorder or remove existing steps.
  */
 import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
+import {
+  FTS_TABLE,
+  FTS_COLUMNS,
+  createFtsTableSql,
+  detectFtsTokenizer,
+  tokenizerOf,
+} from "./fts-schema.js";
 
 type Migration = (db: SqliteDatabase) => void;
 
@@ -111,7 +118,70 @@ const MIGRATIONS: Migration[] = [
       createdAt INTEGER NOT NULL
     );`);
   },
+  // v8: switch the messages_fts tokenizer to FTS5 `trigram` so search matches
+  // SUBSTRINGS / code tokens (a MATCH on "ymentgate" finds "configurePaymentGateway"),
+  // not just whole words. DATA-PRESERVING: an FTS5 tokenizer is fixed at create time,
+  // so we can't ALTER it — instead we build a fresh table on the new tokenizer, COPY
+  // every existing row across (which re-tokenizes/re-indexes the already-mirrored text
+  // under trigram — no transcript re-read needed), then drop the old table and rename.
+  // The whole step runs inside the migration runner's transaction, so search either
+  // sees the old table or the fully-rebuilt new one — never a half-migrated state.
+  //
+  // Guards (idempotent + safe on every DB shape):
+  //   - No messages_fts yet (brand-new DB): nothing to migrate. index-db.ts will
+  //     CREATE it directly on the best tokenizer right after migrations run.
+  //   - LIKE-mode DB (FTS5 unavailable, only messages_text exists): nothing to do.
+  //   - Already on the best available tokenizer: no-op.
+  //   - FTS5 present but `trigram` unavailable in this build: rebuild onto the next
+  //     best tokenizer the engine actually supports (porter, else unicode61), so the
+  //     step still converges and never throws.
+  migrateFtsTokenizer,
+  // v9: per-project DEFAULT model + permission mode, stored on the existing
+  // project_meta row (additive columns). A fresh DB also gets these from the base
+  // project_meta CREATE in index-db.ts; a legacy DB picks them up here. Guarded by a
+  // column-presence check so the step is idempotent. Existing rows read NULL = "no
+  // project-specific default; use the app-wide setting".
+  (db) => {
+    if (hasTable(db, "project_meta")) {
+      if (!hasColumn(db, "project_meta", "defaultModel")) {
+        db.exec(`ALTER TABLE project_meta ADD COLUMN defaultModel TEXT`);
+      }
+      if (!hasColumn(db, "project_meta", "defaultPermissionMode")) {
+        db.exec(`ALTER TABLE project_meta ADD COLUMN defaultPermissionMode TEXT`);
+      }
+    }
+  },
 ];
+
+/**
+ * Migration v8 body (extracted for readability): rebuild `messages_fts` onto the best
+ * available tokenizer (trigram → porter → unicode61), copying existing rows so no
+ * mirrored text is lost or needs a transcript re-read. See the MIGRATIONS comment.
+ */
+function migrateFtsTokenizer(db: SqliteDatabase): void {
+  // Nothing to migrate unless an FTS5 messages_fts already exists. A brand-new DB has
+  // no such table yet (index-db.ts creates it post-migration); a LIKE-mode DB only has
+  // messages_text. tokenizerOf returns null in both cases.
+  const current = tokenizerOf(db, FTS_TABLE);
+  if (current == null) return;
+
+  // The best tokenizer this SQLite build supports. detectFtsTokenizer can't return
+  // null here (FTS5 clearly works — messages_fts exists), but guard anyway.
+  const target = detectFtsTokenizer(db);
+  if (target == null || target === current) return;
+
+  // Rebuild: fresh table on the target tokenizer, copy every row across (re-indexing
+  // the mirrored text under the new tokenizer), drop the old, rename into place. The
+  // column list is the single source of truth from fts-schema.ts, so the copy lines up
+  // 1:1. A unique temp name avoids colliding with anything.
+  const tmp = `${FTS_TABLE}_rebuild`;
+  const cols = FTS_COLUMNS.join(", ");
+  db.exec(`DROP TABLE IF EXISTS ${tmp}`);
+  db.exec(createFtsTableSql(tmp, target));
+  db.exec(`INSERT INTO ${tmp} (${cols}) SELECT ${cols} FROM ${FTS_TABLE}`);
+  db.exec(`DROP TABLE ${FTS_TABLE}`);
+  db.exec(`ALTER TABLE ${tmp} RENAME TO ${FTS_TABLE}`);
+}
 
 /**
  * Bring `db` up to the latest schema version. Reads PRAGMA user_version, runs each

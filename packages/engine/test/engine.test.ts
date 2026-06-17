@@ -34,6 +34,8 @@ import { testMcpServer } from "../src/config/mcp-test.js";
 import type { McpServerDef } from "../src/config/index.js";
 import { parseSearchQuery, mergeFacets } from "../src/query-parser.js";
 import { searchSymbols } from "../src/symbols.js";
+import { tokenizerOf, detectFtsTokenizer, FTS_TABLE } from "../src/fts-schema.js";
+import { normalizeProjectDefault } from "../src/project-settings.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -3436,5 +3438,278 @@ describe("Engine.searchSymbols (allowlist enforcement)", () => {
     const { eng } = await setup(tmp());
     expect(await eng.searchSymbols("  ", "x")).toEqual([]);
     eng.close();
+  });
+});
+
+describe("FTS5 tokenizer (substring/code-token search)", () => {
+  // A fresh index.db stands up messages_fts on the best available tokenizer
+  // (trigram in this Node build). Substring matching is the whole point: a query
+  // that is a fragment of a longer identifier must still find it.
+  it("indexes on trigram and matches SUBSTRINGS, not just whole words", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/code";
+    const f = path.join(proj, "sX.jsonl");
+    writeFileSync(
+      f,
+      jl({
+        type: "user",
+        cwd,
+        message: { role: "user", content: "where do we call configurePaymentGateway in the app" },
+      }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    // This build ships trigram (the preferred tokenizer).
+    expect(idx.searchMode).toBe("fts5");
+    expect(idx.ftsTokenizer).toBe("trigram");
+    await idx.indexSession(f);
+
+    // Whole-word still works.
+    expect(idx.search("configurePaymentGateway").map((h) => h.sessionId)).toEqual(["sX"]);
+    // SUBSTRING in the middle of a camelCase identifier — only trigram can do this.
+    expect(idx.search("ymentgate").map((h) => h.sessionId)).toEqual(["sX"]);
+    expect(idx.search("PaymentGate").map((h) => h.sessionId)).toEqual(["sX"]);
+    // A 3+ char substring that does NOT appear matches nothing.
+    expect(idx.search("zzzqqq")).toEqual([]);
+    idx.close();
+  });
+
+  it("reports the active tokenizer and stamps it on the table DDL", () => {
+    const dir = tmp();
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    expect(idx.ftsTokenizer).toBe("trigram");
+    // The on-disk DDL echoes the tokenizer fts-schema asked for.
+    const db = idx["db"] as never as InstanceType<typeof DatabaseSync>;
+    expect(tokenizerOf(db, FTS_TABLE)).toBe("trigram");
+    idx.close();
+  });
+
+  it("detectFtsTokenizer prefers trigram and leaves no probe tables behind", () => {
+    const db = new DatabaseSync(path.join(tmp(), "probe.db"));
+    expect(detectFtsTokenizer(db)).toBe("trigram");
+    // The throwaway probe tables must be gone (rolled back / dropped).
+    const leftovers = db
+      .prepare("SELECT name FROM sqlite_master WHERE name LIKE '__fts_probe_%'")
+      .all() as Array<{ name: string }>;
+    expect(leftovers).toEqual([]);
+    db.close();
+  });
+});
+
+describe("migrations (FTS tokenizer swap, data-preserving)", () => {
+  // Simulate a LEGACY index.db whose messages_fts was created on the OLD default
+  // tokenizer (no tokenize= => unicode61, whole-word only). The v8 migration must
+  // rebuild it onto trigram WITHOUT losing the already-mirrored rows, and search
+  // must keep working immediately (no transcript re-index).
+  it("rebuilds a legacy unicode61 messages_fts onto trigram, preserving rows", () => {
+    const file = path.join(tmp(), "legacy.db");
+    const db = new DatabaseSync(file);
+    // A DB created before the trigram switch: messages_fts on the default tokenizer,
+    // sitting at user_version 7 (saved_views applied, the FTS swap not yet).
+    db.exec(
+      `CREATE VIRTUAL TABLE messages_fts USING fts5(
+         sessionId UNINDEXED, role UNINDEXED, seq UNINDEXED, toolName UNINDEXED, text
+       )`,
+    );
+    db.exec("PRAGMA user_version = 7");
+    const ins = db.prepare(
+      "INSERT INTO messages_fts (sessionId, role, seq, toolName, text) VALUES (?, ?, ?, ?, ?)",
+    );
+    ins.run("s1", "user", 0, null, "How do I add a checkout button");
+    ins.run("s2", "tool", 1, "Bash", "run vitest configurePaymentGateway now");
+
+    // Pre-migration: it's a whole-word (unicode61) table, no substring match.
+    expect(tokenizerOf(db, "messages_fts")).toBe("unicode61");
+
+    runMigrations(db);
+
+    // Post-migration: trigram, SAME row count (no data lost, no re-read needed).
+    expect(tokenizerOf(db, "messages_fts")).toBe("trigram");
+    const count = db.prepare("SELECT COUNT(*) AS c FROM messages_fts").get() as { c: number };
+    expect(Number(count.c)).toBe(2);
+    // toolName (an UNINDEXED column) survived the copy.
+    const tn = db.prepare("SELECT toolName FROM messages_fts WHERE sessionId='s2'").get() as {
+      toolName: string | null;
+    };
+    expect(tn.toolName).toBe("Bash");
+
+    // Search keeps working immediately — and now does substring matching.
+    const word = db
+      .prepare("SELECT sessionId FROM messages_fts WHERE messages_fts MATCH ?")
+      .all('"checkout"') as Array<{ sessionId: string }>;
+    expect(word.map((r) => r.sessionId)).toEqual(["s1"]);
+    const substr = db
+      .prepare("SELECT sessionId FROM messages_fts WHERE messages_fts MATCH ?")
+      .all('"ymentgate"') as Array<{ sessionId: string }>;
+    expect(substr.map((r) => r.sessionId)).toEqual(["s2"]);
+
+    // Idempotent: re-running is a no-op (already on the best tokenizer).
+    runMigrations(db);
+    expect(tokenizerOf(db, "messages_fts")).toBe("trigram");
+    expect(
+      Number((db.prepare("SELECT COUNT(*) AS c FROM messages_fts").get() as { c: number }).c),
+    ).toBe(2);
+    db.close();
+  });
+
+  it("is a no-op when there is no messages_fts (fresh/LIKE-mode DB)", () => {
+    const file = path.join(tmp(), "nofts.db");
+    const db = new DatabaseSync(file);
+    db.exec("PRAGMA user_version = 7");
+    // No messages_fts table at all — the step must not throw, just advance the version.
+    expect(() => runMigrations(db)).not.toThrow();
+    const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
+    expect(Number(v.user_version)).toBeGreaterThanOrEqual(9);
+    db.close();
+  });
+
+  it("a full live index after a tokenizer migration keeps existing sessions searchable", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/postmig";
+    const f = path.join(proj, "sess.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd, message: { role: "user", content: "the deployment pipeline broke" } }),
+    );
+    // Index once on a fresh DB (already trigram), then reopen — the open path sees an
+    // existing trigram table and adopts it; search must still find the old rows.
+    const idx1 = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx1.indexSession(f);
+    expect(idx1.search("deployment").map((h) => h.sessionId)).toEqual(["sess"]);
+    idx1.close();
+
+    const idx2 = new TranscriptIndex(path.join(dir, "i.db"));
+    expect(idx2.ftsTokenizer).toBe("trigram");
+    // Old rows are still searchable after reopen (no re-index of transcripts).
+    expect(idx2.search("deployment").map((h) => h.sessionId)).toEqual(["sess"]);
+    // Substring works on the persisted rows too.
+    expect(idx2.search("ploy").map((h) => h.sessionId)).toEqual(["sess"]);
+    idx2.close();
+  });
+});
+
+describe("migrations (project_meta default columns backfill)", () => {
+  it("adds defaultModel + defaultPermissionMode to a legacy project_meta and is idempotent", () => {
+    const file = path.join(tmp(), "legacy.db");
+    const db = new DatabaseSync(file);
+    // A DB created before per-project defaults: project_meta without the two columns,
+    // sitting just below the new version.
+    db.exec(`CREATE TABLE project_meta (
+      projectId TEXT PRIMARY KEY,
+      favorite INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      color TEXT
+    );`);
+    db.exec("PRAGMA user_version = 8");
+    db.prepare("INSERT INTO project_meta (projectId, favorite) VALUES (?, ?)").run("p1", 1);
+    expect(hasColumn(db, "project_meta", "defaultModel")).toBe(false);
+
+    runMigrations(db);
+    expect(hasColumn(db, "project_meta", "defaultModel")).toBe(true);
+    expect(hasColumn(db, "project_meta", "defaultPermissionMode")).toBe(true);
+    // Existing row preserved; new columns read NULL (no project default set).
+    const row = db
+      .prepare("SELECT favorite, defaultModel, defaultPermissionMode FROM project_meta WHERE projectId=?")
+      .get("p1") as { favorite: number; defaultModel: string | null; defaultPermissionMode: string | null };
+    expect(Number(row.favorite)).toBe(1);
+    expect(row.defaultModel).toBeNull();
+    expect(row.defaultPermissionMode).toBeNull();
+
+    // Re-running is harmless (column-presence guard).
+    runMigrations(db);
+    expect(hasColumn(db, "project_meta", "defaultModel")).toBe(true);
+    db.close();
+  });
+});
+
+describe("per-project defaults (model + permission mode)", () => {
+  const buildIdx = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/defaults";
+    const f = path.join(proj, "s1.jsonl");
+    writeFileSync(f, jl({ type: "user", cwd, message: { role: "user", content: "hi" } }));
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    return { idx, projectId: projectIdFromCwd(cwd) };
+  };
+
+  it("normalizeProjectDefault trims and treats blank as null", () => {
+    expect(normalizeProjectDefault("  claude-opus-4-8 ")).toBe("claude-opus-4-8");
+    expect(normalizeProjectDefault("")).toBeNull();
+    expect(normalizeProjectDefault("   ")).toBeNull();
+    expect(normalizeProjectDefault(null)).toBeNull();
+    expect(normalizeProjectDefault(undefined)).toBeNull();
+  });
+
+  it("defaults to null, round-trips a set, and only touches provided keys", async () => {
+    const { idx, projectId } = await buildIdx(tmp());
+    // Unset -> null on both keys.
+    let meta = idx.getProjectMeta(projectId);
+    expect(meta.defaultModel).toBeNull();
+    expect(meta.defaultPermissionMode).toBeNull();
+
+    // Set just the model; permission mode stays null; unrelated fields untouched.
+    meta = idx.setProjectMeta(projectId, { defaultModel: "claude-opus-4-8" });
+    expect(meta.defaultModel).toBe("claude-opus-4-8");
+    expect(meta.defaultPermissionMode).toBeNull();
+
+    // Set the permission mode in a separate patch; the model must be preserved.
+    meta = idx.setProjectMeta(projectId, { defaultPermissionMode: "acceptEdits" });
+    expect(meta.defaultModel).toBe("claude-opus-4-8");
+    expect(meta.defaultPermissionMode).toBe("acceptEdits");
+
+    // A patch that omits both keys leaves them as-is (here: also toggles favorite).
+    meta = idx.setProjectMeta(projectId, { favorite: true });
+    expect(meta.favorite).toBe(true);
+    expect(meta.defaultModel).toBe("claude-opus-4-8");
+    expect(meta.defaultPermissionMode).toBe("acceptEdits");
+
+    // Explicit null clears a default (mirrors the color clear semantics).
+    meta = idx.setProjectMeta(projectId, { defaultModel: null });
+    expect(meta.defaultModel).toBeNull();
+    expect(meta.defaultPermissionMode).toBe("acceptEdits");
+
+    // A whitespace-only value normalizes to null (no stray-space default).
+    meta = idx.setProjectMeta(projectId, { defaultPermissionMode: "   " });
+    expect(meta.defaultPermissionMode).toBeNull();
+    idx.close();
+  });
+
+  it("surfaces the defaults on ProjectSummary via getProjects", async () => {
+    const dir = tmp();
+    const { idx, projectId } = await buildIdx(dir);
+    idx.setProjectMeta(projectId, { defaultModel: "claude-sonnet-4-6", defaultPermissionMode: "plan" });
+    const proj = idx.getProjects().find((p) => p.id === projectId)!;
+    expect(proj.defaultModel).toBe("claude-sonnet-4-6");
+    expect(proj.defaultPermissionMode).toBe("plan");
+    idx.close();
+  });
+
+  it("persists per-project defaults across a reopen of the same DB", async () => {
+    const dir = tmp();
+    const { idx, projectId } = await buildIdx(dir);
+    idx.setProjectMeta(projectId, { defaultModel: "claude-haiku-4-5", defaultPermissionMode: "default" });
+    idx.close();
+
+    const reopened = new TranscriptIndex(path.join(dir, "i.db"));
+    const meta = reopened.getProjectMeta(projectId);
+    expect(meta.defaultModel).toBe("claude-haiku-4-5");
+    expect(meta.defaultPermissionMode).toBe("default");
+    reopened.close();
+  });
+
+  it("Engine.setProjectMeta forwards the default keys", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    // No session indexed, but setProjectMeta works on any projectId (the route guards
+    // unknown ids, not the store).
+    const meta = engine.setProjectMeta("proj-x", { defaultModel: "claude-opus-4-8" });
+    expect(meta.defaultModel).toBe("claude-opus-4-8");
+    expect(engine.getProjectMeta("proj-x").defaultModel).toBe("claude-opus-4-8");
+    engine.close();
   });
 });

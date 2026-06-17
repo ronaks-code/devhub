@@ -22,7 +22,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W10 Permission card body, MCP health, archive sessions, inline images, permalinks, @-mention, SQL aggregates ✅
 - [x] W11 PR creation, agents library, period selector, tool-running state, saved views, tag filter, worktrees ✅
 - [x] W12 CLAUDE.md editor, deny-with-feedback, calendar heatmap, code-symbols, query syntax, AI summary, stats poll, Read card ✅mbol
-- [ ] W13 Skills manager, branch switcher, retry/queue, mini-map
+- [x] W13 Skills manager, branch switcher, retry, mini-map, FTS trigram, Task card, per-project defaults, desktop auto-server ✅
 - [ ] W14 TUI live chat, audit log, edit approvals, project detail header
 - [ ] W15 TUI search, push notifications, secret redaction, syntax diff
 - [ ] W16 Live Ops board, config watcher, keyboard approvals, prompt templates
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W13** ✅ (green: tc×4 + 182 tests + build + search-survives-migration + substring + cargo check). engine: FTS5 **trigram** tokenizer via data-preserving copy-migration (v8) → substring search now works; per-project default model/permission (v9). server: projects PATCH forwards defaults. web: SkillsManager, BranchSwitcher, TurnError retry, TranscriptMinimap, TaskCard (inline subagent), per-project default selects. desktop: lib.rs auto-spawns the server on launch (compiles).
 - **W12** ✅ (green: tc×4 + 170 tests + build + symbols + query-syntax + chat). engine: `symbols.ts` on-demand code-symbol search (allowlisted), `query-parser.ts` inline `tool:`/`role:`/`after:`/`model:` tokens integrated into search. server: `/api/summary` (AI recap) + `/api/symbols`. web: ClaudeMdEditor (+preview/token-count), DenyFeedback, 12-month CalendarHeatmap, useStatsPolling, ReadCard.
 - **W11** ✅ (green: tc×4 + 140 tests + build + saved-views/worktrees/chat). engine: `saved-views.ts` smart folders (migration v7), git worktree ops, flag-gated `index-worker.ts` (parse-session extracted as shared source; default OFF, sync fallback). server: `/api/pr` (gh + AI body), worktree routes, saved-views routes. web: AgentsLibrary, dashboard PeriodSelector (rollups-based), ToolCard running-state, TagFilterBar, WorktreePanel. (server caught a transient engine mid-edit tc-error from the parse-session extraction; final gate clean.)
 - **W10** ✅ (green: tc×4 + 129 tests + build + projects-parity + files + chat). engine: `mcp-test.ts` health check, archive sessions (migration v6 + includeArchived), `aggregates.ts` SQL rollups + cache (getProjects/getStats parity-tested), image-data in parser/ContentBlock. server: `/api/assets` (allowlisted image serve) + `/api/files` (@-mention tree). web: PermissionCardBody (diffs/command), ImageBlock inline render, useMessagePermalink (#uuid), MentionPicker (@-file).

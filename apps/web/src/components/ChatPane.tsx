@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ListPlus, MessageSquarePlus, Pencil, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
+import { ArrowDown, Check, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
@@ -15,6 +15,8 @@ import { LiveBubble, LiveStream } from "./LiveBubble";
 import { SlashPalette, filterCommands } from "./SlashPalette";
 import { MentionPicker, detectMention } from "./MentionPicker";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
+import { BranchSwitcher } from "./BranchSwitcher";
+import { TurnError } from "./TurnError";
 import { usePromptHistory } from "../hooks/usePromptHistory";
 import { api, type FileEntry } from "../lib/api";
 import { EmptyState, IconButton, Spinner } from "./ui";
@@ -49,6 +51,9 @@ export function ChatPane({
   initialSessionId,
   defaultModel,
   defaultPermissionMode,
+  projectDefaultModel,
+  projectDefaultPermissionMode,
+  onSaveProjectDefaults,
   model: controlledModel,
   onModelChange,
 }: {
@@ -58,10 +63,23 @@ export function ChatPane({
   projectName: string;
   /** Seed to resume an existing CLI session (--resume) on the first prompt. */
   initialSessionId?: string;
-  /** Preferred model from settings; falls back to the built-in default. */
+  /** Preferred model from GLOBAL settings; falls back to the built-in default. */
   defaultModel?: string;
-  /** Preferred permission mode from settings; falls back to the built-in default. */
+  /** Preferred permission mode from GLOBAL settings; falls back to the built-in default. */
   defaultPermissionMode?: PermissionMode;
+  /**
+   * This project's preferred model (ProjectSummary.defaultModel). Takes
+   * precedence over the global settings default when opening a fresh chat here.
+   */
+  projectDefaultModel?: string | null;
+  /** This project's preferred permission mode. Precedes the global default. */
+  projectDefaultPermissionMode?: PermissionMode | null;
+  /**
+   * Persist the current model + permission as THIS PROJECT's defaults (PATCH
+   * /api/projects/:id). When omitted the "set as project default" control is
+   * hidden. Returns a promise so the control can show a brief saved/failed state.
+   */
+  onSaveProjectDefaults?: (model: string, permissionMode: PermissionMode) => Promise<void>;
   /** Controlled model id (e.g. from a command palette). Uncontrolled if omitted. */
   model?: string | null;
   /** Notified when the model select changes; required for controlled mode. */
@@ -81,14 +99,19 @@ export function ChatPane({
   const history = usePromptHistory(projectId);
   // Model can be controlled by the parent (command palette) or local. When the
   // parent passes a value we defer to it; otherwise we own it here.
-  const [localModel, setLocalModel] = useState<string>(defaultModel ?? DEFAULT_MODEL);
+  // Initial model/permission precedence: this project's saved default →
+  // global settings default → built-in. The project default wins so opening a
+  // chat in a project lands on that project's preferred model/mode.
+  const [localModel, setLocalModel] = useState<string>(
+    projectDefaultModel ?? defaultModel ?? DEFAULT_MODEL,
+  );
   const model = controlledModel ?? localModel;
   const setModel = (m: string) => {
     setLocalModel(m);
     onModelChange?.(m);
   };
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(
-    defaultPermissionMode ?? DEFAULT_PERMISSION,
+    projectDefaultPermissionMode ?? defaultPermissionMode ?? DEFAULT_PERMISSION,
   );
   // True while the in-flight assistant turn is streaming text into the LiveBubble.
   // Deltas flow through liveStreamRef (an external store) — NOT React state — so a
@@ -118,6 +141,12 @@ export function ChatPane({
   // turn at a time, so we hold these locally and dispatch the head as each turn
   // ends — rendering them meanwhile as pending "queue" bubbles below the stream.
   const [queued, setQueued] = useState<QueuedPrompt[]>([]);
+  // User dismissed the current turn-error card (so it doesn't reappear until the
+  // next failure). Reset whenever a new error/error-result arrives or a turn starts.
+  const [errorDismissed, setErrorDismissed] = useState(false);
+  // Transient UI state for the "set as project default" affordance: null idle,
+  // "saving" mid-PATCH, "ok"/"fail" briefly after.
+  const [savingDefault, setSavingDefault] = useState<"saving" | "ok" | "fail" | null>(null);
 
   // "@" file-mention picker state. `mention` holds the active query + the
   // [start,end) range of the "@token" in the draft to replace on insert; null
@@ -234,7 +263,12 @@ export function ChatPane({
       onDelta: (text) => appendDelta(text),
       onMessage: (m) => finalizeMessage(m),
       onStatus: (kind) => setStatus(kind),
-      onResult: (result) => setLastResult(result),
+      onResult: (result) => {
+        setLastResult(result);
+        // A turn that ended in an error subtype should surface the retry card,
+        // so un-dismiss when an error result lands.
+        if (result.isError) setErrorDismissed(false);
+      },
       onPermissionRequest: (req) => setPendingPermission(req),
       onConnectionState: (state) => {
         if (state === "reconnecting") {
@@ -257,6 +291,7 @@ export function ChatPane({
       },
       onError: (message) => {
         setErrorMsg(message);
+        setErrorDismissed(false);
         setRunning(false);
         setStatus(null);
         setPendingPermission(null);
@@ -324,6 +359,7 @@ export function ChatPane({
       // A fresh turn always snaps back to the bottom to follow the reply.
       stick.pin();
       setErrorMsg(null);
+      setErrorDismissed(false);
       setLastResult(null);
       setPendingPermission(null);
       setStatus("starting");
@@ -407,6 +443,20 @@ export function ChatPane({
   const stop = useCallback(() => {
     connRef.current?.send({ t: "interrupt" });
   }, []);
+
+  // Persist the current model + permission as THIS project's defaults. Shows a
+  // brief saved/failed state on the pin control. No-op when the host didn't wire
+  // a save handler (the control is hidden then).
+  const saveProjectDefaults = useCallback(() => {
+    if (!onSaveProjectDefaults || savingDefault === "saving") return;
+    setSavingDefault("saving");
+    onSaveProjectDefaults(model, permissionMode)
+      .then(() => setSavingDefault("ok"))
+      .catch(() => setSavingDefault("fail"))
+      .finally(() => {
+        window.setTimeout(() => setSavingDefault(null), 1800);
+      });
+  }, [onSaveProjectDefaults, savingDefault, model, permissionMode]);
 
   const newChat = useCallback(() => {
     connRef.current?.close();
@@ -710,6 +760,11 @@ export function ChatPane({
           </div>
         </div>
 
+        {/* Git branch dropdown for this project's working tree: switch branches
+            or create a new one before starting a chat. Hides itself when the cwd
+            isn't a git repo. Locked while a turn runs. */}
+        <BranchSwitcher cwd={cwd} disabled={running} />
+
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -737,6 +792,34 @@ export function ChatPane({
             </option>
           ))}
         </select>
+
+        {/* Pin the current model + permission as this project's defaults. Only
+            shown when the host wired a save handler. Reflects a brief saved/
+            failed state after the PATCH. */}
+        {onSaveProjectDefaults ? (
+          <button
+            onClick={saveProjectDefaults}
+            disabled={savingDefault === "saving"}
+            className={cn(
+              "inline-flex items-center justify-center rounded-lg px-2 py-1 ring-1 transition disabled:opacity-50",
+              savingDefault === "ok"
+                ? "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30"
+                : savingDefault === "fail"
+                  ? "bg-red-500/15 text-red-300 ring-red-500/30"
+                  : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-clay-300",
+            )}
+            title="Set the current model + permission mode as this project's defaults"
+            aria-label="Set as project default"
+          >
+            {savingDefault === "saving" ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : savingDefault === "ok" ? (
+              <Check className="h-3.5 w-3.5" />
+            ) : (
+              <Pin className="h-3.5 w-3.5" />
+            )}
+          </button>
+        ) : null}
 
         <button
           onClick={newChat}
@@ -838,6 +921,18 @@ export function ChatPane({
         <PermissionCard request={pendingPermission} onDecision={respondPermission} />
       )}
 
+      {/* Turn-error card: an {t:"error"} socket frame, or a result that ended in
+          an error subtype. Offers Retry (resend the last prompt, resuming the
+          session) + dismiss. Hidden while a turn runs or once dismissed. */}
+      {!running && !errorDismissed && (errorMsg || lastResult?.isError) ? (
+        <TurnError
+          message={errorMsg ?? lastResult?.resultText ?? "The turn ended with an error."}
+          subtype={errorMsg ? undefined : lastResult?.subtype}
+          onRetry={lastPromptRef.current ? regenerate : undefined}
+          onDismiss={() => setErrorDismissed(true)}
+        />
+      ) : null}
+
       {/* Status / result footer */}
       {(running || lastResult || errorMsg || (!running && lastPromptRef.current)) && (
         <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800/80 bg-zinc-900/30 px-5 py-1.5 text-[11px]">
@@ -868,7 +963,8 @@ export function ChatPane({
               )}
             </span>
           )}
-          {errorMsg && <span className="text-red-400">{errorMsg}</span>}
+          {/* The error itself renders in the TurnError card above; the footer just
+              keeps the cost/denials summary and the Regenerate affordance. */}
           {/* Resend the last prompt for a fresh response (resumes the session). */}
           {!running && lastPromptRef.current && (
             <button

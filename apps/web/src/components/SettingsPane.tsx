@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Check, FileText, Loader2, Save, Server, SlidersHorizontal, Webhook } from "lucide-react";
+import { Bot, Check, FileText, Loader2, Save, Server, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
@@ -7,10 +7,11 @@ import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";
 import { HooksEditor } from "./config/HooksEditor";
 import { AgentsLibrary } from "./config/AgentsLibrary";
+import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 
 /** Sub-tabs within the Settings view. */
-type SettingsSection = "preferences" | "memory" | "mcp" | "hooks" | "agents";
+type SettingsSection = "preferences" | "memory" | "mcp" | "hooks" | "agents" | "skills";
 
 const MODELS = [
   "claude-opus-4-8",
@@ -309,6 +310,7 @@ export function SettingsPane({
     { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
     { id: "hooks", label: "Hooks", icon: <Webhook className="h-3.5 w-3.5" /> },
     { id: "agents", label: "Agents", icon: <Bot className="h-3.5 w-3.5" /> },
+    { id: "skills", label: "Skills", icon: <Sparkles className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -323,7 +325,9 @@ export function SettingsPane({
                 ? "Commands Claude Code runs on lifecycle events, edited as JSON."
                 : section === "agents"
                   ? "Subagents installed globally and in this project (read-only)."
-                  : section === "memory"
+                  : section === "skills"
+                    ? "Skills installed globally and in this project (read-only)."
+                    : section === "memory"
                     ? "Your CLAUDE.md memory file — instructions prepended to every session."
                     : "Defaults for new sessions and your spend budget. Saved on the server."}
           </p>
@@ -355,8 +359,10 @@ export function SettingsPane({
           <McpManager projectCwd={projectCwd} />
         ) : section === "hooks" ? (
           <HooksEditor projectCwd={projectCwd} />
-        ) : (
+        ) : section === "agents" ? (
           <AgentsLibrary projectCwd={projectCwd} />
+        ) : (
+          <SkillsManager projectCwd={projectCwd} />
         )}
       </div>
     </div>

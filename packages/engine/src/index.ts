@@ -560,6 +560,22 @@ export type {
 } from "./git.js";
 export { ProjectMetaStore } from "./project-meta.js";
 export type { ProjectMetaPatch } from "./project-meta.js";
+export { normalizeProjectDefault, DEFAULT_PROJECT_DEFAULTS } from "./project-settings.js";
+export type {
+  ProjectDefaults,
+  ProjectDefaultModel,
+  ProjectDefaultPermissionMode,
+} from "./project-settings.js";
+export {
+  FTS_TABLE,
+  FTS_COLUMNS,
+  TOKENIZER_PREFERENCE,
+  createFtsTableSql,
+  createLikeTableSql,
+  detectFtsTokenizer,
+  tokenizerOf,
+} from "./fts-schema.js";
+export type { FtsTokenizer } from "./fts-schema.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";
 export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";

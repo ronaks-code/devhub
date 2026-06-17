@@ -5,6 +5,7 @@ import { DiffView, parseEditInput } from "./DiffView";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
 import { ReadCard } from "./tools/ReadCard";
+import { TaskCard } from "./tools/TaskCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -98,6 +99,10 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
 
   // TodoWrite gets a dedicated checklist renderer instead of raw JSON.
   if (name === "TodoWrite") return <TodoWriteCard block={block} />;
+
+  // Task (subagent) gets a renderer that shows the subagent description + an
+  // inline expander that loads the subagent transcript (when available).
+  if (name === "Task") return <TaskCard block={block} />;
 
   // Bash gets a command/stdout renderer with exit styling; the generic card is
   // its fallback when the input doesn't carry a string command.
