@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdirSync, mkdtempSync, statSync, writeFileSync, appendFileSync, rmSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync, readFileSync, existsSync, readdirSync, appendFileSync, rmSync, utimesSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -44,7 +44,8 @@ import { testMcpServer } from "../src/config/mcp-test.js";
 import type { McpServerDef } from "../src/config/index.js";
 import { parseSearchQuery, mergeFacets } from "../src/query-parser.js";
 import { searchSymbols } from "../src/symbols.js";
-import { tokenizerOf, detectFtsTokenizer, FTS_TABLE } from "../src/fts-schema.js";
+import { tokenizerOf, detectFtsTokenizer, FTS_TABLE, ftsLacksColumn, ftsTableColumns } from "../src/fts-schema.js";
+import { safeWriteFile, listBackups, restoreBackup, DEFAULT_BACKUP_KEEP } from "../src/config/safe-write.js";
 import { normalizeProjectDefault } from "../src/project-settings.js";
 import { AuditStore } from "../src/audit.js";
 import { redactSecrets, redactDeep } from "../src/redact.js";
@@ -4907,5 +4908,250 @@ describe("running-session cache (mtime gate)", () => {
       rmSync(file);
       expect(await listRunning()).toEqual([]); // file gone -> dropped, no stale cache hit
     });
+  });
+});
+
+describe("config safe-write (validate -> rotating backup -> atomic)", () => {
+  it("writes a new file with no backup (nothing to back up yet)", async () => {
+    const file = path.join(tmp(), "settings.json");
+    const out = await safeWriteFile(file, '{"a":1}');
+    expect(out).toBe(file);
+    expect(readFileSync(file, "utf8")).toBe('{"a":1}');
+    // First write of a missing file leaves no backup.
+    expect(await listBackups(file)).toEqual([]);
+  });
+
+  it("rejects non-string content and never touches the file", async () => {
+    const file = path.join(tmp(), "settings.json");
+    // @ts-expect-error deliberately wrong type to prove validation runs first
+    await expect(safeWriteFile(file, { not: "a string" })).rejects.toThrow(/must be a string/);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("snapshots the prior contents to a timestamped backup on overwrite", async () => {
+    const file = path.join(tmp(), "settings.json");
+    await safeWriteFile(file, "v1");
+    await safeWriteFile(file, "v2");
+    expect(readFileSync(file, "utf8")).toBe("v2");
+    const backups = await listBackups(file);
+    expect(backups.length).toBe(1);
+    // The single backup holds the PRIOR contents (v1), not the new ones.
+    expect(readFileSync(backups[0]!.path, "utf8")).toBe("v1");
+    // The backup id is a plain basename in the same dir (safe to round-trip via an API).
+    expect(backups[0]!.id).toBe(path.basename(backups[0]!.path));
+    expect(path.dirname(backups[0]!.path)).toBe(path.dirname(file));
+  });
+
+  it("rotates: keeps only the newest N backups (default DEFAULT_BACKUP_KEEP)", async () => {
+    const file = path.join(tmp(), "settings.json");
+    // Write DEFAULT_BACKUP_KEEP + 3 versions; each overwrite snapshots the prior one.
+    const total = DEFAULT_BACKUP_KEEP + 3;
+    for (let i = 0; i < total; i++) await safeWriteFile(file, `v${i}`);
+    const backups = await listBackups(file);
+    // We never keep more than the cap, even though we wrote more versions.
+    expect(backups.length).toBe(DEFAULT_BACKUP_KEEP);
+    // Newest first; and the most recent backup is the version written just before the last.
+    expect(backups[0]!.timestamp).toBeGreaterThanOrEqual(backups[backups.length - 1]!.timestamp);
+    expect(readFileSync(backups[0]!.path, "utf8")).toBe(`v${total - 2}`);
+    // Only the cap-many .bak.* files exist on disk (the rest were pruned).
+    const onDisk = readdirSync(path.dirname(file)).filter((n) => n.includes(".bak."));
+    expect(onDisk.length).toBe(DEFAULT_BACKUP_KEEP);
+  });
+
+  it("honors a custom keep count", async () => {
+    const file = path.join(tmp(), "settings.json");
+    for (let i = 0; i < 5; i++) await safeWriteFile(file, `v${i}`, { keep: 2 });
+    expect((await listBackups(file)).length).toBe(2);
+  });
+
+  it("gives successive writes distinct backup ids even within the same millisecond", async () => {
+    const file = path.join(tmp(), "settings.json");
+    for (let i = 0; i < 4; i++) await safeWriteFile(file, `v${i}`, { keep: 10 });
+    const ids = (await listBackups(file)).map((b) => b.id);
+    expect(new Set(ids).size).toBe(ids.length); // all unique
+  });
+});
+
+describe("config restoreBackup (restore picker)", () => {
+  it("restores a chosen snapshot, and itself backs up the current state first", async () => {
+    const file = path.join(tmp(), "settings.json");
+    await safeWriteFile(file, "v1");
+    await safeWriteFile(file, "v2"); // backup #1 = v1
+    await safeWriteFile(file, "v3"); // backup #2 = v2; live = v3
+
+    const before = await listBackups(file); // newest first: [v2, v1]
+    expect(before.map((b) => readFileSync(b.path, "utf8"))).toEqual(["v2", "v1"]);
+
+    // Restore the OLDEST snapshot (v1). The current live "v3" must be backed up first.
+    const v1Backup = before[before.length - 1]!;
+    const out = await restoreBackup(file, v1Backup.id);
+    expect(out).toBe(file);
+    expect(readFileSync(file, "utf8")).toBe("v1");
+
+    // A new backup of "v3" now exists, so a regretted restore is itself undoable.
+    const after = await listBackups(file);
+    expect(after.map((b) => readFileSync(b.path, "utf8"))).toContain("v3");
+  });
+
+  it("throws on an unknown / traversal-y backupId and leaves the file untouched", async () => {
+    const file = path.join(tmp(), "settings.json");
+    await safeWriteFile(file, "live");
+    await safeWriteFile(file, "live2");
+    await expect(restoreBackup(file, "settings.json.bak.0")).rejects.toThrow(/no backup/);
+    await expect(restoreBackup(file, "../../../etc/passwd")).rejects.toThrow(/no backup/);
+    await expect(restoreBackup(file, "")).rejects.toThrow(/non-empty/);
+    expect(readFileSync(file, "utf8")).toBe("live2"); // unchanged
+  });
+
+  it("round-trips through writeClaudeMd's rotating backups", async () => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    try {
+      const { writeClaudeMd, listBackups: lb, restoreBackup: rb } = await import("../src/config/index.js");
+      const file = await writeClaudeMd("global", "# first");
+      await writeClaudeMd("global", "# second");
+      expect(readFileSync(file, "utf8")).toBe("# second");
+      const backups = await lb(file);
+      expect(backups.length).toBe(1);
+      expect(readFileSync(backups[0]!.path, "utf8")).toBe("# first");
+      await rb(file, backups[0]!.id);
+      expect(readFileSync(file, "utf8")).toBe("# first");
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  });
+});
+
+describe("migrations (FTS toolName repair, self-healing old DBs)", () => {
+  // Helper: build a PRE-WAVE-4 messages_fts with the OLD 4-column layout (no toolName).
+  const legacyFtsDb = (file: string, tokenizeOpt: string, userVersion: number) => {
+    const db = new DatabaseSync(file);
+    db.exec(
+      `CREATE VIRTUAL TABLE messages_fts USING fts5(
+         sessionId UNINDEXED, role UNINDEXED, seq UNINDEXED, text${tokenizeOpt}
+       )`,
+    );
+    db.exec(`PRAGMA user_version = ${userVersion}`);
+    const ins = db.prepare(
+      "INSERT INTO messages_fts (sessionId, role, seq, text) VALUES (?, ?, ?, ?)",
+    );
+    ins.run("s1", "user", 0, "How do I add a checkout button");
+    ins.run("s2", "tool", 1, "run vitest configurePaymentGateway now");
+    return db;
+  };
+
+  it("ftsLacksColumn detects the missing toolName on a legacy table, false otherwise", () => {
+    const db = legacyFtsDb(path.join(tmp(), "legacy.db"), "", 11);
+    expect(ftsTableColumns(db).includes("toolName")).toBe(false);
+    expect(ftsLacksColumn(db)).toBe(true);
+    db.close();
+
+    // A current (5-column) table has toolName -> not lacking.
+    const cur = new DatabaseSync(path.join(tmp(), "cur.db"));
+    cur.exec(
+      `CREATE VIRTUAL TABLE messages_fts USING fts5(
+         sessionId UNINDEXED, role UNINDEXED, seq UNINDEXED, toolName UNINDEXED, text
+       )`,
+    );
+    expect(ftsLacksColumn(cur)).toBe(false);
+    cur.close();
+
+    // No table at all -> nothing to repair -> false.
+    const none = new DatabaseSync(path.join(tmp(), "none.db"));
+    expect(ftsLacksColumn(none)).toBe(false);
+    none.close();
+  });
+
+  it("rebuilds a legacy 4-column messages_fts to add toolName, preserving rows + searchability", () => {
+    const file = path.join(tmp(), "legacy.db");
+    // user_version 11 = everything through notes applied, the toolName repair (v12) not yet.
+    // Already on trigram so the v8 swap is a no-op and ONLY the v12 repair fires.
+    const db = legacyFtsDb(file, ", tokenize='trigram case_sensitive 0'", 11);
+    expect(ftsLacksColumn(db)).toBe(true);
+
+    runMigrations(db);
+
+    // Post-repair: the column exists, row count preserved (no transcript re-read).
+    expect(ftsLacksColumn(db)).toBe(false);
+    expect(ftsTableColumns(db).includes("toolName")).toBe(true);
+    const count = db.prepare("SELECT COUNT(*) AS c FROM messages_fts").get() as { c: number };
+    expect(Number(count.c)).toBe(2);
+    // Old rows read NULL for the brand-new column until a reindex backfills it.
+    const tn = db.prepare("SELECT toolName FROM messages_fts WHERE sessionId='s2'").get() as {
+      toolName: string | null;
+    };
+    expect(tn.toolName).toBeNull();
+    // Text search still works on the preserved rows.
+    const hit = db
+      .prepare("SELECT sessionId FROM messages_fts WHERE messages_fts MATCH ?")
+      .all('"checkout"') as Array<{ sessionId: string }>;
+    expect(hit.map((r) => r.sessionId)).toEqual(["s1"]);
+
+    // Idempotent: re-running does nothing (column now present).
+    runMigrations(db);
+    expect(ftsLacksColumn(db)).toBe(false);
+    expect(
+      Number((db.prepare("SELECT COUNT(*) AS c FROM messages_fts").get() as { c: number }).c),
+    ).toBe(2);
+    db.close();
+  });
+
+  it("repairs a legacy unicode61 table without toolName even when the v8 tokenizer swap also runs", () => {
+    const file = path.join(tmp(), "legacy-uni.db");
+    // unicode61 (no tokenize=) AND missing toolName, sitting at a version BEFORE v8.
+    // v8 (tokenizer swap) and v12 (toolName) must both run without the missing column
+    // crashing the v8 copy.
+    const db = legacyFtsDb(file, "", 7);
+    expect(tokenizerOf(db, FTS_TABLE)).toBe("unicode61");
+    expect(ftsLacksColumn(db)).toBe(true);
+
+    runMigrations(db);
+
+    // Now trigram AND has toolName, rows intact.
+    expect(tokenizerOf(db, FTS_TABLE)).toBe("trigram");
+    expect(ftsLacksColumn(db)).toBe(false);
+    expect(
+      Number((db.prepare("SELECT COUNT(*) AS c FROM messages_fts").get() as { c: number }).c),
+    ).toBe(2);
+    // Substring search (trigram) works on the preserved, repaired rows.
+    const substr = db
+      .prepare("SELECT sessionId FROM messages_fts WHERE messages_fts MATCH ?")
+      .all('"ymentgate"') as Array<{ sessionId: string }>;
+    expect(substr.map((r) => r.sessionId)).toEqual(["s2"]);
+    db.close();
+  });
+
+  it("is a no-op for a fresh/LIKE-mode DB (no messages_fts) and for a current 5-column table", async () => {
+    // No FTS table: the repair must not throw, just advance user_version.
+    const nofts = path.join(tmp(), "nofts.db");
+    const db1 = new DatabaseSync(nofts);
+    db1.exec("PRAGMA user_version = 11");
+    expect(() => runMigrations(db1)).not.toThrow();
+    expect(
+      Number((db1.prepare("PRAGMA user_version").get() as { user_version: number }).user_version),
+    ).toBeGreaterThanOrEqual(12);
+    db1.close();
+
+    // A real fresh index.db (built via TranscriptIndex) already has the 5-column table;
+    // reopening it does NOT rebuild (the repair is a no-op) and search keeps working.
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const f = path.join(proj, "sess.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd: "/home/me/heal", message: { role: "user", content: "the deployment pipeline broke" } }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    expect(idx.search("deployment").map((h) => h.sessionId)).toEqual(["sess"]);
+    idx.close();
+
+    // Reopen: the existing 5-column table is adopted untouched; rows stay searchable.
+    const idx2 = new TranscriptIndex(path.join(dir, "i.db"));
+    expect(idx2.search("deployment").map((h) => h.sessionId)).toEqual(["sess"]);
+    idx2.close();
   });
 });

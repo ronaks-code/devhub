@@ -118,6 +118,39 @@ export function detectFtsTokenizer(db: SqliteDatabase): FtsTokenizer | null {
   return null;
 }
 
+/**
+ * The columns an existing FTS table actually exposes, via `PRAGMA table_info`. For an
+ * FTS5 virtual table this lists the user columns (and, depending on the SQLite build,
+ * the table-name "rank" shadow column — which we ignore by matching against names we
+ * know). Returns [] when the table is absent. Used to detect a LEGACY table missing a
+ * column that newer code expects (e.g. a pre-`toolName` `messages_fts`).
+ */
+export function ftsTableColumns(db: SqliteDatabase, table: string = FTS_TABLE): string[] {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    return rows.map((r) => r.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * True when an existing FTS `table` is MISSING the `column` (a legacy/old-schema table
+ * predating that column). False when the column is present OR the table doesn't exist
+ * (nothing to repair in either case). `column` defaults to `toolName`, the column added
+ * in wave 4 — DBs created before it have a 4-column `messages_fts` that the repair step
+ * rebuilds onto the full 5-column layout.
+ */
+export function ftsLacksColumn(
+  db: SqliteDatabase,
+  column: string = "toolName",
+  table: string = FTS_TABLE,
+): boolean {
+  const cols = ftsTableColumns(db, table);
+  if (cols.length === 0) return false; // no table -> nothing to repair
+  return !cols.includes(column);
+}
+
 /** The tokenizer an existing `messages_fts` table was created with (parsed from its SQL). */
 export function tokenizerOf(db: SqliteDatabase, table: string = FTS_TABLE): FtsTokenizer | null {
   const row = db

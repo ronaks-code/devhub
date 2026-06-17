@@ -556,6 +556,15 @@ export default function App() {
     setProjectId(id);
   };
 
+  // Open a project in the Browse view from elsewhere (e.g. the dashboard's
+  // Project leaderboard). Switches to Browse and selects the project, dropping any
+  // pending resume seed — mirrors the command palette's "Jump to project" action.
+  const openProject = useCallback((id: string) => {
+    setChatSeed(null);
+    setProjectId(id);
+    setTab("browse");
+  }, []);
+
   const project = projects.find((p) => p.id === projectId) ?? null;
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
@@ -700,7 +709,7 @@ export default function App() {
         {tab === "settings" ? (
           <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
         ) : tab === "dashboard" ? (
-          <DashboardPane onOpenSession={openSession} />
+          <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
         ) : tab === "ops" ? (
           <LiveOpsBoard onOpenSession={openSessionByCwd} />
         ) : tab === "inbox" ? (

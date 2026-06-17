@@ -13,16 +13,24 @@
  *
  * Safety contract for writes:
  *   - We NEVER touch transcripts. These helpers only touch config files.
- *   - Every write VALIDATES its input first, writes a `<file>.bak` backup of the
- *     existing file (if any), then writes atomically (temp file + rename).
+ *   - Every write goes through {@link safeWriteFile}: VALIDATE the input, snapshot the
+ *     existing file to a rotating `<file>.bak.<ts>` backup, then write atomically
+ *     (temp file + rename). {@link listBackups}/{@link restoreBackup} (re-exported
+ *     below) power a restore picker over those snapshots.
  *
  * Tolerance: every reader swallows missing files / parse errors and returns an
  * empty/null result, so a half-configured machine never throws.
  */
-import { readFile, readdir, writeFile, copyFile, rename, mkdir, stat } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { claudeConfigDir } from "../paths.js";
+import { safeWriteFile } from "./safe-write.js";
+
+// Re-export the backup history API so it surfaces on `Engine.config` (the engine
+// re-exports this module as the `config` namespace).
+export { safeWriteFile, listBackups, restoreBackup, DEFAULT_BACKUP_KEEP } from "./safe-write.js";
+export type { BackupInfo } from "./safe-write.js";
 
 // ---- Types -----------------------------------------------------------------
 
@@ -403,32 +411,13 @@ export async function readProjectClaudeMd(projectCwd: string): Promise<ClaudeMdD
 }
 
 // ---- Safe write helpers ----------------------------------------------------
+// The validate -> rotating backup -> atomic write pattern lives in safe-write.ts
+// (safeWriteFile). The helpers below add per-file VALIDATION + path resolution on
+// top of that primitive; they never re-implement the backup/atomic write.
 
 /**
- * Back up `file` to `<file>.bak` if it exists. Best-effort: a missing source is a
- * no-op (nothing to back up). Throws only if the copy itself fails on an existing
- * file — we never silently lose the user's prior config.
- */
-async function backup(file: string): Promise<void> {
-  try {
-    await stat(file);
-  } catch {
-    return; // no existing file -> nothing to back up
-  }
-  await copyFile(file, `${file}.bak`);
-}
-
-/** Atomic write: temp file in the same dir, then rename over the target. */
-async function atomicWrite(file: string, data: string): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, data, "utf8");
-  await rename(tmp, file);
-}
-
-/**
- * SAFE write of a CLAUDE.md. Validates the content is a non-empty string, backs up
- * any existing file to `<file>.bak`, then writes atomically.
+ * SAFE write of a CLAUDE.md. Validates the content is a string, snapshots any existing
+ * file to a rotating backup, then writes atomically (all via {@link safeWriteFile}).
  *
  *  - scope "global"  => ~/.claude/CLAUDE.md
  *  - scope "project" => <projectCwd>/CLAUDE.md   (projectCwd required)
@@ -440,9 +429,6 @@ export async function writeClaudeMd(
   content: string,
   projectCwd?: string,
 ): Promise<string> {
-  if (typeof content !== "string") {
-    throw new TypeError("writeClaudeMd: content must be a string");
-  }
   let file: string;
   if (scope === "global") {
     file = path.join(claudeConfigDir(), "CLAUDE.md");
@@ -450,9 +436,8 @@ export async function writeClaudeMd(
     if (!projectCwd) throw new Error("writeClaudeMd: projectCwd is required for project scope");
     file = path.join(projectCwd, "CLAUDE.md");
   }
-  await backup(file);
-  await atomicWrite(file, content);
-  return file;
+  // safeWriteFile validates content is a string, backs up, and writes atomically.
+  return safeWriteFile(file, content);
 }
 
 /** Minimal validated shape for an MCP server we'll accept on write. */
@@ -496,7 +481,7 @@ function validateMcpServer(entry: McpServerInput): Record<string, unknown> {
  * SAFE upsert of an MCP server into `~/.claude.json`.
  *
  *  - Validates `entry` first (throws on a malformed server).
- *  - Backs up `~/.claude.json` to `~/.claude.json.bak`.
+ *  - Snapshots `~/.claude.json` to a rotating `~/.claude.json.bak.<ts>` backup.
  *  - Writes `mcpServers[name]` at the TOP LEVEL (global scope) when `projectCwd` is
  *    omitted, or under `projects[<projectCwd>].mcpServers[name]` when given.
  *  - Preserves every other key in the file; writes atomically.
@@ -543,7 +528,6 @@ export async function setMcpServer(
     cfg.mcpServers = mcp;
   }
 
-  await backup(file);
-  await atomicWrite(file, JSON.stringify(cfg, null, 2) + "\n");
+  await safeWriteFile(file, JSON.stringify(cfg, null, 2) + "\n");
   return clean;
 }

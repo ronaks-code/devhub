@@ -17,6 +17,8 @@ import {
   createFtsTableSql,
   detectFtsTokenizer,
   tokenizerOf,
+  ftsTableColumns,
+  ftsLacksColumn,
 } from "./fts-schema.js";
 
 type Migration = (db: SqliteDatabase) => void;
@@ -179,6 +181,16 @@ const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE session_meta ADD COLUMN notes TEXT`);
     }
   },
+  // v12: self-heal a PRE-WAVE-4 messages_fts that lacks the `toolName` column. Those
+  // old tables were created as (sessionId, role, seq, text) — without toolName — so the
+  // tool-name facet + display break against them. Like the v8 tokenizer swap, an FTS5
+  // column set is fixed at create time, so we can't ALTER one in; we REBUILD:
+  // create a fresh table on the current (5-column) layout + best tokenizer, copy every
+  // legacy row across (mapping the OLD table's columns; the new `toolName` reads NULL
+  // for those rows until a forced reindex backfills it), drop the old, rename. Runs in
+  // the migration runner's transaction, so search sees only the old or fully-rebuilt
+  // table — never a half-migrated one. No transcript re-read needed.
+  migrateFtsAddToolName,
 ];
 
 /**
@@ -198,15 +210,57 @@ function migrateFtsTokenizer(db: SqliteDatabase): void {
   const target = detectFtsTokenizer(db);
   if (target == null || target === current) return;
 
-  // Rebuild: fresh table on the target tokenizer, copy every row across (re-indexing
-  // the mirrored text under the new tokenizer), drop the old, rename into place. The
-  // column list is the single source of truth from fts-schema.ts, so the copy lines up
-  // 1:1. A unique temp name avoids colliding with anything.
+  // Rebuild: fresh table on the target tokenizer (always the current full layout),
+  // copy every row across (re-indexing the mirrored text under the new tokenizer),
+  // drop the old, rename into place. We copy only the columns the OLD table actually
+  // has (its intersection with the current layout) — a PRE-`toolName` legacy table
+  // would otherwise make `SELECT toolName` throw here. The new `toolName` stays NULL
+  // for those rows; the v12 repair leaves it as-is once the tokenizer is current. A
+  // unique temp name avoids colliding with anything.
+  const oldCols = new Set(ftsTableColumns(db, FTS_TABLE));
+  const cols = FTS_COLUMNS.filter((c) => oldCols.has(c)).join(", ");
   const tmp = `${FTS_TABLE}_rebuild`;
-  const cols = FTS_COLUMNS.join(", ");
   db.exec(`DROP TABLE IF EXISTS ${tmp}`);
   db.exec(createFtsTableSql(tmp, target));
   db.exec(`INSERT INTO ${tmp} (${cols}) SELECT ${cols} FROM ${FTS_TABLE}`);
+  db.exec(`DROP TABLE ${FTS_TABLE}`);
+  db.exec(`ALTER TABLE ${tmp} RENAME TO ${FTS_TABLE}`);
+}
+
+/**
+ * Migration v12 body: REPAIR a legacy `messages_fts` that predates the `toolName`
+ * column (pre-wave-4 4-column schema), rebuilding it onto the current 5-column layout
+ * so old DBs self-heal. See the MIGRATIONS comment.
+ *
+ * Idempotent + safe on every DB shape:
+ *   - No messages_fts (fresh / LIKE-mode DB): nothing to repair — ftsLacksColumn is false.
+ *   - Already has toolName (current schema): no-op.
+ *   - FTS5 unavailable here: an FTS5 messages_fts can't exist, so this never fires.
+ *
+ * The copy maps only the columns the OLD table actually has (its intersection with the
+ * current layout); any missing column — `toolName` for a legacy table — is simply not
+ * inserted, so it reads NULL until a forced reindex backfills the real tool names. We
+ * preserve the existing tokenizer when we can detect it (so this repair doesn't also
+ * silently change the tokenizer); otherwise we fall back to the best available one.
+ */
+function migrateFtsAddToolName(db: SqliteDatabase): void {
+  if (!ftsLacksColumn(db, "toolName", FTS_TABLE)) return;
+
+  // Keep the table's current tokenizer if we can read it; else use the best available.
+  // detectFtsTokenizer can't be null here (FTS5 clearly works — messages_fts exists).
+  const target = tokenizerOf(db, FTS_TABLE) ?? detectFtsTokenizer(db);
+  if (target == null) return; // defensive: no FTS5 -> nothing to do
+
+  // Only copy columns present in BOTH the old table and the current layout. A legacy
+  // table is (sessionId, role, seq, text); `toolName` is absent and stays NULL.
+  const oldCols = new Set(ftsTableColumns(db, FTS_TABLE));
+  const shared = FTS_COLUMNS.filter((c) => oldCols.has(c));
+  const sharedList = shared.join(", ");
+
+  const tmp = `${FTS_TABLE}_addtool`;
+  db.exec(`DROP TABLE IF EXISTS ${tmp}`);
+  db.exec(createFtsTableSql(tmp, target));
+  db.exec(`INSERT INTO ${tmp} (${sharedList}) SELECT ${sharedList} FROM ${FTS_TABLE}`);
   db.exec(`DROP TABLE ${FTS_TABLE}`);
   db.exec(`ALTER TABLE ${tmp} RENAME TO ${FTS_TABLE}`);
 }

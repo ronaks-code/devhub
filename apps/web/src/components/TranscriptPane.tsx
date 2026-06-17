@@ -540,6 +540,7 @@ export function TranscriptPane({
                 <MessageView
                   m={messages[vi.index]!}
                   highlight={findOpen ? findQuery : ""}
+                  prevTimestamp={messages[vi.index - 1]?.timestamp ?? null}
                   onCopyLink={copyPermalink}
                 />
               </div>

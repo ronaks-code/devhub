@@ -27,7 +27,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W15 TUI search, finish/stall notifications, secret redaction, syntax diffs, show-more, permissions editor, top-spenders ✅
 - [x] W16 Live Ops board, config watcher, keyboard approvals, prompt snippets, git discard, diff-context, inbox, token meter ✅
 - [x] W17 Effective config, ahead/behind sync, config linter, semantic-search lane, hour heatmap, Grep card, turn footer ✅
-- [ ] W18 Stop running session, restore-from-backup, transcript timestamps
+- [x] W18 Stop running session, restore-from-backup, turn timestamps, image paste, attachments, FTS self-repair, Web card, leaderboard ✅
 - [ ] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render
 - [ ] W20 Rate-limit handling, plugins view, mark interrupted, skeletons
 - [ ] W21 Mobile/remote auth, tray, MCP toggles, toasts
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W18** ✅ (green: tc×4 + 253 tests + build + stop-gate/attachments/chat). engine: `config/safe-write.ts` centralized + rotating .bak + listBackups/restoreBackup, FTS toolName self-repair (v12). server: stop-running (pid-validated, confirm), attachment upload (base64), config restore routes. web: TurnMeta, useImageAttach (paste/drop), WebCard, ProjectLeaderboard. TECH-DEBT: server keeps its own single-.bak vs engine's rotating .bak.<ts> — unify later.
 - **AUDIT after W16** ✅ PASS — 5 tabs (Browse/Chat/Ops/Inbox/Dashboard) + ⌘K + ⌘⇧P + ⚙; dashboard rich (running-now, period selector, 12mo heatmap, by-model, top-spenders, cost); zero console errors. ("unknown" model bucket still pending a forced reindex backfill.)
 - **W17** ✅ (green: tc×4 + 240 tests + build + config-lint(0 issues)/search/chat). engine: `config/effective.ts` resolver, `embeddings.ts` pluggable hybrid lane (default-off, no ML dep), git fetch/pull/push, running-sessions mtime cache. server: `/api/config/lint` + git fetch/pull/push routes. web: GitSync (ahead/behind + push/pull), HourHeatmap, GrepCard (Grep/Glob), TurnFooter.
 - **W16** ✅ (green: tc×4 + 227 tests + build + LiveOps/discard-gate/chat). engine: `config/watcher.ts` (config-changed EngineEvent), driver token-meter (onStatus kind:tokens), git discardFile/discardAll. server: git unstage/discard routes (confirm-gated). web: LiveOpsBoard tab, useApprovalKeyboard (A/D/S/E), SnippetLibrary, DiffContext collapse, InboxPane, live token meter. INTEGRATOR FIX: wired startConfigWatcher into startEngineLifecycle (engine built it server-started like watchTranscripts).

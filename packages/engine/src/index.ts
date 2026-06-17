@@ -699,6 +699,8 @@ export {
   createLikeTableSql,
   detectFtsTokenizer,
   tokenizerOf,
+  ftsTableColumns,
+  ftsLacksColumn,
 } from "./fts-schema.js";
 export type { FtsTokenizer } from "./fts-schema.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";

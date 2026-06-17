@@ -24,6 +24,8 @@ import { registerPrRoutes } from "./routes/pr.js";
 import { registerSavedViewsRoutes } from "./routes/saved-views.js";
 import { registerSummaryRoutes } from "./routes/summary.js";
 import { registerSymbolsRoutes } from "./routes/symbols.js";
+import { registerRunningRoutes } from "./routes/running.js";
+import { registerAttachmentsRoutes } from "./routes/attachments.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -135,6 +137,10 @@ export function buildApp(opts: BuildOptions = {}): {
   registerSummaryRoutes(app, engine);
 
   registerSymbolsRoutes(app, engine);
+
+  registerRunningRoutes(app, engine);
+
+  registerAttachmentsRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

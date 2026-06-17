@@ -4,6 +4,7 @@ import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { Markdown } from "./Markdown";
+import { TurnMeta } from "./TurnMeta";
 import { ToolCard } from "./ToolCard";
 import { ResultBody } from "./ResultBody";
 import { ImageBlock, type ImageBlockData } from "./ImageBlock";
@@ -140,6 +141,7 @@ export const MessageView = memo(function MessageView({
   streaming,
   live = false,
   highlight = "",
+  prevTimestamp,
   onEdit,
   onCopyLink,
 }: {
@@ -154,6 +156,12 @@ export const MessageView = memo(function MessageView({
   live?: boolean;
   /** Active in-transcript find query; matches inside text blocks get marked. */
   highlight?: string;
+  /**
+   * The immediately-preceding message's ISO timestamp. Used by {@link TurnMeta}
+   * to show the per-turn duration (gap → this message) on an assistant reply that
+   * followed a user prompt. Omit it to show only this message's wall-clock time.
+   */
+  prevTimestamp?: string | null;
   /**
    * When set on a user message (live Chat only), shows an "Edit & resend"
    * affordance. Invoked with the message's plain text so the composer can be
@@ -199,6 +207,13 @@ export const MessageView = memo(function MessageView({
           {m.role === "queue" && <ListPlus className="h-3 w-3 text-amber-500" />}
           {m.model ? <span className="text-[10px] text-zinc-600">{m.model}</span> : null}
           {m.isSidechain ? <span className="text-[10px] text-zinc-600">· subagent</span> : null}
+          {/* Per-turn timestamp + duration (subtle). Latency (prev → this) shows
+              only on an assistant reply, where prevTimestamp is the user prompt. */}
+          <TurnMeta
+            timestamp={m.timestamp}
+            prevTimestamp={prevTimestamp}
+            showDuration={m.role === "assistant"}
+          />
           {/* Right-aligned hover affordances: edit-and-resend (user/live only)
               and the message permalink "copy link". */}
           {(onEdit && m.role === "user" && editText) || onCopyLink ? (

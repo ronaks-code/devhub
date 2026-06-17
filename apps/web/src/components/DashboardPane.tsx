@@ -11,6 +11,7 @@ import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
 import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
+import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { Badge, EmptyState, Spinner } from "./ui";
 
 /** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
@@ -120,9 +121,12 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
 
 export function DashboardPane({
   onOpenSession,
+  onOpenProject,
 }: {
   /** Open a session in the Browse view: (projectId, sessionId). From the App. */
   onOpenSession?: (projectId: string, sessionId: string) => void;
+  /** Open a project in the Browse view by id. From the App. */
+  onOpenProject?: (projectId: string) => void;
 } = {}) {
   // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
   // to a 30-day window (resolved by PeriodSelector's first onChange below).
@@ -209,6 +213,7 @@ export function DashboardPane({
       heatmapMetric={heatmapMetric}
       onHeatmapMetric={setHeatmapMetric}
       onOpenSession={onOpenSession}
+      onOpenProject={onOpenProject}
     />
   );
 }
@@ -233,6 +238,7 @@ function DashboardBody({
   heatmapMetric,
   onHeatmapMetric,
   onOpenSession,
+  onOpenProject,
 }: {
   stats: Stats;
   tokens: number;
@@ -251,6 +257,8 @@ function DashboardBody({
   onHeatmapMetric: (m: HeatmapMetric) => void;
   /** Open a session in the Browse view: (projectId, sessionId). */
   onOpenSession?: (projectId: string, sessionId: string) => void;
+  /** Open a project in the Browse view by id. */
+  onOpenProject?: (projectId: string) => void;
 }) {
   // Period totals: sum the in-range days client-side. Oldest→newest for the chart.
   const usage = useMemo(() => {
@@ -450,6 +458,13 @@ function DashboardBody({
           ) : (
             <div className="text-[12px] text-zinc-600">No project usage yet.</div>
           )}
+        </section>
+
+        {/* Project leaderboard — sortable table (cost / tokens / sessions /
+            last active) across every project; click a row to open it. */}
+        <section>
+          <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Project leaderboard</SectionTitle>
+          <ProjectLeaderboard onOpenProject={onOpenProject} />
         </section>
 
         {/* Top spenders — most expensive sessions (est. cost, click to open) */}

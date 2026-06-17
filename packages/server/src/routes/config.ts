@@ -27,6 +27,7 @@
  * never read/write config under an arbitrary host directory.
  */
 import { readFile, writeFile, copyFile, rename, mkdir, stat } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
@@ -155,6 +156,64 @@ async function removeMcpServer(name: string, projectCwd?: string): Promise<boole
   return true;
 }
 
+// ---- Backups (list + restore) ----------------------------------------------
+//
+// Every safe-write in this package backs the prior file up to `<file>.bak` (see
+// `backup` above + the engine's identical helper). So a config file has AT MOST
+// one backup — the bytes from immediately before the last write. These two helpers
+// expose that single backup for a "revert my last edit" UX. The engine has no
+// backup API, so this config-only surface lives here, reusing the same convention.
+
+/** A backup descriptor for the listing response. `id` is always "bak". */
+interface BackupInfo {
+  id: string;
+  path: string;
+  /** Bytes of the backup file. */
+  size: number;
+  /** mtime of the backup (epoch ms) — when the prior version was captured. */
+  modifiedAt: number;
+}
+
+/**
+ * List the available backup(s) for a config `file`. With the `<file>.bak`
+ * convention there is exactly zero or one, but the response is an array so the
+ * shape can grow (e.g. timestamped backups) without an API break.
+ */
+async function listBackups(file: string): Promise<BackupInfo[]> {
+  const bak = `${file}.bak`;
+  let st: Stats;
+  try {
+    st = await stat(bak);
+  } catch {
+    return [];
+  }
+  if (!st.isFile()) return [];
+  return [{ id: "bak", path: bak, size: st.size, modifiedAt: st.mtimeMs }];
+}
+
+/**
+ * Restore a config `file` from its backup. Only `backupId: "bak"` exists today
+ * (the `<file>.bak`). SAFE: before overwriting, the CURRENT file is itself backed
+ * up to `<file>.bak` (so a restore is reversible by another restore), then the
+ * backup bytes are atomic-written over the target. Returns false when no such
+ * backup exists. Reads/writes only the config file + its sibling `.bak`.
+ */
+async function restoreBackup(file: string, backupId: string): Promise<boolean> {
+  if (backupId !== "bak") return false;
+  const bak = `${file}.bak`;
+  let bakData: string;
+  try {
+    bakData = await readFile(bak, "utf8");
+  } catch {
+    return false; // no backup to restore from
+  }
+  // Snapshot the current bytes into `.bak` first so this restore is undoable. This
+  // overwrites the same `.bak` we just read, hence we read it fully into memory above.
+  await backup(file);
+  await atomicWrite(file, bakData);
+  return true;
+}
+
 // ---- Schemas ---------------------------------------------------------------
 
 /** Optional `cwd` / `projectId` selector for the list endpoints. */
@@ -235,6 +294,28 @@ const hooksPutSchema = {
   },
 } as const;
 
+// GET /api/config/backups?path=<abs config file>. The path is validated against the
+// known-config-file allowlist in the handler (not the schema).
+const backupsGetSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["path"],
+  properties: {
+    path: { type: "string", minLength: 1 },
+  },
+} as const;
+
+// POST /api/config/restore { path, backupId }. Path allowlisted in the handler.
+const restorePostSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["path", "backupId"],
+  properties: {
+    path: { type: "string", minLength: 1 },
+    backupId: { type: "string", minLength: 1, maxLength: 64 },
+  },
+} as const;
+
 // ---- Routes ----------------------------------------------------------------
 
 /**
@@ -254,6 +335,34 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
   /** True when a project param was supplied. */
   const hasProjectParam = (q: { cwd?: string; projectId?: string }): boolean =>
     Boolean(q.cwd || q.projectId);
+
+  /**
+   * The KNOWN config files this package backs up / restores — exactly the files the
+   * safe-writes above target. Anything else is rejected so backup/restore can never
+   * read or overwrite an arbitrary host file. Recomputed per request (cheap) so a
+   * project added at runtime is reachable without a restart, like the other gates.
+   *
+   *   global  : ~/.claude/settings.json, ~/.claude/CLAUDE.md, ~/.claude.json
+   *   project : <cwd>/.claude/settings.json, <cwd>/CLAUDE.md  (per known project)
+   */
+  const knownConfigFiles = (): Set<string> => {
+    const files = new Set<string>([
+      path.resolve(settingsPathFor("global")),
+      path.resolve(path.join(paths.claudeConfigDir(), "CLAUDE.md")),
+      path.resolve(claudeJsonPath()),
+    ]);
+    for (const p of engine.getProjects({ includeArchived: true })) {
+      files.add(path.resolve(settingsPathFor("project", p.cwd)));
+      files.add(path.resolve(path.join(p.cwd, "CLAUDE.md")));
+    }
+    return files;
+  };
+
+  /** Resolve + allowlist a config-file path; undefined when it isn't a known config file. */
+  const resolveConfigFile = (raw: string): string | undefined => {
+    const resolved = path.resolve(raw);
+    return knownConfigFiles().has(resolved) ? resolved : undefined;
+  };
 
   // ---- List endpoints (global + per-project where relevant) ----------------
 
@@ -401,6 +510,35 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
       const removed = await removeMcpServer(req.body.name, cwd);
       if (!removed) return reply.code(404).send({ error: "no such mcp server" });
       return { ok: true, name: req.body.name, scope: cwd ? "project" : "global" };
+    },
+  );
+
+  // ---- Backups (list + restore the prior version of a config file) ---------
+
+  // GET /api/config/backups?path= -> the available backup(s) for a KNOWN config
+  // file. An unknown path is 400 (never lists arbitrary host files).
+  app.get<{ Querystring: { path: string } }>(
+    "/api/config/backups",
+    { schema: { querystring: backupsGetSchema } },
+    async (req, reply) => {
+      const file = resolveConfigFile(req.query.path);
+      if (!file) return reply.code(400).send({ error: "unknown config file" });
+      return { path: file, backups: await listBackups(file) };
+    },
+  );
+
+  // POST /api/config/restore { path, backupId } -> restore the prior version. The
+  // current bytes are themselves backed up first (reversible). Unknown path -> 400;
+  // no such backup -> 404.
+  app.post<{ Body: { path: string; backupId: string } }>(
+    "/api/config/restore",
+    { schema: { body: restorePostSchema } },
+    async (req, reply) => {
+      const file = resolveConfigFile(req.body.path);
+      if (!file) return reply.code(400).send({ error: "unknown config file" });
+      const ok = await restoreBackup(file, req.body.backupId);
+      if (!ok) return reply.code(404).send({ error: "no such backup" });
+      return { ok: true, path: file, backupId: req.body.backupId };
     },
   );
 }

@@ -461,6 +461,17 @@ export const api = {
         (q ? `&q=${encodeURIComponent(q)}` : "") +
         (limit ? `&limit=${limit}` : ""),
     ),
+  // Upload an image attachment. The browser can't write the user's filesystem, so
+  // the composer sends the image as base64 JSON; the server decodes it, validates
+  // type + size, writes it under ~/.claude-ui/attachments/, and returns the on-disk
+  // path (which the composer inserts as an @-reference for the CLI to read) plus a
+  // preview `url` via the read-only assets endpoint. The web side only wires the
+  // call — if the server hasn't shipped POST /api/attachments, the *Maybe helper
+  // surfaces a NotImplementedError so the composer degrades to a clear "not
+  // available here" message instead of erroring. Body matches the server schema
+  // exactly ({ filename, dataBase64 }) — it rejects unknown properties.
+  uploadAttachment: (input: AttachmentUpload) =>
+    sendMaybe<AttachmentResult>("/api/attachments", "POST", input),
   // MCP-server config management (list/upsert/remove across scopes).
   config,
 };
@@ -478,6 +489,35 @@ export interface FileEntry {
   name?: string;
   /** True when the entry is a directory (rendered with a trailing "/"). */
   dir?: boolean;
+}
+
+/**
+ * Payload for POST /api/attachments: an image to persist so the CLI can read it
+ * from disk. Matches the server schema EXACTLY — it sets `additionalProperties:
+ * false`, so only these two fields are accepted (anything else → 400). The server
+ * derives the stored extension from `filename`, re-stamps a random basename, and
+ * enforces a type allowlist + a 10MB decoded-size cap.
+ */
+export interface AttachmentUpload {
+  /** Suggested filename (e.g. "pasted-image.png"); only its EXTENSION is honored. */
+  filename: string;
+  /** Base64-encoded image bytes; a `data:...;base64,` prefix is stripped server-side. */
+  dataBase64: string;
+}
+
+/**
+ * Response from POST /api/attachments — the saved file's on-disk `path` (what the
+ * composer inserts as an `@`-reference so the CLI reads the file) plus a `url`
+ * pointing at the read-only assets endpoint for an inline image preview.
+ */
+export interface AttachmentResult {
+  ok: boolean;
+  /** Absolute on-disk path of the saved attachment. */
+  path: string;
+  /** Preview URL via GET /api/assets (only images are served inline). */
+  url: string;
+  /** Decoded byte size of the stored file. */
+  size: number;
 }
 
 /**

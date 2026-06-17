@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, Check, FileText, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
+import { ArrowDown, Check, FileText, Image as ImageIcon, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "../lib/types";
@@ -21,6 +21,7 @@ import { TurnFooter } from "./TurnFooter";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { TurnError } from "./TurnError";
 import { usePromptHistory } from "../hooks/usePromptHistory";
+import { useImageAttach } from "../hooks/useImageAttach";
 import { api, type FileEntry } from "../lib/api";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
@@ -422,6 +423,38 @@ export function ChatPane({
     };
   }, []);
 
+  // Insert arbitrary text (e.g. an uploaded image's "@path ") at the current
+  // caret, restoring the caret after it and refocusing. Used by useImageAttach
+  // when a pasted/dropped image finishes uploading. Reads the live textarea value
+  // (not stale `draft`) so multiple inserts in a row don't clobber each other.
+  const insertAtCaret = useCallback(
+    (text: string) => {
+      const el = textareaRef.current;
+      const base = el ? el.value : draft;
+      const caret = el ? el.selectionStart ?? base.length : base.length;
+      // Ensure a separating space before the reference when mid-word.
+      const needsLeadingSpace = caret > 0 && !/\s$/.test(base.slice(0, caret));
+      const insert = `${needsLeadingSpace ? " " : ""}@${text} `;
+      const next = base.slice(0, caret) + insert + base.slice(caret);
+      setDraft(next);
+      const newCaret = caret + insert.length;
+      caretRef.current = newCaret;
+      requestAnimationFrame(() => {
+        const node = textareaRef.current;
+        if (node) {
+          node.focus();
+          node.selectionStart = node.selectionEnd = newCaret;
+        }
+      });
+    },
+    [draft, setDraft],
+  );
+
+  // Paste / drag-drop image attachments: upload to /api/attachments and insert the
+  // returned on-disk path as an "@path" reference (the CLI reads the file). Shows
+  // pending thumbnails while uploads run; degrades gracefully if the route is absent.
+  const imageAttach = useImageAttach({ onInsertPath: insertAtCaret });
+
   // Shared turn kickoff. `echo` controls whether we render a local user bubble
   // (true for a typed send; false for regenerate, which reuses the prompt that
   // already shows in the transcript). Snaps to the bottom and resets per-turn UI.
@@ -475,6 +508,9 @@ export function ChatPane({
     setEditingFork(false);
     setMention(null);
     setMentionEntries([]);
+    // The image @paths are already embedded in the prompt text; drop the pending
+    // thumbnails now that the message carrying them is on its way.
+    imageAttach.clear();
     // A turn is in flight: queue this follow-up instead of dropping it. It runs
     // as its own turn when the current (and any earlier-queued) turn finishes.
     if (running) {
@@ -482,7 +518,7 @@ export function ChatPane({
       return;
     }
     runPrompt(prompt, true);
-  }, [draft, running, clearDraft, runPrompt, history]);
+  }, [draft, running, clearDraft, runPrompt, history, imageAttach]);
 
   // Cancel a single queued follow-up by dropping it locally. The queue is held
   // entirely client-side (today's per-turn server only ever sees one prompt at a
@@ -979,6 +1015,7 @@ export function ChatPane({
                     <MessageView
                       m={it.message}
                       live={running}
+                      prevTimestamp={view[vi.index - 1]?.message.timestamp ?? null}
                       onEdit={!running ? editFromMessage : undefined}
                     />
                   </div>
@@ -1152,7 +1189,57 @@ export function ChatPane({
             </button>
           </div>
         ) : null}
-        <div className="flex items-end gap-2 rounded-xl bg-zinc-900 p-2 ring-1 ring-zinc-800 focus-within:ring-clay-500/40">
+        {/* Pending image attachments — thumbnails of pasted/dropped images. Each
+            uploads to /api/attachments and inserts its "@path" into the prompt. */}
+        {imageAttach.attachments.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {imageAttach.attachments.map((a) => (
+              <div
+                key={a.id}
+                className={cn(
+                  "group relative h-16 w-16 overflow-hidden rounded-lg ring-1",
+                  a.status === "error" ? "ring-red-700/60" : "ring-zinc-700",
+                )}
+                title={a.status === "error" ? a.error : a.status === "done" ? a.path : a.filename}
+              >
+                <img src={a.previewUrl} alt={a.filename} className="h-full w-full object-cover" />
+                {/* Uploading veil with a spinner. */}
+                {a.status === "uploading" ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-zinc-950/60">
+                    <Loader2 className="h-4 w-4 animate-spin text-clay-300" />
+                  </div>
+                ) : null}
+                {/* Error veil. */}
+                {a.status === "error" ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-red-950/60 px-1 text-center text-[9px] text-red-200">
+                    failed
+                  </div>
+                ) : null}
+                {/* Remove button (hover). */}
+                <button
+                  onClick={() => imageAttach.remove(a.id)}
+                  className="absolute right-0.5 top-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-zinc-950/80 text-zinc-300 opacity-0 transition hover:bg-zinc-800 hover:text-white group-hover:opacity-100"
+                  title="Remove attachment"
+                  aria-label="Remove attachment"
+                >
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {/* Graceful notice when the server can't accept image uploads. */}
+        {imageAttach.unsupported ? (
+          <div className="mb-2 flex items-center gap-1.5 text-[11px] text-zinc-600">
+            <ImageIcon className="h-3 w-3" />
+            Image upload isn't available on this server yet.
+          </div>
+        ) : null}
+        <div
+          className="flex items-end gap-2 rounded-xl bg-zinc-900 p-2 ring-1 ring-zinc-800 focus-within:ring-clay-500/40"
+          onDrop={imageAttach.onDrop}
+          onDragOver={imageAttach.onDragOver}
+        >
           {/* Snippet library trigger — open the prompt-templates overlay to insert
               a saved template (with {placeholders}) into the composer. */}
           <IconButton
@@ -1179,6 +1266,8 @@ export function ChatPane({
             // INTO or OUT of an "@token" opens/closes the picker.
             onKeyUp={syncMention}
             onClick={syncMention}
+            // Pasting an image uploads it + inserts its @path; text paste is normal.
+            onPaste={imageAttach.onPaste}
             rows={1}
             placeholder={
               running
