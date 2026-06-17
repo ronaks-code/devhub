@@ -1,5 +1,6 @@
 import { ShieldQuestion, Check, X } from "lucide-react";
 import { cn } from "../lib/utils";
+import { PermissionCardBody } from "./PermissionCardBody";
 
 /**
  * A pending tool-permission request, mirroring the {t:"permission-request"}
@@ -29,16 +30,6 @@ export interface PermissionDecision {
   scope: PermissionScope;
 }
 
-function previewInput(input: unknown): string {
-  try {
-    if (input == null) return "";
-    if (typeof input === "string") return input;
-    return JSON.stringify(input, null, 2);
-  } catch {
-    return String(input);
-  }
-}
-
 /** Allow buttons, one per scope — the label doubles as the affordance. */
 const ALLOW_SCOPES: Array<{ scope: PermissionScope; label: string; title: string }> = [
   { scope: "once", label: "Once", title: "Allow this one call" },
@@ -64,7 +55,6 @@ export function PermissionCard({
   request: PendingPermission;
   onDecision: (id: string, decision: PermissionDecision) => void;
 }) {
-  const preview = previewInput(request.toolInput);
   return (
     <div className="mx-4 my-2 overflow-hidden rounded-xl border border-amber-700/50 bg-amber-500/5">
       <div className="flex items-center gap-2 border-b border-amber-700/30 px-3 py-2">
@@ -77,11 +67,9 @@ export function PermissionCard({
         </code>
       </div>
 
-      {preview ? (
-        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words border-b border-amber-700/20 px-3 py-2 font-mono text-[11.5px] leading-relaxed text-zinc-300">
-          {preview.length > 2000 ? `${preview.slice(0, 2000)}\n…` : preview}
-        </pre>
-      ) : null}
+      {/* The actual tool input, rendered meaningfully (diff / command / pretty
+          JSON) so the user reviews exactly what they're approving. */}
+      <PermissionCardBody toolName={request.toolName} toolInput={request.toolInput} />
 
       {request.suggestions && request.suggestions.length > 0 ? (
         <ul className="space-y-0.5 border-b border-amber-700/20 px-3 py-2 text-[11.5px] text-zinc-400">

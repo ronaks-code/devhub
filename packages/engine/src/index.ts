@@ -19,6 +19,9 @@ import type { Checkpoint, RestoreResult } from "./checkpoint.js";
 import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
+import { listMcpServers } from "./config/index.js";
+import { testMcpServer } from "./config/mcp-test.js";
+import type { McpTestResult } from "./config/mcp-test.js";
 import type {
   AppSettings,
   EngineEvent,
@@ -124,8 +127,21 @@ export class Engine {
     return this.index.getProjects(opts);
   }
 
-  getProjectSessions(projectId: string): SessionSummary[] {
-    return this.index.getSessionsForProject(projectId);
+  getProjectSessions(
+    projectId: string,
+    opts: { includeArchived?: boolean } = {},
+  ): SessionSummary[] {
+    return this.index.getSessionsForProject(projectId, opts);
+  }
+
+  /**
+   * Archive (or un-archive) a session. Archived sessions drop out of
+   * getProjectSessions / listAllSessions (and getProjects' counts) unless an
+   * includeArchived flag is passed. Stored in session_meta — never touches the
+   * transcript.
+   */
+  setArchived(sessionId: string, archived: boolean): void {
+    this.index.setArchived(sessionId, archived);
   }
 
   /**
@@ -151,6 +167,23 @@ export class Engine {
   /** Read-only git introspection for a project working directory. */
   git(cwd: string): GitService {
     return new GitService(cwd);
+  }
+
+  /**
+   * Best-effort connectivity test for one configured MCP server, looked up by name.
+   * Pass `scopeCwd` to also consider that project's `~/.claude.json` per-project
+   * servers (a project entry of the same name shadows the global one). For stdio
+   * servers this spawns the command and attempts an MCP `initialize` handshake; for
+   * http/sse servers it does a reachability check. Returns `{ ok:false, error }` when
+   * no server by that name is configured.
+   */
+  async testMcpServer(name: string, scopeCwd?: string): Promise<McpTestResult> {
+    const servers = await listMcpServers(scopeCwd);
+    // A project-scoped entry of the same name takes precedence over the global one.
+    const match =
+      servers.filter((s) => s.name === name).sort((a, b) => (a.scope === "project" ? -1 : 1))[0];
+    if (!match) return { ok: false, error: `no MCP server named "${name}"` };
+    return testMcpServer(match);
   }
 
   getSession(sessionId: string): SessionSummary | undefined {
@@ -434,6 +467,15 @@ export type {
   ResolvedKey,
   SettingsScopeName,
 } from "./config/resolve.js";
+export { testMcpServer } from "./config/mcp-test.js";
+export type { McpTestResult } from "./config/mcp-test.js";
+export {
+  projectRollups,
+  costByProject,
+  usageByModel,
+  AggregateCache,
+} from "./aggregates.js";
+export type { ProjectRollup } from "./aggregates.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";

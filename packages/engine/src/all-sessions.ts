@@ -30,6 +30,8 @@ export interface ListAllSessionsOptions {
   limit?: number;
   /** Rows to skip before returning (for paging; default 0). */
   offset?: number;
+  /** Include archived sessions (hidden by default). */
+  includeArchived?: boolean;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -51,6 +53,10 @@ const ORDER_BY: Record<NonNullable<ListAllSessionsOptions["sort"]>, string> = {
 function whereClause(opts: ListAllSessionsOptions): { sql: string; params: string[] } {
   const clauses: string[] = [];
   const params: string[] = [];
+  // Archived sessions drop out by default (COALESCE: no meta row => not archived).
+  if (!opts.includeArchived) {
+    clauses.push("COALESCE(m.archived, 0) = 0");
+  }
   if (opts.projectId) {
     clauses.push("s.projectId = ?");
     params.push(opts.projectId);

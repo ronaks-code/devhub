@@ -1,11 +1,13 @@
-import { createContext, memo, useContext, type ReactNode } from "react";
-import { Wrench, Terminal, Webhook, ListPlus, Brain, FileDiff, Check, X, Pencil } from "lucide-react";
+import { createContext, memo, useContext, useState, type ReactNode } from "react";
+import { Wrench, Terminal, Webhook, ListPlus, Brain, FileDiff, Check, X, Pencil, Link2, Link2Off } from "lucide-react";
 import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
+import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { Markdown } from "./Markdown";
 import { DiffView, parseEditInput } from "./DiffView";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
+import { ImageBlock, type ImageBlockData } from "./ImageBlock";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -235,11 +237,10 @@ function Block({ block }: { block: ContentBlock }) {
     case "tool_result":
       return <ToolResult result={block} />;
     case "image":
-      return (
-        <div className="my-1 text-xs text-zinc-500">
-          🖼 image{block.mediaType ? ` (${block.mediaType})` : ""}
-        </div>
-      );
+      // The engine ContentBlock image type is {type:"image",mediaType?} with no
+      // bytes/path; the runtime block may carry data/assetPath/url, which
+      // ImageBlock reads defensively off this widened view (no engine edit).
+      return <ImageBlock block={block as ImageBlockData} />;
     default:
       return (
         <pre className="my-1 overflow-x-auto rounded bg-zinc-900/40 p-2 font-mono text-[11px] text-zinc-600">
@@ -264,6 +265,7 @@ export const MessageView = memo(function MessageView({
   streaming,
   highlight = "",
   onEdit,
+  onCopyLink,
 }: {
   m: NormalizedMessage;
   /** Show a blinking cursor at the end (live-streaming assistant bubble). */
@@ -276,9 +278,24 @@ export const MessageView = memo(function MessageView({
    * prefilled and the turn re-run, forking the conversation from that point.
    */
   onEdit?: (text: string) => void;
+  /**
+   * When set, shows a "copy link" affordance on hover that deep-links this
+   * message via the URL hash. Invoked with the message's uuid + seq; returns
+   * whether the clipboard write succeeded (so we can show a brief confirmation).
+   * Backed by useMessagePermalink in the host.
+   */
+  onCopyLink?: (uuid: string | null, seq: number) => Promise<boolean>;
 }) {
   const meta = ROLE_META[m.role] ?? ROLE_META.meta!;
   const dim = m.role === "system" || m.role === "attachment" || m.role === "meta" || m.role === "queue";
+  // Brief "copied" / "copy failed" confirmation on the copy-link button.
+  const [copied, setCopied] = useState<"ok" | "fail" | null>(null);
+  const handleCopyLink = async () => {
+    if (!onCopyLink) return;
+    const ok = await onCopyLink(m.uuid, m.seq);
+    setCopied(ok ? "ok" : "fail");
+    window.setTimeout(() => setCopied(null), 1500);
+  };
   // Plain text of a user message, for the edit-and-resend affordance.
   const editText =
     onEdit && m.role === "user"
@@ -290,7 +307,7 @@ export const MessageView = memo(function MessageView({
       : "";
   return (
     <HighlightContext.Provider value={highlight}>
-    <div className="group flex gap-3 px-4 py-2.5">
+    <div className="group flex gap-3 px-4 py-2.5" {...messageAnchorProps(m.uuid, m.seq)}>
       <div className={cn("mt-1 w-0.5 shrink-0 rounded-full", meta.bar)} />
       <div className="min-w-0 flex-1">
         <div className="mb-1 flex items-center gap-2">
@@ -299,15 +316,38 @@ export const MessageView = memo(function MessageView({
           {m.role === "queue" && <ListPlus className="h-3 w-3 text-amber-500" />}
           {m.model ? <span className="text-[10px] text-zinc-600">{m.model}</span> : null}
           {m.isSidechain ? <span className="text-[10px] text-zinc-600">· subagent</span> : null}
-          {onEdit && m.role === "user" && editText ? (
-            <button
-              onClick={() => onEdit(editText)}
-              className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-500 opacity-0 transition hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100"
-              title="Edit this message and resend (forks the conversation from here)"
-            >
-              <Pencil className="h-3 w-3" />
-              Edit &amp; resend
-            </button>
+          {/* Right-aligned hover affordances: edit-and-resend (user/live only)
+              and the message permalink "copy link". */}
+          {(onEdit && m.role === "user" && editText) || onCopyLink ? (
+            <div className="ml-auto flex items-center gap-1">
+              {onEdit && m.role === "user" && editText ? (
+                <button
+                  onClick={() => onEdit(editText)}
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-500 opacity-0 transition hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100"
+                  title="Edit this message and resend (forks the conversation from here)"
+                >
+                  <Pencil className="h-3 w-3" />
+                  Edit &amp; resend
+                </button>
+              ) : null}
+              {onCopyLink ? (
+                <button
+                  onClick={handleCopyLink}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium opacity-0 transition group-hover:opacity-100",
+                    copied === "ok"
+                      ? "text-emerald-400 opacity-100"
+                      : copied === "fail"
+                        ? "text-red-400 opacity-100"
+                        : "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200",
+                  )}
+                  title="Copy a link to this message"
+                >
+                  {copied === "fail" ? <Link2Off className="h-3 w-3" /> : <Link2 className="h-3 w-3" />}
+                  {copied === "ok" ? "Copied" : copied === "fail" ? "Failed" : "Copy link"}
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className={cn("space-y-0.5", dim && "opacity-70")}>

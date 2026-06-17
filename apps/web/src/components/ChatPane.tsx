@@ -13,8 +13,10 @@ import { useStickToBottom } from "../hooks/useStickToBottom";
 import { MessageView } from "./MessageView";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { SlashPalette, filterCommands } from "./SlashPalette";
+import { MentionPicker, detectMention } from "./MentionPicker";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
 import { usePromptHistory } from "../hooks/usePromptHistory";
+import { api, type FileEntry } from "../lib/api";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
 const MODELS = [
@@ -116,6 +118,19 @@ export function ChatPane({
   // turn at a time, so we hold these locally and dispatch the head as each turn
   // ends — rendering them meanwhile as pending "queue" bubbles below the stream.
   const [queued, setQueued] = useState<QueuedPrompt[]>([]);
+
+  // "@" file-mention picker state. `mention` holds the active query + the
+  // [start,end) range of the "@token" in the draft to replace on insert; null
+  // when no mention is active at the caret. `mentionEntries` is the fuzzy file
+  // list from GET /api/files; `mentionIndex` is the keyboard cursor.
+  const [mention, setMention] = useState<{ query: string; start: number; end: number } | null>(null);
+  const [mentionEntries, setMentionEntries] = useState<FileEntry[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionError, setMentionError] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  // Current caret position in the textarea, tracked so mention detection knows
+  // where "@" tokens end. Updated on every key/click/select.
+  const caretRef = useRef(0);
 
   const connRef = useRef<ChatConn | null>(null);
   const keyRef = useRef(0);
@@ -325,6 +340,8 @@ export function ChatPane({
     history.add(prompt);
     clearDraft();
     setEditingFork(false);
+    setMention(null);
+    setMentionEntries([]);
     // A turn is in flight: queue this follow-up instead of dropping it. It runs
     // as its own turn when the current (and any earlier-queued) turn finishes.
     if (running) {
@@ -437,7 +454,129 @@ export function ChatPane({
     [setDraft],
   );
 
+  // Recompute the active "@" mention from the current draft + caret. Slash mode
+  // (a leading "/token") wins, so we never show both pickers at once. Called from
+  // the textarea's change/select/click handlers via syncMention.
+  const recomputeMention = useCallback((text: string, caret: number) => {
+    // Mentions work whether idle or composing a mid-turn follow-up. Slash mode
+    // can't co-occur (it needs a leading "/", a mention needs an "@" token).
+    const m = detectMention(text, caret);
+    setMention(m);
+    if (!m) {
+      setMentionEntries([]);
+      setMentionError(null);
+    }
+  }, []);
+
+  // Read the caret from the textarea and re-detect the mention. Used after any
+  // edit (change/keyup/click) so the picker tracks where the user is typing.
+  const syncMention = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    caretRef.current = el.selectionStart ?? el.value.length;
+    recomputeMention(el.value, caretRef.current);
+  }, [recomputeMention]);
+
+  const mentionQuery = mention?.query ?? null;
+  const mentionOpen = mention != null;
+
+  // Fetch fuzzy file matches for the active mention query (debounced). Backed by
+  // GET /api/files?cwd=&q=; the cwd is allowlisted server-side. A failure (e.g.
+  // the route isn't available) shows a hint in the picker but never breaks typing.
+  useEffect(() => {
+    if (mentionQuery == null) return;
+    let cancelled = false;
+    setMentionLoading(true);
+    setMentionError(null);
+    const t = window.setTimeout(() => {
+      api
+        .listFiles(cwd, mentionQuery)
+        .then((rows) => {
+          if (cancelled) return;
+          // Normalize: the server may return bare path strings or rich objects.
+          const entries: FileEntry[] = (rows as unknown[]).map((r) =>
+            typeof r === "string" ? { path: r } : (r as FileEntry),
+          );
+          setMentionEntries(entries);
+          setMentionLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMentionEntries([]);
+          setMentionError("File search is unavailable here.");
+          setMentionLoading(false);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [mentionQuery, cwd]);
+
+  // Keep the highlighted mention row valid as the list changes.
+  useEffect(() => {
+    setMentionIndex((i) => (i >= mentionEntries.length ? 0 : i));
+  }, [mentionEntries.length]);
+
+  // Insert a chosen file as an "@path " mention: replace the "@query" token in the
+  // draft with "@<path> " (trailing space so the user keeps typing), restore the
+  // caret after it, and refocus. Closes the picker.
+  const insertMention = useCallback(
+    (entry: FileEntry) => {
+      if (!mention) return;
+      const insertText = `@${entry.path}${entry.dir ? "/" : " "}`;
+      const next = draft.slice(0, mention.start) + insertText + draft.slice(mention.end);
+      setDraft(next);
+      setMention(null);
+      setMentionEntries([]);
+      const caret = mention.start + insertText.length;
+      caretRef.current = caret;
+      const el = textareaRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.focus();
+          el.selectionStart = el.selectionEnd = caret;
+          // A directory insert keeps the "@" token open to drill in further.
+          if (entry.dir) recomputeMention(next, caret);
+        });
+      }
+    },
+    [mention, draft, setDraft, recomputeMention],
+  );
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Mention picker takes keyboard priority while open (Arrow/Enter/Tab/Escape),
+    // ahead of the send/history handlers. Slash mode can't be active at the same
+    // time (it requires a leading "/", a mention requires an "@" token).
+    if (mentionOpen) {
+      const count = mentionEntries.length;
+      if (e.key === "ArrowDown" && count > 0) {
+        e.preventDefault();
+        setMentionIndex((i) => (i + 1) % count);
+        return;
+      }
+      if (e.key === "ArrowUp" && count > 0) {
+        e.preventDefault();
+        setMentionIndex((i) => (i - 1 + count) % count);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+        if (count > 0) {
+          e.preventDefault();
+          const pick = mentionEntries[mentionIndex] ?? mentionEntries[0];
+          if (pick) insertMention(pick);
+          return;
+        }
+        // No matches: fall through so Enter still sends / Tab does nothing special.
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setMention(null);
+        setMentionEntries([]);
+        return;
+      }
+    }
+
     // Slash palette takes keyboard priority while open: Arrow to move, Enter/Tab
     // to insert the highlighted command, Escape to dismiss (clearing the draft).
     if (slashOpen) {
@@ -737,6 +876,19 @@ export function ChatPane({
 
       {/* Composer */}
       <div className="border-t border-zinc-800/80 px-4 py-3">
+        {/* "@" file-mention picker — opens when the caret is in an "@token".
+            Fuzzy-matches project files via GET /api/files; Arrow/Enter handled in
+            onKeyDown so focus stays in the textarea; clicking a row inserts it. */}
+        {mentionOpen ? (
+          <MentionPicker
+            query={mentionQuery ?? ""}
+            entries={mentionEntries}
+            activeIndex={mentionIndex}
+            loading={mentionLoading}
+            error={mentionError}
+            onPick={insertMention}
+          />
+        ) : null}
         {/* Slash command palette — opens when the draft is a single "/token".
             Arrow/Enter are handled in the composer's onKeyDown so focus stays in
             the textarea; clicking a row inserts it too. */}
@@ -774,8 +926,15 @@ export function ChatPane({
               // A manual edit abandons history navigation (we're back on a live line).
               if (history.navigating) history.reset();
               setDraft(e.target.value);
+              // Track the caret + re-detect an "@" mention at the new position.
+              caretRef.current = e.target.selectionStart ?? e.target.value.length;
+              recomputeMention(e.target.value, caretRef.current);
             }}
             onKeyDown={onKeyDown}
+            // Caret moves (click / arrow nav) also re-detect a mention so moving
+            // INTO or OUT of an "@token" opens/closes the picker.
+            onKeyUp={syncMention}
+            onClick={syncMention}
             rows={1}
             placeholder={
               running

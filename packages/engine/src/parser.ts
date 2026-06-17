@@ -21,7 +21,7 @@ import type {
   TitleSource,
   TokenUsage,
 } from "./types.js";
-import { EMPTY_USAGE } from "./types.js";
+import { EMPTY_USAGE, MAX_INLINE_IMAGE_BYTES } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Low-level line access
@@ -152,6 +152,48 @@ function stringifyToolResult(content: unknown): string {
   }
 }
 
+/**
+ * Approximate the decoded byte length of a base64 string without allocating the
+ * buffer: 4 base64 chars encode 3 bytes, minus any trailing `=` padding.
+ */
+function base64ByteLength(b64: string): number {
+  const len = b64.length;
+  if (len === 0) return 0;
+  const pad = b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0;
+  return Math.floor((len * 3) / 4) - pad;
+}
+
+/**
+ * Normalize an image content block, carrying the image so the UI can render it:
+ *  - base64 source -> inline `data` (only when within {@link MAX_INLINE_IMAGE_BYTES};
+ *    larger images degrade to mediaType-only so a payload can't balloon).
+ *  - url/file/path source -> `assetPath` (the face resolves it via its allowlisted
+ *    asset reader).
+ *  - always carries `mediaType` when the source declares one.
+ * All fields are optional, so a source-less image stays a bare `{ type: "image" }`.
+ */
+function imageBlock(bo: Record<string, unknown>): ContentBlock {
+  const source = obj(bo.source);
+  const mediaType = str(source?.media_type) ?? undefined;
+  const out: ContentBlock = { type: "image" };
+  if (mediaType) out.mediaType = mediaType;
+  if (!source) return out;
+
+  const sourceType = str(source.type);
+  if (sourceType === "base64" || (source.data != null && sourceType !== "url")) {
+    const data = str(source.data);
+    if (data && base64ByteLength(data) <= MAX_INLINE_IMAGE_BYTES) {
+      out.data = data;
+    }
+    return out;
+  }
+
+  // A referenced file/url: keep a path so the face can fetch it (allowlisted).
+  const ref = str(source.url) ?? str(source.path) ?? str(source.file_path);
+  if (ref) out.assetPath = ref;
+  return out;
+}
+
 function blocksFromContent(content: unknown): ContentBlock[] {
   if (typeof content === "string") {
     return content ? [{ type: "text", text: content }] : [];
@@ -185,7 +227,7 @@ function blocksFromContent(content: unknown): ContentBlock[] {
         });
         break;
       case "image":
-        out.push({ type: "image", mediaType: str(obj(bo.source)?.media_type) ?? undefined });
+        out.push(imageBlock(bo));
         break;
       default:
         out.push({ type: "unknown", raw: bo });

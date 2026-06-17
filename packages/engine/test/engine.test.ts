@@ -27,6 +27,10 @@ import { dailyUsage } from "../src/rollups.js";
 import { budgetStatus } from "../src/budget.js";
 import { resolveSettings } from "../src/config/resolve.js";
 import { listCheckpoints, restoreCheckpoint, fileHistoryDir } from "../src/checkpoint.js";
+import { projectRollups, costByProject, usageByModel } from "../src/aggregates.js";
+import { MAX_INLINE_IMAGE_BYTES } from "../src/types.js";
+import { testMcpServer } from "../src/config/mcp-test.js";
+import type { McpServerDef } from "../src/config/index.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -2410,5 +2414,366 @@ describe("checkpoint (file-history list + restore)", () => {
         /no checkpoint/,
       );
     });
+  });
+});
+
+describe("migrations (archived column backfill)", () => {
+  it("adds session_meta.archived to a legacy DB and is idempotent", () => {
+    const file = path.join(tmp(), "legacy.db");
+    const db = new DatabaseSync(file);
+    // Legacy session_meta WITHOUT archived; user_version at 5 (headSig migration done).
+    db.exec(`CREATE TABLE session_meta (
+      sessionId TEXT PRIMARY KEY, customTitle TEXT, pinned INTEGER NOT NULL DEFAULT 0, tags TEXT
+    );`);
+    db.exec("PRAGMA user_version = 5");
+    db.prepare("INSERT INTO session_meta (sessionId, pinned) VALUES (?, ?)").run("legacy", 1);
+    expect(hasColumn(db, "session_meta", "archived")).toBe(false);
+
+    runMigrations(db);
+    expect(hasColumn(db, "session_meta", "archived")).toBe(true);
+    // Existing row preserved; new column defaults to 0 (not archived).
+    const row = db.prepare("SELECT pinned, archived FROM session_meta WHERE sessionId = ?").get("legacy") as {
+      pinned: number;
+      archived: number;
+    };
+    expect(Number(row.pinned)).toBe(1);
+    expect(Number(row.archived)).toBe(0);
+
+    runMigrations(db); // re-run is harmless (column-presence guard)
+    expect(hasColumn(db, "session_meta", "archived")).toBe(true);
+    db.close();
+  });
+});
+
+describe("archive sessions (session_meta.archived)", () => {
+  const build = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const mk = (id: string, cwd: string, ts: string) => {
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(
+        p,
+        jl({ type: "user", cwd, timestamp: ts, message: { role: "user", content: `q ${id}` } }) +
+          jl({
+            type: "assistant",
+            cwd,
+            timestamp: ts,
+            message: { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } },
+          }),
+      );
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(mk("alpha", "/home/me/proj", "2026-05-01T00:00:00.000Z"));
+    await idx.indexSession(mk("beta", "/home/me/proj", "2026-04-01T00:00:00.000Z"));
+    return { idx, projectId: projectIdFromCwd("/home/me/proj") };
+  };
+
+  it("SessionSummary.archived defaults false; setArchived flips it", async () => {
+    const { idx } = await build(tmp());
+    expect(idx.getSessionSummary("alpha")!.archived).toBe(false);
+    idx.setArchived("alpha", true);
+    expect(idx.getSessionSummary("alpha")!.archived).toBe(true);
+    idx.setArchived("alpha", false);
+    expect(idx.getSessionSummary("alpha")!.archived).toBe(false);
+    idx.close();
+  });
+
+  it("setArchived preserves other session_meta fields (pinned/tags)", async () => {
+    const { idx } = await build(tmp());
+    idx.setPinned("alpha", true);
+    idx.setTags("alpha", ["keep"]);
+    idx.setArchived("alpha", true);
+    const s = idx.getSessionSummary("alpha")!;
+    expect(s.archived).toBe(true);
+    expect(s.pinned).toBe(true);
+    expect(s.tags).toEqual(["keep"]);
+    idx.close();
+  });
+
+  it("getSessionsForProject hides archived unless includeArchived", async () => {
+    const { idx, projectId } = await build(tmp());
+    idx.setArchived("beta", true);
+    expect(idx.getSessionsForProject(projectId).map((s) => s.sessionId)).toEqual(["alpha"]);
+    expect(
+      idx.getSessionsForProject(projectId, { includeArchived: true }).map((s) => s.sessionId).sort(),
+    ).toEqual(["alpha", "beta"]);
+    idx.close();
+  });
+
+  it("listAllSessions excludes archived unless includeArchived", async () => {
+    const { idx } = await build(tmp());
+    idx.setArchived("beta", true);
+    expect(idx.listAllSessions().map((s) => s.sessionId)).toEqual(["alpha"]);
+    expect(idx.listAllSessions({ includeArchived: true }).map((s) => s.sessionId).sort()).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    idx.close();
+  });
+
+  it("Engine exposes setArchived + includeArchived pass-through", async () => {
+    const dir = tmp();
+    const { idx, projectId } = await build(dir);
+    idx.close();
+    const engine = new Engine(path.join(dir, "i.db"));
+    engine.setArchived("beta", true);
+    expect(engine.getProjectSessions(projectId).map((s) => s.sessionId)).toEqual(["alpha"]);
+    expect(engine.getProjectSessions(projectId, { includeArchived: true }).length).toBe(2);
+    expect(engine.listAllSessions().map((s) => s.sessionId)).toEqual(["alpha"]);
+    expect(engine.listAllSessions({ includeArchived: true }).length).toBe(2);
+    engine.close();
+  });
+});
+
+describe("aggregates parity (SQL GROUP BY rollups match the reference)", () => {
+  // A reference rollup computed the OLD way (JS iteration) to prove the SQL
+  // GROUP BY path produces identical numbers + the project list keeps its shape.
+  const buildIdx = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const ts = "2026-06-01T00:00:00.000Z";
+    const mk = (id: string, cwd: string, model: string, inTok: number, outTok: number, lastTs: string) => {
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(
+        p,
+        jl({ type: "user", cwd, timestamp: ts, message: { role: "user", content: "hi" } }) +
+          jl({
+            type: "assistant",
+            cwd,
+            timestamp: lastTs,
+            message: { role: "assistant", model, content: [{ type: "text", text: "ok" }], usage: { input_tokens: inTok, output_tokens: outTok } },
+          }),
+      );
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    // alpha: two sessions; beta: one. Distinct models so byModel buckets differ.
+    await idx.indexSession(mk("a1", "/home/me/alpha", "claude-opus-4-8", 1_000_000, 0, "2026-06-01T08:00:00.000Z"));
+    await idx.indexSession(mk("a2", "/home/me/alpha", "claude-opus-4-8", 500_000, 0, "2026-06-03T08:00:00.000Z"));
+    await idx.indexSession(mk("b1", "/home/me/beta", "claude-sonnet-4-6", 0, 1_000_000, "2026-06-02T08:00:00.000Z"));
+    return idx;
+  };
+
+  it("projectRollups match a JS reference (usage, lastActivity, count, folders)", async () => {
+    const idx = await buildIdx(tmp());
+    const db = idx["db"] as never;
+    const rollups = projectRollups(db);
+    const byId = new Map(rollups.map((r) => [r.projectId, r]));
+
+    const alpha = byId.get(projectIdFromCwd("/home/me/alpha"))!;
+    expect(alpha.cwd).toBe("/home/me/alpha");
+    expect(alpha.sessionCount).toBe(2);
+    expect(alpha.totalUsage.inputTokens).toBe(1_500_000);
+    // lastActivity is the MAX lastTs across the project's sessions.
+    expect(alpha.lastActivity).toBe("2026-06-03T08:00:00.000Z");
+    expect(alpha.encodedFolders).toEqual(["-proj"]);
+
+    const beta = byId.get(projectIdFromCwd("/home/me/beta"))!;
+    expect(beta.sessionCount).toBe(1);
+    expect(beta.totalUsage.outputTokens).toBe(1_000_000);
+    idx.close();
+  });
+
+  it("getProjects output matches a from-scratch JS rollup (shape + ordering)", async () => {
+    const idx = await buildIdx(tmp());
+    const got = idx.getProjects();
+
+    // Independent reference: group every row in JS the old way.
+    const db = idx["db"] as never as InstanceType<typeof DatabaseSync>;
+    const rows = db
+      .prepare(`SELECT projectId, cwd, lastTs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, filePath FROM sessions`)
+      .all() as Array<Record<string, unknown>>;
+    const refMap = new Map<string, { cwd: string; count: number; last: string | null; inTok: number }>();
+    for (const r of rows) {
+      const id = r.projectId as string;
+      const g = refMap.get(id) ?? { cwd: r.cwd as string, count: 0, last: null as string | null, inTok: 0 };
+      g.count += 1;
+      g.inTok += Number(r.inputTokens);
+      const lt = r.lastTs as string | null;
+      if (lt && (!g.last || lt > g.last)) g.last = lt;
+      refMap.set(id, g);
+    }
+    for (const p of got) {
+      const ref = refMap.get(p.id)!;
+      expect(p.sessionCount).toBe(ref.count);
+      expect(p.lastActivity).toBe(ref.last);
+      expect(p.totalUsage.inputTokens).toBe(ref.inTok);
+    }
+    // Default ordering: most-recent activity first (alpha's 06-03 beats beta's 06-02).
+    expect(got.map((p) => p.cwd)).toEqual(["/home/me/alpha", "/home/me/beta"]);
+    idx.close();
+  });
+
+  it("costByProject + usageByModel match getStats and a recomputed total", async () => {
+    const dir = tmp();
+    const idx = await buildIdx(dir);
+    idx.close();
+    const engine = new Engine(path.join(dir, "i.db"));
+    const stats = engine.getStats();
+
+    // opus: 1.5M input @ $5/Mtok = $7.50; sonnet: 1M output @ $15/Mtok = $15.
+    const cost = costByProject(engine.index["db"] as never);
+    expect(cost.get(projectIdFromCwd("/home/me/alpha"))).toBeCloseTo(7.5, 5);
+    expect(cost.get(projectIdFromCwd("/home/me/beta"))).toBeCloseTo(15, 5);
+    expect(stats.totalCostUsd).toBeCloseTo(22.5, 5);
+
+    const byModel = usageByModel(engine.index["db"] as never);
+    // Sorted by cost desc: sonnet ($15) before opus ($7.50).
+    expect(byModel.map((m) => m.model)).toEqual(["claude-sonnet-4-6", "claude-opus-4-8"]);
+    expect(byModel).toEqual(stats.byModel);
+    engine.close();
+  });
+
+  it("cache invalidates on a new index write (rollups reflect added sessions)", async () => {
+    const dir = tmp();
+    const idx = await buildIdx(dir);
+    // Prime the cache.
+    expect(idx.getProjects().find((p) => p.cwd === "/home/me/alpha")!.sessionCount).toBe(2);
+    // Add a third alpha session; the next read must reflect it (cache invalidated).
+    const proj = path.join(dir, "-proj");
+    const p = path.join(proj, "a3.jsonl");
+    writeFileSync(
+      p,
+      jl({ type: "user", cwd: "/home/me/alpha", timestamp: "2026-06-05T00:00:00.000Z", message: { role: "user", content: "more" } }) +
+        jl({ type: "assistant", cwd: "/home/me/alpha", timestamp: "2026-06-05T00:00:00.000Z", message: { role: "assistant", model: "claude-opus-4-8", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 10, output_tokens: 0 } } }),
+    );
+    await idx.indexSession(p);
+    expect(idx.getProjects().find((p) => p.cwd === "/home/me/alpha")!.sessionCount).toBe(3);
+    idx.close();
+  });
+});
+
+describe("image content blocks (inline data / asset path)", () => {
+  const userImage = (content: unknown) =>
+    normalizeLine({ type: "user", message: { role: "user", content } }, 0)!;
+
+  it("inlines small base64 image data + mediaType", () => {
+    const data = Buffer.from("tiny-png-bytes").toString("base64");
+    const m = userImage([{ type: "image", source: { type: "base64", media_type: "image/png", data } }]);
+    const block = m.blocks[0]!;
+    expect(block.type).toBe("image");
+    if (block.type === "image") {
+      expect(block.mediaType).toBe("image/png");
+      expect(block.data).toBe(data);
+      expect(block.assetPath).toBeUndefined();
+    }
+  });
+
+  it("drops base64 data over the cap (keeps mediaType only)", () => {
+    // Build a base64 string whose decoded length exceeds MAX_INLINE_IMAGE_BYTES.
+    const rawBytes = MAX_INLINE_IMAGE_BYTES + 1024;
+    const data = Buffer.alloc(rawBytes, 0x41).toString("base64");
+    const m = userImage([{ type: "image", source: { type: "base64", media_type: "image/jpeg", data } }]);
+    const block = m.blocks[0]!;
+    if (block.type === "image") {
+      expect(block.mediaType).toBe("image/jpeg");
+      expect(block.data).toBeUndefined(); // too big to inline
+    }
+  });
+
+  it("carries an assetPath for a file/url-referenced image", () => {
+    const m1 = userImage([{ type: "image", source: { type: "url", url: "https://x/y.png" } }]);
+    const b1 = m1.blocks[0]!;
+    if (b1.type === "image") {
+      expect(b1.assetPath).toBe("https://x/y.png");
+      expect(b1.data).toBeUndefined();
+    }
+    const m2 = userImage([{ type: "image", source: { type: "file", file_path: "/proj/shot.png", media_type: "image/png" } }]);
+    const b2 = m2.blocks[0]!;
+    if (b2.type === "image") {
+      expect(b2.assetPath).toBe("/proj/shot.png");
+      expect(b2.mediaType).toBe("image/png");
+    }
+  });
+
+  it("a source-less image stays a bare image block (backward-compat)", () => {
+    const m = userImage([{ type: "image" }]);
+    const block = m.blocks[0]!;
+    expect(block.type).toBe("image");
+    if (block.type === "image") {
+      expect(block.data).toBeUndefined();
+      expect(block.assetPath).toBeUndefined();
+      expect(block.mediaType).toBeUndefined();
+    }
+  });
+});
+
+describe("testMcpServer (connectivity probe)", () => {
+  const def = (over: Partial<McpServerDef> & { raw?: Record<string, unknown> }): McpServerDef => ({
+    name: "t",
+    type: "stdio",
+    command: null,
+    args: [],
+    scope: "global",
+    raw: {},
+    ...over,
+  });
+
+  /** Write a node script to a temp file and return the stdio def that runs it. */
+  const scriptDef = (body: string, args: string[] = []): McpServerDef => {
+    const file = path.join(tmp(), "server.mjs");
+    writeFileSync(file, body);
+    return def({ type: "stdio", command: process.execPath, args: [file, ...args] });
+  };
+
+  it("stdio: ok on a clean JSON-RPC initialize response (with latency)", async () => {
+    // A minimal MCP server: read a line on stdin, reply to id:1 with a result.
+    const server = `
+      let buf = "";
+      process.stdin.setEncoding("utf8");
+      process.stdin.on("data", (c) => {
+        buf += c;
+        let i;
+        while ((i = buf.indexOf("\\n")) >= 0) {
+          const line = buf.slice(0, i); buf = buf.slice(i + 1);
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          if (msg.method === "initialize") {
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { capabilities: {} } }) + "\\n");
+          }
+        }
+      });
+    `;
+    const res = await testMcpServer(scriptDef(server), { timeoutMs: 4000 });
+    expect(res.ok).toBe(true);
+    expect(typeof res.latencyMs).toBe("number");
+    // Resolved via the handshake, NOT the timeout fallback (well under 4000ms).
+    expect(res.latencyMs!).toBeLessThan(3500);
+  });
+
+  it("stdio: fails when the process exits non-zero before replying", async () => {
+    const res = await testMcpServer(scriptDef("process.exit(3);"), { timeoutMs: 4000 });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("code 3");
+  });
+
+  it("stdio: spawn error (missing command) reports a failure, not a throw", async () => {
+    const res = await testMcpServer(
+      def({ type: "stdio", command: "/no/such/binary-xyz", args: [] }),
+      { timeoutMs: 2000 },
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error && res.error.length).toBeGreaterThan(0);
+  });
+
+  it("stdio: missing command is reported", async () => {
+    const res = await testMcpServer(def({ type: "stdio", command: null }));
+    expect(res).toEqual({ ok: false, error: "stdio server has no command" });
+  });
+
+  it("http: an unreachable url fails (network error / timeout)", async () => {
+    // Port 1 is reserved and refuses connections — a fast, deterministic failure.
+    const res = await testMcpServer(
+      def({ type: "http", raw: { url: "http://127.0.0.1:1/" } }),
+      { timeoutMs: 2000 },
+    );
+    expect(res.ok).toBe(false);
+    expect(typeof res.latencyMs).toBe("number");
+  });
+
+  it("http: a url-less http server is reported", async () => {
+    const res = await testMcpServer(def({ type: "sse", raw: {} }));
+    expect(res).toEqual({ ok: false, error: "sse server has no url" });
   });
 });

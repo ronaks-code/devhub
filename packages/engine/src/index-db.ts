@@ -25,9 +25,9 @@ import type { ProjectMetaPatch } from "./project-meta.js";
 import { TagStore, parseTags } from "./tags.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
-import { costUsd } from "./pricing.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
+import { AggregateCache } from "./aggregates.js";
 import { dailyUsage } from "./rollups.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 import type {
@@ -64,6 +64,7 @@ interface Row {
   customTitle: string | null;
   pinned: number;
   tags: string | null;
+  archived: number;
 }
 
 const SCHEMA = `
@@ -96,7 +97,8 @@ CREATE TABLE IF NOT EXISTS session_meta (
   sessionId TEXT PRIMARY KEY,
   customTitle TEXT,
   pinned INTEGER NOT NULL DEFAULT 0,
-  tags TEXT
+  tags TEXT,
+  archived INTEGER NOT NULL DEFAULT 0
 );
 `;
 
@@ -104,7 +106,8 @@ const SELECT_COLS = `
   s.sessionId, s.filePath, s.cwd, s.projectId, s.title, s.titleSource, s.gitBranch,
   s.firstTs, s.lastTs, s.messageCount, s.inputTokens, s.outputTokens,
   s.cacheReadTokens, s.cacheCreationTokens, s.sizeBytes, s.mtimeMs, s.indexedBytes,
-  s.hasSubagents, s.model, s.headSig, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags
+  s.hasSubagents, s.model, s.headSig, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags,
+  COALESCE(m.archived, 0) AS archived
 `;
 
 function n(v: unknown): number {
@@ -328,6 +331,8 @@ export class TranscriptIndex {
   readonly searchMode: "fts5" | "like";
   /** Full-text search over mirrored message text (shares this DB + searchMode). */
   private readonly searcher: MessageSearch;
+  /** Memoized project/stats rollups, invalidated on every session write. */
+  private readonly aggregates: AggregateCache;
 
   constructor(dbPath?: string) {
     const file = dbPath ?? path.join(appDataDir(), "index.db");
@@ -351,6 +356,7 @@ export class TranscriptIndex {
     this.tags = new TagStore(this.db);
     this.searchMode = this.initSearchStore();
     this.searcher = new MessageSearch(this.db, this.searchMode);
+    this.aggregates = new AggregateCache(this.db);
     this.upsert = this.db.prepare(`
       INSERT INTO sessions (
         sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
@@ -605,6 +611,9 @@ export class TranscriptIndex {
       });
       this.writeSearchText(sessionId, searchTexts, startByte === 0);
       this.db.exec("COMMIT");
+      // A session's tokens/cost/activity changed — drop the memoized rollups so the
+      // next getProjects/getStats recomputes against the fresh data.
+      this.aggregates.invalidate();
     } catch (err) {
       this.db.exec("ROLLBACK");
       throw err;
@@ -648,26 +657,27 @@ export class TranscriptIndex {
     return row ? rowToSummary(row) : undefined;
   }
 
-  getSessionsForProject(projectId: string): SessionSummary[] {
+  getSessionsForProject(
+    projectId: string,
+    opts: { includeArchived?: boolean } = {},
+  ): SessionSummary[] {
+    // Archived sessions are hidden by default (COALESCE: a NULL/missing meta row is
+    // not archived). includeArchived drops the filter.
+    const archivedFilter = opts.includeArchived ? "" : " AND COALESCE(m.archived, 0) = 0";
     const rows = this.db
       .prepare(
         `SELECT ${SELECT_COLS} FROM sessions s LEFT JOIN session_meta m USING (sessionId)
-         WHERE s.projectId = ? ORDER BY COALESCE(m.pinned,0) DESC, s.lastTs DESC`,
+         WHERE s.projectId = ?${archivedFilter} ORDER BY COALESCE(m.pinned,0) DESC, s.lastTs DESC`,
       )
       .all(projectId) as unknown as Row[];
     return rows.map(rowToSummary);
-  }
-
-  private allRows(): Row[] {
-    return this.db
-      .prepare(`SELECT ${SELECT_COLS} FROM sessions s LEFT JOIN session_meta m USING (sessionId)`)
-      .all() as unknown as Row[];
   }
 
   /**
    * Cross-project session listing for a global "All Sessions" view. Reuses this
    * index (one query, no transcript reads); see {@link listAllSessions} for the
    * sort/filter/paging options. Returns SessionSummary[] across ALL projects.
+   * Archived sessions are excluded unless `opts.includeArchived` is set.
    */
   listAllSessions(opts: ListAllSessionsOptions = {}): SessionSummary[] {
     return listAllSessions<Row>(this.db, SELECT_COLS, rowToSummary, opts);
@@ -689,40 +699,22 @@ export class TranscriptIndex {
    * are HIDDEN unless `opts.includeArchived` is set.
    */
   getProjects(opts: { includeArchived?: boolean } = {}): ProjectSummary[] {
-    const byId = new Map<string, { rows: Row[]; folders: Set<string> }>();
-    for (const row of this.allRows()) {
-      if (!row.projectId || !row.cwd) continue;
-      let g = byId.get(row.projectId);
-      if (!g) {
-        g = { rows: [], folders: new Set() };
-        byId.set(row.projectId, g);
-      }
-      g.rows.push(row);
-      g.folders.add(path.basename(path.dirname(row.filePath)));
-    }
+    // Heavy per-project token/activity/folder rollups come from SQL GROUP BY
+    // (memoized + invalidated on write) instead of summing every row in JS here.
+    const rollups = this.aggregates.projectRollups();
     const meta = this.projectMeta.getAll();
     const projects: ProjectSummary[] = [];
-    for (const [id, g] of byId) {
-      const cwd = g.rows[0]!.cwd!;
-      let usage: TokenUsage = { ...EMPTY_USAGE };
-      let last: string | null = null;
-      for (const r of g.rows) {
-        usage.inputTokens += r.inputTokens;
-        usage.outputTokens += r.outputTokens;
-        usage.cacheReadTokens += r.cacheReadTokens;
-        usage.cacheCreationTokens += r.cacheCreationTokens;
-        if (r.lastTs && (!last || r.lastTs > last)) last = r.lastTs;
-      }
-      const m = meta.get(id);
+    for (const g of rollups) {
+      const m = meta.get(g.projectId);
       if (m?.archived && !opts.includeArchived) continue; // hidden by default
       projects.push({
-        id,
-        cwd,
-        name: projectName(cwd),
-        sessionCount: g.rows.length,
-        lastActivity: last,
-        totalUsage: usage,
-        encodedFolders: [...g.folders],
+        id: g.projectId,
+        cwd: g.cwd,
+        name: projectName(g.cwd),
+        sessionCount: g.sessionCount,
+        lastActivity: g.lastActivity,
+        totalUsage: g.totalUsage,
+        encodedFolders: g.encodedFolders,
         favorite: m?.favorite ?? false,
         archived: m?.archived ?? false,
         sortOrder: m?.sortOrder ?? 0,
@@ -763,31 +755,7 @@ export class TranscriptIndex {
    * null projectId are bucketed under "unknown".
    */
   getCostByProject(): Map<string, number> {
-    const rows = this.db
-      .prepare(
-        `SELECT projectId, model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens
-         FROM sessions`,
-      )
-      .all() as unknown as Array<{
-      projectId: string | null;
-      model: string | null;
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadTokens: number;
-      cacheCreationTokens: number;
-    }>;
-    const byProject = new Map<string, number>();
-    for (const r of rows) {
-      const cost = costUsd(r.model, {
-        inputTokens: n(r.inputTokens),
-        outputTokens: n(r.outputTokens),
-        cacheReadTokens: n(r.cacheReadTokens),
-        cacheCreationTokens: n(r.cacheCreationTokens),
-      });
-      const id = r.projectId ?? "unknown";
-      byProject.set(id, (byProject.get(id) ?? 0) + cost);
-    }
-    return byProject;
+    return this.aggregates.costByProject();
   }
 
   /**
@@ -798,38 +766,7 @@ export class TranscriptIndex {
    * cost descending. Powers the dashboard's per-model spend breakdown.
    */
   getUsageByModel(): Array<{ model: string; tokens: number; costUsd: number; sessions: number }> {
-    const rows = this.db
-      .prepare(
-        `SELECT model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens
-         FROM sessions`,
-      )
-      .all() as unknown as Array<{
-      model: string | null;
-      inputTokens: number;
-      outputTokens: number;
-      cacheReadTokens: number;
-      cacheCreationTokens: number;
-    }>;
-    const byModel = new Map<string, { tokens: number; costUsd: number; sessions: number }>();
-    for (const r of rows) {
-      const usage = {
-        inputTokens: n(r.inputTokens),
-        outputTokens: n(r.outputTokens),
-        cacheReadTokens: n(r.cacheReadTokens),
-        cacheCreationTokens: n(r.cacheCreationTokens),
-      };
-      const key = r.model ?? "unknown";
-      const tokens =
-        usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens;
-      const acc = byModel.get(key) ?? { tokens: 0, costUsd: 0, sessions: 0 };
-      acc.tokens += tokens;
-      acc.costUsd += costUsd(r.model, usage);
-      acc.sessions += 1;
-      byModel.set(key, acc);
-    }
-    return [...byModel.entries()]
-      .map(([model, v]) => ({ model, ...v }))
-      .sort((a, b) => b.costUsd - a.costUsd);
+    return this.aggregates.usageByModel();
   }
 
   /**
@@ -886,6 +823,21 @@ export class TranscriptIndex {
       .run(sessionId, pinned ? 1 : 0);
   }
 
+  /**
+   * Archive (or un-archive) a session. Archived sessions drop out of
+   * getSessionsForProject / listAllSessions (and so out of getProjects' session
+   * lists) unless an includeArchived flag is passed. Our own flag in session_meta —
+   * never touches the transcript.
+   */
+  setArchived(sessionId: string, archived: boolean): void {
+    this.db
+      .prepare(
+        `INSERT INTO session_meta (sessionId, archived) VALUES (?, ?)
+         ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived`,
+      )
+      .run(sessionId, archived ? 1 : 0);
+  }
+
   /** Read one session's tags (normalized; empty when untagged). */
   getTags(sessionId: string): string[] {
     return this.tags.get(sessionId);
@@ -926,6 +878,7 @@ function rowToSummary(row: Row): SessionSummary {
     hasSubagents: row.hasSubagents === 1,
     model: row.model ?? null,
     pinned: n(row.pinned) === 1,
+    archived: n(row.archived) === 1,
     tags: parseTags(row.tags),
     indexed: true,
   };

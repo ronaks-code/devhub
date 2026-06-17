@@ -19,7 +19,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W7 Dangerous-command classifier, jump-to-match, per-day usage, edit-resend, git diff, bulk sessions, WS reconnect ✅
 - [x] W8 Hooks editor, what-changed panel, monthly budget, slash palette, live-bubble, Bash card ✅
 - [x] W9 Settings scope diff, checkpoint/rewind, queue messages, error nav, model breakdown, word-diff, ⌘P switcher ✅
-- [ ] W10 Permission polish, MCP health, archive sessions, inline images
+- [x] W10 Permission card body, MCP health, archive sessions, inline images, permalinks, @-mention, SQL aggregates ✅
 - [ ] W11 PR creation, agents library, period selector, tool-running status
 - [ ] W12 CLAUDE.md editor, deny-with-feedback, calendar heatmap, @-symbol
 - [ ] W13 Skills manager, branch switcher, retry/queue, mini-map
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W10** ✅ (green: tc×4 + 129 tests + build + projects-parity + files + chat). engine: `mcp-test.ts` health check, archive sessions (migration v6 + includeArchived), `aggregates.ts` SQL rollups + cache (getProjects/getStats parity-tested), image-data in parser/ContentBlock. server: `/api/assets` (allowlisted image serve) + `/api/files` (@-mention tree). web: PermissionCardBody (diffs/command), ImageBlock inline render, useMessagePermalink (#uuid), MentionPicker (@-file).
 - **W9** ✅ (green: tc×4 + 109 tests + build + byModel + 2-prompt queue smoke RESULTS=2). engine: `config/resolve.ts` scope-diff, `checkpoint.ts` list/restore file-history (dryRun default), running needs-you detection, Stats.byModel. server: WS FIFO message queue (queued:N status, clear-queue, keepQueue interrupt, same-session resume). web: error-nav, ModelBreakdown, word-level diff, ⌘P ProjectSwitcher, queue UX. KNOWN: byModel top bucket "unknown" until a forced reindex backfills sessions.model.
 - **W8** ✅ (green: tc×4 + 97 tests + build + search/session + stats.budget + chat). engine: `budget.ts` monthly budget status, `searchInSession` (all matches), budget in Stats. server: `/api/search/session`, PATCH `/api/projects/:id` meta, hooks-write. web: LiveBubble (token deltas re-render ONLY the live bubble via useSyncExternalStore — big perf win), BashCard, SlashPalette, HooksEditor, FileChangeSummary. (server used an in-package structural cast for searchInSession during the parallel window; engine delivered it; runtime verified.)
 - **W7** ✅ (green: tc×4 + 90 tests + build + /api/rollups 200 + chat). engine: `classify-command.ts` severity tiers, `rollups.ts` per-day token/cost series, SearchHit.seq, prefix-rewrite reindex (headSig, migration v5). server: `/api/rollups` + tags in PATCH. web: jump-to-match, edit-and-resend (fork), GitDiffView (real git diffs), multi-select + bulk pin/tag, WS auto-reconnect w/ backoff.

@@ -22,7 +22,24 @@ export type ContentBlock =
       /** Path to a spilled large output under <sessionId>/tool-results/, if any. */
       spilledPath?: string;
     }
-  | { type: "image"; mediaType?: string }
+  | {
+      type: "image";
+      /** Media type from the source block (e.g. "image/png"), when known. */
+      mediaType?: string;
+      /**
+       * Base64-encoded image bytes inlined in the transcript, when present and
+       * small enough to carry (capped — see {@link MAX_INLINE_IMAGE_BYTES}). The UI
+       * renders this directly as a data URL. Optional for backward-compat: an older
+       * `{ type: "image", mediaType? }` block omits it.
+       */
+      data?: string;
+      /**
+       * Path to an image FILE the transcript references instead of inlining
+       * (a source of kind "file"/"path"). The face resolves/serves it via its
+       * allowlisted-asset reader. Optional and mutually exclusive with `data`.
+       */
+      assetPath?: string;
+    }
   | { type: "unknown"; raw: unknown };
 
 /** Normalized role for rendering. `meta` lines are not usually shown. */
@@ -91,6 +108,11 @@ export interface SessionSummary {
    */
   model: string | null;
   pinned: boolean;
+  /**
+   * Hidden from the default session lists unless explicitly included. User-owned
+   * flag in session_meta (never derived from the transcript).
+   */
+  archived: boolean;
   /** User-assigned tags (normalized: trimmed, lower-cased, de-duped). Empty when none. */
   tags: string[];
   /** True while a full index of this file is still pending (counts/usage approximate). */
@@ -297,6 +319,14 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastProjectId: null,
   monthlyBudgetUsd: null,
 };
+
+/**
+ * Cap on inline base64 image bytes carried on an image ContentBlock (~512KB of
+ * raw image data). Larger images are dropped to `mediaType`-only so a single huge
+ * paste can't bloat a message payload; the face can still fall back to its asset
+ * reader for the on-disk source when available.
+ */
+export const MAX_INLINE_IMAGE_BYTES = 512 * 1024;
 
 export const EMPTY_USAGE: TokenUsage = {
   inputTokens: 0,

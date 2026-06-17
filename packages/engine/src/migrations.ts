@@ -88,6 +88,16 @@ const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE sessions ADD COLUMN headSig TEXT`);
     }
   },
+  // v6: per-session `archived` flag in session_meta (our own data — archived
+  // sessions drop out of the default lists). A fresh DB gets the column from the
+  // base SCHEMA; a legacy DB picks it up here. Guarded by a column-presence check
+  // so the step is idempotent. Existing rows read 0 (not archived).
+  (db) => {
+    // session_meta is created by the base SCHEMA before migrations run.
+    if (hasTable(db, "session_meta") && !hasColumn(db, "session_meta", "archived")) {
+      db.exec(`ALTER TABLE session_meta ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
+    }
+  },
 ];
 
 /**

@@ -127,3 +127,23 @@ body {
   background: transparent;
   padding: 0;
 }
+
+/*
+ * Permalink flash — applied briefly to a message when it's deep-linked via the
+ * URL hash (#<uuid>|#seq-<n>). A clay-tinted background + inset ring fades out
+ * over ~2s so the eye lands on the target without a jarring persistent style.
+ * Toggled by useMessagePermalink adding/removing the `.permalink-flash` class.
+ */
+@keyframes permalink-flash {
+  0% {
+    background-color: rgba(217, 119, 87, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 87, 0.45);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px rgba(217, 119, 87, 0);
+  }
+}
+.permalink-flash {
+  animation: permalink-flash 2s ease-out forwards;
+}

@@ -17,6 +17,7 @@ import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
 import { registerRollupsRoutes } from "./routes/rollups.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
+import { registerAssetsRoutes } from "./routes/assets.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -100,6 +101,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerSearchRoutes(app, engine);
 
   registerProjectsRoutes(app, engine);
+
+  registerAssetsRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

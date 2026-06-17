@@ -33,6 +33,7 @@ import { Badge, EmptyState, Spinner } from "./ui";
 import { compactNumber, formatBytes, totalTokens } from "../lib/format";
 import { pairToolResults } from "../lib/transcript";
 import { useStickToBottom } from "../hooks/useStickToBottom";
+import { useMessagePermalink } from "../hooks/useMessagePermalink";
 import { cn } from "../lib/utils";
 
 export function TranscriptPane({
@@ -132,6 +133,29 @@ export function TranscriptPane({
   // next/prev navigation over them. Keyboard: Alt+E / Alt+Shift+E. Enabled only
   // when a transcript is loaded.
   const errorNav = useErrorNav(messages, highlightError, !!page);
+
+  // Deep-link support: #<uuid> | #seq-<n> scrolls to + flashes a message. The
+  // hook does the DOM scroll/flash, but the transcript is virtualized — so we
+  // first scroll the virtualizer to the hashed message's index (mounting its
+  // node) whenever the loaded set changes; the hook then finds + flashes it.
+  const { copyPermalink } = useMessagePermalink([messages.length, page?.session.sessionId]);
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const raw = window.location.hash.replace(/^#/, "").trim();
+    if (!raw) return;
+    const idx = /^(seq-)?\d+$/.test(raw)
+      ? Number(raw.replace(/^seq-/, ""))
+      : messages.findIndex((m) => m.uuid === raw);
+    if (idx == null || idx < 0 || idx >= messages.length) return;
+    stick.unpin(); // rest on the linked message rather than chasing the tail
+    const raf = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(idx, { align: "center" }),
+    );
+    return () => cancelAnimationFrame(raf);
+    // Re-run when the loaded set or the active session changes (fresh-tab deep
+    // link). `stick.unpin` is a stable useCallback, so depending on it (not the
+    // whole `stick` object, which is a fresh literal each render) avoids looping.
+  }, [messages, page?.session.sessionId, virtualizer, stick.unpin]);
 
   // Cmd/Ctrl-F opens the find bar (preventing the browser's native find), and
   // Escape closes it. Scoped to when a transcript is loaded.
@@ -418,7 +442,11 @@ export function TranscriptPane({
                   jumpIndex === vi.index && "bg-clay-500/10 ring-1 ring-inset ring-clay-500/40",
                 )}
               >
-                <MessageView m={messages[vi.index]!} highlight={findOpen ? findQuery : ""} />
+                <MessageView
+                  m={messages[vi.index]!}
+                  highlight={findOpen ? findQuery : ""}
+                  onCopyLink={copyPermalink}
+                />
               </div>
             ))}
           </div>

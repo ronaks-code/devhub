@@ -187,9 +187,44 @@ export const api = {
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>
     send<AppSettings>("/api/settings", "PUT", patch),
+  // Fuzzy file lookup within a project cwd, backing the composer's "@" mention
+  // picker. The server allowlists `cwd` to known project roots (so an arbitrary
+  // path can't be enumerated) and ranks matches for `q` server-side. The web
+  // side only wires the call; an empty `q` asks for an initial/top set.
+  listFiles: (cwd: string, q = "", limit = 30) =>
+    get<FileEntry[]>(
+      `/api/files?cwd=${encodeURIComponent(cwd)}` +
+        (q ? `&q=${encodeURIComponent(q)}` : "") +
+        (limit ? `&limit=${limit}` : ""),
+    ),
   // MCP-server config management (list/upsert/remove across scopes).
   config,
 };
+
+/**
+ * One file match from GET /api/files. `path` is the project-relative path the
+ * mention picker inserts; `name` (when present) is just the basename for display.
+ * The server may return either richer objects or bare path strings, so the
+ * picker normalizes both — this is the rich shape.
+ */
+export interface FileEntry {
+  /** Project-relative path (what gets inserted into the composer). */
+  path: string;
+  /** Basename for display; falls back to `path` when absent. */
+  name?: string;
+  /** True when the entry is a directory (rendered with a trailing "/"). */
+  dir?: boolean;
+}
+
+/**
+ * Build the URL for an on-disk asset (e.g. an image referenced by a transcript
+ * block) served by GET /api/assets?path=. The path is allowlisted server-side
+ * against known project cwds; the web side only forms the URL. Used by ImageBlock
+ * as a plain <img src>, so the browser does the fetch (and caching) directly.
+ */
+export function assetUrl(path: string): string {
+  return `/api/assets?path=${encodeURIComponent(path)}`;
+}
 
 export type { AppSettings };
 
