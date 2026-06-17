@@ -4,10 +4,12 @@ import {
   Cpu,
   Folder,
   Hexagon,
+  Inbox,
   LayoutDashboard,
   MessageSquarePlus,
   MessagesSquare,
   Moon,
+  Radio,
   Search,
   Settings,
   Sparkles,
@@ -27,6 +29,8 @@ import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { DashboardPane } from "./components/DashboardPane";
+import { LiveOpsBoard } from "./components/LiveOpsBoard";
+import { InboxPane } from "./components/InboxPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
@@ -44,7 +48,7 @@ const CHAT_MODELS = [
   "claude-fable-5",
 ] as const;
 
-type Tab = "browse" | "chat" | "dashboard" | "settings";
+type Tab = "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -79,7 +83,7 @@ function writeUiState(state: PersistedUiState): void {
   }
 }
 
-const VALID_TABS: readonly Tab[] = ["browse", "chat", "dashboard", "settings"];
+const VALID_TABS: readonly Tab[] = ["browse", "chat", "ops", "inbox", "dashboard", "settings"];
 
 function TopBar({
   tab,
@@ -106,7 +110,7 @@ function TopBar({
       </div>
 
       <div className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
-        {(["browse", "chat", "dashboard"] as const).map((t) => (
+        {(["browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
           <button
             key={t}
             onClick={() => onTab(t)}
@@ -491,6 +495,23 @@ export default function App() {
   const openSessionRef = useRef(openSession);
   openSessionRef.current = openSession;
 
+  // Open a running session from the LiveOpsBoard, which only knows the session's
+  // cwd (not a projectId). Resolve the cwd to a known project before navigating;
+  // if it doesn't match any known project, we just switch to Browse (the session
+  // may not be indexed yet) so the click is never a dead end.
+  const openSessionByCwd = useCallback(
+    (cwd: string | null, sid: string) => {
+      const match = cwd ? projects.find((p) => p.cwd === cwd) : null;
+      if (match) {
+        openSession(match.id, sid);
+      } else {
+        setChatSeed(null);
+        setTab("browse");
+      }
+    },
+    [projects, openSession],
+  );
+
   const handleRename = async (id: string, title: string | null) => {
     await api.rename(id, title);
     if (projectId) await refreshSessions(projectId);
@@ -565,6 +586,22 @@ export default function App() {
         group: "Navigate",
         icon: <Sparkles className="h-3.5 w-3.5" />,
         run: () => setTab("chat"),
+      },
+      {
+        id: "tab-ops",
+        title: "Go to Live Ops",
+        group: "Navigate",
+        keywords: "running sessions monitor live board",
+        icon: <Radio className="h-3.5 w-3.5" />,
+        run: () => setTab("ops"),
+      },
+      {
+        id: "tab-inbox",
+        title: "Go to Inbox",
+        group: "Navigate",
+        keywords: "triage unsorted untagged sessions",
+        icon: <Inbox className="h-3.5 w-3.5" />,
+        run: () => setTab("inbox"),
       },
       {
         id: "tab-dashboard",
@@ -664,6 +701,10 @@ export default function App() {
           <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
         ) : tab === "dashboard" ? (
           <DashboardPane onOpenSession={openSession} />
+        ) : tab === "ops" ? (
+          <LiveOpsBoard onOpenSession={openSessionByCwd} />
+        ) : tab === "inbox" ? (
+          <InboxPane onOpenSession={openSession} />
         ) : tab === "browse" ? (
           <>
             <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />

@@ -42,6 +42,8 @@ import { selectCommitsInWindow, getSessionCommits } from "../src/session-commits
 import { makeLineHandler } from "../src/driver/cli.js";
 import type { TurnHandlers, TurnResult } from "../src/driver/types.js";
 import type { GitLogEntry } from "../src/git.js";
+import { startConfigWatcher, configWatchPaths } from "../src/config/watcher.js";
+import type { EngineEvent } from "../src/types.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -1726,6 +1728,76 @@ describe("git write ops (temp repo)", () => {
     expect((await bad.createBranch("b")).ok).toBe(false);
     rmSync(dir, { recursive: true, force: true });
     rmSync(nonRepo, { recursive: true, force: true });
+  });
+
+  it("discardFile restores an unstaged edit to its committed content", async () => {
+    const dir = initRepo();
+    const file = path.join(dir, "a.txt");
+    writeFileSync(file, "v1\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    await git.commit("base");
+    // Dirty the tracked file, then discard the edit.
+    writeFileSync(file, "DIRTY\n");
+    expect((await git.status())!.unstaged).toContain("a.txt");
+    const res = await git.discardFile("a.txt");
+    expect(res.ok).toBe(true);
+    // File is back to its committed content and the tree is clean again.
+    expect(statSync(file).size).toBe("v1\n".length);
+    expect((await git.status())!.unstaged).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("discardAll restores every tracked edit but leaves untracked files alone", async () => {
+    const dir = initRepo();
+    const a = path.join(dir, "a.txt");
+    const b = path.join(dir, "b.txt");
+    writeFileSync(a, "a1\n");
+    writeFileSync(b, "b1\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt", "b.txt"]);
+    await git.commit("base");
+    // Modify both tracked files and add a brand-new untracked one.
+    writeFileSync(a, "aDIRTY\n");
+    writeFileSync(b, "bDIRTY\n");
+    writeFileSync(path.join(dir, "new.txt"), "keep me\n");
+    expect((await git.status())!.unstaged.sort()).toEqual(["a.txt", "b.txt"]);
+
+    const res = await git.discardAll();
+    expect(res.ok).toBe(true);
+    const st = await git.status();
+    // Tracked edits gone; the untracked file is NOT deleted by a checkout.
+    expect(st!.unstaged).toEqual([]);
+    expect(st!.untracked).toContain("new.txt");
+    expect(statSync(a).size).toBe("a1\n".length);
+    expect(statSync(b).size).toBe("b1\n".length);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("discardFile rejects an empty path and fails typed on a non-git dir", async () => {
+    const dir = initRepo();
+    const git = new GitService(dir);
+    const empty = await git.discardFile("");
+    expect(empty.ok).toBe(false);
+    expect(empty.error).not.toBe("");
+
+    const nonRepo = mkdtempSync(path.join(os.tmpdir(), "cui-nogit-"));
+    const bad = new GitService(nonRepo);
+    expect(await bad.discardFile("a.txt")).toMatchObject({ ok: false, error: "not a git repository" });
+    expect(await bad.discardAll()).toMatchObject({ ok: false, error: "not a git repository" });
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(nonRepo, { recursive: true, force: true });
+  });
+
+  it("discardAll on a clean tree is a no-op success", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "x\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    await git.commit("base");
+    const res = await git.discardAll();
+    expect(res.ok).toBe(true);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -4299,4 +4371,141 @@ describe("driver thinking-delta dispatch", () => {
     expect(result).not.toBeNull();
     expect(result!.denials).toEqual([{ toolName: "Bash", toolInput: { command: "rm -rf /" } }]);
   });
+});
+
+describe("driver token meter (onStatus kind:tokens)", () => {
+  type TokenStatus = { input: number; output: number; total: number };
+  // Drive makeLineHandler directly with synthetic stream-json frames; collect both
+  // the existing string-kind statuses and the new token statuses separately.
+  const run = (lines: object[]) => {
+    const text: string[] = [];
+    const otherStatus: string[] = [];
+    const tokens: TokenStatus[] = [];
+    const handlers: TurnHandlers = {
+      onDelta: (t) => text.push(t),
+      onStatus: (s) => {
+        if (s.kind === "tokens") tokens.push(s.data as TokenStatus);
+        else otherStatus.push(s.kind);
+      },
+    };
+    const state = { sessionId: null as string | null, seq: 0, finalResult: null as TurnResult | null };
+    const handle = makeLineHandler(handlers, state);
+    for (const l of lines) handle(JSON.stringify(l));
+    return { text, otherStatus, tokens };
+  };
+
+  it("emits a growing input+output estimate from message_start then message_delta", () => {
+    const { tokens } = run([
+      {
+        type: "stream_event",
+        event: {
+          type: "message_start",
+          message: {
+            usage: {
+              input_tokens: 100,
+              cache_read_input_tokens: 20,
+              cache_creation_input_tokens: 5,
+              output_tokens: 1,
+            },
+          },
+        },
+      },
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 10 } } },
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 42 } } },
+    ]);
+    // input = 100 + 20 + 5 = 125; output grows 1 -> 10 -> 42; total = input + output.
+    expect(tokens).toEqual([
+      { input: 125, output: 1, total: 126 },
+      { input: 125, output: 10, total: 135 },
+      { input: 125, output: 42, total: 167 },
+    ]);
+  });
+
+  it("output estimate is monotonic (a smaller restated output_tokens never lowers it)", () => {
+    const { tokens } = run([
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 50, output_tokens: 0 } } } },
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 30 } } },
+      // A stray lower value must not roll the meter backwards.
+      { type: "stream_event", event: { type: "message_delta", usage: { output_tokens: 5 } } },
+    ]);
+    expect(tokens.map((t) => t.output)).toEqual([0, 30, 30]);
+    expect(tokens.at(-1)).toEqual({ input: 50, output: 30, total: 80 });
+  });
+
+  it("does not break existing behavior: onDelta unchanged; no token status without usage", () => {
+    const { text, tokens, otherStatus } = run([
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "hi" } } },
+      // A system non-init frame still produces the existing string-kind status.
+      { type: "system", subtype: "tool_use" },
+    ]);
+    expect(text).toEqual(["hi"]); // onDelta still fires unchanged
+    expect(tokens).toEqual([]); // no usage frames => no token status
+    expect(otherStatus).toEqual(["tool_use"]); // existing kind:string status intact
+  });
+});
+
+describe("config watcher (config-changed event)", () => {
+  it("configWatchPaths covers the global config files/dirs (+ project .claude when given)", () => {
+    const configDir = path.join("/home/u", ".claude");
+    const claudeJson = path.join("/home/u", ".claude.json");
+    const global = configWatchPaths(configDir, [], claudeJson);
+    expect(global).toContain(path.join(configDir, "settings.json"));
+    expect(global).toContain(path.join(configDir, "agents"));
+    expect(global).toContain(path.join(configDir, "commands"));
+    expect(global).toContain(path.join(configDir, "skills"));
+    expect(global).toContain(path.join(configDir, "CLAUDE.md"));
+    // ~/.claude.json lives in the home dir (passed explicitly, defaults to $HOME).
+    expect(global).toContain(claudeJson);
+
+    const withProj = configWatchPaths(configDir, ["/work/proj"], claudeJson);
+    expect(withProj).toContain(path.join("/work/proj", ".claude"));
+    expect(withProj).toContain(path.join("/work/proj", "CLAUDE.md"));
+  });
+
+  it("startConfigWatcher emits a config-changed event when a watched file changes", async () => {
+    // Point CLAUDE_CONFIG_DIR at a temp dir so the watcher watches files we control.
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const configDir = mkdtempSync(path.join(os.tmpdir(), "cui-cfg-"));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const settingsFile = path.join(configDir, "settings.json");
+    // Pre-create the file so chokidar is watching it before we mutate (ignoreInitial
+    // suppresses the add; the later change is what we assert on).
+    writeFileSync(settingsFile, JSON.stringify({ permissions: { allow: [] } }) + "\n");
+
+    const dbDir = tmp();
+    const engine = new Engine(path.join(dbDir, "i.db"));
+    const events: EngineEvent[] = [];
+    const off = engine.on((e) => events.push(e));
+
+    const stop = startConfigWatcher(engine);
+    try {
+      // Give chokidar a moment to attach watchers before we mutate.
+      await new Promise((r) => setTimeout(r, 300));
+      writeFileSync(settingsFile, JSON.stringify({ permissions: { allow: ["Bash"] } }) + "\n");
+
+      // Wait for a config-changed event (awaitWriteFinish debounces ~400ms).
+      const got = await new Promise<EngineEvent | null>((resolve) => {
+        const deadline = Date.now() + 5000;
+        const tick = () => {
+          const hit = events.find((e) => e.kind === "config-changed");
+          if (hit) return resolve(hit);
+          if (Date.now() > deadline) return resolve(null);
+          setTimeout(tick, 50);
+        };
+        tick();
+      });
+
+      expect(got).not.toBeNull();
+      expect(got!.kind).toBe("config-changed");
+      expect((got as { kind: "config-changed"; path: string }).path).toBe(settingsFile);
+    } finally {
+      stop();
+      off();
+      engine.close();
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+      rmSync(configDir, { recursive: true, force: true });
+      rmSync(dbDir, { recursive: true, force: true });
+    }
+  }, 15000);
 });

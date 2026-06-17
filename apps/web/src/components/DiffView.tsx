@@ -1,5 +1,6 @@
 import { memo, useMemo, type ReactNode } from "react";
 import hljs from "highlight.js/lib/common";
+import { DiffContext } from "./DiffContext";
 
 /** One line of a unified diff. " " = unchanged context, "-" = removed, "+" = added. */
 export type DiffLine = { sign: " " | "-" | "+"; text: string };
@@ -496,18 +497,37 @@ export function LineRow({
   );
 }
 
+/**
+ * Above this many lines in a single hunk, `collapseContext` (when on) routes
+ * rendering through {@link DiffContext} so long unchanged runs fold into
+ * "… N unchanged lines" expanders. Short hunks always render in full — collapsing
+ * a handful of lines isn't worth a button.
+ */
+const COLLAPSE_THRESHOLD = 24;
+
 /** Render an already-parsed unified diff (e.g. a raw git patch) in the same
  *  red/green styling as {@link DiffView}, without the LCS synthesis step.
  *  `filePath` (optional) drives syntax highlighting by extension. */
 export const DiffLines = memo(function DiffLines({
   lines,
   filePath,
+  collapseContext = false,
 }: {
   lines: DiffLine[];
   filePath?: string;
+  /**
+   * Collapse long runs of unchanged context lines into GitHub-style
+   * "… N unchanged lines" expanders (only kicks in for diffs past
+   * {@link COLLAPSE_THRESHOLD} lines). Off by default so existing callers are
+   * unchanged.
+   */
+  collapseContext?: boolean;
 }) {
   const paired = pairChangedLines(lines);
   const language = useMemo(() => langFromPath(filePath), [filePath]);
+  if (collapseContext && lines.length > COLLAPSE_THRESHOLD) {
+    return <DiffContext lines={lines} pairedWith={paired} language={language} />;
+  }
   return (
     <div className="font-mono text-[12px] leading-relaxed">
       {lines.map((line, i) => (
@@ -519,15 +539,33 @@ export const DiffLines = memo(function DiffLines({
 
 /** Red/green unified LCS diff for a parsed file edit, with intra-line word diff
  *  and file-extension syntax highlighting. */
-export const DiffView = memo(function DiffView({ edit }: { edit: EditInput }) {
+export const DiffView = memo(function DiffView({
+  edit,
+  collapseContext = false,
+}: {
+  edit: EditInput;
+  /**
+   * Collapse long unchanged-context runs into expanders (per hunk). Off by
+   * default so existing callers render every line as before.
+   */
+  collapseContext?: boolean;
+}) {
   const language = useMemo(() => langFromPath(edit.filePath), [edit.filePath]);
   return (
     <div className="font-mono text-[12px] leading-relaxed">
       {edit.hunks.map((h, i) => {
         const lines = diffHunk(h.oldStr, h.newStr);
         const paired = pairChangedLines(lines);
+        const wrapClass = i > 0 ? "mt-2 border-t border-zinc-800 pt-2" : "";
+        if (collapseContext && lines.length > COLLAPSE_THRESHOLD) {
+          return (
+            <div key={i} className={wrapClass}>
+              <DiffContext lines={lines} pairedWith={paired} language={language} />
+            </div>
+          );
+        }
         return (
-          <div key={i} className={i > 0 ? "mt-2 border-t border-zinc-800 pt-2" : ""}>
+          <div key={i} className={wrapClass}>
             {lines.map((line, j) => (
               <LineRow key={j} line={line} pairedWith={paired[j]!} language={language} />
             ))}

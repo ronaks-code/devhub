@@ -118,7 +118,7 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
           <ToolStatus result={result} live={live} />
         </summary>
         <div className="border-t border-zinc-800 px-3 py-2">
-          <DiffView edit={edit} />
+          <DiffView edit={edit} collapseContext />
         </div>
         {result && (isError || (result.content ?? "").length > 0) ? (
           <details className="border-t border-zinc-800/60">

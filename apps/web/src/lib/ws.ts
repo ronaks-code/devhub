@@ -35,6 +35,75 @@ export type OutgoingMsg =
   // its local queue, so cancellation works against today's per-turn server too.
   | { t: "clear-queue" };
 
+/**
+ * The payload carried by an enriched `{kind:"tokens", data}` status frame: a live
+ * snapshot of the in-flight turn's token usage (and, when the server includes it,
+ * an estimated cost + a model/context-window hint for a "% of context" read).
+ *
+ * The engine emits this opaquely (`onStatus`'s `data` is `unknown`), so every
+ * field is optional and read defensively via {@link parseTokenStatus}. We accept
+ * a few common field spellings (snake_case from the CLI, camelCase from the
+ * engine) so whatever the engine/server lane ends up sending still lights up the
+ * meter rather than silently no-op'ing.
+ */
+export interface TokenStatusData {
+  /** Tokens sent into the model so far this turn. */
+  inputTokens?: number;
+  /** Tokens generated so far this turn. */
+  outputTokens?: number;
+  /** Cache-read tokens (cheap context re-reads), when reported. */
+  cacheReadTokens?: number;
+  /** Cache-creation tokens, when reported. */
+  cacheCreationTokens?: number;
+  /** Running estimated USD cost of the turn, when the server computes it. */
+  costUsd?: number;
+  /** Model id (so the meter can price/scale even if the turn's select changed). */
+  model?: string | null;
+  /** Total context window size for the model, enabling a "% of context" read. */
+  contextWindow?: number;
+}
+
+function num(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/**
+ * Defensively parse an enriched `tokens` status `data` payload into a
+ * {@link TokenStatusData}. Returns null when it doesn't look like a token
+ * snapshot at all, so a non-token status never lights up the meter.
+ */
+export function parseTokenStatus(data: unknown): TokenStatusData | null {
+  if (!data || typeof data !== "object") return null;
+  const o = data as Record<string, unknown>;
+  const input = num(o.inputTokens) ?? num(o.input_tokens);
+  const output = num(o.outputTokens) ?? num(o.output_tokens);
+  const cacheRead = num(o.cacheReadTokens) ?? num(o.cache_read_input_tokens) ?? num(o.cacheReadInputTokens);
+  const cacheCreate =
+    num(o.cacheCreationTokens) ?? num(o.cache_creation_input_tokens) ?? num(o.cacheCreationInputTokens);
+  const cost = num(o.costUsd) ?? num(o.cost_usd) ?? num(o.totalCostUsd) ?? num(o.total_cost_usd);
+  const ctx = num(o.contextWindow) ?? num(o.context_window) ?? num(o.contextLimit);
+  const model = typeof o.model === "string" ? o.model : undefined;
+  // Need at least one usable number to be a meaningful snapshot.
+  if (
+    input === undefined &&
+    output === undefined &&
+    cacheRead === undefined &&
+    cacheCreate === undefined &&
+    cost === undefined
+  ) {
+    return null;
+  }
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheCreationTokens: cacheCreate,
+    costUsd: cost,
+    model,
+    contextWindow: ctx,
+  };
+}
+
 /** A pending tool-permission request from the agent (persistent-path only). */
 export interface PermissionRequestFrame {
   id: string;
@@ -55,7 +124,14 @@ export interface ChatHandlers {
    * animation frame like text deltas so it never thrashes React renders.
    */
   onThinkingDelta?: (text: string) => void;
-  onStatus?: (kind: string) => void;
+  /**
+   * A turn status update. `kind` is the phase ("starting" | "working" | …); the
+   * persistent path also emits enriched statuses like `{kind:"tokens", data}`
+   * carrying a live token/cost snapshot. The engine WS `status` frame is typed
+   * `{t:"status"; kind}` (no `data`), so we widen the parse at this boundary and
+   * pass any `data` through — see {@link StatusData} for the `tokens` shape.
+   */
+  onStatus?: (kind: string, data?: unknown) => void;
   onResult?: (result: TurnResult) => void;
   onError?: (message: string) => void;
   onTurnEnd?: () => void;
@@ -184,7 +260,11 @@ export function openChat(handlers: ChatHandlers): ChatConn {
         scheduleFlush();
         break;
       case "status":
-        handlers.onStatus?.(msg.kind);
+        // The engine WS type is `{t:"status"; kind}` (no data), but the
+        // persistent path emits enriched statuses (e.g. `{kind:"tokens", data}`).
+        // Read `data` off the parsed frame defensively so a live token meter can
+        // consume it; a plain status simply passes `undefined`.
+        handlers.onStatus?.(msg.kind, (msg as { data?: unknown }).data);
         break;
       case "result":
         handlers.onResult?.(msg.result);

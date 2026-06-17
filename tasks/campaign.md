@@ -25,7 +25,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W13 Skills manager, branch switcher, retry, mini-map, FTS trigram, Task card, per-project defaults, desktop auto-server ✅
 - [x] W14 TUI live chat, audit log, edit approvals, project detail header, session↔commits, notes, live thinking, reading mode ✅
 - [x] W15 TUI search, finish/stall notifications, secret redaction, syntax diffs, show-more, permissions editor, top-spenders ✅
-- [ ] W16 Live Ops board, config watcher, keyboard approvals, prompt templates
+- [x] W16 Live Ops board, config watcher, keyboard approvals, prompt snippets, git discard, diff-context, inbox, token meter ✅
 - [ ] W17 Effective config, ahead/behind sync, config linter, semantic search
 - [ ] W18 Stop running session, restore-from-backup, transcript timestamps
 - [ ] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W16** ✅ (green: tc×4 + 227 tests + build + LiveOps/discard-gate/chat). engine: `config/watcher.ts` (config-changed EngineEvent), driver token-meter (onStatus kind:tokens), git discardFile/discardAll. server: git unstage/discard routes (confirm-gated). web: LiveOpsBoard tab, useApprovalKeyboard (A/D/S/E), SnippetLibrary, DiffContext collapse, InboxPane, live token meter. INTEGRATOR FIX: wired startConfigWatcher into startEngineLifecycle (engine built it server-started like watchTranscripts).
 - **W15** ✅ (green: tc×4 + 218 tests + build + tui + file-facet/cost-sort/chat). engine: `redact.ts` secret masking (audit-applied), `file:` search facet, listAllSessions sort:"cost". server: notifications watcher (finish/stall) → `{kind:"notify"}` on /api/events SSE. web: syntax-highlighted diffs, ResultBody show-more, PermissionsEditor (+tester), TopSpenders, notify toasts + browser Notification. tui: Search screen. FIXES: restarted a wedged dev server (15 waves of hot-reload); added "cost" to the all-sessions sort enum (runtime smoke caught it).
 - **W14** ✅ (green: tc×4 + 202 tests + build + tui-smoke + notes/chat). engine: `audit.ts` permission audit log (v10), `session-commits.ts` link sessions→commits, thinking-delta in driver, session notes (v11). server: ws thinking-delta forward + notes in PATCH. web: EditableApproval, ProjectDetailHeader, SessionNotes, useReadingMode, live thinking in LiveBubble. tui: live Chat screen (in-process driver). TECH-DEBT noted: server uses some local type-widening / runtime duck-typing for engine symbols that landed same-wave (functional + typechecks); reconcile in a cleanup pass.
 - **W13** ✅ (green: tc×4 + 182 tests + build + search-survives-migration + substring + cargo check). engine: FTS5 **trigram** tokenizer via data-preserving copy-migration (v8) → substring search now works; per-project default model/permission (v9). server: projects PATCH forwards defaults. web: SkillsManager, BranchSwitcher, TurnError retry, TranscriptMinimap, TaskCard (inline subagent), per-project default selects. desktop: lib.rs auto-spawns the server on launch (compiles).

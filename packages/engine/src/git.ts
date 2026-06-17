@@ -439,6 +439,46 @@ export class GitService {
     return runGitWrite(this.cwd, ["checkout", name]);
   }
 
+  // -- Discard (DESTRUCTIVE working-tree restore) ----------------------------
+  //
+  // These THROW AWAY uncommitted working-tree edits — there is no undo, so they are
+  // the most dangerous writes here. They are confined to the repo (`cwd`), never run
+  // a shell, and never touch a transcript. Paths are execFile args with a leading
+  // `--` so a file named like a flag is still treated as a path; a path can't escape
+  // the repo (git resolves it relative to `cwd` and refuses paths outside the tree).
+
+  /**
+   * Discard the working-tree changes to `path` (`git checkout -- <path>`), restoring
+   * it to its staged/HEAD content. DESTRUCTIVE: unstaged edits to that file are lost.
+   *
+   * Uses `checkout --` (not `restore`) so it behaves identically on older gits and
+   * restores from the index when present, else HEAD. A non-existent/clean path is a
+   * typed failure from git rather than a silent no-op, so a face can report it. Empty
+   * `path` is rejected up front (we never run a bare `checkout --` that would touch
+   * the whole tree by accident). Returns a failed result for a non-git dir.
+   */
+  async discardFile(path: string): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    if (typeof path !== "string" || path.trim() === "") {
+      return { ok: false, stdout: "", error: "discardFile: path must be a non-empty string" };
+    }
+    return runGitWrite(this.cwd, ["checkout", "--", path]);
+  }
+
+  /**
+   * Discard ALL tracked working-tree changes in the repo (`git checkout -- .`),
+   * restoring every tracked file to its staged/HEAD content. DESTRUCTIVE: every
+   * unstaged edit to a tracked file is lost. Untracked files are LEFT ALONE (this is
+   * a checkout, not a `clean`), so a stray new file is never deleted. Returns a
+   * failed result for a non-git dir; a clean tree is a no-op success.
+   */
+  async discardAll(): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    return runGitWrite(this.cwd, ["checkout", "--", "."]);
+  }
+
   // -- Worktrees -------------------------------------------------------------
   //
   // List/add/remove linked worktrees. Listing is read-only (tolerant: [] on a

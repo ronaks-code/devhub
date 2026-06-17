@@ -18,6 +18,28 @@ import type {
 
 const CLAUDE_BIN = process.env.CLAUDE_UI_CLAUDE_BIN?.trim() || "claude";
 
+/** Coerce a usage field to a non-negative integer (0 for missing/garbage). */
+function usageNum(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+}
+
+/**
+ * Input-side token count from an Anthropic `usage` object: the prompt tokens plus
+ * the cache read/creation tokens (all part of what was billed as "input" context).
+ */
+function readInputTokens(usage: Record<string, unknown>): number {
+  return (
+    usageNum(usage.input_tokens) +
+    usageNum(usage.cache_read_input_tokens) +
+    usageNum(usage.cache_creation_input_tokens)
+  );
+}
+
+/** Output (generated) token count from an Anthropic `usage` object. */
+function readOutputTokens(usage: Record<string, unknown>): number {
+  return usageNum(usage.output_tokens);
+}
+
 /**
  * Builds the per-line stream-json handler shared by the per-turn and persistent
  * paths, so both normalize output identically. `state` is mutable so the result
@@ -31,6 +53,23 @@ export function makeLineHandler(handlers: TurnHandlers, state: {
   seq: number;
   finalResult: TurnResult | null;
 }): (line: string) => void {
+  // Running token estimate for THIS handler (one per turn/session). The Anthropic
+  // streaming protocol reports cumulative usage on the partial-message frames:
+  //   - message_start.message.usage carries the input side (input_tokens +
+  //     cache_read/cache_creation) and an initial output_tokens, and
+  //   - message_delta.usage carries the GROWING cumulative output_tokens.
+  // We track the latest seen of each so a face can show a live "tokens so far"
+  // meter mid-turn (before the final `result` frame's authoritative totals).
+  let meterInput = 0;
+  let meterOutput = 0;
+  /** Emit onStatus({ kind:"tokens" }) when the estimate has actually moved. */
+  const emitTokens = (): void => {
+    handlers.onStatus?.({
+      kind: "tokens",
+      data: { input: meterInput, output: meterOutput, total: meterInput + meterOutput },
+    });
+  };
+
   return (line: string): void => {
     const s = line.trim();
     if (!s) return;
@@ -70,6 +109,30 @@ export function makeLineHandler(handlers: TurnHandlers, state: {
         } else if (delta && delta.type === "thinking_delta" && typeof delta.thinking === "string") {
           // Extended-thinking frames carry the reasoning text under `thinking`.
           handlers.onThinkingDelta?.(delta.thinking);
+        }
+      } else if (event && event.type === "message_start") {
+        // First frame of an assistant message: usage lives under message.usage and
+        // carries the input side (+ an initial output count). Take the input side as
+        // our running input estimate; bump output if present.
+        const msg = event.message as Record<string, unknown> | undefined;
+        const usage = msg?.usage as Record<string, unknown> | undefined;
+        if (usage) {
+          meterInput = readInputTokens(usage);
+          const out = readOutputTokens(usage);
+          if (out > meterOutput) meterOutput = out;
+          emitTokens();
+        }
+      } else if (event && event.type === "message_delta") {
+        // Incremental assistant-message frame: usage.output_tokens is CUMULATIVE for
+        // the turn so far, so it monotonically grows — drive the live meter from it.
+        const usage = event.usage as Record<string, unknown> | undefined;
+        if (usage) {
+          const out = readOutputTokens(usage);
+          if (out > meterOutput) meterOutput = out;
+          // message_delta may also restate input (e.g. when tools rerun); keep the max.
+          const inp = readInputTokens(usage);
+          if (inp > meterInput) meterInput = inp;
+          emitTokens();
         }
       }
     } else if (t === "assistant" || t === "user") {

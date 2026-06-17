@@ -78,6 +78,15 @@ export class Engine {
     this.emitter.emit("event", e);
   }
 
+  /**
+   * Emit a `config-changed` event for `changedPath` (a Claude Code config file/dir).
+   * Called by the config watcher ({@link startConfigWatcher}); kept as a narrow
+   * public method so the watcher doesn't need access to the private event bus.
+   */
+  emitConfigChanged(changedPath: string): void {
+    this.emit({ kind: "config-changed", path: changedPath });
+  }
+
   /** Incrementally (re)index every session across every project. Safe to call repeatedly. */
   async indexAll(): Promise<void> {
     if (this.indexing) return;
@@ -605,6 +614,8 @@ export {
 export type { ProjectRollup } from "./aggregates.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
+export { startConfigWatcher, configWatchPaths } from "./config/watcher.js";
+export type { ConfigWatcherOptions } from "./config/watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";
 export { detectSourceKind } from "./discovery.js";
 export type { SourceKind } from "./discovery.js";

@@ -307,6 +307,13 @@ export const api = {
     send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
       tags,
     }),
+  // Toggle a session's archived flag via PATCH /api/sessions/:id { archived }.
+  // Backs the InboxPane "archive" triage action. The PATCH forwards present keys,
+  // so a server that doesn't persist `archived` still ACKs harmlessly.
+  setArchived: (sessionId: string, archived: boolean) =>
+    send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
+      archived,
+    }),
   // Save freeform markdown notes on a session via PATCH /api/sessions/:id { notes }.
   // Backs the SessionNotes editor. The route's `notes` body field is a plain
   // string (the schema rejects null), so clearing notes sends "" — never null.

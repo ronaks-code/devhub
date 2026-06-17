@@ -6,11 +6,12 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import path from "node:path";
-import { Engine, watchTranscripts, paths } from "@claude-ui/engine";
+import { Engine, watchTranscripts, startConfigWatcher, paths } from "@claude-ui/engine";
 import type { EngineEvent } from "@claude-ui/engine/types";
 import { registerWs } from "./ws.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
+import { registerGitActionRoutes } from "./routes/git-actions.js";
 import { registerPermissionsRoutes } from "./routes/permissions.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
@@ -107,6 +108,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerSettingsRoutes(app, engine);
 
   registerGitRoutes(app, engine);
+
+  registerGitActionRoutes(app, engine);
 
   registerPermissionsRoutes(app, engine);
 
@@ -296,11 +299,14 @@ export function startEngineLifecycle(engine: Engine): () => void {
   // WeakMap above). Registered here, after the transcript watcher.
   const notifications = startNotificationsWatcher(engine);
   notificationsByEngine.set(engine, notifications);
+  // Watch ~/.claude config files; config-changed events flow over /api/events SSE.
+  const stopConfig = startConfigWatcher(engine);
   // First index runs in the background; SSE pushes progress. Incremental afterward.
   void engine.indexAll();
   return () => {
     notifications.stop();
     notificationsByEngine.delete(engine);
+    stopConfig();
     stopWatch();
   };
 }

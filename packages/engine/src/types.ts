@@ -310,6 +310,13 @@ export type EngineEvent =
   | { kind: "index-progress"; done: number; total: number }
   | { kind: "session-changed"; sessionId: string; projectId: string }
   | { kind: "session-added"; sessionId: string; projectId: string }
+  /**
+   * A Claude Code CONFIG file/dir changed on disk (settings.json, ~/.claude.json,
+   * agents/, hooks, a project's .claude/). Carries the absolute path that changed so
+   * a face can invalidate just the affected config view. NOT a transcript event —
+   * the watcher only watches config paths. Debounced like the transcript watcher.
+   */
+  | { kind: "config-changed"; path: string }
   | { kind: "ready" };
 
 /**

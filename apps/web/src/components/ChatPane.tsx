@@ -1,20 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, Check, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
+import { ArrowDown, Check, FileText, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "../lib/types";
-import { openChat, type ChatConn } from "../lib/ws";
+import { openChat, parseTokenStatus, type ChatConn, type TokenStatusData } from "../lib/ws";
 import { cn } from "../lib/utils";
 import { indexToolResults, pairMessage } from "../lib/transcript";
 import { useDraft } from "../hooks/useDraft";
 import { useStickToBottom } from "../hooks/useStickToBottom";
+import { useApprovalKeyboard } from "../hooks/useApprovalKeyboard";
 import { MessageView } from "./MessageView";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { SlashPalette, filterCommands } from "./SlashPalette";
 import { MentionPicker, detectMention } from "./MentionPicker";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
+import { SnippetLibrary } from "./SnippetLibrary";
+import { TokenMeter } from "./TokenMeter";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { TurnError } from "./TurnError";
 import { usePromptHistory } from "../hooks/usePromptHistory";
@@ -128,6 +131,17 @@ export function ChatPane({
   // A pending inline permission request from the agent (persistent-path only;
   // dormant on the default per-turn driver). Cleared once answered or the turn ends.
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
+  // Live token/cost snapshot for the in-flight turn, fed by the enriched
+  // `{kind:"tokens", data}` status frame. Null until the first snapshot arrives
+  // (and reset at the start/end of each turn). Dormant on a server that doesn't
+  // emit token statuses, so the meter simply never appears there.
+  const [tokenStatus, setTokenStatus] = useState<TokenStatusData | null>(null);
+  // The snippet-library overlay (prompt templates). Opened via the composer
+  // button or by typing a bare "/" with no slash-command matches.
+  const [snippetsOpen, setSnippetsOpen] = useState(false);
+  // Bumped by the approval "E" key to ask the active PermissionCard to focus its
+  // editable input. Undefined = no focus request pending.
+  const [editFocusToken, setEditFocusToken] = useState<number | undefined>(undefined);
   // The most recent user prompt of this conversation, so "Regenerate" can resend
   // it (resuming the session) for a fresh response.
   const lastPromptRef = useRef<string | null>(null);
@@ -274,14 +288,23 @@ export function ChatPane({
       onDelta: (text) => appendDelta(text),
       onThinkingDelta: (text) => appendThinkingDelta(text),
       onMessage: (m) => finalizeMessage(m),
-      onStatus: (kind) => setStatus(kind),
+      onStatus: (kind, data) => {
+        // An enriched `tokens` status carries a live usage snapshot — feed the
+        // meter without disturbing the human-readable status label.
+        if (kind === "tokens") {
+          const parsed = parseTokenStatus(data);
+          if (parsed) setTokenStatus(parsed);
+          return;
+        }
+        setStatus(kind);
+      },
       onResult: (result) => {
         setLastResult(result);
         // A turn that ended in an error subtype should surface the retry card,
         // so un-dismiss when an error result lands.
         if (result.isError) setErrorDismissed(false);
       },
-      onPermissionRequest: (req) => setPendingPermission(req),
+      onPermissionRequest: (req) => enqueueApprovalRef.current(req),
       onConnectionState: (state) => {
         if (state === "reconnecting") {
           reconnectedRef.current = true;
@@ -297,7 +320,9 @@ export function ChatPane({
           reconnectedRef.current = false;
           setRunning(false);
           setStatus(null);
+          clearApprovalsRef.current();
           setPendingPermission(null);
+          setTokenStatus(null);
           clearLive();
         }
       },
@@ -306,7 +331,9 @@ export function ChatPane({
         setErrorDismissed(false);
         setRunning(false);
         setStatus(null);
+        clearApprovalsRef.current();
         setPendingPermission(null);
+        setTokenStatus(null);
         clearLive();
         // A failed turn shouldn't auto-fire the queue (it might fail the same
         // way, or the error needs the user's attention). The queued prompts stay
@@ -315,7 +342,9 @@ export function ChatPane({
       onTurnEnd: () => {
         setRunning(false);
         setStatus(null);
+        clearApprovalsRef.current();
         setPendingPermission(null);
+        setTokenStatus(null);
         clearLive();
         // The turn finished cleanly — kick off the next queued follow-up, if any.
         dispatchNext();
@@ -327,8 +356,9 @@ export function ChatPane({
 
   // Forward the user's Allow/Deny decision (with its scope) to the agent and
   // dismiss the card. Never auto-decides: only fires from an explicit button
-  // press in PermissionCard. Scope is dormant on the per-turn driver but rides
-  // along in the payload so the persistent path can honor it later.
+  // press in PermissionCard or an approval-keyboard binding. Scope is dormant on
+  // the per-turn driver but rides along in the payload so the persistent path can
+  // honor it later.
   const respondPermission = useCallback((id: string, { decision, scope, message, updatedInput }: PermissionDecision) => {
     connRef.current?.send({
       t: "permission-response",
@@ -345,6 +375,35 @@ export function ChatPane({
     });
     setPendingPermission((cur) => (cur && cur.id === id ? null : cur));
   }, []);
+
+  // Keyboard-driven approvals + a small pending-approvals QUEUE. The hook binds
+  // A=allow once, D=deny, S=allow-for-session, E=edit, and J/K (or arrows) to step
+  // between multiple waiting requests. Bindings are disabled while the composer or
+  // a picker has focus typing (the hook also ignores keystrokes from inputs), and
+  // while the snippet overlay is open. `respond` reuses respondPermission so the
+  // WS frame + the single-card `pendingPermission` clear stay in lockstep.
+  const approvals = useApprovalKeyboard({
+    respond: (id, decision) => {
+      respondPermission(id, decision);
+    },
+    onEdit: () => setEditFocusToken((t) => (t ?? 0) + 1),
+    enabled: !snippetsOpen,
+  });
+
+  // Mirror the active queued approval into `pendingPermission` so the existing
+  // render path (and the deny-feedback sub-state inside the card) is driven by
+  // whichever request the queue is currently focused on.
+  const approvalsActive = approvals.active;
+  useEffect(() => {
+    setPendingPermission(approvalsActive);
+  }, [approvalsActive]);
+
+  // Latest enqueue, read by the socket handler so a new permission-request joins
+  // the queue without re-subscribing the connection.
+  const enqueueApprovalRef = useRef(approvals.enqueue);
+  enqueueApprovalRef.current = approvals.enqueue;
+  const clearApprovalsRef = useRef(approvals.clear);
+  clearApprovalsRef.current = approvals.clear;
 
   useEffect(() => {
     return () => {
@@ -377,7 +436,9 @@ export function ChatPane({
       setErrorMsg(null);
       setErrorDismissed(false);
       setLastResult(null);
+      clearApprovalsRef.current();
       setPendingPermission(null);
+      setTokenStatus(null);
       setStatus("starting");
       setRunning(true);
       clearLive();
@@ -487,7 +548,9 @@ export function ChatPane({
     setStatus(null);
     setLastResult(null);
     setErrorMsg(null);
+    clearApprovalsRef.current();
     setPendingPermission(null);
+    setTokenStatus(null);
     setEditingFork(false);
     queueRef.current = [];
     setQueued([]);
@@ -510,6 +573,24 @@ export function ChatPane({
   useEffect(() => {
     setSlashIndex((i) => (i >= slashMatches.length ? 0 : i));
   }, [slashMatches.length]);
+
+  // Insert a snippet's (placeholder-filled) text into the composer. Appends to any
+  // existing draft (with a separating blank line) so a partial message isn't lost,
+  // then focuses the textarea with the caret at the end for immediate editing.
+  const insertSnippet = useCallback(
+    (text: string) => {
+      const base = draft.trim();
+      setDraft(base ? `${base}\n\n${text}` : text);
+      const el = textareaRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.focus();
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+      }
+    },
+    [draft, setDraft],
+  );
 
   // Insert a chosen slash command into the composer as "/name " (trailing space
   // so the user can type arguments) and refocus the textarea.
@@ -932,9 +1013,18 @@ export function ChatPane({
       </div>
 
       {/* Inline tool-permission request (persistent-path only; dormant on the
-          default per-turn driver). Answered via a permission-response send. */}
+          default per-turn driver). Answered via a permission-response send, or via
+          the approval keyboard (A/D/S/E + J/K to step the queue). */}
       {pendingPermission && (
-        <PermissionCard request={pendingPermission} onDecision={respondPermission} />
+        <PermissionCard
+          request={pendingPermission}
+          onDecision={respondPermission}
+          queueCount={approvals.queue.length}
+          queuePosition={approvals.activeIndex}
+          onNext={approvals.next}
+          onPrev={approvals.prev}
+          editFocusToken={editFocusToken}
+        />
       )}
 
       {/* Turn-error card: an {t:"error"} socket frame, or a result that ended in
@@ -958,6 +1048,10 @@ export function ChatPane({
               {status ?? "working"}
             </span>
           )}
+          {/* Live token/context/$ meter for the running turn — fed by the enriched
+              `tokens` status. Only appears once a snapshot has arrived (so it's a
+              no-op on servers that don't emit token statuses). */}
+          {running && tokenStatus && <TokenMeter data={tokenStatus} model={model} />}
           {queued.length > 0 && (
             <span
               className="flex items-center gap-1 text-amber-400"
@@ -1040,6 +1134,16 @@ export function ChatPane({
           </div>
         ) : null}
         <div className="flex items-end gap-2 rounded-xl bg-zinc-900 p-2 ring-1 ring-zinc-800 focus-within:ring-clay-500/40">
+          {/* Snippet library trigger — open the prompt-templates overlay to insert
+              a saved template (with {placeholders}) into the composer. */}
+          <IconButton
+            onClick={() => setSnippetsOpen(true)}
+            title="Snippet library — insert a saved prompt template"
+            aria-label="Open snippet library"
+            className="h-9 w-9"
+          >
+            <FileText className="h-4 w-4" />
+          </IconButton>
           <textarea
             ref={textareaRef}
             value={draft}
@@ -1097,6 +1201,15 @@ export function ChatPane({
           )}
         </div>
       </div>
+
+      {/* Prompt-template (snippet) library overlay. Opened from the composer's
+          snippet button; inserts a chosen template (placeholders filled) into the
+          draft via insertSnippet. */}
+      <SnippetLibrary
+        open={snippetsOpen}
+        onClose={() => setSnippetsOpen(false)}
+        onInsert={insertSnippet}
+      />
     </div>
   );
 }
