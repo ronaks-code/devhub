@@ -5,6 +5,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { normalizeLine, usageFromMessage } from "../parser.js";
+import { createLineSplitter } from "./buffer.js";
 import type {
   AgentDriver,
   PermissionMode,
@@ -95,27 +96,20 @@ function makeLineHandler(handlers: TurnHandlers, state: {
 /**
  * Splits a stdout byte stream into newline-delimited lines, feeding each complete
  * line to `onLine`. Returns a flush() that handles any trailing partial line.
+ *
+ * Backed by the bounded {@link createLineSplitter}: normal lines stream through
+ * unchanged, but the pending (no-newline) buffer is capped so a process that emits
+ * a giant line without a newline can't grow memory without bound. An overflow logs
+ * a one-line warning and the line is truncated to the cap.
  */
 function makeLineSplitter(onLine: (line: string) => void): {
   push: (chunk: Buffer) => void;
   flush: () => void;
 } {
-  let buf = "";
-  return {
-    push(chunk: Buffer) {
-      buf += chunk.toString();
-      let i: number;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, i);
-        buf = buf.slice(i + 1);
-        onLine(line);
-      }
-    },
-    flush() {
-      if (buf.trim()) onLine(buf);
-      buf = "";
-    },
-  };
+  return createLineSplitter(onLine, {
+    onOverflow: (dropped) =>
+      console.warn(`[driver] dropped ${dropped} bytes from an oversized stdout line (no newline)`),
+  });
 }
 
 /**

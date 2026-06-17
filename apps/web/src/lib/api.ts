@@ -6,6 +6,7 @@ import type {
   SessionSummary,
   Stats,
 } from "./types";
+import type { AppSettings } from "@claude-ui/engine/types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { accept: "application/json" } });
@@ -49,7 +50,13 @@ export const api = {
     }),
   stats: () => get<Stats>("/api/stats"),
   running: () => get<RunningSession[]>("/api/running"),
+  getSettings: () => get<AppSettings>("/api/settings"),
+  // PUT merges a partial update server-side and returns the full merged settings.
+  putSettings: (patch: Partial<AppSettings>) =>
+    send<AppSettings>("/api/settings", "PUT", patch),
 };
+
+export type { AppSettings };
 
 /** Subscribe to server-sent engine events. Returns an unsubscribe fn. */
 export function subscribeEvents(onEvent: (e: EngineEvent) => void): () => void {

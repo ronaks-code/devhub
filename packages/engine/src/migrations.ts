@@ -34,6 +34,18 @@ const MIGRATIONS: Migration[] = [
       value TEXT
     );`);
   },
+  // v2: per-project UI metadata (favorite/archived/sort/color). Keyed by the
+  // stable projectId (sha1 of true cwd). Additive: a fresh DB gets it here, and
+  // an existing DB picks it up on the next startup. Idempotent via IF NOT EXISTS.
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS project_meta (
+      projectId TEXT PRIMARY KEY,
+      favorite INTEGER NOT NULL DEFAULT 0,
+      archived INTEGER NOT NULL DEFAULT 0,
+      sortOrder INTEGER NOT NULL DEFAULT 0,
+      color TEXT
+    );`);
+  },
 ];
 
 /**

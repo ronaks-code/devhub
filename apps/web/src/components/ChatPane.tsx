@@ -8,6 +8,7 @@ import type { NormalizedMessage } from "../lib/types";
 import { openChat, type ChatConn } from "../lib/ws";
 import { cn } from "../lib/utils";
 import { indexToolResults, pairMessage } from "../lib/transcript";
+import { useDraft } from "../hooks/useDraft";
 import { MessageView } from "./MessageView";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
@@ -29,13 +30,28 @@ interface ChatItem {
 
 export function ChatPane({
   cwd,
+  projectId,
   projectName,
   initialSessionId,
+  defaultModel,
+  defaultPermissionMode,
+  model: controlledModel,
+  onModelChange,
 }: {
   cwd: string;
+  /** Stable project id, used to scope the persisted composer draft. */
+  projectId: string;
   projectName: string;
   /** Seed to resume an existing CLI session (--resume) on the first prompt. */
   initialSessionId?: string;
+  /** Preferred model from settings; falls back to the built-in default. */
+  defaultModel?: string;
+  /** Preferred permission mode from settings; falls back to the built-in default. */
+  defaultPermissionMode?: PermissionMode;
+  /** Controlled model id (e.g. from a command palette). Uncontrolled if omitted. */
+  model?: string | null;
+  /** Notified when the model select changes; required for controlled mode. */
+  onModelChange?: (model: string) => void;
 }) {
   const [items, setItems] = useState<ChatItem[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>(initialSessionId);
@@ -43,9 +59,21 @@ export function ChatPane({
   const [status, setStatus] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<TurnResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
-  const [model, setModel] = useState<string>(DEFAULT_MODEL);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>(DEFAULT_PERMISSION);
+  // Composer text persisted per (projectId | sessionId) so an unsent message
+  // survives tab switches and reloads. Scopes by the live sessionId once a turn
+  // assigns one, falling back to the resume seed before the first prompt.
+  const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
+  // Model can be controlled by the parent (command palette) or local. When the
+  // parent passes a value we defer to it; otherwise we own it here.
+  const [localModel, setLocalModel] = useState<string>(defaultModel ?? DEFAULT_MODEL);
+  const model = controlledModel ?? localModel;
+  const setModel = (m: string) => {
+    setLocalModel(m);
+    onModelChange?.(m);
+  };
+  const [permissionMode, setPermissionMode] = useState<PermissionMode>(
+    defaultPermissionMode ?? DEFAULT_PERMISSION,
+  );
   // Key of the assistant bubble currently receiving deltas (null = none in flight).
   const [liveKey, setLiveKey] = useState<number | null>(null);
 
@@ -166,7 +194,7 @@ export function ChatPane({
 
     // A fresh prompt always snaps back to the bottom to follow the reply.
     stickToBottomRef.current = true;
-    setDraft("");
+    clearDraft();
     setErrorMsg(null);
     setLastResult(null);
     setStatus("starting");
@@ -183,7 +211,7 @@ export function ChatPane({
       model,
       permissionMode,
     });
-  }, [draft, running, push, ensureConn, cwd, sessionId, model, permissionMode]);
+  }, [draft, running, push, clearDraft, ensureConn, cwd, sessionId, model, permissionMode]);
 
   const stop = useCallback(() => {
     connRef.current?.send({ t: "interrupt" });

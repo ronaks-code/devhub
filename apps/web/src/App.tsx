@@ -1,20 +1,43 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Hexagon, MessagesSquare, Search } from "lucide-react";
-import { api, subscribeEvents } from "./lib/api";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Command as CommandIcon,
+  Cpu,
+  Folder,
+  Hexagon,
+  LayoutDashboard,
+  MessageSquarePlus,
+  MessagesSquare,
+  Moon,
+  Search,
+  Settings,
+  Sparkles,
+  Sun,
+} from "lucide-react";
+import { api, subscribeEvents, type AppSettings } from "./lib/api";
 import type { ProjectSummary, SessionMessagesPage, SessionSummary } from "./lib/types";
 import type { SearchHit } from "@claude-ui/engine/types";
+import type { PermissionMode } from "@claude-ui/engine/driver";
 import { ProjectsPane } from "./components/ProjectsPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { DashboardPane } from "./components/DashboardPane";
+import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
+import { CommandPalette, type Command } from "./components/CommandPalette";
 import { EmptyState, Spinner } from "./components/ui";
 import { cn } from "./lib/utils";
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
-type Tab = "browse" | "chat" | "dashboard";
+const CHAT_MODELS = [
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "claude-fable-5",
+] as const;
+
+type Tab = "browse" | "chat" | "dashboard" | "settings";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -49,12 +72,13 @@ function writeUiState(state: PersistedUiState): void {
   }
 }
 
-const VALID_TABS: readonly Tab[] = ["browse", "chat", "dashboard"];
+const VALID_TABS: readonly Tab[] = ["browse", "chat", "dashboard", "settings"];
 
 function TopBar({
   tab,
   onTab,
   onOpenSearch,
+  onOpenCommands,
   progress,
   sessionCount,
   projectCount,
@@ -62,6 +86,7 @@ function TopBar({
   tab: Tab;
   onTab: (t: Tab) => void;
   onOpenSearch: () => void;
+  onOpenCommands: () => void;
   progress: { done: number; total: number } | null;
   sessionCount: number;
   projectCount: number;
@@ -100,6 +125,15 @@ function TopBar({
         <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘K</kbd>
       </button>
 
+      <button
+        onClick={onOpenCommands}
+        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300"
+        title="Command palette (⌘⇧P)"
+      >
+        <CommandIcon className="h-3.5 w-3.5" />
+        <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
+      </button>
+
       <div className="ml-auto flex items-center gap-3 text-[11px] text-zinc-500">
         {progress ? (
           <span className="flex items-center gap-1.5 text-clay-300">
@@ -111,6 +145,19 @@ function TopBar({
         )}
         <span>·</span>
         <span>{projectCount} projects</span>
+        <button
+          onClick={() => onTab("settings")}
+          className={cn(
+            "rounded-md p-1 transition",
+            tab === "settings"
+              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+              : "text-zinc-500 hover:text-zinc-300",
+          )}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
       </div>
     </header>
   );
@@ -131,9 +178,19 @@ export default function App() {
     return t && VALID_TABS.includes(t) ? t : "browse";
   });
   const [searchOpen, setSearchOpen] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  // Server-backed app settings (default model/permission, theme, budget…).
+  // Loaded once on mount and updated when the Settings tab saves.
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   // Seeds ChatPane to resume an existing session (--resume) after a handoff
   // from the Browse transcript. Cleared once consumed.
   const [chatSeed, setChatSeed] = useState<{ sessionId: string; projectId: string } | null>(null);
+  // Bumping this remounts ChatPane to start a fresh conversation (command palette
+  // "New chat" / programmatic reset), since ChatPane keys off it.
+  const [chatNonce, setChatNonce] = useState(0);
+  // Chat model lifted to App so the command palette can switch it; ChatPane
+  // still owns permission mode locally. Falls back to settings then a default.
+  const [chatModel, setChatModel] = useState<string | null>(null);
   // Carries a session to auto-select after a search-driven project switch.
   const pendingSessionRef = useRef<string | null>(null);
 
@@ -160,6 +217,7 @@ export default function App() {
   useEffect(() => {
     void refreshProjects();
     api.health().then((h) => setSessionCount(h.sessionCount)).catch(() => {});
+    api.getSettings().then(setSettings).catch(() => {});
   }, [refreshProjects]);
 
   // sessions follow the selected project
@@ -210,17 +268,53 @@ export default function App() {
     });
   }, [refreshProjects, refreshSessions, projectId]);
 
-  // Global Cmd/Ctrl+K opens the search palette.
+  // Global hotkeys: ⌘K toggles search, ⌘⇧P toggles the command palette.
+  // Opening one closes the other so they never stack.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.shiftKey && (e.key === "p" || e.key === "P")) {
         e.preventDefault();
+        setSearchOpen(false);
+        setCommandOpen((v) => !v);
+      } else if (mod && !e.shiftKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCommandOpen(false);
         setSearchOpen((v) => !v);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Reflect the chosen theme onto the document root. Theming is "store only for
+  // now" — we just toggle the `dark` class so the setting has a visible effect
+  // and the rest can build on it later. "system" follows the OS preference.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const theme = settings?.theme ?? "system";
+    const prefersDark =
+      typeof window !== "undefined" && window.matchMedia
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : true;
+    const isDark = theme === "dark" || (theme === "system" && prefersDark);
+    document.documentElement.classList.toggle("dark", isDark);
+  }, [settings?.theme]);
+
+  // Persist a settings patch to the server and update local state on success.
+  const saveSettings = useCallback((patch: Partial<AppSettings>) => {
+    api
+      .putSettings(patch)
+      .then(setSettings)
+      .catch(() => {});
+  }, []);
+
+  const cycleTheme = useCallback(() => {
+    const order: AppSettings["theme"][] = ["dark", "light", "system"];
+    const current = settings?.theme ?? "system";
+    const next = order[(order.indexOf(current) + 1) % order.length];
+    saveSettings({ theme: next });
+  }, [settings?.theme, saveSettings]);
 
   const onSelectSession = (id: string) => {
     setTailBytes(undefined);
@@ -270,6 +364,111 @@ export default function App() {
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
 
+  // Effective chat model: explicit palette choice → settings default → built-in.
+  const effectiveModel = chatModel ?? settings?.defaultModel ?? CHAT_MODELS[0];
+
+  const startNewChat = useCallback(() => {
+    setChatSeed(null);
+    setChatNonce((n) => n + 1);
+    setTab("chat");
+  }, []);
+
+  // Build the command palette actions from current app state. Memoized so the
+  // list is stable between renders unless its inputs change.
+  const commands = useMemo<Command[]>(() => {
+    const list: Command[] = [
+      {
+        id: "tab-browse",
+        title: "Go to Browse",
+        group: "Navigate",
+        icon: <Folder className="h-3.5 w-3.5" />,
+        run: () => setTab("browse"),
+      },
+      {
+        id: "tab-chat",
+        title: "Go to Chat",
+        group: "Navigate",
+        icon: <Sparkles className="h-3.5 w-3.5" />,
+        run: () => setTab("chat"),
+      },
+      {
+        id: "tab-dashboard",
+        title: "Go to Dashboard",
+        group: "Navigate",
+        icon: <LayoutDashboard className="h-3.5 w-3.5" />,
+        run: () => setTab("dashboard"),
+      },
+      {
+        id: "open-settings",
+        title: "Open Settings",
+        group: "Navigate",
+        icon: <Settings className="h-3.5 w-3.5" />,
+        run: () => setTab("settings"),
+      },
+      {
+        id: "new-chat",
+        title: "New chat",
+        group: "Chat",
+        icon: <MessageSquarePlus className="h-3.5 w-3.5" />,
+        run: startNewChat,
+      },
+      {
+        id: "focus-search",
+        title: "Search sessions",
+        group: "Find",
+        hint: "⌘K",
+        keywords: "find filter",
+        icon: <Search className="h-3.5 w-3.5" />,
+        run: () => setSearchOpen(true),
+      },
+      {
+        id: "toggle-theme",
+        title: `Toggle theme (now: ${settings?.theme ?? "system"})`,
+        group: "Theme",
+        keywords: "dark light system appearance",
+        icon:
+          (settings?.theme ?? "system") === "light" ? (
+            <Sun className="h-3.5 w-3.5" />
+          ) : (
+            <Moon className="h-3.5 w-3.5" />
+          ),
+        run: cycleTheme,
+      },
+    ];
+
+    for (const m of CHAT_MODELS) {
+      list.push({
+        id: `model-${m}`,
+        title: `Use model ${m}`,
+        group: "Model",
+        hint: effectiveModel === m ? "current" : undefined,
+        keywords: "change model llm",
+        icon: <Cpu className="h-3.5 w-3.5" />,
+        run: () => {
+          setChatModel(m);
+          setTab("chat");
+        },
+      });
+    }
+
+    for (const p of projects) {
+      list.push({
+        id: `project-${p.id}`,
+        title: `Jump to ${p.name}`,
+        group: "Project",
+        keywords: p.cwd,
+        icon: <Folder className="h-3.5 w-3.5" />,
+        run: () => {
+          setChatSeed(null);
+          setProjectId(p.id);
+          setTab("browse");
+        },
+      });
+    }
+
+    return list;
+  }, [projects, settings?.theme, effectiveModel, cycleTheme, startNewChat]);
+
   return (
     <div className="flex h-full flex-col">
       <TopBar
@@ -280,12 +479,15 @@ export default function App() {
           setTab(t);
         }}
         onOpenSearch={() => setSearchOpen(true)}
+        onOpenCommands={() => setCommandOpen(true)}
         progress={progress}
         sessionCount={sessionCount}
         projectCount={projects.length}
       />
       <div className="flex min-h-0 flex-1">
-        {tab === "dashboard" ? (
+        {tab === "settings" ? (
+          <SettingsPane onSettingsSaved={setSettings} />
+        ) : tab === "dashboard" ? (
           <DashboardPane />
         ) : tab === "browse" ? (
           <>
@@ -310,10 +512,21 @@ export default function App() {
             <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
             {project ? (
               <ChatPane
-                key={activeSeed ? `${project.id}:${activeSeed.sessionId}` : project.id}
+                key={
+                  activeSeed
+                    ? `${project.id}:${activeSeed.sessionId}`
+                    : `${project.id}:${chatNonce}`
+                }
                 cwd={project.cwd}
+                projectId={project.id}
                 projectName={project.name}
                 initialSessionId={activeSeed?.sessionId}
+                defaultModel={settings?.defaultModel}
+                defaultPermissionMode={
+                  settings?.defaultPermissionMode as PermissionMode | undefined
+                }
+                model={chatModel}
+                onModelChange={setChatModel}
               />
             ) : (
               <div className="flex-1 bg-zinc-950">

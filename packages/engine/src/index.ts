@@ -10,11 +10,14 @@ import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
 import { liveSessionsDir } from "./paths.js";
 import { readSessionMessages, listSubagentFiles, normalizeLine, streamRawLines } from "./parser.js";
+import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
+import type { ProjectMetaPatch } from "./project-meta.js";
 import type {
   AppSettings,
   EngineEvent,
   NormalizedMessage,
+  ProjectMeta,
   ProjectSummary,
   RunningSession,
   SearchHit,
@@ -116,12 +119,27 @@ export class Engine {
     }
   }
 
-  getProjects(): ProjectSummary[] {
-    return this.index.getProjects();
+  getProjects(opts: { includeArchived?: boolean } = {}): ProjectSummary[] {
+    return this.index.getProjects(opts);
   }
 
   getProjectSessions(projectId: string): SessionSummary[] {
     return this.index.getSessionsForProject(projectId);
+  }
+
+  /** Per-project UI metadata (favorite/archived/sortOrder/color), defaults when unset. */
+  getProjectMeta(projectId: string): ProjectMeta {
+    return this.index.getProjectMeta(projectId);
+  }
+
+  /** Merge a partial per-project UI-metadata update; returns the new value. */
+  setProjectMeta(projectId: string, patch: ProjectMetaPatch): ProjectMeta {
+    return this.index.setProjectMeta(projectId, patch);
+  }
+
+  /** Read-only git introspection for a project working directory. */
+  git(cwd: string): GitService {
+    return new GitService(cwd);
   }
 
   getSession(sessionId: string): SessionSummary | undefined {
@@ -315,6 +333,13 @@ export type { SourceKind } from "./discovery.js";
 export { archiveSession, hasArchive, readArchived, archiveDir, archivePath } from "./archive.js";
 export { costUsd, pricingForModel, MODEL_PRICING, FALLBACK_PRICING } from "./pricing.js";
 export type { ModelPricing } from "./pricing.js";
+export { GitService, parseStatus } from "./git.js";
+export type { GitStatus, GitBranch, GitLogEntry, GitDiff } from "./git.js";
+export { ProjectMetaStore } from "./project-meta.js";
+export type { ProjectMetaPatch } from "./project-meta.js";
+export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
+export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
+export * as config from "./config/index.js";
 export * as paths from "./paths.js";
 export * from "./types.js";
 export type * from "./driver/types.js";

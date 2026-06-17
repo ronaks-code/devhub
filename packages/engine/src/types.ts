@@ -98,7 +98,36 @@ export interface ProjectSummary {
   totalUsage: TokenUsage;
   /** ~/.claude/projects folders that map to this cwd (>1 ⇒ rename/collision recovered). */
   encodedFolders: string[];
+  /** User-pinned project (sorts to the top). */
+  favorite: boolean;
+  /** Hidden from the default project list unless explicitly included. */
+  archived: boolean;
+  /** Manual ordering hint within a favorite/non-favorite group (lower first). */
+  sortOrder: number;
+  /** Optional UI accent color (free-form, e.g. a hex string), or null. */
+  color: string | null;
 }
+
+/**
+ * Per-project UI metadata we own (the user's pins/archive/order/color). Keyed by
+ * the stable projectId; never derived from the transcript. All fields have sane
+ * defaults so a project with no row behaves like an unpinned, unarchived one.
+ */
+export interface ProjectMeta {
+  projectId: string;
+  favorite: boolean;
+  archived: boolean;
+  sortOrder: number;
+  color: string | null;
+}
+
+/** Baseline project metadata for a project that has no stored row yet. */
+export const DEFAULT_PROJECT_META: Omit<ProjectMeta, "projectId"> = {
+  favorite: false,
+  archived: false,
+  sortOrder: 0,
+  color: null,
+};
 
 export interface RunningSession {
   pid: number;

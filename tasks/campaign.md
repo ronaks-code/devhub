@@ -12,7 +12,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 ## Wave progress
 - [x] W1 Foundations: settings store, schema/migrations, PRAGMAs, error-safety, localStorage, rAF deltas ✅
 - [x] W2 Enablers: persistent driver scaffold, durable archive, multi-source, pricing, permission WS frames, /settings ✅
-- [ ] W3 Settings UI, GitService, config module, LCS diff, draft persistence
+- [x] W3 Settings UI, GitService, config module, LCS diff, draft persistence ✅
 - [ ] W4 Inline permissions, faceted search, git panel, projects keyboard nav
 - [ ] W5 Search ranking, MCP manager, permission rules, transcript outline
 - [ ] W6 Approve-and-remember, commit composer, role filters, light theme
@@ -37,5 +37,6 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W3** ✅ (green: tc×4 + 34 tests + build + runtime smoke: settings/projects/chat). engine: `git.ts` GitService (status/diff/branch/log), `config/` Claude-config read/write module, `project-meta.ts` favorites/archive/sort, driver `buffer.ts` line-cap. web: LCS line-diff, `SettingsPane` + Settings tab, `useDraft` composer persistence, `CommandPalette` (⌘⇧P). NOTE: both agents died on a transient API socket drop after writing all files; work was complete + verified, so kept it (recovery: assess→gate→commit).
 - **W2** ✅ (4 lanes, green: tc×4 + 34 tests + build + live-chat-stream smoke) — engine-driver: permission-request/response WS frames + `PersistentSession` stream-json scaffold (runTurn unchanged). engine-data: `archive.ts` durable gzip archive + deleted-session fallback in getSessionMessages + watcher unlink; `pricing.ts` model→USD + costUsd(); `detectSourceKind()` multi-source. server: `/api/settings` GET/PUT. web: `formatUsd()`; ChatPane virtualized.
 - **W1** ✅ (3 lanes, green: tc×4 + 27 tests + build) — engine: `settings.ts` SettingsStore + `migrations.ts` (PRAGMA user_version) + sqlite PRAGMAs + indexAll per-file try/catch + AppSettings type. server: Fastify route schemas + WS ClientMsg guard. web: localStorage UI-state restore + rAF delta coalescing. New engine API: `engine.getSettings()/setSettings()`.

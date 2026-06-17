@@ -16,6 +16,8 @@ import { DEFAULT_SETTINGS } from "../src/types.js";
 import { archiveSession, hasArchive, readArchived } from "../src/archive.js";
 import { costUsd, pricingForModel, MODEL_PRICING } from "../src/pricing.js";
 import { detectSourceKind } from "../src/discovery.js";
+import { parseStatus } from "../src/git.js";
+import { createLineSplitter } from "../src/driver/buffer.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-test-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";

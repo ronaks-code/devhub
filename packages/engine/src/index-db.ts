@@ -19,7 +19,10 @@ import { streamRawLines, usageFromMessage, isCommandOrMetaPrompt } from "./parse
 import { runMigrations } from "./migrations.js";
 import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
+import { ProjectMetaStore } from "./project-meta.js";
+import type { ProjectMetaPatch } from "./project-meta.js";
 import type {
+  ProjectMeta,
   ProjectSummary,
   SearchHit,
   SessionSummary,
@@ -344,6 +347,8 @@ export class TranscriptIndex {
   private selectOne: StatementSync;
   /** User preferences, sharing this index's DB connection. */
   readonly settings: SettingsStore;
+  /** Per-project UI metadata (favorite/archived/order/color), sharing this DB. */
+  readonly projectMeta: ProjectMetaStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
 
@@ -365,6 +370,7 @@ export class TranscriptIndex {
     // on migrated columns/tables.
     runMigrations(this.db);
     this.settings = new SettingsStore(this.db);
+    this.projectMeta = new ProjectMetaStore(this.db);
     this.searchMode = this.initSearchStore();
     this.upsert = this.db.prepare(`
       INSERT INTO sessions (
@@ -631,7 +637,13 @@ export class TranscriptIndex {
       .all() as unknown as Row[];
   }
 
-  getProjects(): ProjectSummary[] {
+  /**
+   * Projects grouped by true cwd, decorated with the user's per-project metadata
+   * (favorite/archived/sortOrder/color). Ordering: favorites first, then by
+   * sortOrder ascending (manual hint), then most-recent activity. Archived projects
+   * are HIDDEN unless `opts.includeArchived` is set.
+   */
+  getProjects(opts: { includeArchived?: boolean } = {}): ProjectSummary[] {
     const byId = new Map<string, { rows: Row[]; folders: Set<string> }>();
     for (const row of this.allRows()) {
       if (!row.projectId || !row.cwd) continue;
@@ -643,6 +655,7 @@ export class TranscriptIndex {
       g.rows.push(row);
       g.folders.add(path.basename(path.dirname(row.filePath)));
     }
+    const meta = this.projectMeta.getAll();
     const projects: ProjectSummary[] = [];
     for (const [id, g] of byId) {
       const cwd = g.rows[0]!.cwd!;
@@ -655,6 +668,8 @@ export class TranscriptIndex {
         usage.cacheCreationTokens += r.cacheCreationTokens;
         if (r.lastTs && (!last || r.lastTs > last)) last = r.lastTs;
       }
+      const m = meta.get(id);
+      if (m?.archived && !opts.includeArchived) continue; // hidden by default
       projects.push({
         id,
         cwd,
@@ -663,10 +678,33 @@ export class TranscriptIndex {
         lastActivity: last,
         totalUsage: usage,
         encodedFolders: [...g.folders],
+        favorite: m?.favorite ?? false,
+        archived: m?.archived ?? false,
+        sortOrder: m?.sortOrder ?? 0,
+        color: m?.color ?? null,
       });
     }
-    projects.sort((a, b) => (b.lastActivity ?? "").localeCompare(a.lastActivity ?? ""));
+    projects.sort((a, b) => {
+      // Favorites float to the top.
+      if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+      // Then the manual sortOrder hint (lower first).
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      // Then most-recent activity.
+      return (b.lastActivity ?? "").localeCompare(a.lastActivity ?? "");
+    });
     return projects;
+  }
+
+  // -- Per-project UI metadata (favorite/archived/order/color) ---------------
+
+  /** Read one project's UI metadata (defaults when never customized). */
+  getProjectMeta(projectId: string): ProjectMeta {
+    return this.projectMeta.get(projectId);
+  }
+
+  /** Merge a partial UI-metadata update for one project; returns the new value. */
+  setProjectMeta(projectId: string, patch: ProjectMetaPatch): ProjectMeta {
+    return this.projectMeta.set(projectId, patch);
   }
 
   getSessionCount(): number {
