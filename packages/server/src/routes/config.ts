@@ -41,6 +41,11 @@ function claudeJsonPath(): string {
   return path.join(os.homedir(), ".claude.json");
 }
 
+/** `~/.claude/plugins` — the dir holding installed_plugins.json + known_marketplaces.json. */
+function pluginsDir(): string {
+  return path.join(paths.claudeConfigDir(), "plugins");
+}
+
 /**
  * The settings.json a hooks write targets:
  *   - global  → `~/.claude/settings.json`        (the USER settings file)
@@ -154,6 +159,121 @@ async function removeMcpServer(name: string, projectCwd?: string): Promise<boole
   await backup(file);
   await atomicWrite(file, JSON.stringify(cfg, null, 2) + "\n");
   return true;
+}
+
+// ---- Plugins (read-only listing) -------------------------------------------
+//
+// Claude Code records installed plugins + their marketplaces under `~/.claude/plugins`
+// (NOT in settings.json), so the engine's settings-oriented `config` module has no
+// view of them. This narrow, read-only reader surfaces that state for a plugins UI.
+// It tolerates a missing/half-written file (returns empty) and never throws — the
+// pane should render "no plugins" rather than 500 on a fresh machine.
+
+/** A marketplace a plugin can be installed from (`known_marketplaces.json` entry). */
+interface MarketplaceInfo {
+  /** Marketplace id (the JSON key, e.g. "claude-plugins-official"). */
+  name: string;
+  /** Where the marketplace was cloned to locally; null when absent. */
+  installLocation: string | null;
+  /** The source descriptor as written (e.g. `{ source:"github", repo:"owner/name" }`). */
+  source: Record<string, unknown> | null;
+  /** Last refresh time (epoch ms) parsed from `lastUpdated`; null when unparseable. */
+  lastUpdated: number | null;
+}
+
+/** One installed plugin instance (an entry in `installed_plugins.json`'s arrays). */
+interface InstalledPlugin {
+  /** Full plugin id including marketplace, e.g. "frontend-design@claude-plugins-official". */
+  id: string;
+  /** Plugin name (the part before "@"). */
+  name: string;
+  /** Marketplace id (the part after "@"); null when the id has no "@". */
+  marketplace: string | null;
+  /** Install scope as recorded (e.g. "user" | "project"); null when absent. */
+  scope: string | null;
+  /** Where the plugin was installed on disk; null when absent. */
+  installPath: string | null;
+  /** Reported version (often "unknown"); null when absent. */
+  version: string | null;
+  /** Install time (epoch ms) parsed from `installedAt`; null when unparseable. */
+  installedAt: number | null;
+  /** Last-update time (epoch ms) parsed from `lastUpdated`; null when unparseable. */
+  lastUpdated: number | null;
+}
+
+/** The /api/config/plugins payload: installed plugins + the marketplaces they came from. */
+interface PluginsListing {
+  plugins: InstalledPlugin[];
+  marketplaces: MarketplaceInfo[];
+}
+
+/** Parse an ISO date string to epoch ms; null when missing/unparseable. */
+function parseEpoch(v: unknown): number | null {
+  if (typeof v !== "string") return null;
+  const t = Date.parse(v);
+  return Number.isNaN(t) ? null : t;
+}
+
+/** Read a string field from an object, or null when absent/non-string. */
+function strOrNull(o: Record<string, unknown>, key: string): string | null {
+  const v = o[key];
+  return typeof v === "string" ? v : null;
+}
+
+/**
+ * Read + normalize `~/.claude/plugins`'s installed plugins and known marketplaces.
+ * Read-only and tolerant: a missing or corrupt file yields an empty array for that
+ * half, so a fresh machine returns `{ plugins: [], marketplaces: [] }` rather than
+ * erroring. `installed_plugins.json` maps an id → array of install instances (one
+ * per scope); we flatten that to a flat list, carrying the id onto each instance.
+ */
+async function listPlugins(): Promise<PluginsListing> {
+  const dir = pluginsDir();
+  const installed = await readJsonObject(path.join(dir, "installed_plugins.json"));
+  const marketplaces = await readJsonObject(path.join(dir, "known_marketplaces.json"));
+
+  const plugins: InstalledPlugin[] = [];
+  const pluginsMap = installed.plugins;
+  if (pluginsMap && typeof pluginsMap === "object" && !Array.isArray(pluginsMap)) {
+    for (const [id, instances] of Object.entries(pluginsMap as Record<string, unknown>)) {
+      if (!Array.isArray(instances)) continue;
+      const at = id.lastIndexOf("@");
+      const name = at > 0 ? id.slice(0, at) : id;
+      const marketplace = at > 0 ? id.slice(at + 1) : null;
+      for (const inst of instances) {
+        if (!inst || typeof inst !== "object" || Array.isArray(inst)) continue;
+        const e = inst as Record<string, unknown>;
+        plugins.push({
+          id,
+          name,
+          marketplace,
+          scope: strOrNull(e, "scope"),
+          installPath: strOrNull(e, "installPath"),
+          version: strOrNull(e, "version"),
+          installedAt: parseEpoch(e.installedAt),
+          lastUpdated: parseEpoch(e.lastUpdated),
+        });
+      }
+    }
+  }
+
+  const markets: MarketplaceInfo[] = [];
+  for (const [name, raw] of Object.entries(marketplaces)) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const m = raw as Record<string, unknown>;
+    const source = m.source;
+    markets.push({
+      name,
+      installLocation: strOrNull(m, "installLocation"),
+      source:
+        source && typeof source === "object" && !Array.isArray(source)
+          ? (source as Record<string, unknown>)
+          : null,
+      lastUpdated: parseEpoch(m.lastUpdated),
+    });
+  }
+
+  return { plugins, marketplaces: markets };
 }
 
 // ---- Backups (list + restore) ----------------------------------------------
@@ -439,6 +559,10 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
       return { ok: true, scope: req.body.scope, file, hooks };
     },
   );
+
+  // Installed plugins + their marketplaces (read-only; from `~/.claude/plugins`,
+  // not settings.json — hence not part of the engine's settings-oriented config).
+  app.get("/api/config/plugins", async () => listPlugins());
 
   // ---- CLAUDE.md (read + safe write) ---------------------------------------
 

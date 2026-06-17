@@ -11,6 +11,8 @@ import { useDraft } from "../hooks/useDraft";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useApprovalKeyboard } from "../hooks/useApprovalKeyboard";
 import { MessageView } from "./MessageView";
+import { CwdProvider } from "./OpenInEditor";
+import { StoppedBadge, isStoppedSubtype, stoppedReason } from "./StoppedBadge";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { SlashPalette, filterCommands } from "./SlashPalette";
 import { MentionPicker, detectMention } from "./MentionPicker";
@@ -94,6 +96,10 @@ export function ChatPane({
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<TurnResult | null>(null);
+  // True once the user hit Stop on the in-flight turn, until the next turn
+  // starts. Drives the "stopped" badge in the result footer even when the server
+  // reports the interrupted turn with a clean (non-error) result subtype.
+  const [interrupted, setInterrupted] = useState(false);
   // Wall-clock duration of the just-finished turn (ms), measured from the prompt
   // send to the result frame. Feeds the per-turn TurnFooter (the engine's
   // TurnResult carries no duration). Null until a turn completes with a result.
@@ -480,6 +486,7 @@ export function ChatPane({
       setErrorDismissed(false);
       setLastResult(null);
       setLastDurationMs(null);
+      setInterrupted(false);
       turnStartRef.current = Date.now();
       clearApprovalsRef.current();
       setPendingPermission(null);
@@ -567,6 +574,7 @@ export function ChatPane({
 
   const stop = useCallback(() => {
     connRef.current?.send({ t: "interrupt" });
+    setInterrupted(true);
   }, []);
 
   // Persist the current model + permission as THIS project's defaults. Shows a
@@ -596,6 +604,7 @@ export function ChatPane({
     setStatus(null);
     setLastResult(null);
     setLastDurationMs(null);
+    setInterrupted(false);
     turnStartRef.current = null;
     setErrorMsg(null);
     clearApprovalsRef.current();
@@ -886,6 +895,7 @@ export function ChatPane({
   }, [stick.followToIndex]);
 
   return (
+    <CwdProvider value={cwd}>
     <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800/80 px-5 py-2.5">
@@ -1122,12 +1132,25 @@ export function ChatPane({
                 model={model}
                 durationMs={lastDurationMs ?? undefined}
               />
+              {/* Mark a turn that was stopped early — the user hit Stop, or the
+                  result ended in an error/aborted subtype — so a half-finished
+                  turn reads distinctly from a clean completion. */}
+              {(interrupted || isStoppedSubtype(lastResult.subtype)) && (
+                <StoppedBadge
+                  reason={interrupted ? "Stopped: interrupted by you" : stoppedReason(lastResult.subtype)}
+                />
+              )}
               {lastResult.denials.length > 0 && (
                 <span className="text-amber-400">
                   {lastResult.denials.length} denial{lastResult.denials.length === 1 ? "" : "s"}
                 </span>
               )}
             </>
+          )}
+          {/* Interrupted but no result frame arrived (server didn't emit one for
+              the aborted turn) — still surface the stopped state. */}
+          {!running && !lastResult && interrupted && (
+            <StoppedBadge reason="Stopped: interrupted by you" />
           )}
           {/* The error itself renders in the TurnError card above; the footer just
               keeps the per-turn summary and the Regenerate affordance. */}
@@ -1319,6 +1342,7 @@ export function ChatPane({
         onInsert={insertSnippet}
       />
     </div>
+    </CwdProvider>
   );
 }
 

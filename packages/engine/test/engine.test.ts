@@ -56,6 +56,11 @@ import type { TurnHandlers, TurnResult } from "../src/driver/types.js";
 import type { GitLogEntry } from "../src/git.js";
 import { startConfigWatcher, configWatchPaths } from "../src/config/watcher.js";
 import type { EngineEvent } from "../src/types.js";
+import { parseRateLimit, parseResetAt, classifySubtype, classifyText } from "../src/rate-limit.js";
+import { gracefulInterrupt } from "../src/driver/interrupt.js";
+import type { InterruptibleProcess } from "../src/driver/interrupt.js";
+import { scanSubagents, SUBAGENT_ROLE } from "../src/subagents.js";
+import { listPlugins } from "../src/config/index.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -5317,5 +5322,494 @@ describe("config.searchConfig (config command palette)", () => {
       // the user can jump to either definition.
       expect(helperScopes).toEqual(["global", "project"]);
     });
+  });
+});
+
+describe("parseRateLimit (rate-limit / budget / overload detection)", () => {
+  // A minimal TurnResult builder; only the fields parseRateLimit reads matter.
+  const result = (over: Partial<TurnResult>): TurnResult => ({
+    sessionId: "s",
+    subtype: "success",
+    isError: false,
+    costUsd: 0,
+    denials: [],
+    ...over,
+  });
+  const FIXED_NOW = Date.parse("2026-06-16T12:00:00.000Z");
+
+  it("a clean success result is not limited", () => {
+    expect(parseRateLimit(result({ subtype: "success", isError: false }))).toEqual({ limited: false });
+  });
+
+  it("classifies the error_max_budget_usd subtype as a max_budget limit", () => {
+    const info = parseRateLimit(result({ subtype: "error_max_budget_usd", isError: true }));
+    expect(info.limited).toBe(true);
+    expect(info.reason).toBe("max_budget");
+    expect(info.signal).toBe("error_max_budget_usd");
+  });
+
+  it("classifies any *max_budget* subtype variant defensively", () => {
+    expect(parseRateLimit(result({ subtype: "error_max_budget", isError: true })).reason).toBe("max_budget");
+    expect(classifySubtype("error_something_max_budget_else")).toBe("max_budget");
+    // A non-budget terminal subtype is not a rate limit.
+    expect(parseRateLimit(result({ subtype: "error_max_turns", isError: true })).limited).toBe(false);
+  });
+
+  it("detects a 429 rate-limit error from the result text", () => {
+    const info = parseRateLimit(
+      result({ subtype: "error", isError: true, resultText: "API error 429: rate_limit_exceeded" }),
+    );
+    expect(info.limited).toBe(true);
+    expect(info.reason).toBe("rate_limit");
+  });
+
+  it("detects an overloaded (529) error and prefers it over a stray 'limit' word", () => {
+    const info = parseRateLimit(result({ isError: true, resultText: "overloaded_error: server is busy (529)" }));
+    expect(info.reason).toBe("overloaded");
+  });
+
+  it("accepts a raw error string directly", () => {
+    expect(parseRateLimit("Too many requests, please slow down").reason).toBe("rate_limit");
+    expect(parseRateLimit("totally fine, all good")).toEqual({ limited: false });
+    expect(parseRateLimit(null)).toEqual({ limited: false });
+    expect(parseRateLimit(undefined)).toEqual({ limited: false });
+  });
+
+  it("classifyText returns null for innocuous text and a reason for signals", () => {
+    expect(classifyText("compiled successfully")).toBeNull();
+    expect(classifyText("you have exceeded your budget")).toBe("max_budget");
+    expect(classifyText("rate limit reached")).toBe("rate_limit");
+  });
+
+  it("parseResetAt: retry-after seconds -> now + delay", () => {
+    expect(parseResetAt("retry-after: 30", FIXED_NOW)).toBe(FIXED_NOW + 30_000);
+    expect(parseResetAt("Please retry after 5 seconds", FIXED_NOW)).toBe(FIXED_NOW + 5_000);
+  });
+
+  it("parseResetAt: an ISO instant is parsed as an absolute reset time", () => {
+    const iso = "anthropic-ratelimit-requests-reset: 2026-06-16T20:00:00Z";
+    expect(parseResetAt(iso, FIXED_NOW)).toBe(Date.parse("2026-06-16T20:00:00Z"));
+  });
+
+  it("parseResetAt: a large retry-after is treated as an absolute unix-seconds deadline", () => {
+    const deadline = Math.floor(Date.parse("2026-06-16T20:00:00Z") / 1000);
+    expect(parseResetAt(`retry-after: ${deadline}`, FIXED_NOW)).toBe(deadline * 1000);
+  });
+
+  it("parseResetAt: no time present -> undefined", () => {
+    expect(parseResetAt("rate_limit_exceeded", FIXED_NOW)).toBeUndefined();
+    expect(parseResetAt(null)).toBeUndefined();
+  });
+
+  it("carries a parsed resetAt onto a limited result", () => {
+    const info = parseRateLimit(
+      result({ isError: true, resultText: "rate_limit_exceeded; retry-after: 12" }),
+      FIXED_NOW,
+    );
+    expect(info.limited).toBe(true);
+    expect(info.reason).toBe("rate_limit");
+    expect(info.resetAt).toBe(FIXED_NOW + 12_000);
+  });
+
+  it("Engine.parseRateLimit delegates to the same logic", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    expect(engine.parseRateLimit("overloaded_error").reason).toBe("overloaded");
+    expect(engine.parseRateLimit("nothing here")).toEqual({ limited: false });
+    engine.close();
+  });
+});
+
+describe("gracefulInterrupt (SIGINT -> SIGTERM -> SIGKILL escalation)", () => {
+  // A fake child that records sent signals and lets the test drive the escalation
+  // timers synchronously (so no real waiting). exitAfter lets the process "exit"
+  // after a chosen number of signals, which must cancel any further escalation.
+  const makeChild = (exitAfter = Infinity) => {
+    const signals: string[] = [];
+    const pending: Array<{ fn: () => void; ms: number }> = [];
+    let exitListener: (() => void) | null = null;
+    const child: InterruptibleProcess = {
+      pid: 1234,
+      killed: false,
+      kill(sig?: NodeJS.Signals | number) {
+        signals.push(String(sig));
+        if (signals.length >= exitAfter) {
+          (child as { killed?: boolean }).killed = true;
+          exitListener?.(); // process exits -> fires the once("exit") handler
+        }
+        return true;
+      },
+      once(event: string, listener: (...a: unknown[]) => void) {
+        if (event === "exit") exitListener = listener as () => void;
+        return child;
+      },
+    };
+    // Synchronous, manually-pumped timers.
+    const setTimeoutFn = (fn: () => void, ms: number) => {
+      const handle = { fn, ms };
+      pending.push(handle);
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    };
+    const clearTimeoutFn = (h: ReturnType<typeof setTimeout>) => {
+      const i = pending.indexOf(h as unknown as { fn: () => void; ms: number });
+      if (i >= 0) pending.splice(i, 1);
+    };
+    /** Fire every currently-pending timer once (FIFO), as if their delays elapsed. */
+    const pump = () => {
+      const batch = pending.splice(0, pending.length);
+      for (const t of batch) t.fn();
+    };
+    return { child, signals, pump, setTimeoutFn, clearTimeoutFn };
+  };
+
+  it("sends SIGINT immediately, then SIGTERM, then SIGKILL when the process never dies", () => {
+    const { child, signals, pump, setTimeoutFn, clearTimeoutFn } = makeChild();
+    gracefulInterrupt(child, { setTimeoutFn, clearTimeoutFn });
+    expect(signals).toEqual(["SIGINT"]); // step 1 right away
+    pump(); // grace elapses -> SIGTERM (schedules the SIGKILL timer)
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+    pump(); // kill window elapses -> SIGKILL
+    expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+  });
+
+  it("stops escalating once the process exits on SIGINT", () => {
+    const { child, signals, pump, setTimeoutFn, clearTimeoutFn } = makeChild(1); // dies on first signal
+    gracefulInterrupt(child, { setTimeoutFn, clearTimeoutFn });
+    expect(signals).toEqual(["SIGINT"]);
+    pump(); // escalation timers were cancelled on exit -> nothing more fires
+    expect(signals).toEqual(["SIGINT"]);
+  });
+
+  it("escalates to SIGTERM but not SIGKILL when the process dies on SIGTERM", () => {
+    const { child, signals, pump, setTimeoutFn, clearTimeoutFn } = makeChild(2); // dies on 2nd signal
+    gracefulInterrupt(child, { setTimeoutFn, clearTimeoutFn });
+    pump(); // SIGTERM -> process exits -> SIGKILL timer cancelled
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+    pump();
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+  });
+
+  it("cancel() clears pending escalation", () => {
+    const { child, signals, pump, setTimeoutFn, clearTimeoutFn } = makeChild();
+    const cancel = gracefulInterrupt(child, { setTimeoutFn, clearTimeoutFn });
+    cancel();
+    pump();
+    expect(signals).toEqual(["SIGINT"]); // only the immediate one was sent
+  });
+});
+
+describe("subagent indexing + search", () => {
+  // Build a session with a subagents/ dir holding two agent transcripts. The main
+  // transcript and each subagent mention distinct words so we can prove search reaches
+  // subagent content and tags it with the agent id.
+  const buildWithSubagents = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/subby";
+    const main = path.join(proj, "sessS.jsonl");
+    writeFileSync(
+      main,
+      jl({ type: "user", cwd, message: { role: "user", content: "orchestrate the migration" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Delegating to subagents now." }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    // Subagent files live under <dir>/<sessionId>/subagents/.
+    const subDir = path.join(proj, "sessS", "subagents");
+    mkdirSync(subDir, { recursive: true });
+    writeFileSync(
+      path.join(subDir, "agent-explorer.jsonl"),
+      jl({ type: "user", message: { role: "user", content: "explore the codebase thoroughly" } }) +
+        jl({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Found a quokka helper in the search module." },
+              { type: "tool_use", id: "t1", name: "Grep", input: { pattern: "quokka" } },
+            ],
+          },
+        }),
+    );
+    writeFileSync(
+      path.join(subDir, "agent-builder.jsonl"),
+      jl({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Implemented the platypus renderer." }],
+        },
+      }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(main);
+    return { idx, main };
+  };
+
+  it("scanSubagents harvests rows from every agent file, tagged with the agent id", async () => {
+    const dir = tmp();
+    await buildWithSubagents(dir); // writes the files
+    const main = path.join(dir, "-proj", "sessS.jsonl");
+    const rows = await scanSubagents(main);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.role === SUBAGENT_ROLE)).toBe(true);
+    const agents = new Set(rows.map((r) => r.toolName));
+    expect(agents).toEqual(new Set(["agent-explorer", "agent-builder"]));
+    // The Grep tool_use line from the explorer is mirrored too.
+    expect(rows.some((r) => r.text.includes("quokka"))).toBe(true);
+  });
+
+  it("search finds subagent text and surfaces the agentId + role=subagent", async () => {
+    const { idx } = await buildWithSubagents(tmp());
+    // A word that ONLY appears inside a subagent transcript still matches the session.
+    const hits = idx.search("platypus");
+    expect(hits.map((h) => h.sessionId)).toContain("sessS");
+    const hit = hits.find((h) => h.sessionId === "sessS")!;
+    expect(hit.role).toBe(SUBAGENT_ROLE);
+    expect(hit.agentId).toBe("agent-builder");
+    idx.close();
+  });
+
+  it("attributes a match to the correct subagent", async () => {
+    const { idx } = await buildWithSubagents(tmp());
+    const hits = idx.search("quokka");
+    const hit = hits.find((h) => h.sessionId === "sessS")!;
+    expect(hit.agentId).toBe("agent-explorer");
+    idx.close();
+  });
+
+  it("main-transcript hits are unaffected (no agentId, real role)", async () => {
+    const { idx } = await buildWithSubagents(tmp());
+    const hits = idx.search("orchestrate");
+    const hit = hits.find((h) => h.sessionId === "sessS")!;
+    expect(hit.agentId).toBeUndefined();
+    expect(["user", "assistant"]).toContain(hit.role);
+    idx.close();
+  });
+
+  it("a session with no subagents indexes no subagent rows (unchanged behavior)", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const f = path.join(proj, "plain.jsonl");
+    writeFileSync(f, jl({ type: "user", cwd: "/home/me/plain", message: { role: "user", content: "hello plain" } }));
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    expect(idx.search("hello").map((h) => h.role)).not.toContain(SUBAGENT_ROLE);
+    idx.close();
+  });
+
+  it("re-indexing refreshes subagent rows (added agent becomes searchable; no dupes)", async () => {
+    const dir = tmp();
+    const { idx, main } = await buildWithSubagents(dir);
+    // Add a third subagent and force a re-index of the (unchanged-size?) main file by
+    // appending to it so indexSession runs again.
+    const subDir = path.join(dir, "-proj", "sessS", "subagents");
+    writeFileSync(
+      path.join(subDir, "agent-tester.jsonl"),
+      jl({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Ran the wombat suite." }] } }),
+    );
+    appendFileSync(
+      main,
+      jl({ type: "assistant", cwd: "/home/me/subby", message: { role: "assistant", content: [{ type: "text", text: "more" }], usage: { input_tokens: 1, output_tokens: 1 } } }),
+    );
+    expect(await idx.indexSession(main)).toBe("updated");
+    // The new subagent's content is now searchable...
+    const wombat = idx.search("wombat");
+    expect(wombat.find((h) => h.sessionId === "sessS")?.agentId).toBe("agent-tester");
+    // ...and the original ones are still there exactly once (one hit per session).
+    expect(idx.search("platypus").filter((h) => h.sessionId === "sessS").length).toBe(1);
+    idx.close();
+  });
+});
+
+describe("config.listPlugins (installed plugins)", () => {
+  // Point CLAUDE_CONFIG_DIR at a temp dir and lay down plugins/*.json fixtures.
+  const withPlugins = async <T>(
+    fn: (pluginsDir: string) => Promise<T>,
+  ): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const pluginsDir = path.join(root, "plugins");
+    mkdirSync(pluginsDir, { recursive: true });
+    try {
+      return await fn(pluginsDir);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("flattens installed_plugins.json into {name,version,marketplace,enabled,scope}", async () => {
+    await withPlugins(async (pluginsDir) => {
+      writeFileSync(
+        path.join(pluginsDir, "installed_plugins.json"),
+        JSON.stringify({
+          version: 2,
+          plugins: {
+            "frontend-design@claude-plugins-official": [
+              { scope: "user", version: "1.2.0", installPath: "/x" },
+            ],
+            "github@claude-plugins-official": [{ scope: "user", version: "unknown" }],
+          },
+        }),
+      );
+      const plugins = await listPlugins();
+      const fe = plugins.find((p) => p.name === "frontend-design")!;
+      expect(fe).toEqual({
+        name: "frontend-design",
+        version: "1.2.0",
+        marketplace: "claude-plugins-official",
+        enabled: true,
+        scope: "user",
+      });
+      // "unknown" version normalizes to null.
+      expect(plugins.find((p) => p.name === "github")!.version).toBeNull();
+    });
+  });
+
+  it("reports a blocklisted plugin as disabled", async () => {
+    await withPlugins(async (pluginsDir) => {
+      writeFileSync(
+        path.join(pluginsDir, "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            "code-review@claude-plugins-official": [{ scope: "user", version: "1.0.0" }],
+            "linear@claude-plugins-official": [{ scope: "user", version: "1.0.0" }],
+          },
+        }),
+      );
+      writeFileSync(
+        path.join(pluginsDir, "blocklist.json"),
+        JSON.stringify({ plugins: [{ plugin: "code-review@claude-plugins-official", reason: "test" }] }),
+      );
+      const plugins = await listPlugins();
+      expect(plugins.find((p) => p.name === "code-review")!.enabled).toBe(false);
+      expect(plugins.find((p) => p.name === "linear")!.enabled).toBe(true);
+    });
+  });
+
+  it("honors a record-level enabled:false flag", async () => {
+    await withPlugins(async (pluginsDir) => {
+      writeFileSync(
+        path.join(pluginsDir, "installed_plugins.json"),
+        JSON.stringify({
+          plugins: { "x@mkt": [{ scope: "user", version: "1.0.0", enabled: false }] },
+        }),
+      );
+      expect((await listPlugins())[0]!.enabled).toBe(false);
+    });
+  });
+
+  it("handles an unscoped key (no @marketplace) and flattens multiple install records", async () => {
+    await withPlugins(async (pluginsDir) => {
+      writeFileSync(
+        path.join(pluginsDir, "installed_plugins.json"),
+        JSON.stringify({
+          plugins: {
+            local: [{ scope: "project", version: "0.1.0" }],
+            "dup@mkt": [
+              { scope: "user", version: "1.0.0" },
+              { scope: "project", version: "2.0.0" },
+            ],
+          },
+        }),
+      );
+      const plugins = await listPlugins();
+      const local = plugins.find((p) => p.name === "local")!;
+      expect(local.marketplace).toBeNull();
+      expect(local.scope).toBe("project");
+      // Both install records of "dup" surface.
+      expect(plugins.filter((p) => p.name === "dup").map((p) => p.version).sort()).toEqual(["1.0.0", "2.0.0"]);
+    });
+  });
+
+  it("returns [] when no plugins file exists (tolerant) and via Engine.listPlugins", async () => {
+    await withPlugins(async () => {
+      expect(await listPlugins()).toEqual([]);
+      const engine = new Engine(path.join(tmp(), "i.db"));
+      expect(await engine.listPlugins()).toEqual([]);
+      engine.close();
+    });
+  });
+});
+
+describe("per-session costUsd on SessionSummary", () => {
+  it("prices a session's usage by its own model", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/cost";
+    const f = path.join(proj, "costed.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
+          },
+        }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    const s = idx.getSessionSummary("costed")!;
+    // opus pricing: 5 $/Mtok input + 25 $/Mtok output = 5 + 25 = 30 for 1M each.
+    expect(s.model).toBe("claude-opus-4-8");
+    expect(s.costUsd).toBeCloseTo(costUsd("claude-opus-4-8", s.usage), 6);
+    expect(s.costUsd).toBeCloseTo(30, 6);
+    idx.close();
+  });
+
+  it("a session with no usage costs 0; unknown model falls back to a tier", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/cost2";
+    const f = path.join(proj, "free.jsonl");
+    writeFileSync(f, jl({ type: "user", cwd, message: { role: "user", content: "no tokens here" } }));
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    const s = idx.getSessionSummary("free")!;
+    expect(s.costUsd).toBe(0);
+    idx.close();
+  });
+
+  it("costUsd appears on listAllSessions summaries too", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/cost3";
+    const f = path.join(proj, "a.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd, message: { role: "user", content: "x" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          message: {
+            role: "assistant",
+            model: "claude-haiku-4-5",
+            content: [{ type: "text", text: "y" }],
+            usage: { input_tokens: 1_000_000, output_tokens: 0 },
+          },
+        }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(f);
+    const [s] = idx.listAllSessions();
+    // haiku input = 1 $/Mtok -> $1 for 1M input tokens.
+    expect(s!.costUsd).toBeCloseTo(1, 6);
+    idx.close();
   });
 });

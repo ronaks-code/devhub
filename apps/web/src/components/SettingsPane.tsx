@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Check, FileText, Loader2, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
+import { Blocks, Bot, Check, FileText, Loader2, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
@@ -10,9 +10,18 @@ import { PermissionsEditor } from "./config/PermissionsEditor";
 import { AgentsLibrary } from "./config/AgentsLibrary";
 import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
+import { PluginsView } from "./config/PluginsView";
 
 /** Sub-tabs within the Settings view. */
-type SettingsSection = "preferences" | "memory" | "mcp" | "hooks" | "permissions" | "agents" | "skills";
+type SettingsSection =
+  | "preferences"
+  | "memory"
+  | "mcp"
+  | "hooks"
+  | "permissions"
+  | "agents"
+  | "skills"
+  | "plugins";
 
 const MODELS = [
   "claude-opus-4-8",
@@ -313,6 +322,7 @@ export function SettingsPane({
     { id: "permissions", label: "Permissions", icon: <Shield className="h-3.5 w-3.5" /> },
     { id: "agents", label: "Agents", icon: <Bot className="h-3.5 w-3.5" /> },
     { id: "skills", label: "Skills", icon: <Sparkles className="h-3.5 w-3.5" /> },
+    { id: "plugins", label: "Plugins", icon: <Blocks className="h-3.5 w-3.5" /> },
   ];
 
   // Permissions uses a 3-column bucket grid, so it gets a wider container than the
@@ -335,7 +345,9 @@ export function SettingsPane({
                     ? "Subagents installed globally and in this project (read-only)."
                     : section === "skills"
                       ? "Skills installed globally and in this project (read-only)."
-                      : section === "memory"
+                      : section === "plugins"
+                        ? "Plugins installed via the Claude Code CLI and your configured marketplaces (read-only)."
+                        : section === "memory"
                         ? "Your CLAUDE.md memory file — instructions prepended to every session."
                         : "Defaults for new sessions and your spend budget. Saved on the server."}
           </p>
@@ -371,8 +383,10 @@ export function SettingsPane({
           <PermissionsEditor projectCwd={projectCwd} />
         ) : section === "agents" ? (
           <AgentsLibrary projectCwd={projectCwd} />
-        ) : (
+        ) : section === "skills" ? (
           <SkillsManager projectCwd={projectCwd} />
+        ) : (
+          <PluginsView />
         )}
       </div>
     </div>

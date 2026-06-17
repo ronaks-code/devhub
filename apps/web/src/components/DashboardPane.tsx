@@ -13,6 +13,7 @@ import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { Badge, EmptyState, Spinner } from "./ui";
+import { DashboardSkeleton } from "./Skeleton";
 
 /** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
 function oneYearAgoYmd(): string {
@@ -177,8 +178,8 @@ export function DashboardPane({
 
   if (!stats) {
     return (
-      <div className="flex min-w-0 flex-1 items-center justify-center bg-zinc-950">
-        <Spinner className="h-6 w-6" />
+      <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
+        <DashboardSkeleton />
       </div>
     );
   }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, FileDiff, Loader2, Terminal, Wrench, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { DiffView, parseEditInput } from "./DiffView";
+import { OpenInEditor } from "./OpenInEditor";
 import { ResultBody } from "./ResultBody";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
@@ -129,6 +130,9 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
               {edit.filePath}
             </span>
           ) : null}
+          {/* Open the edited file in the user's editor (needs an ambient project
+              cwd; renders nothing without one). */}
+          {edit.filePath ? <OpenInEditor file={edit.filePath} /> : null}
           <ToolStatus result={result} live={live} />
         </summary>
         <div className="border-t border-zinc-800 px-3 py-2">

@@ -35,6 +35,11 @@ import { hybridSearch } from "./embeddings.js";
 import type { HybridSearchOptions } from "./embeddings.js";
 import { searchSymbols } from "./symbols.js";
 import type { SymbolHit, SymbolSearchOptions } from "./symbols.js";
+import { parseRateLimit } from "./rate-limit.js";
+import type { RateLimitInfo } from "./rate-limit.js";
+import { listPlugins } from "./config/index.js";
+import type { PluginInfo } from "./config/index.js";
+import type { TurnResult } from "./driver/types.js";
 import type {
   AppSettings,
   EngineEvent,
@@ -236,6 +241,28 @@ export class Engine {
     opts: { limit?: number } = {},
   ): Promise<ConfigSearchHit[]> {
     return searchConfig(query, projectCwd, opts);
+  }
+
+  /**
+   * Inspect a finished turn ({@link TurnResult}) or a raw error string for any
+   * rate-limit / max-budget / overloaded signal — so the server/UI can show a banner
+   * or schedule a resume. Returns `{ limited, reason?, resetAt?, signal? }`. Pure
+   * delegation to {@link parseRateLimit}; exposed here so faces reach it off the
+   * engine instance without a separate import.
+   */
+  parseRateLimit(resultOrError: TurnResult | string | null | undefined, now?: number): RateLimitInfo {
+    return parseRateLimit(resultOrError, now);
+  }
+
+  /**
+   * Installed Claude Code plugins, flattened from
+   * `~/.claude/plugins/installed_plugins.json` (cross-referenced with
+   * known_marketplaces.json + blocklist.json) to
+   * `[{ name, version, marketplace, enabled, scope }]`. Read-only and tolerant of a
+   * machine with no plugins (returns []). See {@link listPlugins}.
+   */
+  async listPlugins(): Promise<PluginInfo[]> {
+    return listPlugins();
   }
 
   getSession(sessionId: string): SessionSummary | undefined {
@@ -689,6 +716,26 @@ export { watchTranscripts } from "./watcher.js";
 export { startConfigWatcher, configWatchPaths } from "./config/watcher.js";
 export type { ConfigWatcherOptions } from "./config/watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";
+export {
+  gracefulInterrupt,
+  DEFAULT_GRACE_MS,
+  DEFAULT_KILL_MS,
+} from "./driver/interrupt.js";
+export type { InterruptibleProcess, GracefulInterruptOptions } from "./driver/interrupt.js";
+export {
+  parseRateLimit,
+  parseResetAt,
+  classifySubtype,
+  classifyText,
+} from "./rate-limit.js";
+export type { RateLimitInfo, RateLimitReason } from "./rate-limit.js";
+export {
+  scanSubagents,
+  scanSubagentFile,
+  subagentsDir,
+  SUBAGENT_ROLE,
+} from "./subagents.js";
+export type { SubagentSearchText } from "./subagents.js";
 export { detectSourceKind } from "./discovery.js";
 export type { SourceKind } from "./discovery.js";
 export { archiveSession, hasArchive, readArchived, archiveDir, archivePath } from "./archive.js";

@@ -23,6 +23,7 @@ import type {
   HooksInput,
   AgentDef,
   SkillDef,
+  PluginsResult,
   DailyUsage,
   Worktree,
   ClaudeMdDoc,
@@ -214,6 +215,16 @@ const config = {
     get<SkillDef[]>(
       "/api/config/skills" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
     ),
+
+  /**
+   * Installed plugins + known marketplaces, read from ~/.claude/plugins/
+   * (installed_plugins.json + known_marketplaces.json). Backed by the read-only
+   * GET /api/config/plugins (engine `listPlugins`); the web side only wires the
+   * call. Until the engine/server lane ships the route, the *Maybe helper
+   * surfaces a NotImplementedError so PluginsView shows a graceful "not available
+   * on this server yet" state instead of a hard error.
+   */
+  plugins: () => getMaybe<PluginsResult>("/api/config/plugins"),
 
   /**
    * Read a CLAUDE.md. Global scope reads ~/.claude/CLAUDE.md; with `scope:
@@ -435,6 +446,16 @@ export const api = {
       path,
       force,
     }),
+  // Open a project location on the machine running the server: a file in the
+  // user's editor (target "editor"), or the project root in the OS file
+  // explorer / a terminal (target "finder" | "terminal"). The server allowlists
+  // `cwd` to known project roots and (for "editor") `file` within that cwd, then
+  // shells out to the configured opener; the web side only POSTs the intent.
+  // Backs the OpenInEditor button on file paths. Until the engine/server lane
+  // ships POST /api/open, the *Maybe helper surfaces a NotImplementedError so the
+  // button degrades to a quiet "unavailable" state instead of erroring.
+  open: (cwd: string, file?: string, target: "editor" | "finder" | "terminal" = "editor") =>
+    sendMaybe<{ ok: boolean }>("/api/open", "POST", { cwd, target, ...(file ? { file } : {}) }),
   getSettings: () => get<AppSettings>("/api/settings"),
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>

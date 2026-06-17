@@ -6,6 +6,7 @@ import {
   Pencil,
   MessageSquare,
   Coins,
+  DollarSign,
   GitBranch,
   Check,
   X,
@@ -14,14 +15,17 @@ import {
 } from "lucide-react";
 import type { ProjectSummary, SessionSummary } from "../lib/types";
 import { cn } from "../lib/utils";
-import { compactNumber, relativeTime, totalTokens } from "../lib/format";
+import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
+import { costUsd } from "../lib/pricing";
 import { IconButton } from "./ui";
+import { ListSkeleton } from "./Skeleton";
 import { useListKeyboardNav } from "../hooks/useListKeyboardNav";
 import { TagFilterBar, filterByTags } from "./TagFilterBar";
 
 export function SessionsPane({
   project,
   sessions,
+  loading = false,
   selectedId,
   onSelect,
   onRename,
@@ -31,6 +35,8 @@ export function SessionsPane({
 }: {
   project: ProjectSummary | null;
   sessions: SessionSummary[];
+  /** True while the session list is being fetched; shows a skeleton placeholder. */
+  loading?: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onRename: (id: string, title: string | null) => void;
@@ -416,6 +422,18 @@ export function SessionsPane({
                           {compactNumber(totalTokens(s.usage))}
                         </span>
                       )}
+                      {/* APPROXIMATE per-session spend, priced from the session's
+                          model + token usage (same estimate the dashboard uses).
+                          Only shown once there's nonzero usage to price. */}
+                      {totalTokens(s.usage) > 0 && (
+                        <span
+                          className="flex items-center gap-0.5 text-emerald-500/80"
+                          title="Approximate cost (estimated from list price)"
+                        >
+                          <DollarSign className="h-3 w-3" />
+                          {formatUsd(costUsd(s.model, s.usage)).replace(/^\$/, "")}
+                        </span>
+                      )}
                       {s.gitBranch ? (
                         <span className="flex items-center gap-0.5 truncate">
                           <GitBranch className="h-3 w-3" />
@@ -452,7 +470,11 @@ export function SessionsPane({
             </div>
           );
         })}
-        {project && filtered.length === 0 && (
+        {/* Initial load with nothing yet → content-shaped skeleton instead of a
+            "No sessions" flash. A refresh that already has rows keeps showing
+            them (no skeleton) so the list doesn't blink on project re-select. */}
+        {project && filtered.length === 0 && loading && <ListSkeleton />}
+        {project && filtered.length === 0 && !loading && (
           <div className="px-3 py-6 text-center text-xs text-zinc-600">
             {tagFilter.size > 0 || q.trim()
               ? "No sessions match the current filter"

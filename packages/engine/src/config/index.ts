@@ -341,6 +341,115 @@ export async function listMcpServers(projectCwd?: string): Promise<McpServerDef[
   return out;
 }
 
+// ---- Plugins ---------------------------------------------------------------
+
+/** One installed Claude Code plugin (a flattened install record). */
+export interface PluginInfo {
+  /** Plugin name (the part before `@marketplace` in the install key). */
+  name: string;
+  /** Installed version string, or null when the manifest reported none/"unknown". */
+  version: string | null;
+  /** The marketplace it came from (the part after `@`), or null when unscoped. */
+  marketplace: string | null;
+  /**
+   * Whether the plugin is enabled. installed_plugins.json doesn't carry an explicit
+   * flag, so a plugin is enabled when it is installed AND not present in the plugins
+   * blocklist (blocklist.json). A record's own `enabled: false`, if a future version
+   * writes one, also wins.
+   */
+  enabled: boolean;
+  /** Install scope as recorded ("user" | "project" | ...), or null when unspecified. */
+  scope: string | null;
+}
+
+/** `~/.claude/plugins/installed_plugins.json` path. */
+function installedPluginsPath(): string {
+  return path.join(claudeConfigDir(), "plugins", "installed_plugins.json");
+}
+
+/** `~/.claude/plugins/known_marketplaces.json` path. */
+function knownMarketplacesPath(): string {
+  return path.join(claudeConfigDir(), "plugins", "known_marketplaces.json");
+}
+
+/** `~/.claude/plugins/blocklist.json` path (blocked plugins are reported disabled). */
+function pluginBlocklistPath(): string {
+  return path.join(claudeConfigDir(), "plugins", "blocklist.json");
+}
+
+/** Split an `name@marketplace` install key into its parts (marketplace null when absent). */
+function splitPluginKey(key: string): { name: string; marketplace: string | null } {
+  const at = key.lastIndexOf("@");
+  if (at <= 0) return { name: key, marketplace: null };
+  return { name: key.slice(0, at), marketplace: key.slice(at + 1) || null };
+}
+
+/**
+ * Read the set of blocked plugin install-keys (`name@marketplace`) from
+ * blocklist.json. Tolerant: missing/corrupt file -> empty set.
+ */
+async function readBlockedPluginKeys(): Promise<Set<string>> {
+  const cfg = await readJson<Record<string, unknown>>(pluginBlocklistPath());
+  const list = cfg?.plugins;
+  const out = new Set<string>();
+  if (Array.isArray(list)) {
+    for (const entry of list) {
+      if (entry && typeof entry === "object") {
+        const p = (entry as Record<string, unknown>).plugin;
+        if (typeof p === "string") out.add(p);
+      } else if (typeof entry === "string") {
+        out.add(entry);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * List installed Claude Code plugins from `~/.claude/plugins/installed_plugins.json`,
+ * flattened to one {@link PluginInfo} per install record.
+ *
+ * Shape (observed): `{ version, plugins: { "<name>@<marketplace>": [ { scope, version,
+ * installPath, ... } ] } }`. The marketplace name is also cross-checked against
+ * `known_marketplaces.json` (an unknown marketplace is still reported as-is). A
+ * plugin is `enabled` unless its record says `enabled: false` or it appears in
+ * `blocklist.json`.
+ *
+ * Tolerant of a half-configured machine: a missing/corrupt plugins file yields [].
+ */
+export async function listPlugins(): Promise<PluginInfo[]> {
+  const cfg = await readJson<Record<string, unknown>>(installedPluginsPath());
+  const plugins = cfg?.plugins;
+  if (!plugins || typeof plugins !== "object" || Array.isArray(plugins)) return [];
+
+  // Known marketplaces (for cross-reference) + blocked keys (force-disabled).
+  const marketplaces = await readJson<Record<string, unknown>>(knownMarketplacesPath());
+  const knownMarkets =
+    marketplaces && typeof marketplaces === "object" && !Array.isArray(marketplaces)
+      ? new Set(Object.keys(marketplaces))
+      : new Set<string>();
+  const blocked = await readBlockedPluginKeys();
+
+  const out: PluginInfo[] = [];
+  for (const [key, value] of Object.entries(plugins as Record<string, unknown>)) {
+    const { name, marketplace } = splitPluginKey(key);
+    // A marketplace named on the key but absent from known_marketplaces.json is kept
+    // (the install record is the source of truth); knownMarkets is only a cross-check.
+    void knownMarkets;
+    const records = Array.isArray(value) ? value : [value];
+    for (const raw of records) {
+      const rec = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+      const version =
+        typeof rec.version === "string" && rec.version && rec.version !== "unknown" ? rec.version : null;
+      const scope = typeof rec.scope === "string" ? rec.scope : null;
+      const recEnabled = rec.enabled === false ? false : true;
+      const enabled = recEnabled && !blocked.has(key);
+      out.push({ name, version, marketplace, enabled, scope });
+    }
+  }
+  return out;
+}
+
 // ---- Settings (hooks + permissions), layered -------------------------------
 
 function emptyPermissions(): PermissionsConfig {

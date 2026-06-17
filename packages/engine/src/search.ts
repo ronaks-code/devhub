@@ -688,11 +688,15 @@ export class MessageSearch {
   }
 }
 
+/** A mirrored role marking a row as subagent text (agentId rides in `toolName`). */
+const SUBAGENT_ROLE = "subagent";
+
 /** Shared row -> SearchHit mapping (title precedence: custom > stored title). */
 function toHit(
   r: {
     sessionId: string;
     role: string;
+    toolName?: string | null;
     seq: number | null;
     projectId: string | null;
     cwd: string | null;
@@ -703,7 +707,7 @@ function toHit(
   snippet: string,
 ): SearchHit {
   const custom = r.customTitle && r.customTitle.trim() ? r.customTitle.trim() : null;
-  return {
+  const hit: SearchHit = {
     sessionId: r.sessionId,
     projectId: r.projectId ?? "unknown",
     projectName: r.cwd ? projectName(r.cwd) : "",
@@ -715,4 +719,8 @@ function toHit(
     // The matched row's in-session message index; 0 when absent (legacy rows).
     seq: typeof r.seq === "number" ? r.seq : Number(r.seq ?? 0) || 0,
   };
+  // Subagent rows stash the agent id in `toolName` (the FTS layout is fixed); surface
+  // it on the hit so a face can show which subagent the match came from.
+  if (r.role === SUBAGENT_ROLE && r.toolName) hit.agentId = r.toolName;
+  return hit;
 }

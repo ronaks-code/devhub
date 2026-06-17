@@ -239,6 +239,56 @@ export interface SkillDef {
 }
 
 /**
+ * One installed Claude Code plugin from GET /api/config/plugins, read from
+ * ~/.claude/plugins/installed_plugins.json. Mirrors the engine config module's
+ * `PluginDef`; defined locally so the web bundle stays free of the Node-only
+ * engine config code. The shape is intentionally tolerant — the engine/server
+ * lane owns the canonical fields; unknown extras are ignored, and most fields are
+ * optional so older/sparser manifests still render. Kept in lockstep with
+ * packages/engine/src/config/index.ts.
+ */
+export interface PluginDef {
+  /** Plugin name/id as written in the manifest. */
+  name: string;
+  /** Version string from the manifest, if present. */
+  version: string | null;
+  /** Marketplace the plugin was installed from (e.g. "anthropic"), if known. */
+  marketplace: string | null;
+  /** Whether the plugin is currently enabled. */
+  enabled: boolean;
+  /** Where the install lives — global (~/.claude) vs. a project. */
+  scope: ConfigScope;
+  /** Short description from the manifest, if any. */
+  description?: string | null;
+}
+
+/**
+ * One configured plugin marketplace from GET /api/config/plugins, read from
+ * ~/.claude/plugins/known_marketplaces.json. Defined locally to keep the web
+ * bundle server-free; tolerant of extra fields. Kept in lockstep with
+ * packages/engine/src/config/index.ts.
+ */
+export interface MarketplaceDef {
+  /** Marketplace name/id. */
+  name: string;
+  /** Source URL / git remote / local path the marketplace resolves from, if known. */
+  url?: string | null;
+  /** Whether this marketplace is currently enabled/trusted. */
+  enabled?: boolean;
+}
+
+/**
+ * Response from GET /api/config/plugins — the installed plugins plus the known
+ * marketplaces. Mirrors the engine config module's read of
+ * ~/.claude/plugins/{installed_plugins,known_marketplaces}.json. Defined locally
+ * so the web bundle stays free of Node-only engine code.
+ */
+export interface PluginsResult {
+  plugins: PluginDef[];
+  marketplaces: MarketplaceDef[];
+}
+
+/**
  * One subagent definition from GET /api/config/agents (an `agents/*.md` file with
  * frontmatter). Mirrors the engine's `AgentDef` (config/index.ts); defined locally
  * so the web bundle stays free of the Node-only engine config code. Kept in

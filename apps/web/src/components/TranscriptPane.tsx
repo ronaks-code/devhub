@@ -27,6 +27,8 @@ import { SessionNotes } from "./SessionNotes";
 import { TranscriptOutline } from "./TranscriptOutline";
 import { TranscriptMinimap } from "./TranscriptMinimap";
 import { SubagentProvider } from "./tools/TaskCard";
+import { CwdProvider } from "./OpenInEditor";
+import { TranscriptSkeleton } from "./Skeleton";
 import { FileChangeSummary } from "./FileChangeSummary";
 import { useErrorNav } from "../hooks/useErrorNav";
 import { useReadingMode } from "../hooks/useReadingMode";
@@ -279,9 +281,7 @@ export function TranscriptPane({
     return (
       <div className="flex-1 bg-zinc-950">
         {loading ? (
-          <div className="flex h-full items-center justify-center">
-            <Spinner className="h-6 w-6" />
-          </div>
+          <TranscriptSkeleton />
         ) : (
           <EmptyState
             icon={<MessagesSquare className="h-12 w-12" />}
@@ -296,6 +296,7 @@ export function TranscriptPane({
   const s = page.session;
   return (
     <SubagentProvider value={subagentSource}>
+    <CwdProvider value={s.cwd}>
     <div className="relative flex min-w-0 flex-1 flex-col bg-zinc-950">
       <FindBar
         open={findOpen}
@@ -601,6 +602,7 @@ export function TranscriptPane({
       ) : null}
       </div>
     </div>
+    </CwdProvider>
     </SubagentProvider>
   );
 }

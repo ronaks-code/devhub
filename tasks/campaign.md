@@ -29,7 +29,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W17 Effective config, ahead/behind sync, config linter, semantic-search lane, hour heatmap, Grep card, turn footer ✅
 - [x] W18 Stop running session, restore-from-backup, turn timestamps, image paste, attachments, FTS self-repair, Web card, leaderboard ✅
 - [x] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render, date facet, CSV export, open-external, tool grouping ✅r
-- [ ] W20 Rate-limit handling, plugins view, mark interrupted, skeletons
+- [x] W20 Rate-limit handling, plugins view, mark interrupted, skeletons, graceful interrupt, subagent search, per-session cost, open-in-editor ✅
 - [ ] W21 Mobile/remote auth, tray, MCP toggles, toasts
 - [ ] W22 Global error boundary, dirty-tree dashboard, scope selector
 - [ ] W23 Resume after reload, TUI transcript render, sandbox, focus rings
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W20** ✅ (green: tc×4 + 288 tests + build + plugins/cost/chat/tui). engine: `rate-limit.ts` (detect+resetAt), `driver/interrupt.ts` graceful SIGINT→SIGTERM→SIGKILL, subagent-transcript FTS indexing (agentId on SearchHit), config listPlugins, costUsd on SessionSummary. server: `/api/config/plugins` (local reader — tech-debt: dup of engine's), open-file-in-editor. web: PluginsView, StoppedBadge, Skeleton loaders, per-session cost in SessionsPane, OpenInEditor.
 - **W19** ✅ (green: tc×4 + 257 tests + build + csv/chat/tui). engine: `searchConfig` cross-artifact config palette. server: hook dry-run (`/api/hooks/test`), CSV usage export, open-in-editor/Finder/terminal. web: KaTeX math + pretty-JSON in Markdown, SearchDateFilter (after:/before: presets), ToolGroup (collapse consecutive tool-runs). tui: Dashboard screen.
 - **W18** ✅ (green: tc×4 + 253 tests + build + stop-gate/attachments/chat). engine: `config/safe-write.ts` centralized + rotating .bak + listBackups/restoreBackup, FTS toolName self-repair (v12). server: stop-running (pid-validated, confirm), attachment upload (base64), config restore routes. web: TurnMeta, useImageAttach (paste/drop), WebCard, ProjectLeaderboard. TECH-DEBT: server keeps its own single-.bak vs engine's rotating .bak.<ts> — unify later.
 - **AUDIT after W16** ✅ PASS — 5 tabs (Browse/Chat/Ops/Inbox/Dashboard) + ⌘K + ⌘⇧P + ⚙; dashboard rich (running-now, period selector, 12mo heatmap, by-model, top-spenders, cost); zero console errors. ("unknown" model bucket still pending a forced reindex backfill.)

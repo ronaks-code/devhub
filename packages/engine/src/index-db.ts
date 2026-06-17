@@ -41,6 +41,9 @@ import type { FtsTokenizer } from "./fts-schema.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import { AggregateCache } from "./aggregates.js";
+import { costUsd } from "./pricing.js";
+import { scanSubagents, SUBAGENT_ROLE } from "./subagents.js";
+import type { SubagentSearchText } from "./subagents.js";
 import { dailyUsage } from "./rollups.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 import type {
@@ -439,6 +442,13 @@ export class TranscriptIndex {
     const sessionDir = path.join(path.dirname(filePath), sessionId);
     const hasSubagents = existsSync(path.join(sessionDir, "subagents")) ? 1 : 0;
 
+    // Subagent transcripts (separate files under <sessionId>/subagents/**) are scanned
+    // and mirrored too, tagged role="subagent" with the agentId, so search() finds
+    // subagent content. Read OUTSIDE the DB transaction (it does its own file I/O);
+    // the rows are written inside the transaction below. Skipped entirely when the
+    // session has no subagents — main-file indexing is unchanged.
+    const subagentRows: SubagentSearchText[] = hasSubagents ? await scanSubagents(filePath) : [];
+
     // Single transaction: keep the session row and its mirrored search text in
     // lockstep. On a FULL re-index (startByte===0) we replace the session's search
     // rows; on incremental we just append the newly-seen lines.
@@ -467,6 +477,11 @@ export class TranscriptIndex {
         headSig,
       });
       this.writeSearchText(sessionId, searchTexts, startByte === 0);
+      // Mirror subagent text whenever the session has subagents. Subagent files aren't
+      // byte-offset tracked, so we always REPLACE the session's subagent rows (a full
+      // refresh) — cheap relative to the main transcript, and keeps them in sync as
+      // agents are added/extended. No subagents => no-op (no rows, never deletes).
+      if (hasSubagents) this.writeSubagentText(sessionId, subagentRows);
       this.db.exec("COMMIT");
       // A session's tokens/cost/activity changed — drop the memoized rollups so the
       // next getProjects/getStats recomputes against the fresh data.
@@ -498,6 +513,27 @@ export class TranscriptIndex {
     if (full) {
       this.db.prepare(`DELETE FROM ${table} WHERE sessionId = ?`).run(sessionId);
     }
+    if (rows.length === 0) return;
+    const insert = this.db.prepare(
+      `INSERT INTO ${table} (sessionId, role, seq, toolName, text) VALUES (?, ?, ?, ?, ?)`,
+    );
+    for (const r of rows) {
+      insert.run(sessionId, r.role, r.seq, r.toolName, r.text);
+    }
+  }
+
+  /**
+   * Persist mirrored SUBAGENT text for one session. Always a full replace: deletes the
+   * session's existing role="subagent" rows, then inserts the freshly-scanned ones.
+   * The agentId rides in the `toolName` column (the FTS layout is fixed, so we reuse
+   * the unindexed slot — see subagents.ts). Same store as the main text
+   * (messages_fts / messages_text). Caller guards on hasSubagents.
+   */
+  private writeSubagentText(sessionId: string, rows: SubagentSearchText[]): void {
+    const table = this.searchMode === "fts5" ? "messages_fts" : "messages_text";
+    this.db
+      .prepare(`DELETE FROM ${table} WHERE sessionId = ? AND role = ?`)
+      .run(sessionId, SUBAGENT_ROLE);
     if (rows.length === 0) return;
     const insert = this.db.prepare(
       `INSERT INTO ${table} (sessionId, role, seq, toolName, text) VALUES (?, ?, ?, ?, ?)`,
@@ -757,6 +793,12 @@ export class TranscriptIndex {
 
 function rowToSummary(row: Row): SessionSummary {
   const custom = row.customTitle && row.customTitle.trim() ? row.customTitle.trim() : null;
+  const usage = {
+    inputTokens: n(row.inputTokens),
+    outputTokens: n(row.outputTokens),
+    cacheReadTokens: n(row.cacheReadTokens),
+    cacheCreationTokens: n(row.cacheCreationTokens),
+  };
   return {
     sessionId: row.sessionId,
     filePath: row.filePath,
@@ -768,16 +810,14 @@ function rowToSummary(row: Row): SessionSummary {
     firstTimestamp: row.firstTs,
     lastTimestamp: row.lastTs,
     messageCount: n(row.messageCount),
-    usage: {
-      inputTokens: n(row.inputTokens),
-      outputTokens: n(row.outputTokens),
-      cacheReadTokens: n(row.cacheReadTokens),
-      cacheCreationTokens: n(row.cacheCreationTokens),
-    },
+    usage,
     sizeBytes: n(row.sizeBytes),
     mtimeMs: n(row.mtimeMs),
     hasSubagents: row.hasSubagents === 1,
     model: row.model ?? null,
+    // APPROXIMATE per-session spend: this session's usage priced by its own model
+    // (fallback tier for a null/unknown model). Display-only estimate.
+    costUsd: costUsd(row.model ?? null, usage),
     pinned: n(row.pinned) === 1,
     archived: n(row.archived) === 1,
     tags: parseTags(row.tags),

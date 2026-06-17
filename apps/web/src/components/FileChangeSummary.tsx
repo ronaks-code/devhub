@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { FileDiff, X } from "lucide-react";
 import type { NormalizedMessage } from "../lib/types";
 import { parseEditInput, countEditLines } from "./DiffView";
+import { OpenInEditor } from "./OpenInEditor";
 import { cn } from "../lib/utils";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -119,23 +120,30 @@ export function FileChangeSummary({
         ) : (
           <ul>
             {changes.map((c) => (
-              <li key={c.filePath}>
-                <button
-                  onClick={() => onJump(c.firstIndex)}
-                  className="flex w-full flex-col gap-1 px-3 py-1.5 text-left transition hover:bg-zinc-900"
-                  title={c.filePath}
-                >
-                  <span className="truncate font-mono text-[12px] text-zinc-300" dir="rtl">
-                    {shortPath(c.filePath)}
+              <li key={c.filePath} className="group/row">
+                <div className="flex items-start gap-1 px-3 py-1.5 transition hover:bg-zinc-900">
+                  <button
+                    onClick={() => onJump(c.firstIndex)}
+                    className="flex min-w-0 flex-1 flex-col gap-1 text-left"
+                    title={c.filePath}
+                  >
+                    <span className="truncate font-mono text-[12px] text-zinc-300" dir="rtl">
+                      {shortPath(c.filePath)}
+                    </span>
+                    <span className="flex items-center gap-2 text-[10.5px] font-medium">
+                      <span className="text-emerald-400">+{c.added}</span>
+                      <span className="text-red-400">-{c.removed}</span>
+                      {c.edits > 1 ? (
+                        <span className={cn("text-zinc-600")}>· {c.edits} edits</span>
+                      ) : null}
+                    </span>
+                  </button>
+                  {/* Open in editor — revealed on row hover; renders nothing
+                      without an ambient project cwd. */}
+                  <span className="mt-0.5 shrink-0 opacity-0 transition group-hover/row:opacity-100">
+                    <OpenInEditor file={c.filePath} />
                   </span>
-                  <span className="flex items-center gap-2 text-[10.5px] font-medium">
-                    <span className="text-emerald-400">+{c.added}</span>
-                    <span className="text-red-400">-{c.removed}</span>
-                    {c.edits > 1 ? (
-                      <span className={cn("text-zinc-600")}>· {c.edits} edits</span>
-                    ) : null}
-                  </span>
-                </button>
+                </div>
               </li>
             ))}
           </ul>

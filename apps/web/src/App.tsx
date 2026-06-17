@@ -178,6 +178,10 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(() => readUiState().projectId ?? null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  // True while the selected project's session list is being (re)fetched, so the
+  // SessionsPane can show a content-shaped skeleton instead of a bare "No
+  // sessions" flash before the data lands.
+  const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [tailBytes, setTailBytes] = useState<number | undefined>(undefined);
   const [page, setPage] = useState<SessionMessagesPage | null>(null);
@@ -233,7 +237,12 @@ export default function App() {
   }, []);
 
   const refreshSessions = useCallback(async (pid: string) => {
-    setSessions(await api.sessions(pid));
+    setLoadingSessions(true);
+    try {
+      setSessions(await api.sessions(pid));
+    } finally {
+      setLoadingSessions(false);
+    }
   }, []);
 
   // initial load
@@ -720,6 +729,7 @@ export default function App() {
             <SessionsPane
               project={project}
               sessions={sessions}
+              loading={loadingSessions}
               selectedId={sessionId}
               onSelect={onSelectSession}
               onRename={handleRename}

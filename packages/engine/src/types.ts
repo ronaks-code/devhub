@@ -116,6 +116,12 @@ export interface SessionSummary {
   /** User-assigned tags (normalized: trimmed, lower-cased, de-duped). Empty when none. */
   tags: string[];
   /**
+   * APPROXIMATE USD cost of this session, computed from its {@link usage} priced by
+   * its {@link model} (pricing.costUsd). A null/unknown model uses the fallback tier.
+   * Display-only estimate, never billed truth.
+   */
+  costUsd: number;
+  /**
    * Free-form notes (markdown) the user attached to this session, or null when none.
    * User-owned scratchpad in session_meta; never derived from the transcript.
    */
@@ -295,6 +301,14 @@ export interface SearchHit {
    * `SearchHit` literal isn't forced to supply it.
    */
   seq?: number;
+  /**
+   * Set when this hit came from a SUBAGENT transcript (a file under
+   * `<sessionId>/subagents/**`) rather than the main session transcript. Carries the
+   * subagent's agent id (the agent-*.jsonl base name); `role` on such a hit is
+   * `"subagent"`. Optional/absent for ordinary main-transcript hits, so existing
+   * consumers are unaffected.
+   */
+  agentId?: string;
 }
 
 export interface SessionMessagesPage {

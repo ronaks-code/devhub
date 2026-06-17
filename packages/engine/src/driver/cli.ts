@@ -6,6 +6,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { normalizeLine, usageFromMessage } from "../parser.js";
 import { createLineSplitter } from "./buffer.js";
+import { gracefulInterrupt } from "./interrupt.js";
 import type {
   AgentDriver,
   PermissionMode,
@@ -236,7 +237,10 @@ export class CliDriver implements AgentDriver {
 
     return {
       interrupt() {
-        child.kill("SIGTERM");
+        // Graceful: SIGINT (stop politely), then SIGTERM, then SIGKILL — escalation
+        // stops the instant the process exits. The turn still stops; just cleaner
+        // than the old bare SIGTERM.
+        gracefulInterrupt(child);
       },
       done,
     };
@@ -357,9 +361,13 @@ export class PersistentSession {
     // permission replies is not surfaced yet. See PersistentSession docblock.
   }
 
-  /** Stop the current activity (SIGTERM); the process may stay alive for resume. */
+  /**
+   * Stop the current activity gracefully: SIGINT first (the process can stop cleanly
+   * and stay alive for a later resume), escalating to SIGTERM then SIGKILL only if it
+   * ignores the polite signal. Escalation stops the moment the process exits.
+   */
   interrupt(): void {
-    this.child.kill("SIGTERM");
+    gracefulInterrupt(this.child);
   }
 
   /** End stdin and let the process exit; awaits {@link closed}. */
