@@ -1,22 +1,25 @@
 import { createContext, memo, useContext, useState, type ReactNode } from "react";
-import { Wrench, Terminal, Webhook, ListPlus, Brain, FileDiff, Check, X, Pencil, Link2, Link2Off } from "lucide-react";
+import { Terminal, Webhook, ListPlus, Brain, Pencil, Link2, Link2Off } from "lucide-react";
 import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { Markdown } from "./Markdown";
-import { DiffView, parseEditInput } from "./DiffView";
-import { TodoWriteCard } from "./tools/TodoWriteCard";
-import { BashCard } from "./tools/BashCard";
+import { ToolCard } from "./ToolCard";
 import { ImageBlock, type ImageBlockData } from "./ImageBlock";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
-
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
 /**
  * The active in-transcript find query, threaded to leaf blocks without prop
  * drilling. Empty string = no find active (the common, zero-overhead case).
  */
 const HighlightContext = createContext<string>("");
+
+/**
+ * Whether this transcript is the LIVE chat (vs. a historical read). Threaded to
+ * the tool cards so an unresolved tool_use can show a running…/spinner state
+ * only while live — history rendering stays identical. Defaults to false.
+ */
+const LiveContext = createContext<boolean>(false);
 
 /** Split `text` on case-insensitive occurrences of `query`, wrapping matches in <mark>. */
 function HighlightText({ text }: { text: string }): ReactNode {
@@ -45,15 +48,7 @@ function HighlightText({ text }: { text: string }): ReactNode {
   return <>{out}</>;
 }
 
-function prettyInput(input: unknown): string {
-  try {
-    return typeof input === "string" ? input : JSON.stringify(input, null, 2);
-  } catch {
-    return String(input);
-  }
-}
-
-/** Compact, scrollable rendering of a tool_result's body. */
+/** Compact, scrollable rendering of a standalone tool_result's body. */
 function ResultBody({ result }: { result: ToolResultBlock }) {
   const content = result.content ?? "";
   const long = content.length > 600;
@@ -67,117 +62,6 @@ function ResultBody({ result }: { result: ToolResultBlock }) {
     >
       {long ? `${head}\n…` : head || "(empty)"}
     </pre>
-  );
-}
-
-/**
- * A tool_use rendered as ONE named collapsible card. When a tool_result is
- * attached (via pairToolResults) we show its status; Edit/Write/MultiEdit/
- * NotebookEdit get a red/green diff with the file path as the header.
- */
-function ToolCard({ block }: { block: PairedToolUse }) {
-  const name = block.name || "tool";
-
-  // TodoWrite gets a dedicated checklist renderer instead of raw JSON.
-  if (name === "TodoWrite") return <TodoWriteCard block={block} />;
-
-  // Bash gets a command/stdout renderer with exit styling; the generic card is
-  // its fallback when the input doesn't carry a string command.
-  if (name === "Bash") {
-    return <BashCard block={block} fallback={() => <GenericToolCard block={block} />} />;
-  }
-
-  const result = block.result;
-  const isError = result?.isError ?? false;
-  const edit = EDIT_TOOLS.has(name) ? parseEditInput(name, block.input) : null;
-
-  if (edit) {
-    return (
-      <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60" open>
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
-          <FileDiff className="h-3.5 w-3.5 text-clay-400" />
-          <span className="text-clay-400">{name}</span>
-          {edit.filePath ? (
-            <span className="truncate font-mono text-[11px] text-zinc-400" title={edit.filePath}>
-              {edit.filePath}
-            </span>
-          ) : null}
-          {result ? <StatusChip isError={isError} /> : null}
-        </summary>
-        <div className="border-t border-zinc-800 px-3 py-2">
-          <DiffView edit={edit} />
-        </div>
-        {result && (isError || (result.content ?? "").length > 0) ? (
-          <details className="border-t border-zinc-800/60">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[11px] text-zinc-500">
-              <Terminal className="h-3 w-3" />
-              {isError ? "error" : "result"}
-            </summary>
-            <ResultBody result={result} />
-          </details>
-        ) : null}
-      </details>
-    );
-  }
-
-  // Non-edit tools: the generic compact input + (collapsed) result card.
-  return <GenericToolCard block={block} />;
-}
-
-/**
- * The default tool_use card: compact JSON input + a collapsed result body. Used
- * for every tool without a dedicated renderer, and as the BashCard fallback when
- * a Bash input can't be parsed.
- */
-function GenericToolCard({ block }: { block: PairedToolUse }) {
-  const name = block.name || "tool";
-  const result = block.result;
-  const isError = result?.isError ?? false;
-  const resultLong = (result?.content ?? "").length > 600;
-  return (
-    <details
-      className={cn(
-        "my-1.5 rounded-lg border bg-zinc-900/40 open:bg-zinc-900/60",
-        isError ? "border-red-900/60" : "border-zinc-800",
-      )}
-    >
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium text-clay-400">
-        <Wrench className="h-3.5 w-3.5" />
-        <span>{name}</span>
-        {result ? <StatusChip isError={isError} /> : null}
-      </summary>
-      <pre className="overflow-x-auto border-t border-zinc-800 px-3 py-2 font-mono text-[12px] leading-relaxed text-zinc-300">
-        {prettyInput(block.input)}
-      </pre>
-      {result ? (
-        <details className="border-t border-zinc-800/60" open={!resultLong && !isError}>
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[11px] text-zinc-500">
-            <Terminal className="h-3 w-3" />
-            {isError ? "error" : "result"}
-            {resultLong ? (
-              <span className="text-zinc-600">
-                · {(result.content ?? "").length.toLocaleString()} chars
-              </span>
-            ) : null}
-          </summary>
-          <ResultBody result={result} />
-        </details>
-      ) : null}
-    </details>
-  );
-}
-
-function StatusChip({ isError }: { isError: boolean }) {
-  return (
-    <span
-      className={cn(
-        "ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
-        isError ? "bg-red-500/10 text-red-300" : "bg-emerald-500/10 text-emerald-300",
-      )}
-    >
-      {isError ? <X className="h-3 w-3" /> : <Check className="h-3 w-3" />}
-      {isError ? "error" : "ok"}
-    </span>
   );
 }
 
@@ -217,6 +101,13 @@ function TextBlock({ text }: { text: string }) {
   return <Markdown text={text} />;
 }
 
+/** A tool_use block: renders the extracted ToolCard, passing the live flag from
+ *  context so an unresolved tool shows a running…/spinner state only while live. */
+function ToolUseBlock({ block }: { block: PairedToolUse }) {
+  const live = useContext(LiveContext);
+  return <ToolCard block={block} live={live} />;
+}
+
 function Block({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case "text":
@@ -233,7 +124,7 @@ function Block({ block }: { block: ContentBlock }) {
         </details>
       );
     case "tool_use":
-      return <ToolCard block={block as PairedToolUse} />;
+      return <ToolUseBlock block={block as PairedToolUse} />;
     case "tool_result":
       return <ToolResult result={block} />;
     case "image":
@@ -263,6 +154,7 @@ const ROLE_META: Record<string, { label: string; bar: string; chip: string }> = 
 export const MessageView = memo(function MessageView({
   m,
   streaming,
+  live = false,
   highlight = "",
   onEdit,
   onCopyLink,
@@ -270,6 +162,12 @@ export const MessageView = memo(function MessageView({
   m: NormalizedMessage;
   /** Show a blinking cursor at the end (live-streaming assistant bubble). */
   streaming?: boolean;
+  /**
+   * True in the live Chat transcript. Lets an unresolved tool_use show a
+   * running…/spinner state (with elapsed seconds) until its result lands; in
+   * history rendering this stays false and unresolved tools render as before.
+   */
+  live?: boolean;
   /** Active in-transcript find query; matches inside text blocks get marked. */
   highlight?: string;
   /**
@@ -307,6 +205,7 @@ export const MessageView = memo(function MessageView({
       : "";
   return (
     <HighlightContext.Provider value={highlight}>
+    <LiveContext.Provider value={live}>
     <div className="group flex gap-3 px-4 py-2.5" {...messageAnchorProps(m.uuid, m.seq)}>
       <div className={cn("mt-1 w-0.5 shrink-0 rounded-full", meta.bar)} />
       <div className="min-w-0 flex-1">
@@ -370,6 +269,7 @@ export const MessageView = memo(function MessageView({
         </div>
       </div>
     </div>
+    </LiveContext.Provider>
     </HighlightContext.Provider>
   );
 });

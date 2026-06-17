@@ -95,6 +95,34 @@ const suggestSchema = {
 } as const;
 
 /**
+ * Body for adding a worktree: a `cwd` (the main repo), a target `path` for the new
+ * worktree, plus an optional `branch` to check out there OR `newBranch` to create.
+ */
+const addWorktreeSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["cwd", "path"],
+  properties: {
+    cwd: { type: "string", minLength: 1 },
+    path: { type: "string", minLength: 1 },
+    branch: { type: "string", minLength: 1 },
+    newBranch: { type: "string", minLength: 1 },
+  },
+} as const;
+
+/** Body for removing a worktree: a `cwd` (the main repo), the worktree `path`, optional `force`. */
+const removeWorktreeSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["cwd", "path"],
+  properties: {
+    cwd: { type: "string", minLength: 1 },
+    path: { type: "string", minLength: 1 },
+    force: { type: "boolean", default: false },
+  },
+} as const;
+
+/**
  * Cap on the staged-diff text handed to the model. A commit message only needs
  * the gist of the change, and an unbounded diff would blow the prompt budget, so
  * we send at most this many bytes (truncated, with a marker).
@@ -245,6 +273,59 @@ export function registerGitRoutes(app: FastifyInstance, engine: Engine): void {
         return reply.code(502).send({ error: "could not draft a message" });
       }
       return { message };
+    },
+  );
+
+  // -- Worktrees (same cwd allowlist as the reads/writes above) ----------------
+  //
+  // `git worktree` lets one repo have several working trees checked out at once
+  // (e.g. a branch per feature on disk). These three routes pass through to the
+  // engine's GitService worktree methods. add/remove return a typed result; we map
+  // a failure to 502 with the git error rather than throwing, then re-list so the
+  // face gets the fresh worktree set in one round-trip.
+
+  app.get<{ Querystring: { cwd: string } }>(
+    "/api/git/worktrees",
+    { schema: { querystring: cwdSchema } },
+    async (req, reply) => {
+      if (!isKnownCwd(req.query.cwd)) {
+        return reply.code(400).send({ error: "unknown cwd" });
+      }
+      return engine.git(req.query.cwd).listWorktrees();
+    },
+  );
+
+  app.post<{ Body: { cwd: string; path: string; branch?: string; newBranch?: string } }>(
+    "/api/git/worktree",
+    { schema: { body: addWorktreeSchema } },
+    async (req, reply) => {
+      const { cwd, path, branch, newBranch } = req.body;
+      if (!isKnownCwd(cwd)) {
+        return reply.code(400).send({ error: "unknown cwd" });
+      }
+      const git = engine.git(cwd);
+      const res = await git.addWorktree(path, { branch, newBranch });
+      if (!res.ok) {
+        return reply.code(502).send({ error: res.error || "failed to add worktree" });
+      }
+      return git.listWorktrees();
+    },
+  );
+
+  app.delete<{ Body: { cwd: string; path: string; force?: boolean } }>(
+    "/api/git/worktree",
+    { schema: { body: removeWorktreeSchema } },
+    async (req, reply) => {
+      const { cwd, path, force } = req.body;
+      if (!isKnownCwd(cwd)) {
+        return reply.code(400).send({ error: "unknown cwd" });
+      }
+      const git = engine.git(cwd);
+      const res = await git.removeWorktree(path, { force: force === true });
+      if (!res.ok) {
+        return reply.code(502).send({ error: res.error || "failed to remove worktree" });
+      }
+      return git.listWorktrees();
     },
   );
 }

@@ -15,6 +15,7 @@ import { cn } from "../lib/utils";
 import { relativeTime } from "../lib/format";
 import { CommitComposer } from "./CommitComposer";
 import { GitDiffView } from "./GitDiffView";
+import { WorktreePanel } from "./WorktreePanel";
 import { Spinner } from "./ui";
 
 /** A compact count chip with an icon — only rendered when n > 0. */
@@ -304,6 +305,12 @@ export function GitPanel({ cwd }: { cwd: string }) {
               {dirty ? (
                 <CommitComposer cwd={cwd} status={status} onCommitted={refresh} />
               ) : null}
+
+              {/* Worktrees — list / create / remove for this repo. Degrades to a
+                  quiet "not available yet" line when the endpoints aren't present. */}
+              <div className="mt-3 border-t border-zinc-800/60 pt-2">
+                <WorktreePanel cwd={cwd} />
+              </div>
             </>
           ) : (
             // idle + loading first paint

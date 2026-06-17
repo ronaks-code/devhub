@@ -17,6 +17,7 @@ import { cn } from "../lib/utils";
 import { compactNumber, relativeTime, totalTokens } from "../lib/format";
 import { IconButton } from "./ui";
 import { useListKeyboardNav } from "../hooks/useListKeyboardNav";
+import { TagFilterBar, filterByTags } from "./TagFilterBar";
 
 export function SessionsPane({
   project,
@@ -40,6 +41,8 @@ export function SessionsPane({
   onBulkAddTag?: (ids: string[], tag: string) => void | Promise<void>;
 }) {
   const [q, setQ] = useState("");
+  // Tag filter selection (client-side AND): a session must carry every tag here.
+  const [tagFilter, setTagFilter] = useState<Set<string>>(new Set());
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // Multi-select: the set of checked session ids + the last index toggled (the
@@ -51,10 +54,29 @@ export function SessionsPane({
   const [tagDraft, setTagDraft] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
+    // Tag filter first (AND across selected tags), then the title text filter.
+    const byTag = filterByTags(sessions, tagFilter);
     const s = q.trim().toLowerCase();
-    if (!s) return sessions;
-    return sessions.filter((x) => x.title.toLowerCase().includes(s));
-  }, [sessions, q]);
+    if (!s) return byTag;
+    return byTag.filter((x) => x.title.toLowerCase().includes(s));
+  }, [sessions, q, tagFilter]);
+
+  // Drop any selected tag no longer present on any session (e.g. project switch),
+  // so a stale filter never hides the whole list with no way to see why.
+  useEffect(() => {
+    setTagFilter((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set<string>();
+      for (const s of sessions) for (const t of s.tags) live.add(t);
+      let changed = false;
+      const next = new Set<string>();
+      for (const t of prev) {
+        if (live.has(t)) next.add(t);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
 
   // Drop any selected ids that are no longer in the (filtered or full) list, so
   // a project switch / filter never leaves the bulk bar acting on stale ids.
@@ -206,6 +228,10 @@ export function SessionsPane({
           />
         </div>
       </div>
+
+      {/* Tag chip filter — narrows the visible sessions client-side (AND across
+          selected tags). Renders nothing until some session carries a tag. */}
+      <TagFilterBar sessions={sessions} selected={tagFilter} onChange={setTagFilter} />
 
       {/* Bulk action bar — appears once one or more sessions are checked. Pin /
           unpin and add-a-tag fan out PATCH /api/sessions/:id per selected id. */}
@@ -427,7 +453,11 @@ export function SessionsPane({
           );
         })}
         {project && filtered.length === 0 && (
-          <div className="px-3 py-6 text-center text-xs text-zinc-600">No sessions</div>
+          <div className="px-3 py-6 text-center text-xs text-zinc-600">
+            {tagFilter.size > 0 || q.trim()
+              ? "No sessions match the current filter"
+              : "No sessions"}
+          </div>
         )}
         {!project && (
           <div className="px-3 py-6 text-center text-xs text-zinc-600">Select a project</div>

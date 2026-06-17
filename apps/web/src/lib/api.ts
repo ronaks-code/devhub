@@ -19,6 +19,9 @@ import type {
   McpServerInput,
   HooksConfig,
   HooksInput,
+  AgentDef,
+  DailyUsage,
+  Worktree,
 } from "./types";
 
 async function get<T>(url: string): Promise<T> {
@@ -33,6 +36,42 @@ async function send<T>(url: string, method: string, body?: unknown): Promise<T> 
     headers: { "content-type": "application/json" },
     body: body == null ? undefined : JSON.stringify(body),
   });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+  return (await res.json()) as T;
+}
+
+/**
+ * Raised when an endpoint isn't implemented by the running server (HTTP 404 or
+ * 501). The worktree routes are wired here ahead of the engine/server lane that
+ * implements them — exactly like /api/rollups was. Callers (WorktreePanel) catch
+ * this to show a graceful "not available on this server yet" state instead of a
+ * hard error, so the UI never breaks when the backend hasn't shipped the route.
+ */
+export class NotImplementedError extends Error {
+  readonly status: number;
+  constructor(status: number, url: string) {
+    super(`${status} for ${url} (endpoint not available)`);
+    this.name = "NotImplementedError";
+    this.status = status;
+  }
+}
+
+/** GET that maps a 404/501 to {@link NotImplementedError} (other errors still throw). */
+async function getMaybe<T>(url: string): Promise<T> {
+  const res = await fetch(url, { headers: { accept: "application/json" } });
+  if (res.status === 404 || res.status === 501) throw new NotImplementedError(res.status, url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+  return (await res.json()) as T;
+}
+
+/** Mutating request that maps a 404/501 to {@link NotImplementedError}. */
+async function sendMaybe<T>(url: string, method: string, body?: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method,
+    headers: { "content-type": "application/json" },
+    body: body == null ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 404 || res.status === 501) throw new NotImplementedError(res.status, url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return (await res.json()) as T;
 }
@@ -129,6 +168,17 @@ const config = {
       hooks: input.hooks,
       ...(scope === "project" && cwd ? { cwd } : {}),
     }),
+
+  /**
+   * Subagents: the global set, plus (when a known project `cwd` is given) that
+   * project's. Backed by the read-only GET /api/config/agents (engine
+   * `listAgents`). The web side only wires the call; discovery/parsing of the
+   * `agents/*.md` files lives in the engine.
+   */
+  agents: (cwd?: string) =>
+    get<AgentDef[]>(
+      "/api/config/agents" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+    ),
 };
 
 export const api = {
@@ -183,6 +233,52 @@ export const api = {
   // GitService server-side; the web side only POSTs the intent.
   gitCommit: (cwd: string, message: string, all = true) =>
     send<GitCommitResult>("/api/git/commit", "POST", { cwd, message, all }),
+  // Per-day token/cost/session time series for a usage window. `since`/`until`
+  // are inclusive `YYYY-MM-DD` dates; omit both for the full history. Backed by
+  // GET /api/rollups (engine `dailyUsage`). The PeriodSelector sums the in-range
+  // days client-side for period totals — no engine change needed.
+  rollups: (since?: string, until?: string, projectId?: string) =>
+    get<DailyUsage[]>(
+      "/api/rollups" +
+        ((): string => {
+          const qs = new URLSearchParams();
+          if (since) qs.set("since", since);
+          if (until) qs.set("until", until);
+          if (projectId) qs.set("projectId", projectId);
+          const s = qs.toString();
+          return s ? `?${s}` : "";
+        })(),
+    ),
+  // Git worktree management for a project `cwd`, allowlisted server-side like the
+  // other git routes. These call the /api/git/worktree(s) endpoints; until the
+  // engine/server lane ships them, the *Maybe helpers surface a
+  // NotImplementedError so the panel degrades gracefully instead of erroring.
+  gitWorktrees: (cwd: string) =>
+    getMaybe<Worktree[]>(`/api/git/worktrees?cwd=${encodeURIComponent(cwd)}`),
+  // Create a new worktree checking out `branch` at `path` (relative paths are
+  // resolved against the repo server-side). `newBranch` asks git to create the
+  // branch as part of the add.
+  gitWorktreeAdd: (
+    cwd: string,
+    path: string,
+    branch: string,
+    newBranch = false,
+  ) =>
+    sendMaybe<Worktree>("/api/git/worktree", "POST", {
+      cwd,
+      path,
+      branch,
+      newBranch,
+    }),
+  // Remove a worktree by its directory path. `force` drops it even with
+  // uncommitted changes (the panel confirms before calling, and only offers
+  // force on a second confirm).
+  gitWorktreeRemove: (cwd: string, path: string, force = false) =>
+    sendMaybe<{ ok: boolean }>("/api/git/worktree", "DELETE", {
+      cwd,
+      path,
+      force,
+    }),
   getSettings: () => get<AppSettings>("/api/settings"),
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>

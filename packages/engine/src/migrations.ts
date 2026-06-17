@@ -98,6 +98,19 @@ const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE session_meta ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`);
     }
   },
+  // v7: saved views ("smart folders") — a named (query + facets JSON) the user can
+  // re-run. Our own data; never touches transcripts. Idempotent via IF NOT EXISTS.
+  // `facets` is a JSON object string (the SearchFacets); `query` is the text query.
+  // A fresh DB also gets this from the base SCHEMA; a legacy DB picks it up here.
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS saved_views (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      query TEXT NOT NULL DEFAULT '',
+      facets TEXT NOT NULL DEFAULT '{}',
+      createdAt INTEGER NOT NULL
+    );`);
+  },
 ];
 
 /**

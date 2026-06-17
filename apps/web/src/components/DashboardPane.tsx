@@ -1,12 +1,18 @@
-import { useEffect, useState } from "react";
-import { Activity, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio } from "lucide-react";
-import type { RunningSession, Stats } from "../lib/types";
+import { useEffect, useMemo, useState } from "react";
+import { Activity, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
+import type { DailyUsage, RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
 import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
+import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
 import { Badge, EmptyState, Spinner } from "./ui";
+
+/** Sum of the four token buckets for one rolled-up day. */
+function dayTokens(d: DailyUsage): number {
+  return d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheCreationTokens;
+}
 
 /**
  * Estimated total $ for the stats window. Prefers a server-provided `costUsd`
@@ -100,6 +106,31 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
 export function DashboardPane() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [running, setRunning] = useState<RunningSession[] | null>(null);
+  // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
+  // to a 30-day window (resolved by PeriodSelector's first onChange below).
+  const [period, setPeriod] = useState<PeriodRange>({ id: "30d" });
+  const [rollups, setRollups] = useState<DailyUsage[] | null>(null);
+  const [rollupsError, setRollupsError] = useState(false);
+
+  // Re-query the daily-usage series whenever the period window changes. The
+  // server returns only days WITH activity inside [since, until]; we sum them
+  // client-side for the period totals (no engine change needed).
+  useEffect(() => {
+    let cancelled = false;
+    setRollups(null);
+    setRollupsError(false);
+    api
+      .rollups(period.since, period.until)
+      .then((r) => {
+        if (!cancelled) setRollups(r);
+      })
+      .catch(() => {
+        if (!cancelled) setRollupsError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period.since, period.until]);
 
   // Stats once on mount; running once on mount, then poll every 4s.
   useEffect(() => {
@@ -151,6 +182,69 @@ export function DashboardPane() {
   const liveSessions = running ?? [];
 
   return (
+    <DashboardBody
+      stats={stats}
+      tokens={tokens}
+      estTotalCost={estTotalCost}
+      projectCost={projectCost}
+      maxProjectTokens={maxProjectTokens}
+      maxDaySessions={maxDaySessions}
+      liveSessions={liveSessions}
+      period={period}
+      onPeriod={setPeriod}
+      rollups={rollups}
+      rollupsError={rollupsError}
+    />
+  );
+}
+
+/**
+ * The dashboard layout, split out so the data-loading wrapper above stays small.
+ * Pure presentation over the props it's given.
+ */
+function DashboardBody({
+  stats,
+  tokens,
+  estTotalCost,
+  projectCost,
+  maxProjectTokens,
+  maxDaySessions,
+  liveSessions,
+  period,
+  onPeriod,
+  rollups,
+  rollupsError,
+}: {
+  stats: Stats;
+  tokens: number;
+  estTotalCost: number;
+  projectCost: (projTokens: number) => number;
+  maxProjectTokens: number;
+  maxDaySessions: number;
+  liveSessions: RunningSession[];
+  period: PeriodRange;
+  onPeriod: (range: PeriodRange) => void;
+  rollups: DailyUsage[] | null;
+  rollupsError: boolean;
+}) {
+  // Period totals: sum the in-range days client-side. Oldest→newest for the chart.
+  const usage = useMemo(() => {
+    const days = rollups ? [...rollups].sort((a, b) => a.date.localeCompare(b.date)) : [];
+    let tk = 0;
+    let cost = 0;
+    let sessions = 0;
+    let maxTk = 0;
+    for (const d of days) {
+      const t = dayTokens(d);
+      tk += t;
+      cost += d.costUsd;
+      sessions += d.sessions;
+      if (t > maxTk) maxTk = t;
+    }
+    return { days, tokens: tk, cost, sessions, maxTokens: Math.max(1, maxTk) };
+  }, [rollups]);
+
+  return (
     <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
       <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-6">
         {/* Running now */}
@@ -195,6 +289,68 @@ export function DashboardPane() {
             label="Est. cost"
             value={formatUsd(estTotalCost)}
           />
+        </section>
+
+        {/* Usage over time — period selector drives the rollups query + totals */}
+        <section>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <SectionTitle icon={<TrendingUp className="h-3.5 w-3.5" />}>Usage over time</SectionTitle>
+            <PeriodSelector value={period.id} onChange={onPeriod} />
+          </div>
+
+          {/* Period totals (summed client-side from the in-range days). */}
+          <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-[12px]">
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-zinc-500">Tokens</span>
+              <span className="font-semibold tabular-nums text-zinc-100">
+                {compactNumber(usage.tokens)}
+              </span>
+            </span>
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-zinc-500">Est. cost</span>
+              <span className="font-semibold tabular-nums text-clay-300">
+                {formatUsd(usage.cost)}
+              </span>
+            </span>
+            <span className="flex items-baseline gap-1.5">
+              <span className="text-zinc-500">Sessions</span>
+              <span className="font-semibold tabular-nums text-zinc-100">
+                {usage.sessions.toLocaleString()}
+              </span>
+            </span>
+          </div>
+
+          {rollupsError ? (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
+              Usage rollups aren't available on this server yet.
+            </div>
+          ) : rollups === null ? (
+            <div className="flex h-28 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30">
+              <Spinner className="h-5 w-5" />
+            </div>
+          ) : usage.days.length > 0 ? (
+            <div className="flex h-28 items-end gap-0.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+              {usage.days.map((d) => {
+                const t = dayTokens(d);
+                return (
+                  <div
+                    key={d.date}
+                    className="group flex h-full min-w-0 flex-1 items-end"
+                    title={`${d.date}: ${compactNumber(t)} tokens · ${formatUsd(d.costUsd)} · ${d.sessions} session${d.sessions === 1 ? "" : "s"}`}
+                  >
+                    <div
+                      className="w-full rounded-sm bg-clay-500/70 transition group-hover:bg-clay-400"
+                      style={{ height: `${Math.max(t > 0 ? 6 : 2, (t / usage.maxTokens) * 100)}%` }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
+              No usage in this period.
+            </div>
+          )}
         </section>
 
         {/* Per-model breakdown */}

@@ -16,13 +16,17 @@ import { stat, open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { appDataDir, projectIdFromCwd, projectName } from "./paths.js";
-import { streamRawLines, usageFromMessage, isCommandOrMetaPrompt } from "./parser.js";
+import { scanSession, emptySeed } from "./parse-session.js";
+import type { ScanSeed, ScanResult, SearchText } from "./parse-session.js";
+import { workerScanEnabled, runScanInWorker, closeScanWorker } from "./index-worker.js";
 import { runMigrations } from "./migrations.js";
 import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
 import { ProjectMetaStore } from "./project-meta.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
 import { TagStore, parseTags } from "./tags.js";
+import { SavedViewStore } from "./saved-views.js";
+import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
 import { listAllSessions } from "./all-sessions.js";
@@ -36,9 +40,7 @@ import type {
   SearchHit,
   SessionSummary,
   TitleSource,
-  TokenUsage,
 } from "./types.js";
-import { EMPTY_USAGE } from "./types.js";
 
 interface Row {
   sessionId: string;
@@ -100,6 +102,14 @@ CREATE TABLE IF NOT EXISTS session_meta (
   tags TEXT,
   archived INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS saved_views (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  query TEXT NOT NULL DEFAULT '',
+  facets TEXT NOT NULL DEFAULT '{}',
+  createdAt INTEGER NOT NULL
+);
 `;
 
 const SELECT_COLS = `
@@ -114,172 +124,13 @@ function n(v: unknown): number {
   return typeof v === "bigint" ? Number(v) : typeof v === "number" ? v : 0;
 }
 
-/** One row of renderable text mirrored into the search store for a session. */
-interface SearchText {
-  role: "user" | "assistant" | "tool";
-  seq: number;
-  text: string;
-  /** Tool name for role="tool" rows (the invoked tool, or the tool a result belongs to). */
-  toolName: string | null;
-}
-
-/** Max characters of a tool_result body we mirror into the search store. */
-const MAX_TOOL_RESULT_TEXT = 2000;
-
-/** Pull a non-empty `message.model` string off an assistant transcript line, or null. */
-function messageModel(message: unknown): string | null {
-  const m =
-    message && typeof message === "object" && !Array.isArray(message)
-      ? (message as Record<string, unknown>)
-      : undefined;
-  const mdl = m?.model;
-  return typeof mdl === "string" && mdl.trim() ? mdl.trim() : null;
-}
-
-/** Read a string field off an arbitrary block object, trimmed and non-empty, or null. */
-function blockStr(b: Record<string, unknown>, key: string): string | null {
-  const v = b[key];
-  return typeof v === "string" && v.trim() ? v.trim() : null;
-}
-
-/** Map a tool_use block to "<ToolName>: <key input>" for search (one compact line). */
-function toolUseLine(name: string, input: unknown): string | null {
-  const io =
-    input && typeof input === "object" && !Array.isArray(input)
-      ? (input as Record<string, unknown>)
-      : undefined;
-  const pick = (key: string): string | null => (io ? blockStr(io, key) : null);
-
-  let detail: string | null = null;
-  switch (name) {
-    case "Bash":
-      detail = pick("command");
-      break;
-    case "Edit":
-    case "Write":
-    case "MultiEdit":
-    case "NotebookEdit":
-      detail = pick("file_path") ?? pick("notebook_path");
-      break;
-    case "Read":
-      detail = pick("file_path") ?? pick("path");
-      break;
-    case "Glob":
-    case "Grep":
-      detail = pick("pattern") ?? pick("path");
-      break;
-    default:
-      // Unknown tool: a short JSON of its input so the args are still searchable.
-      if (io) {
-        try {
-          detail = JSON.stringify(io);
-        } catch {
-          detail = null;
-        }
-      }
-      break;
-  }
-
-  const line = detail ? `${name}: ${detail}` : name;
-  const trimmed = line.trim();
-  return trimmed ? trimmed.slice(0, MAX_SEARCH_TEXT) : null;
-}
-
-/**
- * Harvest tool I/O text from one message for search.
- * - assistant tool_use blocks -> "<ToolName>: <key input>" (role="tool", toolName set).
- * - user tool_result blocks    -> the (capped) result body (role="tool", toolName null).
- * Pushes a SearchText per block; the caller assigns/advances `seq`.
- */
-function toolTexts(type: string, message: unknown, seq: number): SearchText[] {
-  const m =
-    message && typeof message === "object" && !Array.isArray(message)
-      ? (message as Record<string, unknown>)
-      : undefined;
-  const content = m?.content;
-  if (!Array.isArray(content)) return [];
-
-  const out: SearchText[] = [];
-  for (const raw of content) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-    const b = raw as Record<string, unknown>;
-
-    if (type === "assistant" && b.type === "tool_use") {
-      const name = blockStr(b, "name") ?? "Tool";
-      const line = toolUseLine(name, b.input);
-      if (line) out.push({ role: "tool", seq, text: line, toolName: name });
-    } else if (type === "user" && b.type === "tool_result") {
-      const text = toolResultText(b.content);
-      if (text) out.push({ role: "tool", seq, text, toolName: null });
-    }
-  }
-  return out;
-}
-
-/** Flatten a tool_result `content` (string or block array) to a capped plain string. */
-function toolResultText(content: unknown): string | null {
-  let s: string;
-  if (typeof content === "string") {
-    s = content;
-  } else if (Array.isArray(content)) {
-    s = content
-      .map((b) => {
-        if (!b || typeof b !== "object" || Array.isArray(b)) return "";
-        const bo = b as Record<string, unknown>;
-        if (bo.type === "text" && typeof bo.text === "string") return bo.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  } else {
-    return null;
-  }
-  const t = s.trim();
-  return t ? t.slice(0, MAX_TOOL_RESULT_TEXT) : null;
-}
-
-/**
- * Pull the human-readable text out of a user/assistant transcript line for search.
- * - assistant: concatenate `text` blocks (skip thinking/tool_use/tool_result noise).
- * - user: only plain string content, and only when it isn't a command/meta wrapper.
- * Returns the (trimmed, capped) text or null when there's nothing worth indexing.
- */
-function renderableText(type: string, message: unknown): string | null {
-  const m =
-    message && typeof message === "object" && !Array.isArray(message)
-      ? (message as Record<string, unknown>)
-      : undefined;
-  const content = m?.content;
-
-  if (type === "assistant") {
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const b of content) {
-      if (b && typeof b === "object" && (b as Record<string, unknown>).type === "text") {
-        const t = (b as Record<string, unknown>).text;
-        if (typeof t === "string" && t.trim()) parts.push(t);
-      }
-    }
-    const joined = parts.join("\n").trim();
-    return joined ? joined.slice(0, MAX_SEARCH_TEXT) : null;
-  }
-
-  if (type === "user") {
-    if (typeof content !== "string") return null;
-    const t = content.trim();
-    if (!t || isCommandOrMetaPrompt(content)) return null;
-    return t.slice(0, MAX_SEARCH_TEXT);
-  }
-
-  return null;
-}
-
 // Load node:sqlite via require so bundlers/test-runners (Vite/vitest) don't try to
 // resolve this newer builtin through their module graph — Node resolves it natively.
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
-/** Max characters of renderable text we mirror per message into the search store. */
-const MAX_SEARCH_TEXT = 4000;
+// The per-line parse helpers (renderableText/toolTexts/messageModel) and the
+// MAX_SEARCH_TEXT/MAX_TOOL_RESULT_TEXT caps + the SearchText shape now live in
+// parse-session.ts, the single source of truth shared with the indexing worker.
 
 /**
  * Bytes of the transcript HEAD fingerprinted to detect a prefix rewrite / rotation.
@@ -327,6 +178,8 @@ export class TranscriptIndex {
   readonly projectMeta: ProjectMetaStore;
   /** Per-session tags (session_meta.tags JSON array), sharing this DB. */
   readonly tags: TagStore;
+  /** Saved views / smart folders (saved_views table), sharing this DB. */
+  readonly savedViews: SavedViewStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
   /** Full-text search over mirrored message text (shares this DB + searchMode). */
@@ -354,6 +207,7 @@ export class TranscriptIndex {
     this.settings = new SettingsStore(this.db);
     this.projectMeta = new ProjectMetaStore(this.db);
     this.tags = new TagStore(this.db);
+    this.savedViews = new SavedViewStore(this.db);
     this.searchMode = this.initSearchStore();
     this.searcher = new MessageSearch(this.db, this.searchMode);
     this.aggregates = new AggregateCache(this.db);
@@ -412,11 +266,37 @@ export class TranscriptIndex {
   }
 
   close(): void {
+    // Tear down the (optional) index worker. It's unref()'d so it never blocks exit;
+    // terminate is best-effort and async, so we don't await it here (close stays sync).
+    void closeScanWorker();
     this.db.close();
   }
 
   private getRow(sessionId: string): Row | undefined {
     return this.selectOne.get(sessionId) as Row | undefined;
+  }
+
+  /**
+   * Run the PARSE phase for one session — the only CPU-heavy part of indexing.
+   * DEFAULT: synchronous, in-process {@link scanSession} (behavior unchanged). When
+   * `CLAUDE_UI_INDEX_WORKER` is set, offload it to a worker thread instead; the worker
+   * runs the SAME scanSession (identical output) and only READS the file — this thread
+   * still does every DB write. A worker failure falls back to the synchronous scan so
+   * a broken worker can never lose an index pass.
+   */
+  private async scanFile(
+    filePath: string,
+    startByte: number,
+    seed: ScanSeed,
+  ): Promise<ScanResult> {
+    if (workerScanEnabled()) {
+      try {
+        return await runScanInWorker(filePath, startByte, seed);
+      } catch (err) {
+        console.warn(`[engine] index worker scan failed for ${filePath}; using sync:`, err);
+      }
+    }
+    return scanSession(filePath, startByte, seed);
   }
 
   /** Index (or incrementally update) a single session file. */
@@ -456,106 +336,54 @@ export class TranscriptIndex {
       !!existing && existing.indexedBytes > 0 && st.size > existing.indexedBytes && headUnchanged;
     const startByte = incremental ? existing!.indexedBytes : 0;
 
-    let messageCount = incremental ? existing!.messageCount : 0;
-    const usage: TokenUsage = incremental
-      ? {
-          inputTokens: existing!.inputTokens,
-          outputTokens: existing!.outputTokens,
-          cacheReadTokens: existing!.cacheReadTokens,
-          cacheCreationTokens: existing!.cacheCreationTokens,
-        }
-      : { ...EMPTY_USAGE };
-    let cwd = incremental ? existing!.cwd : null;
-    let gitBranch = incremental ? existing!.gitBranch : null;
-    let firstTs = incremental ? existing!.firstTs : null;
-    let lastTs = incremental ? existing!.lastTs : null;
-    // Pick the session's model from its assistant lines: the most-frequently-seen
-    // `message.model`, tie-broken by the last one seen (a session that switched
-    // models mid-stream reports the one it spent most of its turns on). On an
-    // incremental pass we only see the NEW bytes, so we can't recompute true history;
-    // `incumbentModel` (the already-stored choice) is therefore preferred on a tie so
-    // a single new differing line doesn't flip a session that ran mostly on another
-    // model — it only changes when the new lines strictly out-count the incumbent.
-    const modelCounts = new Map<string, number>();
+    // Seed the parse phase: on an incremental pass we carry the prior accumulators
+    // forward; on a full pass we start from zero. `incumbentModel` (the already-stored
+    // model) is preferred on a tie so a single new differing line doesn't flip a
+    // session that ran mostly on another model. searchSeq continues after the rows
+    // already stored on an incremental pass.
     const incumbentModel: string | null = incremental ? existing!.model : null;
-    let lastModel: string | null = incumbentModel;
-    if (incumbentModel) modelCounts.set(incumbentModel, 1);
-    let aiTitle: string | null = null;
-    let summary: string | null = null;
-    let firstPrompt: string | null = null;
+    const seed: ScanSeed = incremental
+      ? {
+          messageCount: existing!.messageCount,
+          usage: {
+            inputTokens: existing!.inputTokens,
+            outputTokens: existing!.outputTokens,
+            cacheReadTokens: existing!.cacheReadTokens,
+            cacheCreationTokens: existing!.cacheCreationTokens,
+          },
+          cwd: existing!.cwd,
+          gitBranch: existing!.gitBranch,
+          firstTs: existing!.firstTs,
+          lastTs: existing!.lastTs,
+          incumbentModel,
+          startSeq: existing!.messageCount,
+        }
+      : emptySeed();
 
-    // Mirror renderable text for search. On incremental runs we append after the
-    // rows already stored, so continue the seq from the prior messageCount.
-    const searchTexts: SearchText[] = [];
-    let searchSeq = incremental ? messageCount : 0;
+    // Scan the (appended) bytes. Off-loaded to a worker thread when the worker path
+    // is enabled (CLAUDE_UI_INDEX_WORKER); otherwise scanned synchronously in-process.
+    // Either way the parsed output is byte-for-byte identical (same scanSession code),
+    // and the DB write below stays single-writer on this thread.
+    const scan = await this.scanFile(filePath, startByte, seed);
 
-    for await (const raw of streamRawLines(filePath, { startByte })) {
-      const type = typeof raw.type === "string" ? raw.type : "";
-      const ts = typeof raw.timestamp === "string" ? raw.timestamp : null;
-      if (ts) {
-        if (!firstTs) firstTs = ts;
-        lastTs = ts;
-      }
-      if (!cwd && typeof raw.cwd === "string") cwd = raw.cwd;
-      if (gitBranch === null && typeof raw.gitBranch === "string") gitBranch = raw.gitBranch;
-      if (type === "user" || type === "assistant") {
-        messageCount++;
-        const text = renderableText(type, raw.message);
-        if (text) {
-          searchTexts.push({ role: type, seq: searchSeq, text, toolName: null });
-        }
-        // Mirror tool I/O (assistant tool_use lines + user tool_result bodies) so
-        // search covers what tools were run and what they returned. Same message
-        // seq; counting/usage above is unchanged.
-        for (const tt of toolTexts(type, raw.message, searchSeq)) {
-          searchTexts.push(tt);
-        }
-        searchSeq++;
-      }
-      if (type === "assistant") {
-        const u = usageFromMessage(raw.message);
-        if (u) {
-          usage.inputTokens += u.inputTokens;
-          usage.outputTokens += u.outputTokens;
-          usage.cacheReadTokens += u.cacheReadTokens;
-          usage.cacheCreationTokens += u.cacheCreationTokens;
-        }
-        const mdl = messageModel(raw.message);
-        if (mdl) {
-          modelCounts.set(mdl, (modelCounts.get(mdl) ?? 0) + 1);
-          lastModel = mdl;
-        }
-      }
-      if (type === "ai-title" && typeof raw.aiTitle === "string") aiTitle = raw.aiTitle;
-      if (type === "summary" && typeof raw.summary === "string") summary = raw.summary;
-      if (!firstPrompt && type === "user") {
-        const content = (raw.message as Record<string, unknown> | undefined)?.content;
-        if (
-          typeof content === "string" &&
-          content.trim() &&
-          raw.isMeta !== true &&
-          !isCommandOrMetaPrompt(content)
-        ) {
-          firstPrompt = content.trim().slice(0, 120);
-        }
-      }
-    }
+    const { messageCount, usage, cwd, gitBranch, firstTs, lastTs } = scan;
+    const lastModel = scan.lastModel;
 
     let title = incremental ? existing!.title : null;
     let titleSource: TitleSource | null = incremental
       ? (existing!.titleSource as TitleSource | null)
       : null;
-    if (aiTitle) {
-      title = aiTitle;
+    if (scan.aiTitle) {
+      title = scan.aiTitle;
       titleSource = "ai-title";
-    } else if (!incremental && summary) {
-      title = summary;
+    } else if (!incremental && scan.summary) {
+      title = scan.summary;
       titleSource = "summary";
-    } else if (!incremental && firstPrompt) {
-      title = firstPrompt;
+    } else if (!incremental && scan.firstPrompt) {
+      title = scan.firstPrompt;
       titleSource = "first-prompt";
-    } else if (incremental && summary && titleSource !== "ai-title") {
-      title = summary;
+    } else if (incremental && scan.summary && titleSource !== "ai-title") {
+      title = scan.summary;
       titleSource = "summary";
     }
     if (!title) {
@@ -570,7 +398,7 @@ export class TranscriptIndex {
     let model: string | null = null;
     let bestCount = -1;
     const tiePriority = (id: string): number => (id === incumbentModel ? 2 : id === lastModel ? 1 : 0);
-    for (const [id, count] of modelCounts) {
+    for (const [id, count] of scan.modelCounts) {
       if (count > bestCount || (count === bestCount && model !== null && tiePriority(id) > tiePriority(model))) {
         bestCount = count;
         model = id;
@@ -578,6 +406,7 @@ export class TranscriptIndex {
     }
     if (!model) model = lastModel;
 
+    const searchTexts = scan.searchTexts;
     const projectId = cwd ? projectIdFromCwd(cwd) : null;
     const sessionDir = path.join(path.dirname(filePath), sessionId);
     const hasSubagents = existsSync(path.join(sessionDir, "subagents")) ? 1 : 0;
@@ -851,6 +680,21 @@ export class TranscriptIndex {
   /** Every distinct tag in use with its session count (count desc, then name asc). */
   getAllTags(): Array<{ tag: string; count: number }> {
     return this.tags.getAll();
+  }
+
+  /** All saved views (smart folders), newest first. */
+  listSavedViews(): SavedView[] {
+    return this.savedViews.list();
+  }
+
+  /** Persist a new saved view; returns the stored view (with id + createdAt). */
+  saveView(input: SaveViewInput): SavedView {
+    return this.savedViews.save(input);
+  }
+
+  /** Delete a saved view by id; returns true when a row was removed. */
+  deleteView(id: number): boolean {
+    return this.savedViews.delete(id);
   }
 }
 

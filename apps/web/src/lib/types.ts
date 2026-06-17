@@ -113,3 +113,60 @@ export interface HooksInput {
   /** Full hooks map to persist (event -> matcher entries). */
   hooks: Record<string, unknown[]>;
 }
+
+/**
+ * One subagent definition from GET /api/config/agents (an `agents/*.md` file with
+ * frontmatter). Mirrors the engine's `AgentDef` (config/index.ts); defined locally
+ * so the web bundle stays free of the Node-only engine config code. Kept in
+ * lockstep with packages/engine/src/config/index.ts.
+ */
+export interface AgentDef {
+  name: string;
+  description: string | null;
+  /** Preferred model alias from frontmatter (e.g. "sonnet"), if set. */
+  model: string | null;
+  scope: ConfigScope;
+  /** Absolute path to the source .md file (used for the open/copy affordance). */
+  filePath: string;
+}
+
+/**
+ * One day's rolled-up token usage + cost + session count, from GET /api/rollups.
+ * Mirrors the engine's `DailyUsage` (rollups.ts); defined locally so the web
+ * bundle stays free of Node-only engine code. The series is oldest→newest and
+ * days with no activity are simply absent (the client zero-/range-fills as needed).
+ * Kept in lockstep with packages/engine/src/rollups.ts.
+ */
+export interface DailyUsage {
+  /** UTC calendar day, `YYYY-MM-DD`. */
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  /** APPROXIMATE summed USD spend for the day (per-session, model-priced). */
+  costUsd: number;
+  /** Number of sessions whose last activity fell on this day. */
+  sessions: number;
+}
+
+/**
+ * One git worktree from GET /api/git/worktrees. A worktree is a checkout of a
+ * branch in its own directory that shares the repo's history — handy for working
+ * on two branches at once. The shape is mirrored locally (not imported from the
+ * engine root, which bundles Node-only code) to keep the web build server-free,
+ * and is intentionally tolerant: the engine/server lane owns the canonical
+ * fields; unknown extras are ignored.
+ */
+export interface Worktree {
+  /** Absolute path of the worktree directory. */
+  path: string;
+  /** Checked-out branch (e.g. "feature/x"), or null when detached. */
+  branch: string | null;
+  /** Current HEAD commit hash, when reported. */
+  head?: string | null;
+  /** True for the repo's primary (main) worktree, which can't be removed here. */
+  isMain?: boolean;
+  /** True when this worktree is bare/locked/prunable (advisory display only). */
+  locked?: boolean;
+}

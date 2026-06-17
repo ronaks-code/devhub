@@ -18,7 +18,8 @@ import { DEFAULT_SETTINGS } from "../src/types.js";
 import { archiveSession, hasArchive, readArchived } from "../src/archive.js";
 import { costUsd, pricingForModel, MODEL_PRICING } from "../src/pricing.js";
 import { detectSourceKind } from "../src/discovery.js";
-import { parseStatus, GitService } from "../src/git.js";
+import { parseStatus, parseWorktrees, GitService } from "../src/git.js";
+import { scanSession, emptySeed } from "../src/parse-session.js";
 import { createLineSplitter } from "../src/driver/buffer.js";
 import { listRunningSessions, isPidAlive } from "../src/running.js";
 import { runMigrations, hasColumn } from "../src/migrations.js";
@@ -2775,5 +2776,302 @@ describe("testMcpServer (connectivity probe)", () => {
   it("http: a url-less http server is reported", async () => {
     const res = await testMcpServer(def({ type: "sse", raw: {} }));
     expect(res).toEqual({ ok: false, error: "sse server has no url" });
+  });
+});
+
+describe("saved views (smart folders)", () => {
+  it("save/list/delete round-trips, newest first, with facets JSON", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    expect(engine.listSavedViews()).toEqual([]);
+
+    const a = engine.saveView({ name: "Bugs in alpha", query: "bug", facets: { projectId: "p1", tag: "bug" } });
+    expect(a.id).toBeGreaterThan(0);
+    expect(a.query).toBe("bug");
+    expect(a.facets).toEqual({ projectId: "p1", tag: "bug" });
+    expect(typeof a.createdAt).toBe("number");
+
+    const b = engine.saveView({ name: "Recent" }); // facet-only / query-less is fine
+    expect(b.query).toBe("");
+    expect(b.facets).toEqual({});
+
+    // Newest first (b inserted after a -> b leads).
+    const list = engine.listSavedViews();
+    expect(list.map((v) => v.name)).toEqual(["Recent", "Bugs in alpha"]);
+    // Facets round-trip through JSON unchanged.
+    expect(list.find((v) => v.name === "Bugs in alpha")!.facets).toEqual({ projectId: "p1", tag: "bug" });
+
+    // Delete by id removes exactly that view; a second delete is a no-op false.
+    expect(engine.deleteView(a.id)).toBe(true);
+    expect(engine.listSavedViews().map((v) => v.name)).toEqual(["Recent"]);
+    expect(engine.deleteView(a.id)).toBe(false);
+    engine.close();
+  });
+
+  it("trims the name and requires one; persists across a reopen", () => {
+    const dir = tmp();
+    const engine = new Engine(path.join(dir, "i.db"));
+    const saved = engine.saveView({ name: "  Tagged work  ", query: "  deploy  " });
+    expect(saved.name).toBe("Tagged work"); // trimmed
+    expect(saved.query).toBe("deploy"); // trimmed
+    expect(() => engine.saveView({ name: "   " })).toThrow(); // blank name rejected
+    engine.close();
+
+    // Stored in the shared index.db, so it survives a reopen.
+    const reopened = new Engine(path.join(dir, "i.db"));
+    expect(reopened.listSavedViews().map((v) => v.name)).toEqual(["Tagged work"]);
+    reopened.close();
+  });
+
+  it("a corrupt facets JSON value reads back as {}", () => {
+    const file = path.join(tmp(), "i.db");
+    const engine = new Engine(file);
+    engine.saveView({ name: "ok", query: "x" });
+    engine.close();
+
+    // Corrupt the stored facets directly, then reopen and read.
+    const db = new DatabaseSync(file);
+    db.prepare("UPDATE saved_views SET facets = ? WHERE name = ?").run("{not json", "ok");
+    db.close();
+
+    const reopened = new Engine(file);
+    expect(reopened.listSavedViews()[0]!.facets).toEqual({});
+    reopened.close();
+  });
+});
+
+describe("migrations (saved_views table backfill)", () => {
+  it("adds saved_views to a legacy DB and is idempotent", () => {
+    const file = path.join(tmp(), "legacy.db");
+    const db = new DatabaseSync(file);
+    // A DB created before saved views existed: sit at user_version 6 (archived
+    // migration applied, saved_views one not yet).
+    db.exec(`CREATE TABLE session_meta (sessionId TEXT PRIMARY KEY, archived INTEGER NOT NULL DEFAULT 0);`);
+    db.exec("PRAGMA user_version = 6");
+
+    const hasTable = (name: string): boolean =>
+      !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(name);
+    expect(hasTable("saved_views")).toBe(false);
+
+    runMigrations(db);
+    expect(hasTable("saved_views")).toBe(true);
+    // Usable after the migration: an insert + read works.
+    db.prepare("INSERT INTO saved_views (name, query, facets, createdAt) VALUES (?, ?, ?, ?)").run(
+      "v",
+      "q",
+      "{}",
+      123,
+    );
+    const row = db.prepare("SELECT name, createdAt FROM saved_views").get() as { name: string; createdAt: number };
+    expect(row.name).toBe("v");
+
+    // Re-running is harmless (IF NOT EXISTS guard).
+    runMigrations(db);
+    expect(hasTable("saved_views")).toBe(true);
+    db.close();
+  });
+});
+
+describe("parseWorktrees (git worktree list --porcelain)", () => {
+  it("parses the main + linked worktrees, branch/head/locked/isMain", () => {
+    // A representative porcelain dump: main on `main`, a linked worktree on a feature
+    // branch, a locked detached one, and a bare entry. Blank lines separate blocks.
+    const raw = [
+      "worktree /repo",
+      "HEAD 1111111111111111111111111111111111111111",
+      "branch refs/heads/main",
+      "",
+      "worktree /repo-feature",
+      "HEAD 2222222222222222222222222222222222222222",
+      "branch refs/heads/feature/login",
+      "",
+      "worktree /repo-detached",
+      "HEAD 3333333333333333333333333333333333333333",
+      "detached",
+      "locked",
+      "",
+    ].join("\n");
+
+    const wts = parseWorktrees(raw);
+    expect(wts.length).toBe(3);
+
+    expect(wts[0]).toEqual({
+      path: "/repo",
+      branch: "main",
+      head: "1111111111111111111111111111111111111111",
+      locked: false,
+      isMain: true, // first block is the main worktree
+    });
+    // The "refs/heads/" prefix is stripped, including a slashed branch name.
+    expect(wts[1]!.branch).toBe("feature/login");
+    expect(wts[1]!.isMain).toBe(false);
+    // detached => branch null; locked => true.
+    expect(wts[2]!.branch).toBeNull();
+    expect(wts[2]!.locked).toBe(true);
+    expect(wts[2]!.head).toBe("3333333333333333333333333333333333333333");
+  });
+
+  it("handles a final block without a trailing blank line, and empty input", () => {
+    expect(parseWorktrees("")).toEqual([]);
+    const raw = ["worktree /only", "HEAD abc", "branch refs/heads/dev"].join("\n");
+    const wts = parseWorktrees(raw);
+    expect(wts.length).toBe(1);
+    expect(wts[0]).toMatchObject({ path: "/only", branch: "dev", head: "abc", isMain: true });
+  });
+
+  it("a bare repo entry has null branch/head and never throws", () => {
+    const raw = ["worktree /bare", "bare", ""].join("\n");
+    const [wt] = parseWorktrees(raw);
+    expect(wt).toEqual({ path: "/bare", branch: null, head: null, locked: false, isMain: true });
+  });
+});
+
+describe("git worktree ops (temp repo)", () => {
+  const initRepo = (): string => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "cui-wt-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "CUI Test"], { cwd: dir });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
+    writeFileSync(path.join(dir, "a.txt"), "x\n");
+    execFileSync("git", ["add", "a.txt"], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+    return dir;
+  };
+
+  it("list shows the main worktree; add creates a new-branch worktree; remove deletes it", async () => {
+    const dir = initRepo();
+    const git = new GitService(dir);
+
+    // Initially just the main worktree (isMain, on its current branch).
+    let wts = await git.listWorktrees();
+    expect(wts.length).toBe(1);
+    expect(wts[0]!.isMain).toBe(true);
+    expect(wts[0]!.branch).not.toBeNull();
+
+    // Add a linked worktree on a brand-new branch.
+    const wtPath = path.join(os.tmpdir(), `cui-wt-linked-${Date.now()}`);
+    const add = await git.addWorktree(wtPath, { newBranch: "feature-x" });
+    expect(add.ok).toBe(true);
+
+    wts = await git.listWorktrees();
+    expect(wts.length).toBe(2);
+    const linked = wts.find((w) => !w.isMain)!;
+    expect(linked.branch).toBe("feature-x");
+
+    // Remove it; back to one worktree.
+    const rm = await git.removeWorktree(wtPath, { force: true });
+    expect(rm.ok).toBe(true);
+    expect((await git.listWorktrees()).length).toBe(1);
+
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(wtPath, { recursive: true, force: true });
+  });
+
+  it("listWorktrees on a non-git dir returns []; add/remove fail typed", async () => {
+    const nonRepo = mkdtempSync(path.join(os.tmpdir(), "cui-wt-nogit-"));
+    const git = new GitService(nonRepo);
+    expect(await git.listWorktrees()).toEqual([]);
+    expect(await git.addWorktree(path.join(nonRepo, "wt"))).toMatchObject({ ok: false });
+    expect(await git.removeWorktree(path.join(nonRepo, "wt"))).toMatchObject({ ok: false });
+    rmSync(nonRepo, { recursive: true, force: true });
+  });
+});
+
+describe("index worker parse phase (parse-session.scanSession)", () => {
+  // Build a representative transcript exercising every branch the scan folds:
+  // user prompt, assistant text + tool_use + usage + model, a tool_result, an
+  // ai-title, and a summary.
+  const writeTranscript = (file: string, cwd: string) => {
+    writeFileSync(
+      file,
+      jl({ type: "summary", summary: "older summary" }) +
+        jl({ type: "user", cwd, gitBranch: "main", timestamp: "2026-01-01T00:00:00.000Z", message: { role: "user", content: "deploy the widget service" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          timestamp: "2026-01-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [
+              { type: "text", text: "Running the deploy." },
+              { type: "tool_use", id: "tu1", name: "Bash", input: { command: "./deploy.sh widget" } },
+            ],
+            usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 4, cache_creation_input_tokens: 2 },
+          },
+        }) +
+        jl({ type: "user", cwd, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: "deployed OK" }] } }) +
+        jl({ type: "ai-title", aiTitle: "Deploy widget" }),
+    );
+  };
+
+  it("scanSession folds counts/usage/model/title-sources and mirrors search text", async () => {
+    const dir = tmp();
+    const file = path.join(dir, "s.jsonl");
+    const cwd = "/home/me/widget";
+    writeTranscript(file, cwd);
+
+    const scan = await scanSession(file, 0, emptySeed());
+    // 3 messages (user + assistant + user tool_result); ai-title/summary aren't messages.
+    expect(scan.messageCount).toBe(3);
+    expect(scan.usage).toEqual({ inputTokens: 100, outputTokens: 20, cacheReadTokens: 4, cacheCreationTokens: 2 });
+    expect(scan.cwd).toBe(cwd);
+    expect(scan.gitBranch).toBe("main");
+    expect(scan.firstTs).toBe("2026-01-01T00:00:00.000Z");
+    expect(scan.lastTs).toBe("2026-01-01T00:01:00.000Z");
+    expect(scan.aiTitle).toBe("Deploy widget");
+    expect(scan.summary).toBe("older summary");
+    expect(scan.firstPrompt).toBe("deploy the widget service");
+    expect(scan.modelCounts).toEqual([["claude-opus-4-8", 1]]);
+    expect(scan.lastModel).toBe("claude-opus-4-8");
+
+    // Search rows: user text, assistant text, the Bash tool_use line, the tool_result.
+    const texts = scan.searchTexts.map((t) => t.text);
+    expect(texts).toContain("deploy the widget service");
+    expect(texts).toContain("Running the deploy.");
+    expect(scan.searchTexts.some((t) => t.role === "tool" && t.toolName === "Bash" && t.text.includes("./deploy.sh widget"))).toBe(true);
+    expect(scan.searchTexts.some((t) => t.role === "tool" && t.text === "deployed OK")).toBe(true);
+  });
+
+  it("the worker path (CLAUDE_UI_INDEX_WORKER) produces an identical index to the default", async () => {
+    const dir = tmp();
+    const projSync = path.join(dir, "-sync");
+    const projWk = path.join(dir, "-wk");
+    mkdirSync(projSync);
+    mkdirSync(projWk);
+    const cwd = "/home/me/identical";
+    writeTranscript(path.join(projSync, "sess.jsonl"), cwd);
+    writeTranscript(path.join(projWk, "sess.jsonl"), cwd);
+
+    // Default (worker OFF): index synchronously.
+    const prev = process.env.CLAUDE_UI_INDEX_WORKER;
+    delete process.env.CLAUDE_UI_INDEX_WORKER;
+    const syncIdx = new TranscriptIndex(path.join(dir, "sync.db"));
+    expect(await syncIdx.indexSession(path.join(projSync, "sess.jsonl"))).toBe("added");
+    const syncSummary = syncIdx.getSessionSummary("sess")!;
+    const syncSearch = syncIdx.search("deploy").length;
+    syncIdx.close();
+
+    // Worker ON: index the identical transcript via the worker-thread parse path.
+    process.env.CLAUDE_UI_INDEX_WORKER = "1";
+    try {
+      const wkIdx = new TranscriptIndex(path.join(dir, "wk.db"));
+      expect(await wkIdx.indexSession(path.join(projWk, "sess.jsonl"))).toBe("added");
+      const wkSummary = wkIdx.getSessionSummary("sess")!;
+      // Same parsed metadata regardless of which thread did the parse.
+      expect(wkSummary.messageCount).toBe(syncSummary.messageCount);
+      expect(wkSummary.usage).toEqual(syncSummary.usage);
+      expect(wkSummary.title).toBe(syncSummary.title);
+      expect(wkSummary.titleSource).toBe(syncSummary.titleSource);
+      expect(wkSummary.model).toBe(syncSummary.model);
+      expect(wkSummary.gitBranch).toBe(syncSummary.gitBranch);
+      // Same mirrored search rows (the Bash tool line is searchable under both).
+      expect(wkIdx.search("deploy").length).toBe(syncSearch);
+      expect(wkIdx.search("deploy", { toolName: "Bash" }).map((h) => h.sessionId)).toEqual(["sess"]);
+      wkIdx.close();
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_UI_INDEX_WORKER;
+      else process.env.CLAUDE_UI_INDEX_WORKER = prev;
+    }
   });
 });

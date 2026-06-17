@@ -776,6 +776,7 @@ export function ChatPane({
                   >
                     <MessageView
                       m={it.message}
+                      live={running}
                       onEdit={!running ? editFromMessage : undefined}
                     />
                   </div>

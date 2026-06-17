@@ -19,6 +19,7 @@ import type { Checkpoint, RestoreResult } from "./checkpoint.js";
 import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
+import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { listMcpServers } from "./config/index.js";
 import { testMcpServer } from "./config/mcp-test.js";
 import type { McpTestResult } from "./config/mcp-test.js";
@@ -207,6 +208,28 @@ export class Engine {
   /** Every distinct tag in use with its session count (count desc, then name asc). */
   getAllTags(): Array<{ tag: string; count: number }> {
     return this.index.getAllTags();
+  }
+
+  /**
+   * Saved views ("smart folders") — a named, re-runnable (query + facets). A view
+   * is exactly what {@link search} understands, so re-running one is
+   * `engine.search(view.query, view.facets)`. Newest first.
+   */
+  listSavedViews(): SavedView[] {
+    return this.index.listSavedViews();
+  }
+
+  /**
+   * Persist a new saved view (smart folder). `name` is required (trimmed); `query`
+   * and `facets` default to "" / {}. Returns the stored view (with id + createdAt).
+   */
+  saveView(input: SaveViewInput): SavedView {
+    return this.index.saveView(input);
+  }
+
+  /** Delete a saved view by id; returns true when a row was removed. */
+  deleteView(id: number): boolean {
+    return this.index.deleteView(id);
   }
 
   /**
@@ -484,18 +507,21 @@ export type { SourceKind } from "./discovery.js";
 export { archiveSession, hasArchive, readArchived, archiveDir, archivePath } from "./archive.js";
 export { costUsd, pricingForModel, MODEL_PRICING, FALLBACK_PRICING } from "./pricing.js";
 export type { ModelPricing } from "./pricing.js";
-export { GitService, parseStatus } from "./git.js";
+export { GitService, parseStatus, parseWorktrees } from "./git.js";
 export type {
   GitStatus,
   GitBranch,
   GitLogEntry,
   GitDiff,
+  GitWorktree,
   GitWriteResult,
   GitCommitResult,
 } from "./git.js";
 export { ProjectMetaStore } from "./project-meta.js";
 export type { ProjectMetaPatch } from "./project-meta.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";
+export { SavedViewStore } from "./saved-views.js";
+export type { SavedView, SaveViewInput } from "./saved-views.js";
 export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
 export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
 export * as config from "./config/index.js";

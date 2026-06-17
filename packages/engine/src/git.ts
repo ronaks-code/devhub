@@ -51,6 +51,20 @@ export interface GitDiff {
   patch: string;
 }
 
+/** One worktree from `git worktree list --porcelain`. */
+export interface GitWorktree {
+  /** Absolute path of the worktree's root directory. */
+  path: string;
+  /** Checked-out branch (short name), or null when detached / bare. */
+  branch: string | null;
+  /** Full HEAD commit hash, or null for a bare repo (no HEAD). */
+  head: string | null;
+  /** True when the worktree is locked (`git worktree lock`). */
+  locked: boolean;
+  /** True for the MAIN worktree (the first entry git lists — the repo's own dir). */
+  isMain: boolean;
+}
+
 /**
  * Result of a mutating git op (stage/unstage/commit/branch/checkout). Unlike the
  * read-only ops (which return null on any failure), writes report success/failure
@@ -200,6 +214,65 @@ function parseBranchHeader(body: string, status: GitStatus): void {
   const behind = body.match(/behind (\d+)/);
   if (ahead?.[1]) status.ahead = Number(ahead[1]);
   if (behind?.[1]) status.behind = Number(behind[1]);
+}
+
+/**
+ * Parse `git worktree list --porcelain` output into {@link GitWorktree}[]. Exported
+ * for unit testing of the porcelain format without spawning git.
+ *
+ * The porcelain format is a NEWLINE-separated list of attribute lines, with a BLANK
+ * line between worktrees. The first attribute of each block is always `worktree
+ * <abs-path>`; then optional `HEAD <sha>`, `branch refs/heads/<name>`, `detached`,
+ * `bare`, and `locked [<reason>]`. The FIRST block git emits is the main worktree.
+ */
+export function parseWorktrees(raw: string): GitWorktree[] {
+  const out: GitWorktree[] = [];
+  let cur: GitWorktree | null = null;
+  // Flush the in-progress block (if any) into `out`.
+  const flush = () => {
+    if (cur) out.push(cur);
+    cur = null;
+  };
+
+  for (const line of raw.split("\n")) {
+    if (line === "") {
+      // Blank line ends a worktree block.
+      flush();
+      continue;
+    }
+    // Each line is "<key>" or "<key> <value>".
+    const sp = line.indexOf(" ");
+    const key = sp >= 0 ? line.slice(0, sp) : line;
+    const value = sp >= 0 ? line.slice(sp + 1) : "";
+
+    if (key === "worktree") {
+      // A new block starts; flush any prior one that wasn't blank-terminated.
+      flush();
+      cur = {
+        path: value,
+        branch: null,
+        head: null,
+        locked: false,
+        // The first worktree git lists is the main one.
+        isMain: out.length === 0,
+      };
+      continue;
+    }
+    if (!cur) continue; // attribute before any `worktree` line — ignore defensively
+    if (key === "HEAD") {
+      cur.head = value || null;
+    } else if (key === "branch") {
+      // "refs/heads/<name>" -> "<name>"; keep anything unexpected verbatim.
+      cur.branch = value.startsWith("refs/heads/") ? value.slice("refs/heads/".length) : value;
+    } else if (key === "detached") {
+      cur.branch = null;
+    } else if (key === "locked") {
+      cur.locked = true;
+    }
+    // `bare` carries no fields we surface; HEAD/branch simply stay null for it.
+  }
+  flush(); // last block may not be blank-terminated
+  return out;
 }
 
 /** Field separator unlikely to appear in a commit subject/author. */
@@ -364,5 +437,53 @@ export class GitService {
     const guard = await this.repoGuard();
     if (guard) return guard;
     return runGitWrite(this.cwd, ["checkout", name]);
+  }
+
+  // -- Worktrees -------------------------------------------------------------
+  //
+  // List/add/remove linked worktrees. Listing is read-only (tolerant: [] on a
+  // non-git dir). add/remove MUTATE the repo's worktree set but never a transcript;
+  // paths are execFile args (no shell) and `--` ends option parsing so a path that
+  // looks like a flag is still treated as a path.
+
+  /** Linked worktrees (main first), or [] when `cwd` is not a git repo. */
+  async listWorktrees(): Promise<GitWorktree[]> {
+    const out = await runGit(this.cwd, ["worktree", "list", "--porcelain"]);
+    if (out === null) return [];
+    return parseWorktrees(out);
+  }
+
+  /**
+   * Add a worktree at `wtPath`. With `{ newBranch }` creates that branch (`-b`); with
+   * `{ branch }` checks out an existing branch there; with neither, git checks out a
+   * detached HEAD at the current commit. Returns a typed result (failed for a non-git
+   * dir, an existing path, or a branch already checked out elsewhere).
+   */
+  async addWorktree(
+    wtPath: string,
+    opts: { branch?: string; newBranch?: string } = {},
+  ): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    const args = ["worktree", "add"];
+    // `-b <new>` must precede the path; an existing branch is a positional after it.
+    if (opts.newBranch) args.push("-b", opts.newBranch);
+    args.push("--", wtPath);
+    if (!opts.newBranch && opts.branch) args.push(opts.branch);
+    return runGitWrite(this.cwd, args);
+  }
+
+  /**
+   * Remove the worktree at `wtPath` (`git worktree remove`). Fails (typed) when the
+   * worktree has uncommitted changes unless `{ force: true }`; returns a failed result
+   * for a non-git dir.
+   */
+  async removeWorktree(wtPath: string, opts: { force?: boolean } = {}): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    const args = ["worktree", "remove"];
+    if (opts.force) args.push("--force");
+    args.push("--", wtPath);
+    return runGitWrite(this.cwd, args);
   }
 }
