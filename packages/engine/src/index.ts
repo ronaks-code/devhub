@@ -29,6 +29,8 @@ import { testMcpServer } from "./config/mcp-test.js";
 import type { McpTestResult } from "./config/mcp-test.js";
 import { resolveEffectiveConfig } from "./config/effective.js";
 import type { EffectiveConfig } from "./config/effective.js";
+import { searchConfig } from "./config/index-config.js";
+import type { ConfigSearchHit } from "./config/index-config.js";
 import { hybridSearch } from "./embeddings.js";
 import type { HybridSearchOptions } from "./embeddings.js";
 import { searchSymbols } from "./symbols.js";
@@ -217,6 +219,23 @@ export class Engine {
    */
   async getEffectiveConfig(projectCwd?: string): Promise<EffectiveConfig> {
     return resolveEffectiveConfig(projectCwd);
+  }
+
+  /**
+   * Flat, relevance-ranked search across ALL Claude Code config artifacts — agents,
+   * skills, commands, MCP server names, settings/permission keys, hook events, and
+   * CLAUDE.md content — for a config command palette. Case-insensitive substring-then-
+   * fuzzy matching; a blank query returns []. Pass `projectCwd` to also include that
+   * project's scoped config (project + global entries are returned side by side, each
+   * with its own scope). `opts.limit` caps the result count. Read-only and tolerant of a
+   * half-configured machine. See {@link searchConfig}.
+   */
+  async searchConfig(
+    query: string,
+    projectCwd?: string,
+    opts: { limit?: number } = {},
+  ): Promise<ConfigSearchHit[]> {
+    return searchConfig(query, projectCwd, opts);
   }
 
   getSession(sessionId: string): SessionSummary | undefined {
@@ -643,6 +662,8 @@ export type {
 } from "./config/resolve.js";
 export { resolveEffectiveConfig } from "./config/effective.js";
 export type { EffectiveConfig, EffectiveExtension } from "./config/effective.js";
+export { searchConfig } from "./config/index-config.js";
+export type { ConfigSearchHit, ConfigArtifactKind } from "./config/index-config.js";
 export {
   hybridSearch,
   selectProvider,

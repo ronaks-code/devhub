@@ -8,8 +8,9 @@ import { Engine } from "@claude-ui/engine";
 import type { NormalizedMessage, ProjectSummary, SearchHit, SessionSummary } from "@claude-ui/engine/types";
 import { Chat } from "./screens/Chat.js";
 import { Search } from "./screens/Search.js";
+import { Dashboard } from "./screens/Dashboard.js";
 
-type Mode = "projects" | "sessions" | "transcript" | "chat" | "search";
+type Mode = "projects" | "sessions" | "transcript" | "chat" | "search" | "dashboard";
 
 /** Just the bits the transcript header renders — works for a SessionSummary or a SearchHit. */
 type TranscriptHead = { sessionId: string; title: string; cwd: string | null };
@@ -86,6 +87,13 @@ export function App({ engine }: { engine: Engine }) {
           return;
         }
       }
+      if (input === "d") {
+        // Open the dashboard (running sessions + headline stats) from browse.
+        if (mode === "projects" || mode === "sessions") {
+          setMode("dashboard");
+          return;
+        }
+      }
       if (mode === "projects") {
         if (key.downArrow || input === "j") setPIdx((i) => Math.min(i + 1, projects.length - 1));
         else if (key.upArrow || input === "k") setPIdx((i) => Math.max(i - 1, 0));
@@ -127,10 +135,10 @@ export function App({ engine }: { engine: Engine }) {
         else if (key.escape || input === "h") setMode(transcriptReturn);
       }
     },
-    // While the Chat or Search screen is mounted it owns keyboard input; the
-    // browse handler is disabled so typed characters (incl. "q"/"c"/"/") go to
-    // that screen's input instead of triggering browse shortcuts.
-    { isActive: mode !== "chat" && mode !== "search" },
+    // While the Chat, Search, or Dashboard screen is mounted it owns keyboard
+    // input; the browse handler is disabled so typed characters (incl.
+    // "q"/"c"/"/"/"d") go to that screen instead of triggering browse shortcuts.
+    { isActive: mode !== "chat" && mode !== "search" && mode !== "dashboard" },
   );
 
   if (mode === "chat" && project) {
@@ -153,6 +161,16 @@ export function App({ engine }: { engine: Engine }) {
           onOpen={(hit) => openTranscript({ sessionId: hit.sessionId, title: hit.title, cwd: hit.cwd }, "search")}
           onExit={() => setMode("projects")}
         />
+      </Box>
+    );
+  }
+
+  if (mode === "dashboard") {
+    // The Dashboard screen owns its own input (r refresh, esc/h back). It reads
+    // running sessions + headline stats in-process; Esc returns to browse.
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <Dashboard engine={engine} onExit={() => setMode("projects")} />
       </Box>
     );
   }
@@ -210,9 +228,9 @@ export function App({ engine }: { engine: Engine }) {
       <Box marginTop={1}>
         <Text color="gray" dimColor>
           {mode === "projects"
-            ? "↑↓/jk move · ⏎ open · c chat · / search · q quit"
+            ? "↑↓/jk move · ⏎ open · c chat · / search · d dashboard · q quit"
             : mode === "sessions"
-              ? "↑↓/jk move · ⏎ open · c chat · / search · esc/h back · q quit"
+              ? "↑↓/jk move · ⏎ open · c chat · / search · d dashboard · esc/h back · q quit"
               : "↑↓/jk scroll · space page · esc/h back · q quit"}
         </Text>
       </Box>

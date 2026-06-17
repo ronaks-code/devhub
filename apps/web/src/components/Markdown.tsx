@@ -1,9 +1,34 @@
 import { memo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
+import rehypeKatex from "rehype-katex";
+import hljs from "highlight.js/lib/core";
+import jsonLang from "highlight.js/lib/languages/json";
 import { Check, Copy } from "lucide-react";
 import { cn } from "../lib/utils";
+
+// A minimal highlight.js instance registered with only the JSON grammar — used
+// to re-highlight a fenced ```json block AFTER we pretty-print it (rehype-highlight
+// already ran on the original, un-indented source, so we redo this one ourselves).
+hljs.registerLanguage("json", jsonLang);
+
+/**
+ * Pretty-print a JSON string with 2-space indentation. Returns `null` when the
+ * input does NOT parse as JSON (so the caller leaves the original block alone —
+ * a malformed/partial JSON fence still renders verbatim instead of erroring).
+ * Cheap parse → only attempted on blocks already tagged `language-json`.
+ */
+function prettyJson(src: string): string | null {
+  const trimmed = src.trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.stringify(JSON.parse(trimmed), null, 2);
+  } catch {
+    return null;
+  }
+}
 
 /** Extract plain text from React children (for the copy-to-clipboard payload). */
 function childText(node: ReactNode): string {
@@ -11,7 +36,12 @@ function childText(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(childText).join("");
   if (typeof node === "object" && "props" in node) {
-    return childText((node as { props?: { children?: ReactNode } }).props?.children);
+    const props = (node as { props?: { "data-copy-text"?: string; children?: ReactNode } }).props;
+    // A pretty-printed JSON block renders its highlighted markup via
+    // dangerouslySetInnerHTML (so it has no React children to walk); it stashes
+    // the reformatted source on data-copy-text so Copy yields the indented JSON.
+    if (props && typeof props["data-copy-text"] === "string") return props["data-copy-text"];
+    return childText(props?.children);
   }
   return "";
 }
@@ -84,8 +114,8 @@ export const Markdown = memo(function Markdown({
   return (
     <div className={cn("md-body text-[13.5px] leading-relaxed text-zinc-200", className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex, rehypeHighlight]}
         components={{
           h1: ({ children }) => (
             <h1 className="mb-2 mt-3 text-[17px] font-semibold text-zinc-100 first:mt-0">
@@ -156,6 +186,27 @@ export const Markdown = memo(function Markdown({
             // sits inside <pre>; everything else is inline.
             const isBlock = /\blanguage-/.test(codeClass ?? "") || /\bhljs\b/.test(codeClass ?? "");
             if (isBlock) {
+              // Pretty-print fenced ```json blocks: reformat the source with a
+              // 2-space indent, then RE-highlight it ourselves. rehype-highlight
+              // already ran (in the rehype pass) on the original, un-indented
+              // text and replaced `children` with colored spans — so we flatten
+              // those back to source via childText(), reformat, and re-run hljs
+              // on the result. If the text isn't valid JSON, prettyJson() returns
+              // null and we fall through to the already-highlighted children.
+              if (/\blanguage-json\b/.test(codeClass ?? "")) {
+                const pretty = prettyJson(childText(children));
+                if (pretty != null) {
+                  const html = hljs.highlight(pretty, { language: "json" }).value;
+                  return (
+                    <code
+                      className={cn("hljs language-json")}
+                      data-copy-text={pretty}
+                      dangerouslySetInnerHTML={{ __html: html }}
+                      {...props}
+                    />
+                  );
+                }
+              }
               return (
                 <code className={cn("hljs", codeClass)} {...props}>
                   {children}

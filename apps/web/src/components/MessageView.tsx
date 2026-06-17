@@ -6,6 +6,7 @@ import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { Markdown } from "./Markdown";
 import { TurnMeta } from "./TurnMeta";
 import { ToolCard } from "./ToolCard";
+import { ToolGroup } from "./ToolGroup";
 import { ResultBody } from "./ResultBody";
 import { ImageBlock, type ImageBlockData } from "./ImageBlock";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
@@ -124,6 +125,63 @@ function Block({ block }: { block: ContentBlock }) {
         </pre>
       );
   }
+}
+
+/**
+ * A tool-ish block is one that renders as a tool CARD: a tool_use (paired or not)
+ * or a STANDALONE tool_result (one whose tool_use fell outside the window). These
+ * are the blocks ToolGroup folds together.
+ */
+function isToolBlock(b: ContentBlock): boolean {
+  return b.type === "tool_use" || b.type === "tool_result";
+}
+
+/**
+ * The name shown in a grouped run's preview chips. tool_use carries the tool name;
+ * a standalone tool_result just shows "result".
+ */
+function toolBlockName(b: ContentBlock): string {
+  if (b.type === "tool_use") return (b as { name?: string }).name || "tool";
+  return "result";
+}
+
+/** Minimum consecutive tool cards before a run gets folded into a ToolGroup. */
+const MIN_GROUP = 3;
+
+/**
+ * Segment a message's blocks into render units: long RUNS of consecutive tool
+ * cards (≥ {@link MIN_GROUP}) become one `{ kind: "group" }` unit (rendered as a
+ * collapsible ToolGroup); everything else stays a `{ kind: "block" }` unit rendered
+ * inline. Prose (text/thinking) and images break a run, so a tool burst sandwiched
+ * by explanation stays grouped while a single tool between sentences renders flat.
+ * Order and identity are preserved — the original blocks render verbatim on expand.
+ */
+type RenderUnit =
+  | { kind: "block"; block: ContentBlock; index: number }
+  | { kind: "group"; blocks: { block: ContentBlock; index: number }[] };
+
+function groupToolBlocks(blocks: ContentBlock[]): RenderUnit[] {
+  const units: RenderUnit[] = [];
+  let i = 0;
+  while (i < blocks.length) {
+    if (isToolBlock(blocks[i]!)) {
+      let j = i;
+      while (j < blocks.length && isToolBlock(blocks[j]!)) j++;
+      const runLen = j - i;
+      if (runLen >= MIN_GROUP) {
+        const run: { block: ContentBlock; index: number }[] = [];
+        for (let k = i; k < j; k++) run.push({ block: blocks[k]!, index: k });
+        units.push({ kind: "group", blocks: run });
+      } else {
+        for (let k = i; k < j; k++) units.push({ kind: "block", block: blocks[k]!, index: k });
+      }
+      i = j;
+    } else {
+      units.push({ kind: "block", block: blocks[i]!, index: i });
+      i++;
+    }
+  }
+  return units;
 }
 
 const ROLE_META: Record<string, { label: string; bar: string; chip: string }> = {
@@ -257,9 +315,23 @@ export const MessageView = memo(function MessageView({
             )
           ) : (
             <>
-              {m.blocks.map((b, i) => (
-                <Block key={i} block={b} />
-              ))}
+              {groupToolBlocks(m.blocks).map((unit) =>
+                unit.kind === "block" ? (
+                  <Block key={unit.index} block={unit.block} />
+                ) : (
+                  <ToolGroup
+                    key={`g${unit.blocks[0]!.index}`}
+                    count={unit.blocks.length}
+                    names={unit.blocks.map((u) => toolBlockName(u.block))}
+                    // Keep an in-flight tool burst visible while live; folded in history.
+                    defaultOpen={live}
+                  >
+                    {unit.blocks.map((u) => (
+                      <Block key={u.index} block={u.block} />
+                    ))}
+                  </ToolGroup>
+                ),
+              )}
               {streaming ? (
                 <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-clay-400 align-middle" />
               ) : null}

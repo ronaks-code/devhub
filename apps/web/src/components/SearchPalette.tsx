@@ -3,6 +3,7 @@ import { Search, CornerDownLeft, Folder } from "lucide-react";
 import type { SearchHitWithSeq } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
+import { SearchDateFilter } from "./SearchDateFilter";
 
 /** Render FTS snippet markers ([match]) as styled highlights. */
 function Highlighted({ text }: { text: string }) {
@@ -127,6 +128,12 @@ export function SearchPalette({
             className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />
           {loading && <Spinner className="h-3.5 w-3.5" />}
+        </div>
+
+        {/* Date-range facet: writes after:/before: tokens into the query, which the
+            engine query-parser lifts into search facets (no separate API param). */}
+        <div className="border-b border-zinc-800 px-4 py-2">
+          <SearchDateFilter query={q} onChange={setQ} />
         </div>
 
         <div ref={listRef} className="max-h-[55vh] overflow-y-auto py-1.5">

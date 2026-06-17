@@ -28,7 +28,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W16 Live Ops board, config watcher, keyboard approvals, prompt snippets, git discard, diff-context, inbox, token meter ✅
 - [x] W17 Effective config, ahead/behind sync, config linter, semantic-search lane, hour heatmap, Grep card, turn footer ✅
 - [x] W18 Stop running session, restore-from-backup, turn timestamps, image paste, attachments, FTS self-repair, Web card, leaderboard ✅
-- [ ] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render
+- [x] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render, date facet, CSV export, open-external, tool grouping ✅r
 - [ ] W20 Rate-limit handling, plugins view, mark interrupted, skeletons
 - [ ] W21 Mobile/remote auth, tray, MCP toggles, toasts
 - [ ] W22 Global error boundary, dirty-tree dashboard, scope selector
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W19** ✅ (green: tc×4 + 257 tests + build + csv/chat/tui). engine: `searchConfig` cross-artifact config palette. server: hook dry-run (`/api/hooks/test`), CSV usage export, open-in-editor/Finder/terminal. web: KaTeX math + pretty-JSON in Markdown, SearchDateFilter (after:/before: presets), ToolGroup (collapse consecutive tool-runs). tui: Dashboard screen.
 - **W18** ✅ (green: tc×4 + 253 tests + build + stop-gate/attachments/chat). engine: `config/safe-write.ts` centralized + rotating .bak + listBackups/restoreBackup, FTS toolName self-repair (v12). server: stop-running (pid-validated, confirm), attachment upload (base64), config restore routes. web: TurnMeta, useImageAttach (paste/drop), WebCard, ProjectLeaderboard. TECH-DEBT: server keeps its own single-.bak vs engine's rotating .bak.<ts> — unify later.
 - **AUDIT after W16** ✅ PASS — 5 tabs (Browse/Chat/Ops/Inbox/Dashboard) + ⌘K + ⌘⇧P + ⚙; dashboard rich (running-now, period selector, 12mo heatmap, by-model, top-spenders, cost); zero console errors. ("unknown" model bucket still pending a forced reindex backfill.)
 - **W17** ✅ (green: tc×4 + 240 tests + build + config-lint(0 issues)/search/chat). engine: `config/effective.ts` resolver, `embeddings.ts` pluggable hybrid lane (default-off, no ML dep), git fetch/pull/push, running-sessions mtime cache. server: `/api/config/lint` + git fetch/pull/push routes. web: GitSync (ahead/behind + push/pull), HourHeatmap, GrepCard (Grep/Glob), TurnFooter.

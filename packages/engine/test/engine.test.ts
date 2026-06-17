@@ -28,6 +28,7 @@ import { dailyUsage } from "../src/rollups.js";
 import { budgetStatus } from "../src/budget.js";
 import { resolveSettings } from "../src/config/resolve.js";
 import { resolveEffectiveConfig } from "../src/config/effective.js";
+import { searchConfig } from "../src/config/index-config.js";
 import {
   hybridSearch,
   selectProvider,
@@ -5153,5 +5154,168 @@ describe("migrations (FTS toolName repair, self-healing old DBs)", () => {
     const idx2 = new TranscriptIndex(path.join(dir, "i.db"));
     expect(idx2.search("deployment").map((h) => h.sessionId)).toEqual(["sess"]);
     idx2.close();
+  });
+});
+
+describe("config.searchConfig (config command palette)", () => {
+  // searchConfig fans out over the same readers resolveSettings/effective use: user
+  // (global) artifacts under CLAUDE_CONFIG_DIR, project artifacts under
+  // <projectCwd>/.claude. MCP servers live in ~/.claude.json (the real home dir), so we
+  // don't assert on them here — we assert on the artifacts the temp config dir owns.
+  const withConfig = async <T>(
+    fn: (configDir: string, projectCwd: string) => Promise<T>,
+  ): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const projectCwd = path.join(root, "proj");
+    mkdirSync(path.join(projectCwd, ".claude"), { recursive: true });
+    try {
+      return await fn(root, projectCwd);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("finds agents, skills, commands, settings keys, hooks, and CLAUDE.md content", async () => {
+    await withConfig(async (configDir, projectCwd) => {
+      // A global agent whose description (not name) holds the search term.
+      mkdirSync(path.join(configDir, "agents"), { recursive: true });
+      writeFileSync(
+        path.join(configDir, "agents", "reviewer.md"),
+        "---\nname: reviewer\ndescription: Audits a pull request for regressions\n---\nbody",
+      );
+      // A global skill.
+      mkdirSync(path.join(configDir, "skills", "deployer"), { recursive: true });
+      writeFileSync(
+        path.join(configDir, "skills", "deployer", "SKILL.md"),
+        "---\nname: deployer\ndescription: Ships the app to production\n---\nbody",
+      );
+      // A project command (nested -> namespaced name "git:commit").
+      mkdirSync(path.join(projectCwd, ".claude", "commands", "git"), { recursive: true });
+      writeFileSync(
+        path.join(projectCwd, ".claude", "commands", "git", "commit.md"),
+        "---\ndescription: Make a conventional commit\n---\nrun git commit",
+      );
+      // Project settings.json: a permission rule + a hook event.
+      writeFileSync(
+        path.join(projectCwd, ".claude", "settings.json"),
+        JSON.stringify({
+          permissions: { allow: ["Bash(npm:*)"], deny: [], ask: [] },
+          hooks: { PreToolUse: [{ matcher: "Bash" }] },
+        }),
+      );
+      // A project CLAUDE.md whose CONTENT we should be able to grep.
+      writeFileSync(
+        path.join(projectCwd, "CLAUDE.md"),
+        "# Project rules\n\nAlways run the migrations additively.\n",
+      );
+
+      // 1) Agent matched via its DESCRIPTION ("regressions"), not its name.
+      const agentHits = await searchConfig("regressions", projectCwd);
+      expect(agentHits.some((h) => h.kind === "agent" && h.name === "reviewer")).toBe(true);
+
+      // 2) Skill matched by name; carries scope + the file it lives in.
+      const skillHits = await searchConfig("deployer", projectCwd);
+      const skill = skillHits.find((h) => h.kind === "skill" && h.name === "deployer");
+      expect(skill).toBeTruthy();
+      expect(skill!.scope).toBe("global");
+      expect(skill!.file).toContain(path.join("skills", "deployer", "SKILL.md"));
+
+      // 3) Project command matched, namespaced, with project scope.
+      const cmdHits = await searchConfig("commit", projectCwd);
+      const cmd = cmdHits.find((h) => h.kind === "command" && h.name === "git:commit");
+      expect(cmd).toBeTruthy();
+      expect(cmd!.scope).toBe("project");
+
+      // 4) A permission RULE inside permissions.allow is searchable by its content.
+      const permHits = await searchConfig("npm", projectCwd);
+      expect(permHits.some((h) => h.kind === "setting" && h.name === "permissions.allow")).toBe(true);
+
+      // 5) A hook event name is searchable.
+      const hookHits = await searchConfig("PreToolUse", projectCwd);
+      const hook = hookHits.find((h) => h.kind === "hook" && h.name === "PreToolUse");
+      expect(hook).toBeTruthy();
+      expect(hook!.snippet).toContain("PreToolUse");
+
+      // 6) CLAUDE.md CONTENT is searched line by line; the matched line is the snippet.
+      const mdHits = await searchConfig("migrations", projectCwd);
+      const md = mdHits.find((h) => h.kind === "claudeMd");
+      expect(md).toBeTruthy();
+      expect(md!.scope).toBe("project");
+      expect(md!.snippet).toContain("migrations additively");
+    });
+  });
+
+  it("is case-insensitive, supports fuzzy subsequence, and ranks substring above fuzzy", async () => {
+    await withConfig(async (configDir) => {
+      mkdirSync(path.join(configDir, "skills", "deployer"), { recursive: true });
+      writeFileSync(
+        path.join(configDir, "skills", "deployer", "SKILL.md"),
+        "---\nname: deployer\ndescription: x\n---\nbody",
+      );
+      // Also a command whose name merely CONTAINS the fuzzy chars d-e-p out of order span.
+      mkdirSync(path.join(configDir, "commands"), { recursive: true });
+      writeFileSync(
+        path.join(configDir, "commands", "dump-env-prefs.md"),
+        "---\ndescription: y\n---\nz",
+      );
+
+      // Case-insensitive substring.
+      const upper = await searchConfig("DEPLOY");
+      expect(upper.some((h) => h.name === "deployer")).toBe(true);
+
+      // Fuzzy subsequence: "dpl" is not a substring of "deployer" but IS a subsequence.
+      const fuzzy = await searchConfig("dpl");
+      expect(fuzzy.some((h) => h.name === "deployer")).toBe(true);
+
+      // Ranking: searching "dep" — "deployer" (substring) outranks "dump-env-prefs"
+      // (only a scattered subsequence d..e..p).
+      const ranked = await searchConfig("dep");
+      const names = ranked.map((h) => h.name);
+      expect(names).toContain("deployer");
+      expect(names.indexOf("deployer")).toBeLessThan(
+        names.indexOf("dump-env-prefs") === -1 ? Infinity : names.indexOf("dump-env-prefs"),
+      );
+    });
+  });
+
+  it("returns [] for a blank query and honors the limit", async () => {
+    await withConfig(async (configDir) => {
+      mkdirSync(path.join(configDir, "agents"), { recursive: true });
+      for (const n of ["alpha", "alphabet", "alphanumeric"]) {
+        writeFileSync(
+          path.join(configDir, "agents", `${n}.md`),
+          `---\nname: ${n}\ndescription: an alpha agent\n---\nbody`,
+        );
+      }
+      expect(await searchConfig("")).toEqual([]);
+      expect(await searchConfig("   ")).toEqual([]);
+
+      const capped = await searchConfig("alpha", undefined, { limit: 2 });
+      expect(capped.length).toBe(2);
+    });
+  });
+
+  it("surfaces both global and project artifacts of the same name, each with its scope", async () => {
+    await withConfig(async (configDir, projectCwd) => {
+      mkdirSync(path.join(configDir, "agents"), { recursive: true });
+      writeFileSync(
+        path.join(configDir, "agents", "helper.md"),
+        "---\nname: helper\ndescription: global helper\n---\nb",
+      );
+      mkdirSync(path.join(projectCwd, ".claude", "agents"), { recursive: true });
+      writeFileSync(
+        path.join(projectCwd, ".claude", "agents", "helper.md"),
+        "---\nname: helper\ndescription: project helper\n---\nb",
+      );
+
+      const hits = await searchConfig("helper", projectCwd);
+      const helperScopes = hits.filter((h) => h.kind === "agent" && h.name === "helper").map((h) => h.scope).sort();
+      // Unlike effective-config (which dedupes to the winner), the palette shows BOTH so
+      // the user can jump to either definition.
+      expect(helperScopes).toEqual(["global", "project"]);
+    });
   });
 });
