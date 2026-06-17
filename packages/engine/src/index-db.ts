@@ -47,6 +47,13 @@ import { scanSubagents, SUBAGENT_ROLE } from "./subagents.js";
 import type { SubagentSearchText } from "./subagents.js";
 import { dailyUsage } from "./rollups.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
+import { exportArchive, importArchive } from "./portable.js";
+import type {
+  ArchiveBundle,
+  ExportArchiveOptions,
+  ImportArchiveOptions,
+  ImportArchiveResult,
+} from "./portable.js";
 import type {
   ProjectMeta,
   ProjectSummary,
@@ -580,6 +587,32 @@ export class TranscriptIndex {
    */
   dailyUsage(opts: DailyUsageOptions = {}): DailyUsage[] {
     return dailyUsage(this.db, opts);
+  }
+
+  /**
+   * Serialize this index into a portable, self-describing {@link ArchiveBundle} — every
+   * indexed session's normalized metadata + mirrored search text PLUS all the sidecar
+   * data we own (custom titles/pins/tags/archived/notes, saved views, the permission
+   * audit log). Read-only; never reads or copies a raw ~/.claude transcript. The export
+   * `timestamp` is injectable for deterministic tests. See {@link exportArchive}.
+   */
+  exportArchive(opts: ExportArchiveOptions = {}): ArchiveBundle {
+    return exportArchive(this.db, opts);
+  }
+
+  /**
+   * Restore a {@link ArchiveBundle} into THIS index, idempotently — re-importing the
+   * same bundle never duplicates rows (the mirrored text reuses the W23 stable-rowid
+   * path; session/sidecar rows upsert by identity). A bundle with an unreadable
+   * `schemaVersion` throws (or no-ops in non-strict mode). NEVER writes to ~/.claude —
+   * only this index DB. See {@link importArchive}.
+   */
+  importArchive(bundle: ArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
+    const res = importArchive(this.db, bundle, opts);
+    // Imported sessions changed token/activity totals — drop the memoized rollups so
+    // the next getProjects/getStats recomputes against the restored data.
+    this.aggregates.invalidate();
+    return res;
   }
 
   /**

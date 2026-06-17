@@ -3,6 +3,7 @@ import { Terminal, Webhook, ListPlus, Brain, Pencil, Link2, Link2Off } from "luc
 import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { messageAnchorProps } from "../hooks/useMessagePermalink";
+import { CopyMessage } from "./CopyMessage";
 import { Markdown } from "./Markdown";
 import { TurnMeta } from "./TurnMeta";
 import { ToolCard } from "./ToolCard";
@@ -244,6 +245,15 @@ export const MessageView = memo(function MessageView({
     setCopied(ok ? "ok" : "fail");
     window.setTimeout(() => setCopied(null), 1500);
   };
+  // Show the copy-as-markdown affordance only when there's real content to copy
+  // (so empty/placeholder bubbles don't sprout a dead button on hover).
+  const hasCopyable = m.blocks.some(
+    (b) =>
+      (b.type === "text" && b.text.trim().length > 0) ||
+      (b.type === "thinking" && b.text.trim().length > 0) ||
+      b.type === "tool_use" ||
+      (b.type === "tool_result" && (b.content?.trim().length ?? 0) > 0),
+  );
   // Plain text of a user message, for the edit-and-resend affordance.
   const editText =
     onEdit && m.role === "user"
@@ -272,10 +282,11 @@ export const MessageView = memo(function MessageView({
             prevTimestamp={prevTimestamp}
             showDuration={m.role === "assistant"}
           />
-          {/* Right-aligned hover affordances: edit-and-resend (user/live only)
-              and the message permalink "copy link". */}
-          {(onEdit && m.role === "user" && editText) || onCopyLink ? (
+          {/* Right-aligned hover affordances: edit-and-resend (user/live only),
+              copy-as-markdown, and the message permalink "copy link". */}
+          {(onEdit && m.role === "user" && editText) || onCopyLink || hasCopyable ? (
             <div className="ml-auto flex items-center gap-1">
+              {hasCopyable ? <CopyMessage message={m} /> : null}
               {onEdit && m.role === "user" && editText ? (
                 <button
                   onClick={() => onEdit(editText)}

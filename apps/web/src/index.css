@@ -161,3 +161,37 @@ body {
 .permalink-flash {
   animation: permalink-flash 2s ease-out forwards;
 }
+
+/*
+ * Perf / reduced-motion mode. useReducedMotion sets data-reduce-motion="true" on
+ * <html> when the OS asks for reduced motion OR the user flips the manual toggle.
+ * We then near-instant every DECORATIVE transition/animation so the UI feels
+ * snappier and avoids motion that can cause discomfort.
+ *
+ * We DON'T zero things out entirely (0.01ms keeps animationend/transitionend
+ * events firing, which some components rely on for cleanup — e.g. the permalink
+ * flash removes its class on animationend). Smooth-scroll is forced to auto so
+ * jumps are instant rather than gliding.
+ *
+ * The `* , ::before, ::after` sweep intentionally also stills the streaming caret
+ * blink (.animate-pulse) and skeleton shimmer. Spinners (.animate-spin) carry
+ * real "working" meaning, so they're explicitly exempt below.
+ */
+:root[data-reduce-motion="true"] *,
+:root[data-reduce-motion="true"] *::before,
+:root[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Keep the load spinner spinning — it communicates "in progress", not decoration. */
+:root[data-reduce-motion="true"] .animate-spin {
+  animation-duration: 0.8s !important;
+  animation-iteration-count: infinite !important;
+}
+
+html[data-reduce-motion="true"] {
+  scroll-behavior: auto;
+}

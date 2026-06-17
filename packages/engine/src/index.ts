@@ -42,6 +42,12 @@ import type { PluginInfo } from "./config/index.js";
 import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
 import type { McpToggle } from "./config/mcp-toggle.js";
 import { computeAutoTags } from "./auto-tag.js";
+import type {
+  ArchiveBundle,
+  ExportArchiveOptions,
+  ImportArchiveOptions,
+  ImportArchiveResult,
+} from "./portable.js";
 import type { TurnResult } from "./driver/types.js";
 import type {
   AppSettings,
@@ -541,6 +547,30 @@ export class Engine {
     return this.index.dailyUsage(opts);
   }
 
+  /**
+   * Serialize the durable index into a portable, self-describing {@link ArchiveBundle}
+   * (a versioned JSON document): every indexed session's normalized metadata + mirrored
+   * search text PLUS all the sidecar data we own (custom titles/pins/tags/archived
+   * /notes, saved views, the permission audit log). Read-only; never reads or copies a
+   * raw ~/.claude transcript. The export `timestamp` is injectable for deterministic
+   * tests (defaults to Date.now()). For a very large index, stream it instead with
+   * {@link exportArchiveChunks}.
+   */
+  exportArchive(opts: ExportArchiveOptions = {}): ArchiveBundle {
+    return this.index.exportArchive(opts);
+  }
+
+  /**
+   * Restore a {@link ArchiveBundle} into THIS index, idempotently — re-importing the
+   * same bundle never duplicates rows (mirrored text reuses the W23 stable-rowid path;
+   * session/sidecar rows upsert by identity). A bundle with an unreadable
+   * `schemaVersion` throws {@link ArchiveVersionError} (or no-ops in non-strict mode).
+   * NEVER writes to ~/.claude — only the index DB.
+   */
+  importArchive(bundle: ArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
+    return this.index.importArchive(bundle, opts);
+  }
+
   /** Aggregate usage/activity analytics computed from the index. */
   getStats(): Stats {
     const totalSessions = this.index.getSessionCount();
@@ -769,6 +799,24 @@ export { forkTurn, forkCliArgs } from "./driver/fork.js";
 export type { ForkedTurn } from "./driver/fork.js";
 export { writeFtsRows, assignStableRowids, stableRowid } from "./fts-write.js";
 export type { FtsRow } from "./fts-write.js";
+export {
+  exportArchive,
+  exportArchiveChunks,
+  importArchive,
+  ArchiveVersionError,
+  ARCHIVE_SCHEMA_VERSION,
+} from "./portable.js";
+export type {
+  ArchiveBundle,
+  ArchiveSession,
+  ArchiveTextRow,
+  ArchiveSavedView,
+  ArchiveAuditRow,
+  ArchiveChunk,
+  ExportArchiveOptions,
+  ImportArchiveOptions,
+  ImportArchiveResult,
+} from "./portable.js";
 export {
   gracefulInterrupt,
   DEFAULT_GRACE_MS,

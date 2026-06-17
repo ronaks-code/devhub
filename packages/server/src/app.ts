@@ -29,8 +29,10 @@ import { registerRunningRoutes } from "./routes/running.js";
 import { registerAttachmentsRoutes } from "./routes/attachments.js";
 import { registerHookTestRoutes } from "./routes/hook-test.js";
 import { registerExportUsageRoutes } from "./routes/export-usage.js";
+import { registerExportSessionRoutes } from "./routes/export-session.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
+import { registerHealthRoutes } from "./routes/health.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -153,9 +155,13 @@ export function buildApp(opts: BuildOptions = {}): {
 
   registerExportUsageRoutes(app, engine);
 
+  registerExportSessionRoutes(app, engine);
+
   registerOpenExternalRoutes(app, engine);
 
   registerTailRoutes(app, engine);
+
+  registerHealthRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

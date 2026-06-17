@@ -249,6 +249,102 @@ describe("server REST endpoints (no token)", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ plugins: [], marketplaces: [] });
   });
+
+  it("GET /api/sessions/:id/export?format=json downloads the normalized session", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/export?format=json",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/json");
+    // Downloadable: filename derived from the session id.
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain("alpha-1");
+    const body = res.json() as {
+      session: { sessionId: string };
+      messages: unknown[];
+      truncatedFromStart: boolean;
+    };
+    expect(body.session.sessionId).toBe("alpha-1");
+    expect(body.messages.length).toBeGreaterThan(0);
+    expect(body.truncatedFromStart).toBe(false);
+  });
+
+  it("GET /api/sessions/:id/export?format=md renders a Markdown transcript", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/export?format=md",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/markdown");
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    // The seeded text + tool call should both surface in the rendered transcript.
+    expect(res.body).toContain("deploy the widget");
+    expect(res.body).toContain("Tool call: `Bash`");
+  });
+
+  it("GET /api/sessions/:id/export defaults to md when no format is given", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/export",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/markdown");
+  });
+
+  it("GET /api/sessions/:id/export 404s for an unknown session", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/nope/export?format=json",
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "session not found" });
+  });
+
+  it("GET /api/sessions/:id/export 400s for a bad format", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/export?format=pdf",
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain("pdf");
+  });
+
+  it("GET /api/health/diagnostics reports the expected fields (200)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/health/diagnostics",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      ok: boolean;
+      ready: boolean;
+      version: string;
+      cli: { claudeVersion: string | null };
+      paths: { projectsDir: string | null; configDir: string | null; indexDbPath: string | null };
+      search: { mode: string; tokenizer: string | null };
+      index: {
+        sessionCount: number | null;
+        indexedMessageCount: number | null;
+        dbSizeBytes: number | null;
+      };
+    };
+    expect(body.ok).toBe(true);
+    expect(body.ready).toBe(true);
+    expect(typeof body.version).toBe("string");
+    // CLI version may be null in CI (no `claude` on PATH) — assert the KEY exists.
+    expect(body.cli).toHaveProperty("claudeVersion");
+    // Hermetic config dir points under the temp root.
+    expect(body.paths.configDir).toBe(current!.root);
+    expect(body.paths.projectsDir).toContain(current!.root);
+    expect(body.paths.indexDbPath).toContain(current!.root);
+    expect(["fts5", "like", "unknown"]).toContain(body.search.mode);
+    expect(body.search).toHaveProperty("tokenizer");
+    expect(body.index.sessionCount).toBe(3);
+    // Three seeded sessions, each with a user + assistant line.
+    expect(body.index.indexedMessageCount).toBeGreaterThan(0);
+    expect(body.index).toHaveProperty("dbSizeBytes");
+  });
 });
 
 describe("server token auth", () => {

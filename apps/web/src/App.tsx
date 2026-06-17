@@ -3,9 +3,11 @@ import {
   Command as CommandIcon,
   Cpu,
   Folder,
+  Gauge,
   Hexagon,
   History,
   Inbox,
+  Keyboard,
   LayoutDashboard,
   MessageSquarePlus,
   MessagesSquare,
@@ -16,6 +18,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { api, subscribeEvents, type AppSettings } from "./lib/api";
 import type {
@@ -41,9 +44,13 @@ import { ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SessionCostBadge } from "./components/SessionCostBadge";
+import { ShortcutOverlay } from "./components/ShortcutOverlay";
+import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
 import { EmptyState, Spinner } from "./components/ui";
 import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
+import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
+import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { cn } from "./lib/utils";
 
 const BASE_TAIL = 2 * 1024 * 1024;
@@ -188,11 +195,22 @@ function RecentMenu({
   );
 }
 
+/** Icon + label for each perf-mode preference, for the header toggle. */
+const PERF_META: Record<PerfPreference, { label: string; title: string }> = {
+  auto: { label: "Motion: auto", title: "Reduced motion follows your OS setting — click to force it on" },
+  on: { label: "Motion: off", title: "Reduced motion forced ON — click to force it off" },
+  off: { label: "Motion: on", title: "Full motion forced ON — click to follow your OS setting" },
+};
+
 function TopBar({
   tab,
   onTab,
   onOpenSearch,
   onOpenCommands,
+  onOpenShortcuts,
+  perfPreference,
+  perfReduced,
+  onCyclePerf,
   progress,
   sessionCount,
   projectCount,
@@ -206,6 +224,10 @@ function TopBar({
   onTab: (t: Tab) => void;
   onOpenSearch: () => void;
   onOpenCommands: () => void;
+  onOpenShortcuts: () => void;
+  perfPreference: PerfPreference;
+  perfReduced: boolean;
+  onCyclePerf: () => void;
   progress: { done: number; total: number } | null;
   sessionCount: number;
   projectCount: number;
@@ -259,6 +281,31 @@ function TopBar({
       </button>
 
       <div className="ml-auto flex items-center gap-3 text-[11px] text-zinc-500">
+        {/* Perf / reduced-motion toggle. Cycles auto → on → off; tinted clay
+            while motion is being suppressed so the active state reads at a glance. */}
+        <button
+          onClick={onCyclePerf}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md p-1 transition",
+            perfReduced
+              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+              : "text-zinc-500 hover:text-zinc-300",
+          )}
+          title={PERF_META[perfPreference].title}
+          aria-label={PERF_META[perfPreference].label}
+          aria-pressed={perfReduced}
+        >
+          {perfReduced ? <Zap className="h-4 w-4" /> : <Gauge className="h-4 w-4" />}
+        </button>
+        {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
+        <button
+          onClick={onOpenShortcuts}
+          className="rounded-md p-1 text-zinc-500 transition hover:text-zinc-300"
+          title="Keyboard shortcuts (?)"
+          aria-label="Keyboard shortcuts"
+        >
+          <Keyboard className="h-4 w-4" />
+        </button>
         <RecentMenu
           recents={recents}
           onOpen={onOpenRecent}
@@ -318,6 +365,11 @@ export default function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
+  // Keyboard-shortcut cheat-sheet overlay (opened with "?").
+  const [shortcutOpen, setShortcutOpen] = useState(false);
+  // Reduced-motion / perf mode: respects prefers-reduced-motion and a persisted
+  // manual toggle, and sets data-reduce-motion on <html> for index.css to key off.
+  const perf = useReducedMotion();
   // Server-backed app settings (default model/permission, theme, budget…).
   // Loaded once on mount and updated when the Settings tab saves.
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -526,6 +578,24 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // "?" opens the keyboard-shortcut cheat-sheet — but only when the user isn't
+  // typing into a field (so a literal "?" in a prompt/search still types). No
+  // modifier required; Shift is fine since "?" itself is Shift+/.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "?" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
+        return;
+      }
+      e.preventDefault();
+      setShortcutOpen((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   // Reflect the chosen theme onto the document root. Theming is "store only for
   // now" — we just toggle the `dark` class so the setting has a visible effect
   // and the rest can build on it later. "system" follows the OS preference.
@@ -665,6 +735,63 @@ export default function App() {
     [projects, openSession],
   );
 
+  // ── Deep-link URL routing ────────────────────────────────────────────────
+  // Reflect the current view (tab + project + session) in the URL query so a
+  // copied link reopens the same place and back/forward walks history. Restore
+  // a route on load / popstate by adopting tab + project + (staged) session,
+  // reusing the same pendingSessionRef pattern as openSession for cross-project
+  // session selection. All params are tolerated as missing/malformed.
+  const routeState = useMemo<RouteState>(
+    () => ({ tab: tab as RouteTab, project: projectId, session: sessionId }),
+    [tab, projectId, sessionId],
+  );
+  // Latest selected project id, read by applyRoute (which has empty deps so its
+  // identity stays stable for the router) to decide same- vs cross-project nav.
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+  const applyRoute = useCallback(
+    (route: RouteState) => {
+      if (route.tab) setTab(route.tab);
+      // Adopt the routed project + session. Same project → select the session
+      // directly; a different project stages it for the project-change effect.
+      const nextProject = route.project ?? null;
+      const nextSession = route.session ?? null;
+      setChatSeed(null);
+      setTailBytes(undefined);
+      setJumpTarget(null);
+      if (nextProject && nextProject !== projectIdRef.current) {
+        // Cross-project: stage the session for the project-change effect to pick up.
+        pendingSessionRef.current = nextSession;
+        setProjectId(nextProject);
+      } else {
+        // Same (or no) project switch — set the session directly so it isn't lost.
+        setSessionId(nextSession);
+      }
+    },
+    [],
+  );
+  const { initial: initialRoute } = useUrlRouter(routeState, applyRoute);
+  // Honor a route present in the entry URL once, after the first projects load
+  // (so a staged session can resolve). Runs a single time.
+  const restoredRouteRef = useRef(false);
+  useEffect(() => {
+    if (restoredRouteRef.current) return;
+    const hasRoute =
+      initialRoute.tab != null || initialRoute.project != null || initialRoute.session != null;
+    if (!hasRoute) {
+      restoredRouteRef.current = true;
+      return;
+    }
+    // Wait until projects exist so a routed project id can be validated/selected.
+    if (projects.length === 0) return;
+    restoredRouteRef.current = true;
+    if (initialRoute.project && projects.some((p) => p.id === initialRoute.project)) {
+      applyRoute(initialRoute);
+    } else if (initialRoute.tab) {
+      setTab(initialRoute.tab);
+    }
+  }, [projects, initialRoute, applyRoute]);
+
   const handleRename = async (id: string, title: string | null) => {
     await api.rename(id, title);
     if (projectId) await refreshSessions(projectId);
@@ -721,6 +848,12 @@ export default function App() {
   const project = projects.find((p) => p.id === projectId) ?? null;
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
+
+  // Responsive Browse layout: 3 panes on wide screens, a single active pane with
+  // a breadcrumb on narrow ones. The stage auto-advances as the user drills in.
+  const shell = useResponsiveShell({ hasProject: !!projectId, hasSession: !!sessionId });
+  // The open session's title for the transcript breadcrumb crumb (when loaded).
+  const sessionTitle = page?.session.title ?? null;
 
   // Effective chat model: explicit palette choice → settings default → built-in.
   const effectiveModel = chatModel ?? settings?.defaultModel ?? CHAT_MODELS[0];
@@ -867,6 +1000,10 @@ export default function App() {
         }}
         onOpenSearch={() => setSearchOpen(true)}
         onOpenCommands={() => setCommandOpen(true)}
+        onOpenShortcuts={() => setShortcutOpen(true)}
+        perfPreference={perf.preference}
+        perfReduced={perf.reduced}
+        onCyclePerf={perf.cyclePreference}
         progress={progress}
         sessionCount={sessionCount}
         projectCount={projects.length}
@@ -887,38 +1024,48 @@ export default function App() {
         ) : tab === "inbox" ? (
           <InboxPane onOpenSession={openSession} />
         ) : tab === "browse" ? (
-          <>
-            <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
-            <SessionsPane
-              project={project}
-              sessions={sessions}
-              loading={loadingSessions}
-              selectedId={sessionId}
-              onSelect={onSelectSession}
-              onRename={handleRename}
-              onTogglePin={handlePin}
-              onBulkPin={handleBulkPin}
-              onBulkAddTag={handleBulkAddTag}
-            />
-            <div className="flex min-w-0 flex-1 flex-col">
-              {/* Rich project header atop the transcript area: branch, sessions,
-                  tokens + spend, last activity, favorite/archive toggles. */}
-              {project ? (
-                <ProjectDetailHeader
-                  project={project}
-                  onToggleFavorite={toggleProjectFavorite}
-                  onToggleArchive={toggleProjectArchive}
-                />
-              ) : null}
-              <TranscriptPane
-                page={page}
-                loading={loadingPage}
-                onLoadMore={handleLoadMore}
-                onContinue={handleContinue}
-                jumpTarget={jumpTarget}
+          <ResponsiveShell
+            stage={shell.stage}
+            onNavigate={shell.setStage}
+            projectLabel={project?.name}
+            sessionLabel={sessionTitle}
+            projects={
+              <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
+            }
+            sessions={
+              <SessionsPane
+                project={project}
+                sessions={sessions}
+                loading={loadingSessions}
+                selectedId={sessionId}
+                onSelect={onSelectSession}
+                onRename={handleRename}
+                onTogglePin={handlePin}
+                onBulkPin={handleBulkPin}
+                onBulkAddTag={handleBulkAddTag}
               />
-            </div>
-          </>
+            }
+            transcript={
+              <div className="flex min-w-0 flex-1 flex-col">
+                {/* Rich project header atop the transcript area: branch, sessions,
+                    tokens + spend, last activity, favorite/archive toggles. */}
+                {project ? (
+                  <ProjectDetailHeader
+                    project={project}
+                    onToggleFavorite={toggleProjectFavorite}
+                    onToggleArchive={toggleProjectArchive}
+                  />
+                ) : null}
+                <TranscriptPane
+                  page={page}
+                  loading={loadingPage}
+                  onLoadMore={handleLoadMore}
+                  onContinue={handleContinue}
+                  jumpTarget={jumpTarget}
+                />
+              </div>
+            }
+          />
         ) : (
           <>
             <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
@@ -980,6 +1127,8 @@ export default function App() {
           setTab("browse");
         }}
       />
+
+      <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
       </div>
