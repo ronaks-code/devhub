@@ -89,6 +89,13 @@ export interface GitCommitResult extends GitWriteResult {
 const MAX_DIFF_BUFFER = 8 * 1024 * 1024; // 8 MB
 /** Default safety timeout for a single git invocation. */
 const GIT_TIMEOUT_MS = 10_000;
+/**
+ * Longer timeout for NETWORK ops (fetch/pull/push). A remote can be slow or briefly
+ * unreachable, so we give it more room than a local read — but still bound it so a
+ * dead remote (or a host waiting on an interactive credential prompt) can't hang the
+ * caller forever. On timeout the op resolves `ok:false` like any other failure.
+ */
+const GIT_NETWORK_TIMEOUT_MS = 60_000;
 
 /**
  * Run `git <args>` in `cwd` and resolve its stdout. Resolves `null` instead of
@@ -119,12 +126,29 @@ function runGit(cwd: string, args: string[], maxBuffer = 1024 * 1024): Promise<s
  * callers get a typed failure instead of an exception. Args are an array (no shell),
  * so a path/branch/message can't be interpreted as shell syntax.
  */
-function runGitWrite(cwd: string, args: string[]): Promise<GitWriteResult> {
+function runGitWrite(
+  cwd: string,
+  args: string[],
+  opts: { timeout?: number; network?: boolean } = {},
+): Promise<GitWriteResult> {
+  // For NETWORK ops, force git NOT to pop an interactive credential/SSH prompt:
+  // GIT_TERMINAL_PROMPT=0 makes it fail fast with an auth error we can surface,
+  // rather than blocking until the (headless) timeout fires. We only ADD vars
+  // (spread process.env) so the user's existing git/SSH config is untouched.
+  const env = opts.network
+    ? { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", SSH_ASKPASS: "echo" }
+    : process.env;
   return new Promise((resolve) => {
     execFile(
       "git",
       args,
-      { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true },
+      {
+        cwd,
+        timeout: opts.timeout ?? GIT_TIMEOUT_MS,
+        maxBuffer: 1024 * 1024,
+        windowsHide: true,
+        env,
+      },
       (err, stdout, stderr) => {
         const out = (stdout ?? "").trim();
         if (err) {
@@ -437,6 +461,79 @@ export class GitService {
     const guard = await this.repoGuard();
     if (guard) return guard;
     return runGitWrite(this.cwd, ["checkout", name]);
+  }
+
+  // -- Network ops (fetch / pull / push) -------------------------------------
+  //
+  // These talk to a REMOTE, so they're slower and can fail for reasons no local op
+  // can: no remote configured, auth required, host unreachable, non-fast-forward
+  // rejection. Each returns a typed {@link GitWriteResult} (ok:false + the remote's
+  // stderr) rather than throwing, and runs with GIT_TERMINAL_PROMPT=0 so a missing
+  // credential fails fast instead of blocking on a hidden prompt. They never run a
+  // shell and never touch a transcript. A non-git dir is a typed failure up front.
+
+  /**
+   * `git fetch` — download remote refs/objects WITHOUT touching the working tree.
+   * The safest network op (it only updates remote-tracking refs). With `{ remote }`
+   * fetches that remote; otherwise fetches the default. With `{ prune }` also deletes
+   * local remote-tracking refs whose upstream branch was removed. Tolerant: a repo
+   * with no remote, or an unreachable/unauthenticated one, returns `ok:false` with
+   * git's stderr.
+   */
+  async fetch(opts: { remote?: string; prune?: boolean } = {}): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    const args = ["fetch"];
+    if (opts.prune) args.push("--prune");
+    // `--` ends option parsing so a remote literally named like a flag is still a remote.
+    if (opts.remote) args.push("--", opts.remote);
+    return runGitWrite(this.cwd, args, { network: true, timeout: GIT_NETWORK_TIMEOUT_MS });
+  }
+
+  /**
+   * `git pull` — fetch the upstream and integrate it into the current branch. With
+   * `{ rebase: true }` replays local commits ON TOP of the upstream (`--rebase`)
+   * instead of creating a merge commit; with `{ rebase: false }` forces a merge
+   * (`--no-rebase`); omitted leaves git's configured default. `{ remote, branch }`
+   * pull from a specific ref. Tolerant: no upstream, auth failure, or a merge/rebase
+   * CONFLICT all come back as `ok:false` with git's stderr (the working tree may be
+   * left mid-merge — the caller surfaces the message so the user can resolve it).
+   */
+  async pull(
+    opts: { rebase?: boolean; remote?: string; branch?: string } = {},
+  ): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    const args = ["pull"];
+    if (opts.rebase === true) args.push("--rebase");
+    else if (opts.rebase === false) args.push("--no-rebase");
+    if (opts.remote) {
+      args.push(opts.remote);
+      if (opts.branch) args.push(opts.branch);
+    }
+    return runGitWrite(this.cwd, args, { network: true, timeout: GIT_NETWORK_TIMEOUT_MS });
+  }
+
+  /**
+   * `git push` — upload the current branch's commits to its upstream. With
+   * `{ setUpstream: true }` adds `-u` and pushes to `<remote> HEAD` so a brand-new
+   * local branch gets its upstream wired on first push (defaulting `remote` to
+   * "origin" when not given). Otherwise pushes to the already-configured upstream.
+   * Tolerant: no remote/upstream, auth failure, or a non-fast-forward REJECTION (the
+   * remote moved ahead — push without force) all return `ok:false` with git's stderr.
+   * NOTE: never force-pushes; a rejected push is reported, not overridden.
+   */
+  async push(opts: { setUpstream?: boolean; remote?: string } = {}): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    const args = ["push"];
+    if (opts.setUpstream) {
+      // `-u <remote> HEAD` sets the upstream to the current branch on that remote.
+      args.push("-u", opts.remote ?? "origin", "HEAD");
+    } else if (opts.remote) {
+      args.push(opts.remote);
+    }
+    return runGitWrite(this.cwd, args, { network: true, timeout: GIT_NETWORK_TIMEOUT_MS });
   }
 
   // -- Discard (DESTRUCTIVE working-tree restore) ----------------------------

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, Check, FileText, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
-import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "../lib/types";
@@ -18,6 +17,7 @@ import { MentionPicker, detectMention } from "./MentionPicker";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
 import { SnippetLibrary } from "./SnippetLibrary";
 import { TokenMeter } from "./TokenMeter";
+import { TurnFooter } from "./TurnFooter";
 import { BranchSwitcher } from "./BranchSwitcher";
 import { TurnError } from "./TurnError";
 import { usePromptHistory } from "../hooks/usePromptHistory";
@@ -93,6 +93,10 @@ export function ChatPane({
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<TurnResult | null>(null);
+  // Wall-clock duration of the just-finished turn (ms), measured from the prompt
+  // send to the result frame. Feeds the per-turn TurnFooter (the engine's
+  // TurnResult carries no duration). Null until a turn completes with a result.
+  const [lastDurationMs, setLastDurationMs] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   // Composer text persisted per (projectId | sessionId) so an unsent message
   // survives tab switches and reloads. Scopes by the live sessionId once a turn
@@ -145,6 +149,9 @@ export function ChatPane({
   // The most recent user prompt of this conversation, so "Regenerate" can resend
   // it (resuming the session) for a fresh response.
   const lastPromptRef = useRef<string | null>(null);
+  // Wall-clock start of the in-flight turn (Date.now() at prompt send), used to
+  // compute the TurnFooter's duration when the result lands.
+  const turnStartRef = useRef<number | null>(null);
   // Slash commands advertised by the session (from the {t:"session"} init frame),
   // surfaced in the SlashPalette when the composer starts with "/".
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
@@ -300,6 +307,9 @@ export function ChatPane({
       },
       onResult: (result) => {
         setLastResult(result);
+        // Stamp the turn's wall-clock duration for the per-turn footer (the
+        // engine TurnResult carries none). Null start = couldn't measure.
+        setLastDurationMs(turnStartRef.current != null ? Date.now() - turnStartRef.current : null);
         // A turn that ended in an error subtype should surface the retry card,
         // so un-dismiss when an error result lands.
         if (result.isError) setErrorDismissed(false);
@@ -436,6 +446,8 @@ export function ChatPane({
       setErrorMsg(null);
       setErrorDismissed(false);
       setLastResult(null);
+      setLastDurationMs(null);
+      turnStartRef.current = Date.now();
       clearApprovalsRef.current();
       setPendingPermission(null);
       setTokenStatus(null);
@@ -547,6 +559,8 @@ export function ChatPane({
     setRunning(false);
     setStatus(null);
     setLastResult(null);
+    setLastDurationMs(null);
+    turnStartRef.current = null;
     setErrorMsg(null);
     clearApprovalsRef.current();
     setPendingPermission(null);
@@ -1061,20 +1075,25 @@ export function ChatPane({
               {queued.length} queued
             </span>
           )}
+          {/* Per-turn summary: cost, tokens (in/out/cache), duration, and model
+              from the {t:"result"} payload (TurnResult). The denials chip rides
+              alongside it. Replaces the old cost-only line. */}
           {!running && lastResult && (
-            <span className="flex items-center gap-2 text-zinc-500">
-              <span className={cn(lastResult.isError && "text-red-400")}>
-                {formatUsd(lastResult.costUsd)}
-              </span>
+            <>
+              <TurnFooter
+                result={lastResult}
+                model={model}
+                durationMs={lastDurationMs ?? undefined}
+              />
               {lastResult.denials.length > 0 && (
                 <span className="text-amber-400">
                   {lastResult.denials.length} denial{lastResult.denials.length === 1 ? "" : "s"}
                 </span>
               )}
-            </span>
+            </>
           )}
           {/* The error itself renders in the TurnError card above; the footer just
-              keeps the cost/denials summary and the Regenerate affordance. */}
+              keeps the per-turn summary and the Regenerate affordance. */}
           {/* Resend the last prompt for a fresh response (resumes the session). */}
           {!running && lastPromptRef.current && (
             <button

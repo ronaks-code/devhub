@@ -27,6 +27,10 @@ import type { PermissionDenial } from "./driver/types.js";
 import { listMcpServers } from "./config/index.js";
 import { testMcpServer } from "./config/mcp-test.js";
 import type { McpTestResult } from "./config/mcp-test.js";
+import { resolveEffectiveConfig } from "./config/effective.js";
+import type { EffectiveConfig } from "./config/effective.js";
+import { hybridSearch } from "./embeddings.js";
+import type { HybridSearchOptions } from "./embeddings.js";
 import { searchSymbols } from "./symbols.js";
 import type { SymbolHit, SymbolSearchOptions } from "./symbols.js";
 import type {
@@ -203,6 +207,18 @@ export class Engine {
     return testMcpServer(match);
   }
 
+  /**
+   * The fully-merged EFFECTIVE Claude Code config for a project: every settings.json
+   * key with its winning scope + per-scope provenance, the merged hooks + accumulated
+   * permission lists the runtime applies, and the ACTIVE agents/skills/commands/mcp
+   * servers (a project entry shadows a global of the same name, flagged `shadowedBy`).
+   * Omit `projectCwd` for a user/global-only view. Read-only; tolerant of a half-
+   * configured machine. See {@link resolveEffectiveConfig}.
+   */
+  async getEffectiveConfig(projectCwd?: string): Promise<EffectiveConfig> {
+    return resolveEffectiveConfig(projectCwd);
+  }
+
   getSession(sessionId: string): SessionSummary | undefined {
     return this.index.getSessionSummary(sessionId);
   }
@@ -313,6 +329,23 @@ export class Engine {
    */
   search(query: string, opts: SearchFacets = {}): SearchHit[] {
     return this.index.search(query, opts);
+  }
+
+  /**
+   * The SECOND search lane: FTS primary + an OPTIONAL semantic rerank on top. With no
+   * `CLAUDE_UI_EMBED_PROVIDER` configured (the default) this returns EXACTLY what
+   * {@link search} returns — same hits, same order — at no added cost. When a provider
+   * is configured (the built-in dependency-free "lexical" overlap reranker, or a host-
+   * supplied one passed via `opts.provider`), it pulls a wider FTS candidate set and
+   * reorders it by relevance to `query`. FTS stays the source of truth for WHICH rows
+   * match; the reranker only reorders. See {@link hybridSearch}.
+   */
+  async searchHybrid(
+    query: string,
+    facets: SearchFacets = {},
+    opts: HybridSearchOptions = {},
+  ): Promise<SearchHit[]> {
+    return hybridSearch((q, f) => this.index.search(q, f), query, facets, opts);
   }
 
   /**
@@ -584,7 +617,12 @@ export { budgetStatus } from "./budget.js";
 export type { BudgetStatus } from "./budget.js";
 export { classifyCommand, classifyShell } from "./classify-command.js";
 export type { CommandSeverity, CommandClassification } from "./classify-command.js";
-export { listRunningSessions, isPidAlive, DEFAULT_NEEDS_YOU_MS } from "./running.js";
+export {
+  listRunningSessions,
+  isPidAlive,
+  clearRunningSessionsCache,
+  DEFAULT_NEEDS_YOU_MS,
+} from "./running.js";
 export {
   listCheckpoints,
   restoreCheckpoint,
@@ -603,6 +641,19 @@ export type {
   ResolvedKey,
   SettingsScopeName,
 } from "./config/resolve.js";
+export { resolveEffectiveConfig } from "./config/effective.js";
+export type { EffectiveConfig, EffectiveExtension } from "./config/effective.js";
+export {
+  hybridSearch,
+  selectProvider,
+  noopProvider,
+  lexicalProvider,
+} from "./embeddings.js";
+export type {
+  EmbeddingProvider,
+  FtsSearchFn,
+  HybridSearchOptions,
+} from "./embeddings.js";
 export { testMcpServer } from "./config/mcp-test.js";
 export type { McpTestResult } from "./config/mcp-test.js";
 export {

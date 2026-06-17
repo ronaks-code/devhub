@@ -19,12 +19,26 @@ export function CommitComposer({
   cwd,
   status,
   onCommitted,
+  message: controlledMessage,
+  onMessageChange,
 }: {
   cwd: string;
   status: GitStatus;
   onCommitted: () => void;
+  /**
+   * Optional controlled commit message. When provided (with onMessageChange),
+   * the textarea is driven by the host so a sibling control (GitSync's
+   * "Commit & Push") can read/commit the same draft. Uncontrolled otherwise.
+   */
+  message?: string;
+  onMessageChange?: (message: string) => void;
 }) {
-  const [message, setMessage] = useState("");
+  const [localMessage, setLocalMessage] = useState("");
+  const message = controlledMessage ?? localMessage;
+  const setMessage = (m: string) => {
+    if (onMessageChange) onMessageChange(m);
+    else setLocalMessage(m);
+  };
   const [suggesting, setSuggesting] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

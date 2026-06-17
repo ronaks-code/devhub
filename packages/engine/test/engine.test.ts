@@ -27,6 +27,16 @@ import { classifyCommand, classifyShell } from "../src/classify-command.js";
 import { dailyUsage } from "../src/rollups.js";
 import { budgetStatus } from "../src/budget.js";
 import { resolveSettings } from "../src/config/resolve.js";
+import { resolveEffectiveConfig } from "../src/config/effective.js";
+import {
+  hybridSearch,
+  selectProvider,
+  noopProvider,
+  lexicalProvider,
+} from "../src/embeddings.js";
+import type { EmbeddingProvider, FtsSearchFn } from "../src/embeddings.js";
+import { listRunningSessions as listRunning, clearRunningSessionsCache } from "../src/running.js";
+import type { SearchHit } from "../src/types.js";
 import { listCheckpoints, restoreCheckpoint, fileHistoryDir } from "../src/checkpoint.js";
 import { projectRollups, costByProject, usageByModel } from "../src/aggregates.js";
 import { MAX_INLINE_IMAGE_BYTES } from "../src/types.js";
@@ -3282,6 +3292,84 @@ describe("git worktree ops (temp repo)", () => {
   });
 });
 
+describe("git network ops (fetch/pull/push against a local remote)", () => {
+  // A bare repo on disk is a fully valid git remote reachable WITHOUT any network or
+  // auth, so we can exercise fetch/pull/push end-to-end deterministically. (No real
+  // network egress — git talks to a local path.)
+  const initWithRemote = (): { dir: string; bare: string } => {
+    const bare = mkdtempSync(path.join(os.tmpdir(), "cui-bare-"));
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", bare], { cwd: bare });
+    const dir = mkdtempSync(path.join(os.tmpdir(), "cui-net-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "CUI Test"], { cwd: dir });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
+    execFileSync("git", ["remote", "add", "origin", bare], { cwd: dir });
+    writeFileSync(path.join(dir, "a.txt"), "v1\n");
+    execFileSync("git", ["add", "a.txt"], { cwd: dir });
+    execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+    return { dir, bare };
+  };
+
+  it("push --setUpstream wires origin/main; fetch + pull round-trip a remote commit", async () => {
+    const { dir, bare } = initWithRemote();
+    const git = new GitService(dir);
+
+    // First push sets the upstream so the bare repo gets our branch.
+    const pushed = await git.push({ setUpstream: true });
+    expect(pushed.ok).toBe(true);
+
+    // A SECOND clone commits + pushes a change, simulating a remote moving ahead.
+    const other = mkdtempSync(path.join(os.tmpdir(), "cui-net2-"));
+    execFileSync("git", ["clone", "-q", bare, other], { cwd: os.tmpdir() });
+    execFileSync("git", ["config", "user.email", "o@example.com"], { cwd: other });
+    execFileSync("git", ["config", "user.name", "Other"], { cwd: other });
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: other });
+    writeFileSync(path.join(other, "b.txt"), "from-remote\n");
+    execFileSync("git", ["add", "b.txt"], { cwd: other });
+    execFileSync("git", ["commit", "-q", "-m", "remote change"], { cwd: other });
+    execFileSync("git", ["push", "-q", "origin", "main"], { cwd: other });
+
+    // fetch sees the remote is ahead (behind > 0 after a status), pull integrates it.
+    const fetched = await git.fetch();
+    expect(fetched.ok).toBe(true);
+    expect((await git.status())!.behind).toBeGreaterThan(0);
+
+    const pulled = await git.pull({ rebase: true });
+    expect(pulled.ok).toBe(true);
+    // The remote's file is now in our working tree, and we're no longer behind.
+    expect(statSync(path.join(dir, "b.txt")).size).toBeGreaterThan(0);
+    expect((await git.status())!.behind).toBe(0);
+
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(other, { recursive: true, force: true });
+    rmSync(bare, { recursive: true, force: true });
+  }, 30000);
+
+  it("tolerates no-remote / non-git dirs: a no-op fetch succeeds, real failures are TYPED, never thrown", async () => {
+    // A repo with NO remote configured. `git fetch` with nothing to fetch is a no-op
+    // SUCCESS (git exits 0), but a push has no destination and fails typed.
+    const noRemote = mkdtempSync(path.join(os.tmpdir(), "cui-noremote-"));
+    execFileSync("git", ["init", "-q"], { cwd: noRemote });
+    const git = new GitService(noRemote);
+    const f = await git.fetch();
+    expect(f.ok).toBe(true); // no remote -> nothing to fetch -> no-op success
+    const p = await git.push();
+    expect(p.ok).toBe(false); // "No configured push destination"
+    expect(p.error).not.toBe("");
+
+    // A non-git dir fails typed up front (the repoGuard), never throws.
+    const nonRepo = mkdtempSync(path.join(os.tmpdir(), "cui-net-nogit-"));
+    const bad = new GitService(nonRepo);
+    expect(await bad.fetch()).toMatchObject({ ok: false, error: "not a git repository" });
+    expect(await bad.pull()).toMatchObject({ ok: false, error: "not a git repository" });
+    expect(await bad.push()).toMatchObject({ ok: false, error: "not a git repository" });
+
+    rmSync(noRemote, { recursive: true, force: true });
+    rmSync(nonRepo, { recursive: true, force: true });
+  }, 30000);
+});
+
 describe("index worker parse phase (parse-session.scanSession)", () => {
   // Build a representative transcript exercising every branch the scan folds:
   // user prompt, assistant text + tool_use + usage + model, a tool_result, an
@@ -4508,4 +4596,316 @@ describe("config watcher (config-changed event)", () => {
       rmSync(dbDir, { recursive: true, force: true });
     }
   }, 15000);
+});
+
+describe("config.resolveEffectiveConfig (merged effective view + provenance)", () => {
+  // Same temp-config harness shape as resolveSettings: user under CLAUDE_CONFIG_DIR,
+  // project/local under <projectCwd>/.claude. We also lay down agents/skills to prove
+  // the active-extension shadowing.
+  const withConfig = async <T>(
+    fn: (configDir: string, projectCwd: string) => Promise<T>,
+  ): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const projectCwd = path.join(root, "proj");
+    mkdirSync(path.join(projectCwd, ".claude"), { recursive: true });
+    try {
+      return await fn(root, projectCwd);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  const agentMd = (name: string, desc: string) =>
+    `---\nname: ${name}\ndescription: ${desc}\n---\nbody\n`;
+
+  it("surfaces settings scope-diff, merged hooks/permissions, and active extensions", async () => {
+    await withConfig(async (configDir, projectCwd) => {
+      // settings: user sets model+theme; project overrides model and adds permissions+hooks.
+      writeFileSync(
+        path.join(configDir, "settings.json"),
+        JSON.stringify({
+          model: "user-model",
+          theme: "dark",
+          permissions: { allow: ["Read"], deny: [], ask: [] },
+          hooks: { PreToolUse: [{ matcher: "Bash", from: "user" }] },
+        }),
+      );
+      writeFileSync(
+        path.join(projectCwd, ".claude", "settings.json"),
+        JSON.stringify({
+          model: "project-model",
+          permissions: { allow: ["Edit"], deny: ["WebFetch"], ask: [] },
+          hooks: { PreToolUse: [{ matcher: "Edit", from: "project" }] },
+        }),
+      );
+
+      // agents: a global "shared" + global-only "g"; project overrides "shared" + adds "p".
+      mkdirSync(path.join(configDir, "agents"), { recursive: true });
+      mkdirSync(path.join(projectCwd, ".claude", "agents"), { recursive: true });
+      writeFileSync(path.join(configDir, "agents", "shared.md"), agentMd("shared", "global one"));
+      writeFileSync(path.join(configDir, "agents", "g.md"), agentMd("g", "global only"));
+      writeFileSync(
+        path.join(projectCwd, ".claude", "agents", "shared.md"),
+        agentMd("shared", "project override"),
+      );
+      writeFileSync(path.join(projectCwd, ".claude", "agents", "p.md"), agentMd("p", "project only"));
+
+      const eff = await resolveEffectiveConfig(projectCwd);
+
+      // settings: per-key scope diff is carried through from resolveSettings.
+      const model = eff.settings.find((k) => k.key === "model")!;
+      expect(model.winner).toBe("project");
+      expect(model.effectiveValue).toBe("project-model");
+      expect(model.overridden).toBe(true);
+
+      // permissions accumulate across layers (user Read + project Edit/WebFetch).
+      expect(eff.permissions.allow.sort()).toEqual(["Edit", "Read"]);
+      expect(eff.permissions.deny).toEqual(["WebFetch"]);
+      // sources are the settings.json files that actually contributed.
+      expect(eff.permissions.sources.length).toBe(2);
+
+      // hooks: the project layer wins for the PreToolUse event (later layer overrides).
+      const pre = eff.hooks.PreToolUse as Array<{ from: string }>;
+      expect(pre).toHaveLength(1);
+      expect(pre[0]!.from).toBe("project");
+
+      // active agents: "shared" appears once, winning scope=project, shadowedBy=project.
+      const shared = eff.agents.find((a) => a.name === "shared")!;
+      expect(shared.scope).toBe("project");
+      expect(shared.description).toBe("project override");
+      expect(shared.shadowedBy).toBe("project");
+      expect(shared.scopes.sort()).toEqual(["global", "project"]);
+
+      // global-only "g" and project-only "p" are present, not shadowed.
+      const g = eff.agents.find((a) => a.name === "g")!;
+      expect(g.scope).toBe("global");
+      expect(g.shadowedBy).toBeNull();
+      const p = eff.agents.find((a) => a.name === "p")!;
+      expect(p.scope).toBe("project");
+      expect(p.shadowedBy).toBeNull();
+
+      // names are unique + sorted.
+      const names = eff.agents.map((a) => a.name);
+      expect(names).toEqual([...new Set(names)].sort());
+
+      expect(eff.projectCwd).toBe(projectCwd);
+    });
+  });
+
+  it("global-only view (no projectCwd) omits project/local scopes and tolerates an empty machine", async () => {
+    await withConfig(async (configDir) => {
+      writeFileSync(path.join(configDir, "settings.json"), JSON.stringify({ theme: "light" }));
+      const eff = await resolveEffectiveConfig();
+      expect(eff.projectCwd).toBeNull();
+      const scopeNames = eff.settingsScopes.map((s) => s.scope);
+      expect(scopeNames).not.toContain("project");
+      expect(scopeNames).not.toContain("local");
+      // No agents/skills/commands/mcp on a bare machine -> empty arrays, no throw.
+      expect(eff.agents).toEqual([]);
+      expect(eff.skills).toEqual([]);
+      expect(eff.commands).toEqual([]);
+      expect(eff.mcpServers).toEqual([]);
+      const theme = eff.settings.find((k) => k.key === "theme")!;
+      expect(theme.effectiveValue).toBe("light");
+    });
+  });
+});
+
+describe("hybridSearch (FTS primary + optional rerank)", () => {
+  // Build synthetic SearchHits so we exercise the rerank logic without a DB. Each hit's
+  // snippet is what the reranker scores against the query.
+  const hit = (sessionId: string, snippet: string): SearchHit => ({
+    sessionId,
+    projectId: "p",
+    projectName: "proj",
+    title: sessionId,
+    cwd: "/x",
+    role: "assistant",
+    snippet,
+    timestamp: null,
+    seq: 0,
+  });
+
+  // A fake FTS lane returning a fixed candidate order, respecting the limit it's given.
+  const makeFts = (hits: SearchHit[]): { fn: FtsSearchFn; calls: number[] } => {
+    const calls: number[] = [];
+    const fn: FtsSearchFn = (_q, facets) => {
+      calls.push(facets?.limit ?? 50);
+      return hits.slice(0, facets?.limit ?? 50);
+    };
+    return { fn, calls };
+  };
+
+  it("selectProvider: env values map to the right built-ins (default off)", () => {
+    expect(selectProvider(undefined)).toBe(noopProvider);
+    expect(selectProvider("")).toBe(noopProvider);
+    expect(selectProvider("none")).toBe(noopProvider);
+    expect(selectProvider("OFF")).toBe(noopProvider);
+    expect(selectProvider("lexical")).toBe(lexicalProvider);
+    // unknown name -> no-op (never breaks search), unless found in the registry.
+    expect(selectProvider("mystery")).toBe(noopProvider);
+    const custom: EmbeddingProvider = { id: "custom" };
+    expect(selectProvider("custom", { custom })).toBe(custom);
+  });
+
+  it("DEFAULT OFF: no provider returns FTS results unchanged, capped at limit", async () => {
+    const hits = [hit("a", "alpha"), hit("b", "beta"), hit("c", "gamma")];
+    const { fn } = makeFts(hits);
+    const out = await hybridSearch(fn, "anything", { limit: 2 }, { provider: noopProvider });
+    // Same order as FTS, truncated to the limit — no reordering.
+    expect(out.map((h) => h.sessionId)).toEqual(["a", "b"]);
+  });
+
+  it("lexical reranker floats the candidate that best covers the query tokens", async () => {
+    // FTS order is a,b,c but c's snippet mentions the most query words.
+    const hits = [
+      hit("a", "the cat sat"),
+      hit("b", "a dog ran"),
+      hit("c", "the quick brown fox jumps"),
+    ];
+    const { fn } = makeFts(hits);
+    const out = await hybridSearch(
+      fn,
+      "quick brown fox",
+      { limit: 3 },
+      { provider: lexicalProvider },
+    );
+    // c covers all 3 query tokens -> first; a/b cover none -> keep FTS relative order.
+    expect(out.map((h) => h.sessionId)).toEqual(["c", "a", "b"]);
+  });
+
+  it("pulls a WIDER candidate set than the final limit, then truncates", async () => {
+    const hits = Array.from({ length: 100 }, (_, i) => hit(`s${i}`, `doc ${i}`));
+    const { fn, calls } = makeFts(hits);
+    const out = await hybridSearch(
+      fn,
+      "doc",
+      { limit: 5 },
+      { provider: lexicalProvider, candidateLimit: 40 },
+    );
+    // FTS was asked for the wide candidate set (40), and the result is capped at 5.
+    expect(calls[0]).toBe(40);
+    expect(out).toHaveLength(5);
+  });
+
+  it("a provider that THROWS falls back to FTS order (never degrades search)", async () => {
+    const hits = [hit("a", "x"), hit("b", "y")];
+    const { fn } = makeFts(hits);
+    const boom: EmbeddingProvider = {
+      id: "boom",
+      async rerank() {
+        throw new Error("provider exploded");
+      },
+    };
+    const out = await hybridSearch(fn, "q", { limit: 2 }, { provider: boom });
+    expect(out.map((h) => h.sessionId)).toEqual(["a", "b"]);
+  });
+
+  it("an embed-based provider is ranked by cosine similarity to the query", async () => {
+    const hits = [hit("a", "a"), hit("b", "b")];
+    const { fn } = makeFts(hits);
+    // query=[1,0]; "a" vector aligns ([1,0]), "b" is orthogonal ([0,1]) -> a wins.
+    const embedder: EmbeddingProvider = {
+      id: "fake-embed",
+      async embed(texts) {
+        return texts.map((t) => (t === "a" ? [1, 0] : t === "b" ? [0, 1] : [1, 0]));
+      },
+    };
+    const out = await hybridSearch(fn, "a", { limit: 2 }, { provider: embedder });
+    expect(out[0]!.sessionId).toBe("a");
+  });
+});
+
+describe("running-session cache (mtime gate)", () => {
+  const withConfigDir = async <T>(fn: (sessionsDir: string) => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const sessionsDir = path.join(root, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    clearRunningSessionsCache(); // start each test from a cold cache
+    try {
+      return await fn(sessionsDir);
+    } finally {
+      clearRunningSessionsCache();
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("re-reads only files whose mtime changed; reuses the cached parse otherwise", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const file = path.join(sessionsDir, `${process.pid}.json`);
+      writeFileSync(
+        file,
+        JSON.stringify({ pid: process.pid, sessionId: "v1", cwd: "/home/me/a", status: "idle" }),
+      );
+      // Pin the mtime to an EXACT integer-ms value BEFORE the first read, so the cache
+      // stores precisely this stamp (a fresh write's mtime carries sub-ms precision that
+      // utimesSync can't reproduce, which would otherwise look like a change).
+      const pinned = new Date(Date.now() - 10_000);
+      utimesSync(file, pinned, pinned);
+      const first = await listRunning();
+      expect(first[0]!.sessionId).toBe("v1");
+
+      // Rewrite the body but RESTORE the same pinned mtime: the gate should treat the
+      // file as unchanged and serve the cached "v1" parse.
+      writeFileSync(
+        file,
+        JSON.stringify({ pid: process.pid, sessionId: "v2", cwd: "/home/me/a", status: "idle" }),
+      );
+      utimesSync(file, pinned, pinned);
+      const cached = await listRunning();
+      expect(cached[0]!.sessionId).toBe("v1"); // stale parse reused (proves the cache hit)
+
+      // Now advance the mtime: the gate must re-read and pick up "v2".
+      const newer = new Date(pinned.getTime() + 5000);
+      utimesSync(file, newer, newer);
+      const fresh = await listRunning();
+      expect(fresh[0]!.sessionId).toBe("v2");
+    });
+  });
+
+  it("liveness is recomputed every call even when the file (and its parse) is cached", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      // A live entry (our pid) -> the file parse caches, but alive must stay true and
+      // status must keep reflecting a live probe across calls.
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "live", cwd: "/home/me/b", status: "busy" }),
+      );
+      const a = await listRunning();
+      const b = await listRunning(); // second call hits the parse cache
+      expect(a[0]!.alive).toBe(true);
+      expect(b[0]!.alive).toBe(true);
+      expect(b[0]!.status).toBe("busy");
+
+      // A dead PID is still flagged dead on a cached read (liveness isn't cached).
+      const deadPid = 2 ** 30;
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "ghost", cwd: "/home/me/c", status: "busy" }),
+      );
+      const withDead = await listRunning();
+      const ghost = withDead.find((s) => s.sessionId === "ghost")!;
+      expect(ghost.alive).toBe(false);
+      expect(ghost.status).toBe("dead");
+    });
+  });
+
+  it("evicts the cache entry when a session file disappears", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const file = path.join(sessionsDir, `${process.pid}.json`);
+      writeFileSync(
+        file,
+        JSON.stringify({ pid: process.pid, sessionId: "gone-soon", cwd: "/home/me/d", status: "idle" }),
+      );
+      expect((await listRunning()).map((s) => s.sessionId)).toContain("gone-soon");
+      rmSync(file);
+      expect(await listRunning()).toEqual([]); // file gone -> dropped, no stale cache hit
+    });
+  });
 });

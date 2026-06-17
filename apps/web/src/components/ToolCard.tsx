@@ -7,6 +7,7 @@ import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
 import { ReadCard } from "./tools/ReadCard";
 import { TaskCard } from "./tools/TaskCard";
+import { GrepCard } from "./tools/GrepCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -98,6 +99,12 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
   // content. Falls back to the generic card when the input has no file_path.
   if (name === "Read") {
     return <ReadCard block={block} fallback={() => <GenericToolCard block={block} live={live} />} />;
+  }
+
+  // Grep + Glob get a search renderer: pattern + path/filters + matched
+  // files/lines compactly. Falls back to the generic card with no pattern.
+  if (name === "Grep" || name === "Glob") {
+    return <GrepCard block={block} fallback={() => <GenericToolCard block={block} live={live} />} />;
   }
 
   const result = block.result;

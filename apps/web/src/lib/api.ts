@@ -111,6 +111,21 @@ export interface GitCommitResult {
   hash: string | null;
 }
 
+/**
+ * Response from the remote git operations (POST /api/git/fetch|pull|push).
+ * Mirrors the engine's GitWriteResult: `ok` reports success, `stdout` carries
+ * git's (trimmed) output to show in the result line, and `error` is the failure
+ * reason (e.g. "no upstream branch", "non-fast-forward") when `ok` is false.
+ * Kept in lockstep with packages/engine/src/git.ts.
+ */
+export interface GitRemoteResult {
+  ok: boolean;
+  /** Trimmed git stdout (may be empty — e.g. "Already up to date."). */
+  stdout: string;
+  /** Failure reason when `ok` is false; empty on success. */
+  error: string;
+}
+
 /** Response shape for an MCP write (PUT/DELETE) — the server echoes the target. */
 export interface McpWriteResult {
   ok: boolean;
@@ -361,6 +376,19 @@ export const api = {
   // the switcher updates from the response without a separate re-fetch.
   gitBranch: (cwd: string, name: string, checkout = true) =>
     send<GitBranch[]>("/api/git/branch", "POST", { cwd, name, checkout }),
+  // Remote sync for a project `cwd`, allowlisted server-side like the other git
+  // routes. Fetch updates remote-tracking refs (no working-tree change), pull
+  // fast-forwards/merges the upstream into the current branch, and push uploads
+  // local commits. These call POST /api/git/fetch|pull|push; until the
+  // engine/server lane ships them, the *Maybe helper surfaces a
+  // NotImplementedError so GitSync shows a graceful "not available yet" state
+  // instead of erroring — exactly like the worktree routes were wired.
+  gitFetch: (cwd: string) =>
+    sendMaybe<GitRemoteResult>("/api/git/fetch", "POST", { cwd }),
+  gitPull: (cwd: string) =>
+    sendMaybe<GitRemoteResult>("/api/git/pull", "POST", { cwd }),
+  gitPush: (cwd: string) =>
+    sendMaybe<GitRemoteResult>("/api/git/push", "POST", { cwd }),
   // Per-day token/cost/session time series for a usage window. `since`/`until`
   // are inclusive `YYYY-MM-DD` dates; omit both for the full history. Backed by
   // GET /api/rollups (engine `dailyUsage`). The PeriodSelector sums the in-range

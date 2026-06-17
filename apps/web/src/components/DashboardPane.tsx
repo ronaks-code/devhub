@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, CalendarDays, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
+import { Activity, CalendarDays, Clock, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
 import type { DailyUsage, RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
@@ -9,6 +9,7 @@ import { useStatsPolling } from "../hooks/useStatsPolling";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
+import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
 import { Badge, EmptyState, Spinner } from "./ui";
 
@@ -405,6 +406,14 @@ function DashboardBody({
           ) : (
             <CalendarHeatmap days={yearRollups} metric={heatmapMetric} />
           )}
+        </section>
+
+        {/* When you work — time-of-day × day-of-week session heatmap. Self-loads
+            its own recent-session sample (rollups only know calendar days, not
+            the hour), bucketed in the browser's local timezone. */}
+        <section>
+          <SectionTitle icon={<Clock className="h-3.5 w-3.5" />}>When you work</SectionTitle>
+          <HourHeatmap />
         </section>
 
         {/* Per-model breakdown */}

@@ -26,7 +26,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W14 TUI live chat, audit log, edit approvals, project detail header, session↔commits, notes, live thinking, reading mode ✅
 - [x] W15 TUI search, finish/stall notifications, secret redaction, syntax diffs, show-more, permissions editor, top-spenders ✅
 - [x] W16 Live Ops board, config watcher, keyboard approvals, prompt snippets, git discard, diff-context, inbox, token meter ✅
-- [ ] W17 Effective config, ahead/behind sync, config linter, semantic search
+- [x] W17 Effective config, ahead/behind sync, config linter, semantic-search lane, hour heatmap, Grep card, turn footer ✅
 - [ ] W18 Stop running session, restore-from-backup, transcript timestamps
 - [ ] W19 TUI dashboard, config search, hook dry-run, KaTeX/JSON render
 - [ ] W20 Rate-limit handling, plugins view, mark interrupted, skeletons
@@ -37,6 +37,8 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **AUDIT after W16** ✅ PASS — 5 tabs (Browse/Chat/Ops/Inbox/Dashboard) + ⌘K + ⌘⇧P + ⚙; dashboard rich (running-now, period selector, 12mo heatmap, by-model, top-spenders, cost); zero console errors. ("unknown" model bucket still pending a forced reindex backfill.)
+- **W17** ✅ (green: tc×4 + 240 tests + build + config-lint(0 issues)/search/chat). engine: `config/effective.ts` resolver, `embeddings.ts` pluggable hybrid lane (default-off, no ML dep), git fetch/pull/push, running-sessions mtime cache. server: `/api/config/lint` + git fetch/pull/push routes. web: GitSync (ahead/behind + push/pull), HourHeatmap, GrepCard (Grep/Glob), TurnFooter.
 - **W16** ✅ (green: tc×4 + 227 tests + build + LiveOps/discard-gate/chat). engine: `config/watcher.ts` (config-changed EngineEvent), driver token-meter (onStatus kind:tokens), git discardFile/discardAll. server: git unstage/discard routes (confirm-gated). web: LiveOpsBoard tab, useApprovalKeyboard (A/D/S/E), SnippetLibrary, DiffContext collapse, InboxPane, live token meter. INTEGRATOR FIX: wired startConfigWatcher into startEngineLifecycle (engine built it server-started like watchTranscripts).
 - **W15** ✅ (green: tc×4 + 218 tests + build + tui + file-facet/cost-sort/chat). engine: `redact.ts` secret masking (audit-applied), `file:` search facet, listAllSessions sort:"cost". server: notifications watcher (finish/stall) → `{kind:"notify"}` on /api/events SSE. web: syntax-highlighted diffs, ResultBody show-more, PermissionsEditor (+tester), TopSpenders, notify toasts + browser Notification. tui: Search screen. FIXES: restarted a wedged dev server (15 waves of hot-reload); added "cost" to the all-sessions sort enum (runtime smoke caught it).
 - **W14** ✅ (green: tc×4 + 202 tests + build + tui-smoke + notes/chat). engine: `audit.ts` permission audit log (v10), `session-commits.ts` link sessions→commits, thinking-delta in driver, session notes (v11). server: ws thinking-delta forward + notes in PATCH. web: EditableApproval, ProjectDetailHeader, SessionNotes, useReadingMode, live thinking in LiveBubble. tui: live Chat screen (in-process driver). TECH-DEBT noted: server uses some local type-widening / runtime duck-typing for engine symbols that landed same-wave (functional + typechecks); reconcile in a cleanup pass.

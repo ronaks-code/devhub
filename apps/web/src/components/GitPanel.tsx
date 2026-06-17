@@ -14,6 +14,7 @@ import type { GitLogEntry, GitStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { relativeTime } from "../lib/format";
 import { CommitComposer } from "./CommitComposer";
+import { GitSync } from "./GitSync";
 import { GitDiffView } from "./GitDiffView";
 import { WorktreePanel } from "./WorktreePanel";
 import { Spinner } from "./ui";
@@ -153,6 +154,10 @@ export function GitPanel({ cwd }: { cwd: string }) {
   const [log, setLog] = useState<GitLogEntry[]>([]);
   // null = not fetched yet; "repo" / "no-repo" / "error" once we know.
   const [state, setState] = useState<"idle" | "repo" | "no-repo" | "error">("idle");
+  // Commit message draft, lifted here so the CommitComposer and GitSync's
+  // "Commit & Push" share one draft (push commits the same message the composer
+  // shows). Cleared on a successful commit.
+  const [commitMessage, setCommitMessage] = useState("");
 
   // Fetch status + recent log for `cwd`. Returns a cancel fn so the effect can
   // drop a stale in-flight load; the composer calls it (ignoring the return) to
@@ -190,6 +195,7 @@ export function GitPanel({ cwd }: { cwd: string }) {
     setStatus(null);
     setLog([]);
     setState("idle");
+    setCommitMessage("");
   }, [cwd]);
 
   const dirty =
@@ -197,6 +203,25 @@ export function GitPanel({ cwd }: { cwd: string }) {
     (status.staged.length > 0 ||
       status.unstaged.length > 0 ||
       status.untracked.length > 0);
+
+  // Commit-and-push step for GitSync: commit the current draft (staging tracked
+  // changes via {all:true}), then return whether it succeeded so GitSync chains
+  // the push only on success. Clears the draft + refreshes status on a commit.
+  const commitForPush = useCallback(async (): Promise<boolean> => {
+    const msg = commitMessage.trim();
+    if (!msg) return false;
+    try {
+      const res = await api.gitCommit(cwd, msg, true);
+      if (res.ok) {
+        setCommitMessage("");
+        refresh();
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }, [commitMessage, cwd, refresh]);
 
   return (
     <div className="border-b border-zinc-800/80 bg-zinc-900/20">
@@ -272,6 +297,16 @@ export function GitPanel({ cwd }: { cwd: string }) {
                 ) : null}
               </div>
 
+              {/* Remote sync — ahead/behind indicator + Fetch/Pull/Push and
+                  Commit-and-Push. Refreshes status/log on a successful op. */}
+              <GitSync
+                cwd={cwd}
+                status={status}
+                dirty={dirty}
+                onCommitAndPush={dirty ? commitForPush : undefined}
+                onSynced={refresh}
+              />
+
               {/* Changed-file list — click a tracked file to expand its real
                   working-tree diff (GET /api/git/diff?cwd=&file=). */}
               {dirty ? <ChangedFiles cwd={cwd} status={status} /> : null}
@@ -303,7 +338,13 @@ export function GitPanel({ cwd }: { cwd: string }) {
               {/* Stage + commit tracked changes. Only shown when the tree is
                   dirty; refreshes status/log on a successful commit. */}
               {dirty ? (
-                <CommitComposer cwd={cwd} status={status} onCommitted={refresh} />
+                <CommitComposer
+                  cwd={cwd}
+                  status={status}
+                  onCommitted={refresh}
+                  message={commitMessage}
+                  onMessageChange={setCommitMessage}
+                />
               ) : null}
 
               {/* Worktrees — list / create / remove for this repo. Degrades to a
