@@ -205,6 +205,17 @@ export function ChatPane({
     liveStreamRef.current.append(text);
   }, []);
 
+  // Append streamed THINKING text to the in-flight bubble. Like appendDelta it
+  // flips `liveActive` on the first chunk so the bubble mounts even when thinking
+  // arrives before any visible answer (the common case — reasoning streams first).
+  const appendThinkingDelta = useCallback((text: string) => {
+    if (!liveActiveRef.current) {
+      liveActiveRef.current = true;
+      setLiveActive(true);
+    }
+    liveStreamRef.current.appendThinking(text);
+  }, []);
+
   // Tear down the in-flight live bubble (turn ended/aborted with no finalized
   // assistant message). Drops the streamed text rather than stranding a cursor.
   const clearLive = useCallback(() => {
@@ -261,6 +272,7 @@ export function ChatPane({
         if (Array.isArray(init?.slashCommands)) setSlashCommands(init.slashCommands);
       },
       onDelta: (text) => appendDelta(text),
+      onThinkingDelta: (text) => appendThinkingDelta(text),
       onMessage: (m) => finalizeMessage(m),
       onStatus: (kind) => setStatus(kind),
       onResult: (result) => {
@@ -311,13 +323,13 @@ export function ChatPane({
     });
     connRef.current = conn;
     return conn;
-  }, [appendDelta, finalizeMessage, clearLive, dispatchNext]);
+  }, [appendDelta, appendThinkingDelta, finalizeMessage, clearLive, dispatchNext]);
 
   // Forward the user's Allow/Deny decision (with its scope) to the agent and
   // dismiss the card. Never auto-decides: only fires from an explicit button
   // press in PermissionCard. Scope is dormant on the per-turn driver but rides
   // along in the payload so the persistent path can honor it later.
-  const respondPermission = useCallback((id: string, { decision, scope, message }: PermissionDecision) => {
+  const respondPermission = useCallback((id: string, { decision, scope, message, updatedInput }: PermissionDecision) => {
     connRef.current?.send({
       t: "permission-response",
       id,
@@ -326,6 +338,10 @@ export function ChatPane({
       // Optional deny feedback (PermissionCard → DenyFeedback). Only include it
       // when present so a plain deny/allow payload is unchanged.
       ...(message ? { message } : {}),
+      // Optional edited tool input (PermissionCard → EditableApproval) on an
+      // allow. Only include it when the user revised the input, so a plain
+      // unchanged-allow payload is identical to before.
+      ...(updatedInput !== undefined ? { updatedInput } : {}),
     });
     setPendingPermission((cur) => (cur && cur.id === id ? null : cur));
   }, []);

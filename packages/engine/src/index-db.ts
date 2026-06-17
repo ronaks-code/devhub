@@ -27,6 +27,7 @@ import type { ProjectMetaPatch } from "./project-meta.js";
 import { TagStore, parseTags } from "./tags.js";
 import { SavedViewStore } from "./saved-views.js";
 import type { SavedView, SaveViewInput } from "./saved-views.js";
+import { AuditStore } from "./audit.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
 import {
@@ -75,6 +76,7 @@ interface Row {
   pinned: number;
   tags: string | null;
   archived: number;
+  notes: string | null;
 }
 
 const SCHEMA = `
@@ -108,7 +110,8 @@ CREATE TABLE IF NOT EXISTS session_meta (
   customTitle TEXT,
   pinned INTEGER NOT NULL DEFAULT 0,
   tags TEXT,
-  archived INTEGER NOT NULL DEFAULT 0
+  archived INTEGER NOT NULL DEFAULT 0,
+  notes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS saved_views (
@@ -118,6 +121,17 @@ CREATE TABLE IF NOT EXISTS saved_views (
   facets TEXT NOT NULL DEFAULT '{}',
   createdAt INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS permission_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sessionId TEXT,
+  toolName TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  scope TEXT,
+  reason TEXT,
+  ts INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_permission_audit_session ON permission_audit(sessionId);
 `;
 
 const SELECT_COLS = `
@@ -125,7 +139,7 @@ const SELECT_COLS = `
   s.firstTs, s.lastTs, s.messageCount, s.inputTokens, s.outputTokens,
   s.cacheReadTokens, s.cacheCreationTokens, s.sizeBytes, s.mtimeMs, s.indexedBytes,
   s.hasSubagents, s.model, s.headSig, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags,
-  COALESCE(m.archived, 0) AS archived
+  COALESCE(m.archived, 0) AS archived, m.notes
 `;
 
 function n(v: unknown): number {
@@ -188,6 +202,8 @@ export class TranscriptIndex {
   readonly tags: TagStore;
   /** Saved views / smart folders (saved_views table), sharing this DB. */
   readonly savedViews: SavedViewStore;
+  /** Permission-decision audit log (permission_audit table), sharing this DB. */
+  readonly audit: AuditStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
   /**
@@ -221,6 +237,7 @@ export class TranscriptIndex {
     this.projectMeta = new ProjectMetaStore(this.db);
     this.tags = new TagStore(this.db);
     this.savedViews = new SavedViewStore(this.db);
+    this.audit = new AuditStore(this.db);
     const store = this.initSearchStore();
     this.searchMode = store.mode;
     this.ftsTokenizer = store.tokenizer;
@@ -695,6 +712,33 @@ export class TranscriptIndex {
     return this.tags.getAll();
   }
 
+  /**
+   * Read a session's free-form notes (markdown), or null when none. Our own data in
+   * session_meta.notes; never derived from the transcript.
+   */
+  getNotes(sessionId: string): string | null {
+    const row = this.db
+      .prepare("SELECT notes FROM session_meta WHERE sessionId = ?")
+      .get(sessionId) as { notes: string | null } | undefined;
+    const notes = row?.notes;
+    return typeof notes === "string" && notes.trim() ? notes : null;
+  }
+
+  /**
+   * Set (or clear) a session's notes. A blank/whitespace-only value stores NULL so
+   * the row reads back as "no notes". Stored in session_meta — never touches the
+   * transcript.
+   */
+  setNotes(sessionId: string, md: string | null): void {
+    const value = typeof md === "string" && md.trim() ? md : null;
+    this.db
+      .prepare(
+        `INSERT INTO session_meta (sessionId, notes) VALUES (?, ?)
+         ON CONFLICT(sessionId) DO UPDATE SET notes = excluded.notes`,
+      )
+      .run(sessionId, value);
+  }
+
   /** All saved views (smart folders), newest first. */
   listSavedViews(): SavedView[] {
     return this.savedViews.list();
@@ -737,6 +781,7 @@ function rowToSummary(row: Row): SessionSummary {
     pinned: n(row.pinned) === 1,
     archived: n(row.archived) === 1,
     tags: parseTags(row.tags),
+    notes: row.notes && row.notes.trim() ? row.notes : null,
     indexed: true,
   };
 }

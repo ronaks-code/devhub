@@ -115,6 +115,11 @@ export interface SessionSummary {
   archived: boolean;
   /** User-assigned tags (normalized: trimmed, lower-cased, de-duped). Empty when none. */
   tags: string[];
+  /**
+   * Free-form notes (markdown) the user attached to this session, or null when none.
+   * User-owned scratchpad in session_meta; never derived from the transcript.
+   */
+  notes: string | null;
   /** True while a full index of this file is still pending (counts/usage approximate). */
   indexed: boolean;
 }

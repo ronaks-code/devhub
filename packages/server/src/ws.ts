@@ -19,9 +19,11 @@ import { createDriver, type Engine } from "@claude-ui/engine";
 import { PERMISSION_MODES } from "@claude-ui/engine/driver";
 import type {
   ClientMsg,
+  PermissionDenial,
   PermissionMode,
   RunningTurn,
   ServerMsg,
+  TurnHandlers,
 } from "@claude-ui/engine/driver";
 
 type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
@@ -45,6 +47,48 @@ type IncomingMsg =
   | Exclude<ClientMsg, { t: "interrupt" }>
   | { t: "interrupt"; keepQueue?: boolean }
   | { t: "clear-queue" };
+
+/**
+ * Frames the server emits. The engine's `ServerMsg` is the source of truth but
+ * does not yet carry a thinking (extended-reasoning) frame, so — mirroring the
+ * `IncomingMsg` widening above — we widen the outgoing type locally to add it.
+ * Clients that don't understand `thinking-delta` simply ignore it.
+ *
+ * NOTE (missing engine symbols): if this becomes first-class, add a
+ * `{ t: "thinking-delta"; text: string }` variant to `@claude-ui/engine/driver`
+ * `ServerMsg` (and an `onThinkingDelta?: (text: string) => void` on
+ * `TurnHandlers`, see below), then drop this widening.
+ */
+type OutgoingMsg = ServerMsg | { t: "thinking-delta"; text: string };
+
+/**
+ * Local widening of `TurnHandlers` to carry the thinking-delta callback the
+ * engine streams from `thinking_delta` blocks. `TurnHandlers` doesn't declare it
+ * yet; once it does (`onThinkingDelta?: (text: string) => void`) this alias and
+ * the cast at the call site can be removed. Honoring it is a no-op if the engine
+ * never invokes it.
+ */
+type TurnHandlersWithThinking = TurnHandlers & {
+  onThinkingDelta?: (text: string) => void;
+};
+
+/**
+ * Best-effort shape of an engine audit helper for permission denials. The engine
+ * does not export this yet; we look it up at runtime and call it only if present
+ * (per spec: "best-effort, ignore if absent"). No compile-time dependency on a
+ * symbol the engine may not have.
+ *
+ * NOTE (missing engine symbols): wire `auditPermissionDenials(sessionId, denials)`
+ * (or similar) onto `Engine`, then replace this duck-typed lookup with a typed call.
+ */
+type DenialAuditFn = (sessionId: string | null, denials: PermissionDenial[]) => void;
+function resolveDenialAudit(engine: Engine): DenialAuditFn | undefined {
+  const candidate = (engine as unknown as Record<string, unknown>)
+    .auditPermissionDenials;
+  return typeof candidate === "function"
+    ? (candidate.bind(engine) as DenialAuditFn)
+    : undefined;
+}
 
 /**
  * Upper bound on pending prompts so a misbehaving (or malicious) client can't
@@ -89,7 +133,10 @@ function parseClientMsg(raw: unknown): IncomingMsg | null {
   return null;
 }
 
-export function registerWs(app: FastifyInstance, _engine: Engine): void {
+export function registerWs(app: FastifyInstance, engine: Engine): void {
+  // Resolved once: a best-effort denial-audit helper, if the engine exposes one.
+  const auditDenials = resolveDenialAudit(engine);
+
   app.get("/api/ws/session", { websocket: true }, (socket) => {
     /** The turn currently being driven, or null when idle. */
     let activeTurn: RunningTurn | null = null;
@@ -102,7 +149,7 @@ export function registerWs(app: FastifyInstance, _engine: Engine): void {
      */
     let resumeSessionId: string | undefined;
 
-    const send = (msg: ServerMsg) => {
+    const send = (msg: OutgoingMsg) => {
       if (socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify(msg));
       }
@@ -117,6 +164,29 @@ export function registerWs(app: FastifyInstance, _engine: Engine): void {
      * client supplied. On completion, emits turn-end and pulls the next prompt.
      */
     const startTurn = (msg: PromptMsg) => {
+      // Denials reported by the turn's result, kept so we can audit them (best
+      // effort) once the turn ends.
+      let denials: PermissionDenial[] = [];
+
+      // `onThinkingDelta` isn't on `TurnHandlers` yet; cast through the local
+      // widening so the field type-checks. Ignored by an engine that never fires it.
+      const handlers: TurnHandlersWithThinking = {
+        onSession: (sessionId, init) => {
+          // Resume this same session for every subsequent queued turn.
+          resumeSessionId = sessionId;
+          send({ t: "session", sessionId, init });
+        },
+        onMessage: (message) => send({ t: "message", message }),
+        onDelta: (text) => send({ t: "delta", text }),
+        onThinkingDelta: (text) => send({ t: "thinking-delta", text }),
+        onStatus: ({ kind }) => send({ t: "status", kind }),
+        onResult: (result) => {
+          denials = result.denials;
+          send({ t: "result", result });
+        },
+        onError: (message) => send({ t: "error", message }),
+      };
+
       const turn = createDriver().runTurn(
         {
           cwd: msg.cwd,
@@ -125,21 +195,19 @@ export function registerWs(app: FastifyInstance, _engine: Engine): void {
           model: msg.model,
           permissionMode: msg.permissionMode ?? "acceptEdits",
         },
-        {
-          onSession: (sessionId, init) => {
-            // Resume this same session for every subsequent queued turn.
-            resumeSessionId = sessionId;
-            send({ t: "session", sessionId, init });
-          },
-          onMessage: (message) => send({ t: "message", message }),
-          onDelta: (text) => send({ t: "delta", text }),
-          onStatus: ({ kind }) => send({ t: "status", kind }),
-          onResult: (result) => send({ t: "result", result }),
-          onError: (message) => send({ t: "error", message }),
-        },
+        handlers as TurnHandlers,
       );
       activeTurn = turn;
       void turn.done.finally(() => {
+        // Best-effort: log any tool-permission denials from this turn. Failures
+        // here never affect the user's turn; swallow them.
+        if (auditDenials && denials.length > 0) {
+          try {
+            auditDenials(resumeSessionId ?? msg.sessionId ?? null, denials);
+          } catch {
+            // ignore — auditing is non-essential
+          }
+        }
         send({ t: "turn-end" });
         activeTurn = null;
         drainQueue();

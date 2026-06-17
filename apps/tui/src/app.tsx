@@ -6,8 +6,9 @@ import React, { useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { Engine } from "@claude-ui/engine";
 import type { NormalizedMessage, ProjectSummary, SessionSummary } from "@claude-ui/engine/types";
+import { Chat } from "./screens/Chat.js";
 
-type Mode = "projects" | "sessions" | "transcript";
+type Mode = "projects" | "sessions" | "transcript" | "chat";
 
 const VISIBLE = 16; // list/transcript window height
 
@@ -47,48 +48,79 @@ export function App({ engine }: { engine: Engine }) {
   const [lines, setLines] = useState<string[]>([]);
   const [scroll, setScroll] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Which browse screen the chat screen returns to on Esc (set when launched).
+  const [chatReturn, setChatReturn] = useState<"projects" | "sessions">("projects");
 
-  useInput((input, key) => {
-    if (input === "q") {
-      exit();
-      return;
-    }
-    if (mode === "projects") {
-      if (key.downArrow || input === "j") setPIdx((i) => Math.min(i + 1, projects.length - 1));
-      else if (key.upArrow || input === "k") setPIdx((i) => Math.max(i - 1, 0));
-      else if (key.return) {
-        const p = projects[pIdx];
-        if (p) {
-          setProject(p);
-          setSessions(engine.getProjectSessions(p.id));
-          setSIdx(0);
-          setMode("sessions");
-        }
+  useInput(
+    (input, key) => {
+      if (input === "q") {
+        exit();
+        return;
       }
-    } else if (mode === "sessions") {
-      if (key.downArrow || input === "j") setSIdx((i) => Math.min(i + 1, sessions.length - 1));
-      else if (key.upArrow || input === "k") setSIdx((i) => Math.max(i - 1, 0));
-      else if (key.escape || input === "h") setMode("projects");
-      else if (key.return) {
-        const s = sessions[sIdx];
-        if (s) {
-          setSession(s);
-          setLoading(true);
-          setMode("transcript");
-          setScroll(0);
-          engine
-            .getSessionMessages(s.sessionId)
-            .then((page) => setLines((page?.messages ?? []).flatMap(flattenMessage)))
-            .finally(() => setLoading(false));
+      if (mode === "projects") {
+        if (key.downArrow || input === "j") setPIdx((i) => Math.min(i + 1, projects.length - 1));
+        else if (key.upArrow || input === "k") setPIdx((i) => Math.max(i - 1, 0));
+        else if (input === "c") {
+          // Open a live chat against the highlighted project.
+          const p = projects[pIdx];
+          if (p) {
+            setProject(p);
+            setChatReturn("projects");
+            setMode("chat");
+          }
+        } else if (key.return) {
+          const p = projects[pIdx];
+          if (p) {
+            setProject(p);
+            setSessions(engine.getProjectSessions(p.id));
+            setSIdx(0);
+            setMode("sessions");
+          }
         }
+      } else if (mode === "sessions") {
+        if (key.downArrow || input === "j") setSIdx((i) => Math.min(i + 1, sessions.length - 1));
+        else if (key.upArrow || input === "k") setSIdx((i) => Math.max(i - 1, 0));
+        else if (input === "c") {
+          // Live chat against this project (current cwd grouping).
+          if (project) {
+            setChatReturn("sessions");
+            setMode("chat");
+          }
+        } else if (key.escape || input === "h") setMode("projects");
+        else if (key.return) {
+          const s = sessions[sIdx];
+          if (s) {
+            setSession(s);
+            setLoading(true);
+            setMode("transcript");
+            setScroll(0);
+            engine
+              .getSessionMessages(s.sessionId)
+              .then((page) => setLines((page?.messages ?? []).flatMap(flattenMessage)))
+              .finally(() => setLoading(false));
+          }
+        }
+      } else if (mode === "transcript") {
+        if (key.downArrow || input === "j") setScroll((s) => Math.min(s + 1, Math.max(0, lines.length - VISIBLE)));
+        else if (key.upArrow || input === "k") setScroll((s) => Math.max(0, s - 1));
+        else if (input === " ") setScroll((s) => Math.min(s + VISIBLE, Math.max(0, lines.length - VISIBLE)));
+        else if (key.escape || input === "h") setMode("sessions");
       }
-    } else if (mode === "transcript") {
-      if (key.downArrow || input === "j") setScroll((s) => Math.min(s + 1, Math.max(0, lines.length - VISIBLE)));
-      else if (key.upArrow || input === "k") setScroll((s) => Math.max(0, s - 1));
-      else if (input === " ") setScroll((s) => Math.min(s + VISIBLE, Math.max(0, lines.length - VISIBLE)));
-      else if (key.escape || input === "h") setMode("sessions");
-    }
-  });
+    },
+    // While the Chat screen is mounted it owns keyboard input; the browse
+    // handler is disabled so typed characters (incl. "q"/"c") go to the prompt.
+    { isActive: mode !== "chat" },
+  );
+
+  if (mode === "chat" && project) {
+    // The Chat screen owns its own header/footer + keyboard input. Esc returns
+    // to the browse screens (sessions when we came from there, else projects).
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        <Chat project={project} onExit={() => setMode(chatReturn)} />
+      </Box>
+    );
+  }
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -143,9 +175,9 @@ export function App({ engine }: { engine: Engine }) {
       <Box marginTop={1}>
         <Text color="gray" dimColor>
           {mode === "projects"
-            ? "↑↓/jk move · ⏎ open · q quit"
+            ? "↑↓/jk move · ⏎ open · c chat · q quit"
             : mode === "sessions"
-              ? "↑↓/jk move · ⏎ open · esc/h back · q quit"
+              ? "↑↓/jk move · ⏎ open · c chat · esc/h back · q quit"
               : "↑↓/jk scroll · space page · esc/h back · q quit"}
         </Text>
       </Box>

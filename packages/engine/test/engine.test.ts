@@ -36,6 +36,11 @@ import { parseSearchQuery, mergeFacets } from "../src/query-parser.js";
 import { searchSymbols } from "../src/symbols.js";
 import { tokenizerOf, detectFtsTokenizer, FTS_TABLE } from "../src/fts-schema.js";
 import { normalizeProjectDefault } from "../src/project-settings.js";
+import { AuditStore } from "../src/audit.js";
+import { selectCommitsInWindow, getSessionCommits } from "../src/session-commits.js";
+import { makeLineHandler } from "../src/driver/cli.js";
+import type { TurnHandlers, TurnResult } from "../src/driver/types.js";
+import type { GitLogEntry } from "../src/git.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -3711,5 +3716,363 @@ describe("per-project defaults (model + permission mode)", () => {
     expect(meta.defaultModel).toBe("claude-opus-4-8");
     expect(engine.getProjectMeta("proj-x").defaultModel).toBe("claude-opus-4-8");
     engine.close();
+  });
+});
+
+describe("permission audit log", () => {
+  it("migration adds permission_audit to a legacy DB and is idempotent", () => {
+    const file = path.join(tmp(), "legacy-audit.db");
+    const db = new DatabaseSync(file);
+    // A DB created before the audit table existed: session_meta only, version 9.
+    db.exec(`CREATE TABLE session_meta (sessionId TEXT PRIMARY KEY, customTitle TEXT);`);
+    db.exec("PRAGMA user_version = 9");
+    expect(hasColumn(db, "permission_audit", "decision")).toBe(false);
+
+    runMigrations(db);
+    // Table now exists and is writable.
+    db.prepare(
+      "INSERT INTO permission_audit (toolName, decision, ts) VALUES (?, ?, ?)",
+    ).run("Bash", "deny", 123);
+    const row = db.prepare("SELECT toolName, decision FROM permission_audit").get() as {
+      toolName: string;
+      decision: string;
+    };
+    expect(row.toolName).toBe("Bash");
+    expect(row.decision).toBe("deny");
+
+    runMigrations(db); // re-run is harmless (IF NOT EXISTS)
+    expect((db.prepare("SELECT COUNT(*) AS c FROM permission_audit").get() as { c: number }).c).toBe(1);
+    db.close();
+  });
+
+  it("logDecision stores a verdict and lists newest-first", () => {
+    const db = new DatabaseSync(path.join(tmp(), "a.db"));
+    db.exec(`CREATE TABLE permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT, toolName TEXT NOT NULL,
+      decision TEXT NOT NULL, scope TEXT, reason TEXT, ts INTEGER NOT NULL
+    );`);
+    const audit = new AuditStore(db);
+    const e1 = audit.logDecision({ sessionId: "s1", toolName: "Bash", decision: "deny", reason: "rm -rf", ts: 100 });
+    expect(e1.id).toBeGreaterThan(0);
+    expect(e1.decision).toBe("deny");
+    audit.logDecision({ sessionId: "s1", toolName: "Edit", decision: "allow", scope: "once", ts: 200 });
+
+    const all = audit.list();
+    expect(all.map((e) => e.toolName)).toEqual(["Edit", "Bash"]); // ts desc
+    expect(all[0]!.scope).toBe("once");
+    expect(all[1]!.reason).toBe("rm -rf");
+    db.close();
+  });
+
+  it("normalizes blank tool name and unknown decision (fail-closed to deny)", () => {
+    const db = new DatabaseSync(path.join(tmp(), "a.db"));
+    db.exec(`CREATE TABLE permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT, toolName TEXT NOT NULL,
+      decision TEXT NOT NULL, scope TEXT, reason TEXT, ts INTEGER NOT NULL
+    );`);
+    const audit = new AuditStore(db);
+    const e = audit.logDecision({ toolName: "   ", decision: "maybe" as unknown as "allow" });
+    expect(e.toolName).toBe("tool");
+    expect(e.decision).toBe("deny");
+    expect(e.sessionId).toBeNull();
+    db.close();
+  });
+
+  it("logResultDenials records each turn-end denial as an implicit deny", () => {
+    const db = new DatabaseSync(path.join(tmp(), "a.db"));
+    db.exec(`CREATE TABLE permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT, toolName TEXT NOT NULL,
+      decision TEXT NOT NULL, scope TEXT, reason TEXT, ts INTEGER NOT NULL
+    );`);
+    const audit = new AuditStore(db);
+    const written = audit.logResultDenials(
+      [{ toolName: "Bash", toolInput: { command: "x" } }, { toolName: "Write" }],
+      { sessionId: "sess", ts: 500 },
+    );
+    expect(written.length).toBe(2);
+    expect(written.every((w) => w.decision === "deny" && w.scope === "result")).toBe(true);
+    // Empty denials write nothing.
+    expect(audit.logResultDenials([], { sessionId: "sess" })).toEqual([]);
+    db.close();
+  });
+
+  it("list scopes to one session and honors the limit", () => {
+    const db = new DatabaseSync(path.join(tmp(), "a.db"));
+    db.exec(`CREATE TABLE permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT, toolName TEXT NOT NULL,
+      decision TEXT NOT NULL, scope TEXT, reason TEXT, ts INTEGER NOT NULL
+    );`);
+    const audit = new AuditStore(db);
+    audit.logDecision({ sessionId: "a", toolName: "T1", decision: "allow", ts: 1 });
+    audit.logDecision({ sessionId: "b", toolName: "T2", decision: "allow", ts: 2 });
+    audit.logDecision({ sessionId: "a", toolName: "T3", decision: "deny", ts: 3 });
+
+    expect(audit.list({ sessionId: "a" }).map((e) => e.toolName)).toEqual(["T3", "T1"]);
+    expect(audit.list({ limit: 1 }).map((e) => e.toolName)).toEqual(["T3"]);
+    db.close();
+  });
+
+  it("Engine exposes logPermissionDecision/logTurnDenials/listAudit", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    engine.logPermissionDecision({ sessionId: "s", toolName: "Bash", decision: "deny", reason: "blocked" });
+    engine.logTurnDenials([{ toolName: "Write" }], { sessionId: "s" });
+    const list = engine.listAudit({ sessionId: "s" });
+    expect(list.length).toBe(2);
+    expect(list.map((e) => e.toolName).sort()).toEqual(["Bash", "Write"]);
+    expect(list.every((e) => e.decision === "deny")).toBe(true);
+    engine.close();
+  });
+});
+
+describe("session notes", () => {
+  const setup = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const file = path.join(proj, "noted.jsonl");
+    writeFileSync(
+      file,
+      jl({ type: "user", cwd: "/home/me/noted", message: { role: "user", content: "do the thing" } }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(file);
+    return { idx };
+  };
+
+  it("migration adds session_meta.notes to a legacy DB and is idempotent", () => {
+    const db = new DatabaseSync(path.join(tmp(), "legacy-notes.db"));
+    db.exec(`CREATE TABLE session_meta (
+      sessionId TEXT PRIMARY KEY, customTitle TEXT, pinned INTEGER NOT NULL DEFAULT 0,
+      tags TEXT, archived INTEGER NOT NULL DEFAULT 0
+    );`);
+    db.exec("PRAGMA user_version = 10");
+    db.prepare("INSERT INTO session_meta (sessionId, pinned) VALUES (?, ?)").run("legacy", 1);
+    expect(hasColumn(db, "session_meta", "notes")).toBe(false);
+
+    runMigrations(db);
+    expect(hasColumn(db, "session_meta", "notes")).toBe(true);
+    const row = db.prepare("SELECT pinned, notes FROM session_meta WHERE sessionId=?").get("legacy") as {
+      pinned: number;
+      notes: string | null;
+    };
+    expect(Number(row.pinned)).toBe(1);
+    expect(row.notes).toBeNull();
+
+    runMigrations(db); // idempotent
+    expect(hasColumn(db, "session_meta", "notes")).toBe(true);
+    db.close();
+  });
+
+  it("set/get round-trips, blank clears, and surfaces on SessionSummary", async () => {
+    const { idx } = await setup(tmp());
+    expect(idx.getNotes("noted")).toBeNull();
+    expect(idx.getSessionSummary("noted")!.notes).toBeNull();
+
+    idx.setNotes("noted", "# TODO\n- ship it");
+    expect(idx.getNotes("noted")).toBe("# TODO\n- ship it");
+    expect(idx.getSessionSummary("noted")!.notes).toBe("# TODO\n- ship it");
+
+    // Blank/whitespace clears to null.
+    idx.setNotes("noted", "   ");
+    expect(idx.getNotes("noted")).toBeNull();
+    expect(idx.getSessionSummary("noted")!.notes).toBeNull();
+
+    // Explicit null clears too.
+    idx.setNotes("noted", "keep");
+    idx.setNotes("noted", null);
+    expect(idx.getNotes("noted")).toBeNull();
+    idx.close();
+  });
+
+  it("notes coexist with tags/pin on the same session_meta row", async () => {
+    const { idx } = await setup(tmp());
+    idx.setTags("noted", ["wip"]);
+    idx.setPinned("noted", true);
+    idx.setNotes("noted", "context here");
+    const s = idx.getSessionSummary("noted")!;
+    expect(s.tags).toEqual(["wip"]);
+    expect(s.pinned).toBe(true);
+    expect(s.notes).toBe("context here");
+    idx.close();
+  });
+
+  it("Engine exposes getNotes/setNotes", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    engine.setNotes("sN", "remember this");
+    expect(engine.getNotes("sN")).toBe("remember this");
+    engine.setNotes("sN", "");
+    expect(engine.getNotes("sN")).toBeNull();
+    engine.close();
+  });
+});
+
+describe("session-commits (commits in the session window)", () => {
+  const mkLog = (entries: Array<{ hash: string; subject: string; date: string }>): GitLogEntry[] =>
+    entries.map((e) => ({
+      hash: e.hash,
+      shortHash: e.hash.slice(0, 7),
+      subject: e.subject,
+      authorName: "me",
+      date: e.date,
+    }));
+
+  it("keeps commits authored inside the (padded) first→last window, newest first", () => {
+    const log = mkLog([
+      { hash: "ddd", subject: "after window (way later)", date: "2026-06-01T12:00:00.000Z" },
+      { hash: "ccc", subject: "just after last (within pad)", date: "2026-06-01T10:05:00.000Z" },
+      { hash: "bbb", subject: "during", date: "2026-06-01T09:30:00.000Z" },
+      { hash: "aaa", subject: "before window", date: "2026-06-01T08:00:00.000Z" },
+    ]);
+    const out = selectCommitsInWindow(log, "2026-06-01T09:00:00.000Z", "2026-06-01T10:00:00.000Z");
+    // "during" + "just after (within 10m pad)" survive; before/way-after dropped.
+    expect(out.map((c) => c.hash)).toEqual(["ccc", "bbb"]);
+    expect(out[0]!.subject).toBe("just after last (within pad)");
+    expect(out[0]!.ts).toBe(Date.parse("2026-06-01T10:05:00.000Z"));
+  });
+
+  it("returns [] when there is no usable window", () => {
+    const log = mkLog([{ hash: "x", subject: "c", date: "2026-06-01T09:00:00.000Z" }]);
+    expect(selectCommitsInWindow(log, null, null)).toEqual([]);
+    expect(selectCommitsInWindow([], "2026-06-01T09:00:00.000Z", null)).toEqual([]);
+  });
+
+  it("an open bound (single-message session) still matches nearby commits", () => {
+    const log = mkLog([
+      { hash: "near", subject: "near the only timestamp", date: "2026-06-01T09:02:00.000Z" },
+      { hash: "far", subject: "hours away", date: "2026-06-01T15:00:00.000Z" },
+    ]);
+    // firstTs only; lastTs open (+∞) -> "far" is also after first, so both match here.
+    const out = selectCommitsInWindow(log, "2026-06-01T09:00:00.000Z", null);
+    expect(out.map((c) => c.hash).sort()).toEqual(["far", "near"]);
+  });
+
+  it("getSessionCommits returns [] for a session with no cwd (no git access)", async () => {
+    let called = false;
+    const commits = await getSessionCommits(
+      { cwd: null, firstTimestamp: "2026-06-01T09:00:00.000Z", lastTimestamp: "2026-06-01T10:00:00.000Z" },
+      () => {
+        called = true;
+        return {} as never;
+      },
+    );
+    expect(commits).toEqual([]);
+    expect(called).toBe(false); // short-circuits before touching git
+  });
+
+  it("getSessionCommits wires the git log to the window filter", async () => {
+    const fakeLog = mkLog([
+      { hash: "in", subject: "in window", date: "2026-06-01T09:30:00.000Z" },
+      { hash: "out", subject: "way before", date: "2026-05-01T00:00:00.000Z" },
+    ]);
+    const fakeGit = () => ({ log: async () => fakeLog }) as never;
+    const commits = await getSessionCommits(
+      { cwd: "/repo", firstTimestamp: "2026-06-01T09:00:00.000Z", lastTimestamp: "2026-06-01T10:00:00.000Z" },
+      fakeGit,
+    );
+    expect(commits.map((c) => c.hash)).toEqual(["in"]);
+  });
+
+  it("getSessionCommits is best-effort [] for a non-git dir (empty log)", async () => {
+    const commits = await getSessionCommits(
+      { cwd: "/not/a/repo", firstTimestamp: "2026-06-01T09:00:00.000Z", lastTimestamp: "2026-06-01T10:00:00.000Z" },
+      () => ({ log: async () => [] }) as never,
+    );
+    expect(commits).toEqual([]);
+  });
+
+  it("Engine.getSessionCommits selects commits in a real temp repo's window", async () => {
+    const dir = tmp();
+    const repo = path.join(dir, "repo");
+    mkdirSync(repo);
+    const run = (...args: string[]) =>
+      execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+    run("init", "-q");
+    run("config", "user.email", "t@t.dev");
+    run("config", "user.name", "Tester");
+    run("config", "commit.gpgsign", "false");
+    // Author the commit with a fixed UTC date INSIDE the session window we'll query.
+    // Use an explicit +0000 offset so the commit's author date is unambiguously UTC,
+    // matching the UTC ("Z") session timestamps below regardless of the test host's tz.
+    const inWindow = "2026-06-01T09:30:00 +0000";
+    writeFileSync(path.join(repo, "a.txt"), "hi");
+    run("add", "a.txt");
+    execFileSync("git", ["commit", "-q", "-m", "in window commit"], {
+      cwd: repo,
+      stdio: "pipe",
+      env: { ...process.env, GIT_AUTHOR_DATE: inWindow, GIT_COMMITTER_DATE: inWindow },
+    });
+
+    // Index a session whose cwd is the repo and whose window straddles that commit.
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const file = path.join(proj, "repoSess.jsonl");
+    writeFileSync(
+      file,
+      jl({ type: "user", cwd: repo, timestamp: "2026-06-01T09:00:00.000Z", message: { role: "user", content: "start" } }) +
+        jl({ type: "user", cwd: repo, timestamp: "2026-06-01T10:00:00.000Z", message: { role: "user", content: "end" } }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(file);
+
+    const commits = await engine.getSessionCommits("repoSess");
+    expect(commits.length).toBe(1);
+    expect(commits[0]!.subject).toBe("in window commit");
+    expect(commits[0]!.hash.length).toBe(40);
+
+    // Unknown session id -> [] (best-effort).
+    expect(await engine.getSessionCommits("nope")).toEqual([]);
+    engine.close();
+  });
+});
+
+describe("driver thinking-delta dispatch", () => {
+  // Drive makeLineHandler directly with synthetic stream-json frames (no `claude`).
+  const run = (lines: object[]) => {
+    const text: string[] = [];
+    const thinking: string[] = [];
+    let result: TurnResult | null = null;
+    const handlers: TurnHandlers = {
+      onDelta: (t) => text.push(t),
+      onThinkingDelta: (t) => thinking.push(t),
+      onResult: (r) => {
+        result = r;
+      },
+    };
+    const state = { sessionId: null as string | null, seq: 0, finalResult: null as TurnResult | null };
+    const handle = makeLineHandler(handlers, state);
+    for (const l of lines) handle(JSON.stringify(l));
+    return { text, thinking, result: result as TurnResult | null, state };
+  };
+
+  it("routes text_delta to onDelta and thinking_delta to onThinkingDelta", () => {
+    const { text, thinking } = run([
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "let me reason" } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "the answer" } } },
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: " more" } } },
+    ]);
+    expect(text).toEqual(["the answer"]); // onDelta unchanged
+    expect(thinking).toEqual(["let me reason", " more"]); // thinking captured separately
+  });
+
+  it("ignores signature_delta / other delta types (no spurious callbacks)", () => {
+    const { text, thinking } = run([
+      { type: "stream_event", event: { type: "content_block_delta", delta: { type: "signature_delta", signature: "abc" } } },
+      { type: "stream_event", event: { type: "message_start", message: {} } },
+    ]);
+    expect(text).toEqual([]);
+    expect(thinking).toEqual([]);
+  });
+
+  it("captures result-level permission_denials on a result frame (server can audit them)", () => {
+    const { result } = run([
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        total_cost_usd: 0.01,
+        permission_denials: [{ tool_name: "Bash", tool_input: { command: "rm -rf /" } }],
+      },
+    ]);
+    expect(result).not.toBeNull();
+    expect(result!.denials).toEqual([{ toolName: "Bash", toolInput: { command: "rm -rf /" } }]);
   });
 });

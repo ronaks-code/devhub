@@ -151,6 +151,34 @@ const MIGRATIONS: Migration[] = [
       }
     }
   },
+  // v10: permission-decision audit log — a durable trail of allow/deny verdicts for
+  // tool calls (see audit.ts). Our own data; never touches transcripts. Idempotent
+  // via IF NOT EXISTS. A fresh DB also gets this from the base SCHEMA in index-db.ts;
+  // a legacy DB picks it up here.
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS permission_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      sessionId TEXT,
+      toolName TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      scope TEXT,
+      reason TEXT,
+      ts INTEGER NOT NULL
+    );`);
+    db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_permission_audit_session ON permission_audit(sessionId)`,
+    );
+  },
+  // v11: free-form session NOTES (markdown) in session_meta.notes. Our own data — a
+  // scratchpad the user attaches to a session; never derived from the transcript. A
+  // fresh DB gets the column from the base SCHEMA; a legacy DB picks it up here.
+  // Guarded by a column-presence check so the step is idempotent. Existing rows read
+  // NULL (no notes).
+  (db) => {
+    if (hasTable(db, "session_meta") && !hasColumn(db, "session_meta", "notes")) {
+      db.exec(`ALTER TABLE session_meta ADD COLUMN notes TEXT`);
+    }
+  },
 ];
 
 /**

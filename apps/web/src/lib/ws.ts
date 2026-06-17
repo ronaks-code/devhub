@@ -5,13 +5,29 @@ import type { PermissionScope } from "../components/PermissionCard";
 /**
  * Client frames we send on the chat socket. This is the engine's `ClientMsg`
  * extended with an optional `scope` on permission-response: the engine union
- * doesn't yet carry the scope (it's groundwork for the persistent path), and we
+ * doesn't carry the scope (it's groundwork for the persistent path), and we
  * can't edit that package, so we widen the type at this boundary. The extra field
  * is harmless to a server that ignores it and ready for one that honors it.
+ *
+ * `updatedInput` (the user-edited tool input from EditableApproval) and the
+ * `{t:"thinking-delta"}` ServerMsg below ARE in the engine union now, so they
+ * need no shim — we just spell out the full permission-response shape here so the
+ * web-only `scope` rides alongside the engine fields.
  */
 export type OutgoingMsg =
   | ClientMsg
-  | { t: "permission-response"; id: string; decision: "allow" | "deny"; scope?: PermissionScope; message?: string }
+  | {
+      t: "permission-response";
+      id: string;
+      decision: "allow" | "deny";
+      scope?: PermissionScope;
+      message?: string;
+      // The user's EDITED tool input (from EditableApproval), forwarded on an
+      // allow so the persistent path runs the REVISED call instead of the
+      // original. Engine-backed (ClientMsg.permission-response carries it); a
+      // server that ignores it falls back to the request's original input.
+      updatedInput?: unknown;
+    }
   // Cancel any prompts the server has queued behind the running turn. Groundwork
   // for the server-side queue: the engine `ClientMsg` union doesn't carry it yet,
   // so we widen it at this boundary (same approach as permission-response's
@@ -32,6 +48,13 @@ export interface ChatHandlers {
   onSession?: (sessionId: string, init: SessionInit) => void;
   /** Token-by-token partial assistant text streamed during a turn. */
   onDelta?: (text: string) => void;
+  /**
+   * Token-by-token partial THINKING (reasoning) text streamed during a turn,
+   * from a `{t:"thinking-delta"}` frame. Only emitted on the persistent
+   * (stream-json) path; dormant on the default per-turn driver. Coalesced per
+   * animation frame like text deltas so it never thrashes React renders.
+   */
+  onThinkingDelta?: (text: string) => void;
   onStatus?: (kind: string) => void;
   onResult?: (result: TurnResult) => void;
   onError?: (message: string) => void;
@@ -91,10 +114,13 @@ export function openChat(handlers: ChatHandlers): ChatConn {
   let attempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Coalesce a fast {t:"delta"} token stream: accumulate chunks and flush the
-  // concatenated text once per animation frame, so we call onDelta a few times
-  // per frame instead of once per token (which would thrash React renders).
+  // Coalesce the fast {t:"delta"} / {t:"thinking-delta"} token streams:
+  // accumulate chunks and flush the concatenated text once per animation frame,
+  // so we call onDelta/onThinkingDelta a few times per frame instead of once per
+  // token (which would thrash React renders). The two streams share one rAF tick
+  // but keep separate buffers so text and thinking never bleed into each other.
   let deltaBuf = "";
+  let thinkingBuf = "";
   let rafId: number | null = null;
   const canRaf =
     typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
@@ -103,6 +129,13 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     if (rafId != null) {
       window.cancelAnimationFrame(rafId);
       rafId = null;
+    }
+    // Flush thinking BEFORE text: a turn streams thinking first, then the visible
+    // answer, so emitting in that order keeps the handler sequence wire-faithful.
+    if (thinkingBuf.length > 0) {
+      const t = thinkingBuf;
+      thinkingBuf = "";
+      handlers.onThinkingDelta?.(t);
     }
     if (deltaBuf.length === 0) return;
     const text = deltaBuf;
@@ -130,10 +163,11 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     } catch {
       return; // ignore malformed frames
     }
-    // Any non-delta frame must observe the full streamed text first: flush the
-    // buffer synchronously so e.g. a final "message" sees the live bubble that
-    // the deltas built up, keeping handler ordering identical to the wire order.
-    if (msg.t !== "delta") flushDeltas();
+    // Any non-streaming frame must observe the full streamed text/thinking first:
+    // flush the buffers synchronously so e.g. a final "message" sees the live
+    // bubble the deltas built up, keeping handler ordering identical to the wire
+    // order. Both delta and thinking-delta are streaming frames, so neither flushes.
+    if (msg.t !== "delta" && msg.t !== "thinking-delta") flushDeltas();
     switch (msg.t) {
       case "session":
         handlers.onSession?.(msg.sessionId, msg.init);
@@ -143,6 +177,10 @@ export function openChat(handlers: ChatHandlers): ChatConn {
         break;
       case "delta":
         deltaBuf += msg.text;
+        scheduleFlush();
+        break;
+      case "thinking-delta":
+        thinkingBuf += msg.text;
         scheduleFlush();
         break;
       case "status":

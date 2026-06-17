@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ShieldQuestion, Check, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import { PermissionCardBody } from "./PermissionCardBody";
+import { EditableApproval } from "./EditableApproval";
 import { DenyFeedback } from "./DenyFeedback";
 
 /**
@@ -37,6 +37,14 @@ export interface PermissionDecision {
    * plain deny.
    */
   message?: string;
+  /**
+   * Optional EDITED tool input the user revised before approving (via
+   * EditableApproval). Rides along on an ALLOW as `updatedInput` in the
+   * permission-response, so the persistent path runs the REVISED call instead of
+   * the original. Absent when the user approved the input unchanged (the server
+   * then uses the request's original input). Never present on a deny.
+   */
+  updatedInput?: unknown;
 }
 
 /** Allow buttons, one per scope — the label doubles as the affordance. */
@@ -67,6 +75,9 @@ export function PermissionCard({
   // When true, the Deny button has opened the optional feedback box (the buttons
   // row hides while it's up). Reset implicitly when the card unmounts on decide.
   const [denying, setDenying] = useState(false);
+  // The user's EDITED tool input (from EditableApproval), or null when unchanged
+  // from the request's original. Rides along on an allow as `updatedInput`.
+  const [editedInput, setEditedInput] = useState<unknown | null>(null);
   return (
     <div className="mx-4 my-2 overflow-hidden rounded-xl border border-amber-700/50 bg-amber-500/5">
       <div className="flex items-center gap-2 border-b border-amber-700/30 px-3 py-2">
@@ -79,9 +90,14 @@ export function PermissionCard({
         </code>
       </div>
 
-      {/* The actual tool input, rendered meaningfully (diff / command / pretty
-          JSON) so the user reviews exactly what they're approving. */}
-      <PermissionCardBody toolName={request.toolName} toolInput={request.toolInput} />
+      {/* The actual tool input, rendered meaningfully AND editable: the user can
+          revise the command / contents before approving. The edited value (when
+          changed) rides along on Allow as `updatedInput`. */}
+      <EditableApproval
+        toolName={request.toolName}
+        toolInput={request.toolInput}
+        onChange={setEditedInput}
+      />
 
       {request.suggestions && request.suggestions.length > 0 ? (
         <ul className="space-y-0.5 border-b border-amber-700/20 px-3 py-2 text-[11.5px] text-zinc-400">
@@ -120,7 +136,15 @@ export function PermissionCard({
               <button
                 key={scope}
                 title={title}
-                onClick={() => onDecision(request.id, { decision: "allow", scope })}
+                onClick={() =>
+                  onDecision(request.id, {
+                    decision: "allow",
+                    scope,
+                    // Only attach the edited input when the user actually changed it
+                    // (null = approved unchanged → server uses the original input).
+                    ...(editedInput != null ? { updatedInput: editedInput } : {}),
+                  })
+                }
                 className={cn(
                   "inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-white transition",
                   // The primary "Once" is solid; the broader scopes are tinted so

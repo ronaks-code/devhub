@@ -23,6 +23,7 @@ import type {
 import type { PermissionMode } from "@claude-ui/engine/driver";
 import { ProjectsPane } from "./components/ProjectsPane";
 import { SessionsPane } from "./components/SessionsPane";
+import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { DashboardPane } from "./components/DashboardPane";
@@ -345,6 +346,33 @@ export default function App() {
     [refreshProjects],
   );
 
+  // Persist a project's favorite / archived flags (PATCH /api/projects/:id), then
+  // refresh the list so the header + ProjectsPane reflect the new state. The
+  // server forwards present keys, so a server that doesn't persist these still
+  // ACKs harmlessly. Errors are swallowed (the UI just won't change).
+  const toggleProjectFavorite = useCallback(
+    async (id: string, favorite: boolean) => {
+      try {
+        await api.patchProject(id, { favorite });
+        await refreshProjects();
+      } catch {
+        /* non-fatal — leave the list as-is */
+      }
+    },
+    [refreshProjects],
+  );
+  const toggleProjectArchive = useCallback(
+    async (id: string, archived: boolean) => {
+      try {
+        await api.patchProject(id, { archived });
+        await refreshProjects();
+      } catch {
+        /* non-fatal — leave the list as-is */
+      }
+    },
+    [refreshProjects],
+  );
+
   const cycleTheme = useCallback(() => {
     const order: AppSettings["theme"][] = ["dark", "light", "system"];
     const current = settings?.theme ?? "system";
@@ -563,13 +591,24 @@ export default function App() {
               onBulkPin={handleBulkPin}
               onBulkAddTag={handleBulkAddTag}
             />
-            <TranscriptPane
-              page={page}
-              loading={loadingPage}
-              onLoadMore={handleLoadMore}
-              onContinue={handleContinue}
-              jumpTarget={jumpTarget}
-            />
+            <div className="flex min-w-0 flex-1 flex-col">
+              {/* Rich project header atop the transcript area: branch, sessions,
+                  tokens + spend, last activity, favorite/archive toggles. */}
+              {project ? (
+                <ProjectDetailHeader
+                  project={project}
+                  onToggleFavorite={toggleProjectFavorite}
+                  onToggleArchive={toggleProjectArchive}
+                />
+              ) : null}
+              <TranscriptPane
+                page={page}
+                loading={loadingPage}
+                onLoadMore={handleLoadMore}
+                onContinue={handleContinue}
+                jumpTarget={jumpTarget}
+              />
+            </div>
           </>
         ) : (
           <>

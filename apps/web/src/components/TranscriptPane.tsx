@@ -16,16 +16,20 @@ import {
   AlertCircle,
   ChevronUp,
   ChevronDown,
+  BookOpen,
+  StickyNote,
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
 import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
+import { SessionNotes } from "./SessionNotes";
 import { TranscriptOutline } from "./TranscriptOutline";
 import { TranscriptMinimap } from "./TranscriptMinimap";
 import { SubagentProvider } from "./tools/TaskCard";
 import { FileChangeSummary } from "./FileChangeSummary";
 import { useErrorNav } from "../hooks/useErrorNav";
+import { useReadingMode } from "../hooks/useReadingMode";
 import {
   TranscriptFilters,
   applyFilters,
@@ -69,7 +73,18 @@ export function TranscriptPane({
   // after pairing so the virtualizer, find bar, and outline all index the same
   // visible list and their positions stay in sync.
   const [filters, setFilters] = useState<TranscriptFilterState>(EMPTY_FILTERS);
-  const messages = useMemo(() => applyFilters(paired, filters), [paired, filters]);
+  // "Reading mode": strip the transcript to user + assistant prose for a clean
+  // read (hides tool cards, thinking, system/meta). Applied after the chip
+  // filters so the virtualizer, find bar, outline, and minimap all index the
+  // same visible list. When off, `apply` returns the input unchanged.
+  const reading = useReadingMode();
+  const messages = useMemo(
+    () => reading.apply(applyFilters(paired, filters)),
+    [paired, filters, reading],
+  );
+  // Per-session markdown notes panel toggle (header affordance). The session's
+  // saved notes come straight from SessionSummary.notes.
+  const [notesOpen, setNotesOpen] = useState(false);
 
   // The subagent files for this session, threaded to any Task cards in the
   // transcript so their "view subagent transcript" expander can load them.
@@ -375,6 +390,39 @@ export function TranscriptPane({
           >
             <MapIcon className="h-3.5 w-3.5" />
           </button>
+
+          {/* Reading mode: hide tool cards / thinking / system, show only the
+              user + assistant prose for a clean, article-like read. */}
+          <button
+            onClick={reading.toggle}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              reading.enabled
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={reading.enabled ? "Exit reading mode" : "Reading mode — prose only"}
+            aria-pressed={reading.enabled}
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            Read
+          </button>
+
+          {/* Per-session markdown notes. */}
+          <button
+            onClick={() => setNotesOpen((v) => !v)}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              notesOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={notesOpen ? "Hide notes" : "Notes for this session"}
+            aria-pressed={notesOpen}
+          >
+            <StickyNote className="h-3.5 w-3.5" />
+            Notes
+          </button>
           {onContinue && s.cwd ? (
             <button
               onClick={() => onContinue(s.sessionId, s.cwd!)}
@@ -419,6 +467,17 @@ export function TranscriptPane({
         </div>
       </div>
 
+      {/* Per-session markdown notes editor (toggled from the header). Loaded from
+          the session's `notes`, saved via PATCH /api/sessions/:id { notes }. */}
+      {notesOpen ? (
+        <SessionNotes
+          key={s.sessionId}
+          sessionId={s.sessionId}
+          initialNotes={s.notes}
+          onClose={() => setNotesOpen(false)}
+        />
+      ) : null}
+
       {/* Read-only git panel for the session's working directory (collapsed by
           default; fetches on expand). Only shown when we know the cwd. */}
       {s.cwd ? <GitPanel cwd={s.cwd} /> : null}
@@ -444,9 +503,17 @@ export function TranscriptPane({
         <div ref={parentRef} onScroll={stick.onScroll} className="h-full overflow-y-auto">
           {messages.length === 0 && paired.length > 0 ? (
             <EmptyState
-              icon={<MessagesSquare className="h-10 w-10" />}
-              title="No messages match these filters"
-              hint="Adjust or clear the filter chips above to see the rest of the transcript."
+              icon={reading.enabled ? <BookOpen className="h-10 w-10" /> : <MessagesSquare className="h-10 w-10" />}
+              title={
+                reading.enabled
+                  ? "No prose to read here"
+                  : "No messages match these filters"
+              }
+              hint={
+                reading.enabled
+                  ? "This session is all tool calls — turn off reading mode to see them."
+                  : "Adjust or clear the filter chips above to see the rest of the transcript."
+              }
             />
           ) : null}
           <div

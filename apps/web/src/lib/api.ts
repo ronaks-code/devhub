@@ -278,6 +278,15 @@ export const api = {
     send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
       tags,
     }),
+  // Save freeform markdown notes on a session via PATCH /api/sessions/:id { notes }.
+  // Backs the SessionNotes editor. The route's `notes` body field is a plain
+  // string (the schema rejects null), so clearing notes sends "" — never null.
+  // The PATCH forwards present keys, so a server that doesn't persist `notes`
+  // still ACKs harmlessly.
+  setNotes: (sessionId: string, notes: string) =>
+    send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
+      notes,
+    }),
   stats: () => get<Stats>("/api/stats"),
   running: () => get<RunningSession[]>("/api/running"),
   // Read-only git status for a project cwd. The server returns null when the

@@ -78,6 +78,13 @@ export interface TurnHandlers {
   onMessage?: (m: NormalizedMessage) => void;
   /** Token-by-token partial assistant text (from --include-partial-messages). */
   onDelta?: (text: string) => void;
+  /**
+   * Token-by-token partial THINKING text (extended-thinking `thinking_delta` frames
+   * from --include-partial-messages). Separate from {@link onDelta} so a face can
+   * render the model's reasoning stream distinctly from its answer text. Optional;
+   * a face that doesn't surface thinking simply leaves it unset.
+   */
+  onThinkingDelta?: (text: string) => void;
   onStatus?: (status: { kind: string; data?: unknown }) => void;
   onResult?: (r: TurnResult) => void;
   onError?: (err: string) => void;
@@ -117,12 +124,22 @@ export type ClientMsg =
       id: string;
       decision: "allow" | "deny";
       message?: string;
+      /**
+       * For an EDITABLE approval: the (possibly user-edited) tool input to run
+       * instead of the agent's original. Only meaningful with `decision: "allow"`;
+       * omitted means "run the tool as proposed". Carried opaquely (the shape is the
+       * tool's own input) on the persistent (stream-json) control path.
+       */
+      updatedInput?: unknown;
     };
 
 export type ServerMsg =
   | { t: "session"; sessionId: string; init: SessionInit }
   | { t: "message"; message: NormalizedMessage }
   | { t: "delta"; text: string }
+  // Token-by-token partial THINKING text (extended-thinking stream), kept distinct
+  // from "delta" (answer text) so a face can render reasoning separately.
+  | { t: "thinking-delta"; text: string }
   | { t: "status"; kind: string }
   | { t: "result"; result: TurnResult }
   | { t: "error"; message: string }

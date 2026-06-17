@@ -22,8 +22,11 @@ const CLAUDE_BIN = process.env.CLAUDE_UI_CLAUDE_BIN?.trim() || "claude";
  * Builds the per-line stream-json handler shared by the per-turn and persistent
  * paths, so both normalize output identically. `state` is mutable so the result
  * frame and resolved session id survive across lines.
+ *
+ * Exported for unit testing of the (fiddly) stream-json frame dispatch — especially
+ * the text vs. thinking delta split — without spawning the `claude` binary.
  */
-function makeLineHandler(handlers: TurnHandlers, state: {
+export function makeLineHandler(handlers: TurnHandlers, state: {
   sessionId: string | null;
   seq: number;
   finalResult: TurnResult | null;
@@ -56,14 +59,17 @@ function makeLineHandler(handlers: TurnHandlers, state: {
       }
     } else if (t === "stream_event") {
       // Partial-message frames from --include-partial-messages. Emit text-token
-      // deltas only; ignore message_start/stop, content_block_start/stop,
-      // message_delta, thinking_delta, signature_delta, etc. The final full
-      // "assistant" message still arrives below and is emitted via onMessage.
+      // deltas via onDelta and extended-thinking deltas via onThinkingDelta; ignore
+      // message_start/stop, content_block_start/stop, message_delta, signature_delta,
+      // etc. The final full "assistant" message still arrives below (onMessage).
       const event = m.event as Record<string, unknown> | undefined;
       if (event && event.type === "content_block_delta") {
         const delta = event.delta as Record<string, unknown> | undefined;
         if (delta && delta.type === "text_delta" && typeof delta.text === "string") {
           handlers.onDelta?.(delta.text);
+        } else if (delta && delta.type === "thinking_delta" && typeof delta.thinking === "string") {
+          // Extended-thinking frames carry the reasoning text under `thinking`.
+          handlers.onThinkingDelta?.(delta.thinking);
         }
       }
     } else if (t === "assistant" || t === "user") {

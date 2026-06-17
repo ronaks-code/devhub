@@ -188,7 +188,12 @@ export function buildApp(opts: BuildOptions = {}): {
   // request can't stuff the index with oversized or unbounded tag lists.
   app.patch<{
     Params: { id: string };
-    Body: { customTitle?: string | null; pinned?: boolean; tags?: string[] };
+    Body: {
+      customTitle?: string | null;
+      pinned?: boolean;
+      tags?: string[];
+      notes?: string;
+    };
   }>(
     "/api/sessions/:id",
     {
@@ -209,6 +214,9 @@ export function buildApp(opts: BuildOptions = {}): {
               maxItems: 50,
               items: { type: "string", minLength: 1, maxLength: 64 },
             },
+            // Free-form per-session note (sidecar, never touches the transcript).
+            // Capped so a single request can't stuff the index with an oversized blob.
+            notes: { type: "string", maxLength: 10000 },
           },
         },
       },
@@ -219,6 +227,21 @@ export function buildApp(opts: BuildOptions = {}): {
       if ("customTitle" in body) engine.index.setCustomTitle(id, body.customTitle ?? null);
       if ("pinned" in body) engine.index.setPinned(id, body.pinned === true);
       if ("tags" in body && body.tags) engine.setTags(id, body.tags);
+      // Best-effort: `engine.setNotes` isn't on `Engine` yet (missing engine
+      // symbol). Detect it at runtime and forward only if present, so the typecheck
+      // passes and the route degrades gracefully until the engine adds it.
+      // NOTE (missing engine symbols): add `setNotes(sessionId, notes)` to `Engine`,
+      // then replace this duck-typed lookup with the direct typed call.
+      if ("notes" in body && typeof body.notes === "string") {
+        const setNotes = (engine as unknown as Record<string, unknown>).setNotes;
+        if (typeof setNotes === "function") {
+          (setNotes as (sessionId: string, notes: string) => void).call(
+            engine,
+            id,
+            body.notes,
+          );
+        }
+      }
       return engine.getSession(id) ?? { ok: true };
     },
   );

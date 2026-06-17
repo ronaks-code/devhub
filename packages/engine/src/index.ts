@@ -20,6 +20,10 @@ import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
 import type { SavedView, SaveViewInput } from "./saved-views.js";
+import type { AuditDecisionInput, AuditEntry } from "./audit.js";
+import { getSessionCommits } from "./session-commits.js";
+import type { SessionCommit } from "./session-commits.js";
+import type { PermissionDenial } from "./driver/types.js";
 import { listMcpServers } from "./config/index.js";
 import { testMcpServer } from "./config/mcp-test.js";
 import type { McpTestResult } from "./config/mcp-test.js";
@@ -210,6 +214,64 @@ export class Engine {
   /** Every distinct tag in use with its session count (count desc, then name asc). */
   getAllTags(): Array<{ tag: string; count: number }> {
     return this.index.getAllTags();
+  }
+
+  /**
+   * Read a session's free-form notes (markdown), or null when none. User-owned
+   * scratchpad in session_meta — never derived from the transcript.
+   */
+  getNotes(sessionId: string): string | null {
+    return this.index.getNotes(sessionId);
+  }
+
+  /**
+   * Set (or clear) a session's notes (markdown). A blank value clears them. Stored
+   * in session_meta — never touches the transcript. The value also surfaces on the
+   * `notes` field of {@link SessionSummary}.
+   */
+  setNotes(sessionId: string, md: string | null): void {
+    this.index.setNotes(sessionId, md);
+  }
+
+  /**
+   * Record one permission DECISION (allow/deny for a tool call) in the audit log.
+   * Returns the stored entry. Our own data in session_meta's sibling
+   * `permission_audit` table; never touches the transcript.
+   */
+  logPermissionDecision(input: AuditDecisionInput): AuditEntry {
+    return this.index.audit.logDecision(input);
+  }
+
+  /**
+   * Capture the result-level `permission_denials` a turn reported (as implicit deny
+   * decisions, scope "result"). The server calls this when a turn ends so denials
+   * that never surfaced an inline prompt still land in the audit trail. Returns the
+   * rows written (one per denial; [] when none).
+   */
+  logTurnDenials(
+    denials: PermissionDenial[],
+    opts: { sessionId?: string | null; ts?: number } = {},
+  ): AuditEntry[] {
+    return this.index.audit.logResultDenials(denials, opts);
+  }
+
+  /**
+   * Recent permission-decision audit entries, newest first. `{ sessionId }` scopes
+   * to one session; `{ limit }` caps the row count (default 100).
+   */
+  listAudit(opts: { limit?: number; sessionId?: string | null } = {}): AuditEntry[] {
+    return this.index.audit.list(opts);
+  }
+
+  /**
+   * The git commits a session LIKELY produced: commits in the session's cwd authored
+   * within its first→last activity window (padded). Best-effort — `[]` for a session
+   * with no cwd, a non-git cwd, or an unknown session id. Read-only (uses {@link git}).
+   */
+  async getSessionCommits(sessionId: string): Promise<SessionCommit[]> {
+    const summary = this.index.getSessionSummary(sessionId);
+    if (!summary) return [];
+    return getSessionCommits(summary, (cwd) => this.git(cwd));
   }
 
   /**
@@ -579,6 +641,10 @@ export type { FtsTokenizer } from "./fts-schema.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";
 export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";
+export { AuditStore } from "./audit.js";
+export type { AuditDecision, AuditDecisionInput, AuditEntry } from "./audit.js";
+export { getSessionCommits, selectCommitsInWindow } from "./session-commits.js";
+export type { SessionCommit } from "./session-commits.js";
 export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
 export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
 export * as config from "./config/index.js";
