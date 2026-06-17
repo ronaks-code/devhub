@@ -32,6 +32,11 @@ import { safeWriteFile } from "./safe-write.js";
 export { safeWriteFile, listBackups, restoreBackup, DEFAULT_BACKUP_KEEP } from "./safe-write.js";
 export type { BackupInfo } from "./safe-write.js";
 
+// Per-project MCP enable/disable toggles (reversible; edit settings, never definitions).
+// Re-exported here so they surface on the `config` namespace alongside the readers above.
+export { setMcpEnabled, listMcpToggles } from "./mcp-toggle.js";
+export type { McpToggle } from "./mcp-toggle.js";
+
 // ---- Types -----------------------------------------------------------------
 
 /** Where a config entry was found. */

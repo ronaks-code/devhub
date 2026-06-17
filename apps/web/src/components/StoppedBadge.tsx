@@ -1,5 +1,6 @@
 import { OctagonX } from "lucide-react";
 import { cn } from "../lib/utils";
+import { StatusLabel, statusMeta } from "./StatusLabel";
 
 /**
  * A small "stopped" badge marking a turn that was interrupted or ended in an
@@ -11,15 +12,28 @@ import { cn } from "../lib/utils";
  *
  * Purely presentational: the caller decides WHEN a turn counts as stopped (see
  * {@link isStoppedSubtype} / {@link stoppedReason}) and just renders this when so.
+ *
+ * When the caller passes the result `subtype` and it maps to a known status (via
+ * {@link statusMeta}), this renders the precise {@link StatusLabel} chip ("Hit the
+ * max-turns limit", "Hit the spend limit", "Rate limited", …) instead of the generic
+ * amber "stopped" pill — clearer at a glance. The `subtype` prop is additive: callers
+ * that pass only `reason` keep the original chip.
  */
 export function StoppedBadge({
   reason,
+  subtype,
   className,
 }: {
   /** Short explanation shown on hover (e.g. "Interrupted", "Hit the max-turns limit"). */
   reason?: string;
+  /** Optional result `subtype` — when recognized, drives a precise StatusLabel chip. */
+  subtype?: string | null;
   className?: string;
 }) {
+  // A recognized subtype reads better as its specific status label.
+  if (subtype && statusMeta(subtype)) {
+    return <StatusLabel subtype={subtype} className={className} />;
+  }
   return (
     <span
       title={reason ?? "This turn was stopped before it finished."}

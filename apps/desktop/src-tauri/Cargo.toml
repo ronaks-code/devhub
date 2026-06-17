@@ -21,5 +21,7 @@ tauri-build = { version = "2.2.0" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.5.0" }
+# `tray-icon` enables the menu-bar tray API; `image-png` lets us decode the bundled
+# PNG app icon for use as the tray image (see src/tray.rs).
+tauri = { version = "2.5.0", features = ["tray-icon", "image-png"] }
 tauri-plugin-log = "2.0.0-rc"

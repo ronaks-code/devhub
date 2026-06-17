@@ -1,31 +1,82 @@
-import { useEffect } from "react";
-import { Bell, CheckCircle2, Info, AlertTriangle, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bell, CheckCircle2, Info, AlertTriangle, XCircle, X } from "lucide-react";
 import { cn } from "../lib/utils";
 
-/** One toast to display. `id` is unique; `onClick` (optional) makes it actionable. */
+/**
+ * One toast to display. `id` is unique; `onClick` (optional) makes it actionable.
+ *
+ * `level` chooses the variant + tone: "info" (default), "success", "warning", and
+ * "error". The first three match {@link import("../lib/types").NotifyEvent}'s level,
+ * so the SSE-driven toasts in App.tsx need no change; "error" is additive for callers
+ * that surface a failure. `duration` overrides the auto-dismiss timeout (ms); pass 0
+ * to make the toast sticky (only a manual dismiss / click closes it).
+ */
 export interface ToastItem {
   id: number;
   title: string;
   body?: string;
-  level?: "info" | "success" | "warning";
+  level?: "info" | "success" | "warning" | "error";
   /** Invoked when the toast body is clicked (e.g. open the related session). */
   onClick?: () => void;
+  /** Auto-dismiss after this many ms (default {@link DEFAULT_DURATION}); 0 = never. */
+  duration?: number;
 }
+
+/** Default auto-dismiss timeout. Matches the prior hard-coded 6s. */
+const DEFAULT_DURATION = 6000;
 
 const LEVEL_META = {
   info: { icon: <Info className="h-4 w-4" />, ring: "ring-sky-500/30", tint: "text-sky-300" },
   success: { icon: <CheckCircle2 className="h-4 w-4" />, ring: "ring-emerald-500/30", tint: "text-emerald-300" },
   warning: { icon: <AlertTriangle className="h-4 w-4" />, ring: "ring-amber-500/30", tint: "text-amber-300" },
+  error: { icon: <XCircle className="h-4 w-4" />, ring: "ring-red-500/30", tint: "text-red-300" },
 } as const;
 
-/** A single auto-dismissing toast card. */
+/**
+ * A single auto-dismissing toast card. The timer pauses while the pointer is over
+ * the card (so a slow reader/hover never loses the toast mid-read) and resumes —
+ * with the elapsed time deducted — on leave. A manual dismiss (the X) always works.
+ */
 function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) => void }) {
   const meta = LEVEL_META[item.level ?? "info"];
-  // Auto-dismiss after a few seconds; cleared if the toast unmounts first.
+  const duration = item.duration ?? DEFAULT_DURATION;
+
+  // Remaining time + the timestamp the current countdown started, so a hover can
+  // pause (banking the remainder) and a leave can resume from there. A duration of
+  // 0 disables the timer entirely (sticky toast).
+  const remainingRef = useRef(duration);
+  const startedRef = useRef(0);
+  const timerRef = useRef<number | null>(null);
+  // Pause/resume handlers, set up inside the effect so they share the timer refs;
+  // the JSX wires the card's hover/focus events to them.
+  const pauseRef = useRef<() => void>(() => {});
+  const resumeRef = useRef<() => void>(() => {});
+
   useEffect(() => {
-    const t = window.setTimeout(() => onDismiss(item.id), 6000);
-    return () => window.clearTimeout(t);
-  }, [item.id, onDismiss]);
+    if (duration <= 0) return; // sticky — no auto-dismiss
+    const clear = () => {
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+    // Arm from the current remaining time. Called on mount and on each resume.
+    const arm = () => {
+      clear();
+      startedRef.current = Date.now();
+      timerRef.current = window.setTimeout(() => onDismiss(item.id), remainingRef.current);
+    };
+    pauseRef.current = () => {
+      if (timerRef.current == null) return;
+      clear();
+      remainingRef.current = Math.max(0, remainingRef.current - (Date.now() - startedRef.current));
+    };
+    resumeRef.current = () => {
+      if (remainingRef.current > 0) arm();
+    };
+    arm();
+    return clear;
+  }, [item.id, duration, onDismiss]);
 
   const clickable = !!item.onClick;
   return (
@@ -35,6 +86,10 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) =
         meta.ring,
       )}
       role="status"
+      onMouseEnter={() => pauseRef.current()}
+      onMouseLeave={() => resumeRef.current()}
+      onFocus={() => pauseRef.current()}
+      onBlur={() => resumeRef.current()}
     >
       <span className={cn("mt-0.5 shrink-0", meta.tint)}>{meta.icon}</span>
       <button
@@ -72,7 +127,11 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) =
 /**
  * Bottom-right stack of transient toasts. Unobtrusive: fixed, pointer-events-none
  * on the container (so it never blocks the UI) with each card re-enabling clicks.
- * Empty container renders nothing.
+ *
+ * The whole stack lives in an `aria-live="polite"` / `role="status"` region so a
+ * screen reader announces each new toast as it appears (without stealing focus).
+ * The region stays MOUNTED even when empty so assistive tech keeps observing it —
+ * an empty container is just visually nothing.
  */
 export function ToastStack({
   toasts,
@@ -81,11 +140,17 @@ export function ToastStack({
   toasts: ToastItem[];
   onDismiss: (id: number) => void;
 }) {
-  if (toasts.length === 0) return null;
   return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col gap-2">
+    <div
+      className="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col gap-2"
+      role="status"
+      aria-live="polite"
+      aria-atomic="false"
+      aria-relevant="additions"
+    >
       <span className="sr-only">
         <Bell className="h-4 w-4" />
+        Notifications
       </span>
       {toasts.map((t) => (
         <Toast key={t.id} item={t} onDismiss={onDismiss} />

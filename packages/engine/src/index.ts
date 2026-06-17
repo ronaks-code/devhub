@@ -39,6 +39,9 @@ import { parseRateLimit } from "./rate-limit.js";
 import type { RateLimitInfo } from "./rate-limit.js";
 import { listPlugins } from "./config/index.js";
 import type { PluginInfo } from "./config/index.js";
+import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
+import type { McpToggle } from "./config/mcp-toggle.js";
+import { computeAutoTags } from "./auto-tag.js";
 import type { TurnResult } from "./driver/types.js";
 import type {
   AppSettings,
@@ -265,6 +268,26 @@ export class Engine {
     return listPlugins();
   }
 
+  /**
+   * Every known project MCP server for `projectPath` with its resolved on/off state,
+   * honoring that project's `.claude/settings.json` toggle fields
+   * (disableAllProjectMcpServers / enabledMcpjsonServers / disabledMcpjsonServers).
+   * Read-only and tolerant of a project with no MCP config. See {@link listMcpToggles}.
+   */
+  async listMcpToggles(projectPath: string): Promise<McpToggle[]> {
+    return listMcpToggles(projectPath);
+  }
+
+  /**
+   * Toggle one project MCP server on/off by editing that project's `.claude/settings.json`
+   * (SAFE write: validate → rotating `.bak` backup → atomic write). The server's DEFINITION
+   * is never touched, so the toggle is reversible. Returns the new resolved state. See
+   * {@link setMcpEnabled}.
+   */
+  async setMcpEnabled(projectPath: string, serverName: string, enabled: boolean): Promise<McpToggle> {
+    return setMcpEnabled(projectPath, serverName, enabled);
+  }
+
   getSession(sessionId: string): SessionSummary | undefined {
     return this.index.getSessionSummary(sessionId);
   }
@@ -286,6 +309,19 @@ export class Engine {
   /** Every distinct tag in use with its session count (count desc, then name asc). */
   getAllTags(): Array<{ tag: string; count: number }> {
     return this.index.getAllTags();
+  }
+
+  /**
+   * SUGGESTED auto-tags for a session, derived from its project's language/framework
+   * (marker files in the session's cwd) plus a `branch:<slug>` tag for a non-default git
+   * branch. Looks up the session's cwd + gitBranch from the index, then delegates to
+   * {@link computeAutoTags}. Does NOT persist — a face/route decides whether to apply them
+   * via {@link setTags}. Returns [] for an unknown session or when nothing can be derived.
+   */
+  autoTagSession(sessionId: string): string[] {
+    const summary = this.index.getSessionSummary(sessionId);
+    if (!summary) return [];
+    return computeAutoTags({ cwd: summary.cwd, gitBranch: summary.gitBranch });
   }
 
   /**
@@ -704,6 +740,8 @@ export type {
 } from "./embeddings.js";
 export { testMcpServer } from "./config/mcp-test.js";
 export type { McpTestResult } from "./config/mcp-test.js";
+export { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
+export type { McpToggle } from "./config/mcp-toggle.js";
 export {
   projectRollups,
   costByProject,
@@ -772,6 +810,7 @@ export {
 } from "./fts-schema.js";
 export type { FtsTokenizer } from "./fts-schema.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";
+export { computeAutoTags, branchTag } from "./auto-tag.js";
 export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";
 export { AuditStore } from "./audit.js";

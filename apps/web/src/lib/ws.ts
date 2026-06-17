@@ -1,6 +1,7 @@
 import type { ClientMsg, ServerMsg, TurnResult, SessionInit } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "@claude-ui/engine/types";
 import type { PermissionScope } from "../components/PermissionCard";
+import { getToken } from "./api";
 
 /**
  * Client frames we send on the chat socket. This is the engine's `ClientMsg`
@@ -170,11 +171,16 @@ const RECONNECT_MAX_MS = 15_000;
  * JSON-parsed as ServerMsg and dispatched to the matching handler.
  */
 export function openChat(handlers: ChatHandlers): ChatConn {
+  // A required bearer token can't ride in a WebSocket handshake header from the
+  // browser, so we append it as `?token=<t>` (the server accepts either). On the
+  // local no-token default getToken() is null and the URL is unchanged.
+  const token = getToken();
   const url =
     (location.protocol === "https:" ? "wss:" : "ws:") +
     "//" +
     location.host +
-    "/api/ws/session";
+    "/api/ws/session" +
+    (token ? `?token=${encodeURIComponent(token)}` : "");
 
   // Frames typed before the socket is OPEN. We only ever push frames here that
   // haven't been sent on the wire, so a reconnect flush can never duplicate an

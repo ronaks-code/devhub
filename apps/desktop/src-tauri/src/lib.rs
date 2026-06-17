@@ -14,6 +14,8 @@
 //!   CLAUDE_UI_SERVER_PORT  port to probe for readiness    (default: 8787)
 //!   CLAUDE_UI_NO_SPAWN     if set ("1"/"true"), never spawn — assume external server
 
+mod tray;
+
 use std::io::Read;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
@@ -245,6 +247,12 @@ pub fn run() {
             {
                 use tauri::Manager;
                 app.state::<ServerProcess>().set(child);
+            }
+
+            // Menu-bar tray icon + dock badge (running-session count). Best-effort:
+            // a tray build failure shouldn't stop the app from opening its window.
+            if let Err(err) = tray::setup_tray(app.handle(), host.clone(), port) {
+                log::warn!("[claude-ui] failed to set up tray: {err}");
             }
 
             // Give the server a moment to come up. The webview talks to the API

@@ -1138,6 +1138,10 @@ export function ChatPane({
               {(interrupted || isStoppedSubtype(lastResult.subtype)) && (
                 <StoppedBadge
                   reason={interrupted ? "Stopped: interrupted by you" : stoppedReason(lastResult.subtype)}
+                  // Pass the result subtype (only when not a user interrupt) so a
+                  // recognized one renders its precise StatusLabel ("Hit the spend
+                  // limit", "Rate limited", …) instead of the generic chip.
+                  subtype={interrupted ? undefined : lastResult.subtype}
                 />
               )}
               {lastResult.denials.length > 0 && (

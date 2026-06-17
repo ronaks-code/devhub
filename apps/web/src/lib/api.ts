@@ -33,8 +33,85 @@ import type {
   RuleAction,
 } from "./types";
 
+/**
+ * Bearer-token plumbing for remote/mobile access. The server may require a token
+ * (set by whoever runs it); when it does, every protected route answers 401 until
+ * we present `Authorization: Bearer <t>`. On the local default the server requires
+ * no token, so this whole layer is dormant — `getToken()` is null and we send no
+ * header, exactly like before. AuthGate captures the 401, stores a token here, and
+ * re-runs the failed call; ws.ts reads the same token onto the socket URL.
+ *
+ * Stored in localStorage under {@link TOKEN_KEY} so it survives reloads. Reads are
+ * SSR/quota guarded (same defensive pattern as App.tsx's UI-state persistence).
+ */
+export const TOKEN_KEY = "claude-ui-token";
+
+/** Read the stored access token, or null when none is set / storage is unavailable. */
+export function getToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Persist (or, with null, clear) the access token. Non-fatal on storage errors. */
+export function setToken(token: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable or quota exceeded — non-fatal */
+  }
+}
+
+/**
+ * Raised when a request comes back 401 (the server wants a bearer token we don't
+ * have, or the one we have is wrong). AuthGate listens for this to render its login
+ * screen; on a local no-token server it never fires.
+ */
+export class UnauthorizedError extends Error {
+  readonly status = 401;
+  constructor(url: string) {
+    super(`401 Unauthorized for ${url}`);
+    this.name = "UnauthorizedError";
+  }
+}
+
+// Subscribers (AuthGate) notified whenever a request 401s, so a 401 anywhere in the
+// app flips to the login screen — not just on the call the user happened to await.
+const unauthorizedListeners = new Set<() => void>();
+
+/** Subscribe to 401s from any API call. Returns an unsubscribe fn. */
+export function onUnauthorized(fn: () => void): () => void {
+  unauthorizedListeners.add(fn);
+  return () => unauthorizedListeners.delete(fn);
+}
+
+function notifyUnauthorized(): void {
+  for (const fn of unauthorizedListeners) {
+    try {
+      fn();
+    } catch {
+      /* a listener throwing must not break the request path */
+    }
+  }
+}
+
+/** Merge the stored bearer token into a header bag (no-op when no token is set). */
+function withAuth(headers: Record<string, string>): Record<string, string> {
+  const token = getToken();
+  return token ? { ...headers, authorization: `Bearer ${token}` } : headers;
+}
+
 async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await fetch(url, { headers: withAuth({ accept: "application/json" }) });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new UnauthorizedError(url);
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return (await res.json()) as T;
 }
@@ -42,9 +119,13 @@ async function get<T>(url: string): Promise<T> {
 async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: withAuth({ "content-type": "application/json" }),
     body: body == null ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new UnauthorizedError(url);
+  }
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return (await res.json()) as T;
 }
@@ -67,7 +148,11 @@ export class NotImplementedError extends Error {
 
 /** GET that maps a 404/501 to {@link NotImplementedError} (other errors still throw). */
 async function getMaybe<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await fetch(url, { headers: withAuth({ accept: "application/json" }) });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new UnauthorizedError(url);
+  }
   if (res.status === 404 || res.status === 501) throw new NotImplementedError(res.status, url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return (await res.json()) as T;
@@ -77,9 +162,13 @@ async function getMaybe<T>(url: string): Promise<T> {
 async function sendMaybe<T>(url: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
     method,
-    headers: { "content-type": "application/json" },
+    headers: withAuth({ "content-type": "application/json" }),
     body: body == null ? undefined : JSON.stringify(body),
   });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new UnauthorizedError(url);
+  }
   if (res.status === 404 || res.status === 501) throw new NotImplementedError(res.status, url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
   return (await res.json()) as T;
@@ -548,7 +637,13 @@ export interface AttachmentResult {
  * as a plain <img src>, so the browser does the fetch (and caching) directly.
  */
 export function assetUrl(path: string): string {
-  return `/api/assets?path=${encodeURIComponent(path)}`;
+  // <img src> and EventSource can't carry an Authorization header, so a required
+  // token rides as a query param instead (the server accepts either). No-op locally.
+  const token = getToken();
+  return (
+    `/api/assets?path=${encodeURIComponent(path)}` +
+    (token ? `&token=${encodeURIComponent(token)}` : "")
+  );
 }
 
 export type { AppSettings };
@@ -559,7 +654,12 @@ export type { AppSettings };
  * so toast handling type-checks without an engine edit; unknown kinds are simply ignored.
  */
 export function subscribeEvents(onEvent: (e: AppEvent) => void): () => void {
-  const es = new EventSource("/api/events");
+  // EventSource has no header API, so a required token rides as a query param
+  // (the server accepts either). No token locally → a plain same-origin stream.
+  const token = getToken();
+  const es = new EventSource(
+    "/api/events" + (token ? `?token=${encodeURIComponent(token)}` : ""),
+  );
   es.onmessage = (ev) => {
     try {
       onEvent(JSON.parse(ev.data) as AppEvent);

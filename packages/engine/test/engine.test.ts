@@ -61,6 +61,8 @@ import { gracefulInterrupt } from "../src/driver/interrupt.js";
 import type { InterruptibleProcess } from "../src/driver/interrupt.js";
 import { scanSubagents, SUBAGENT_ROLE } from "../src/subagents.js";
 import { listPlugins } from "../src/config/index.js";
+import { setMcpEnabled, listMcpToggles } from "../src/config/mcp-toggle.js";
+import { computeAutoTags, branchTag } from "../src/auto-tag.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -5811,5 +5813,182 @@ describe("per-session costUsd on SessionSummary", () => {
     // haiku input = 1 $/Mtok -> $1 for 1M input tokens.
     expect(s!.costUsd).toBeCloseTo(1, 6);
     idx.close();
+  });
+});
+
+describe("per-project MCP toggles (mcp-toggle)", () => {
+  // Lay down a project with a .mcp.json (two servers) + a writable .claude/ dir.
+  const makeProject = (servers: Record<string, unknown>) => {
+    const proj = tmp();
+    writeFileSync(path.join(proj, ".mcp.json"), JSON.stringify({ mcpServers: servers }));
+    mkdirSync(path.join(proj, ".claude"), { recursive: true });
+    return proj;
+  };
+  const readSettings = (proj: string) =>
+    JSON.parse(readFileSync(path.join(proj, ".claude", "settings.json"), "utf8"));
+
+  it("lists known project servers as enabled by default (no settings)", async () => {
+    const proj = makeProject({ alpha: { command: "a" }, beta: { command: "b" } });
+    const toggles = await listMcpToggles(proj);
+    expect(toggles).toEqual([
+      { name: "alpha", enabled: true },
+      { name: "beta", enabled: true },
+    ]);
+  });
+
+  it("disable denylists the server and re-enable removes it (reversible, defn untouched)", async () => {
+    const proj = makeProject({ alpha: { command: "a" }, beta: { command: "b" } });
+
+    const off = await setMcpEnabled(proj, "beta", false);
+    expect(off).toEqual({ name: "beta", enabled: false });
+    expect(readSettings(proj).disabledMcpjsonServers).toEqual(["beta"]);
+    // The .mcp.json definition is never touched.
+    expect(JSON.parse(readFileSync(path.join(proj, ".mcp.json"), "utf8")).mcpServers.beta).toEqual({
+      command: "b",
+    });
+    let toggles = await listMcpToggles(proj);
+    expect(toggles.find((t) => t.name === "beta")!.enabled).toBe(false);
+    expect(toggles.find((t) => t.name === "alpha")!.enabled).toBe(true);
+
+    const on = await setMcpEnabled(proj, "beta", true);
+    expect(on).toEqual({ name: "beta", enabled: true });
+    expect(readSettings(proj).disabledMcpjsonServers).toEqual([]);
+    toggles = await listMcpToggles(proj);
+    expect(toggles.every((t) => t.enabled)).toBe(true);
+  });
+
+  it("honors disableAllProjectMcpServers: only allowlisted servers are enabled", async () => {
+    const proj = makeProject({ alpha: { command: "a" }, beta: { command: "b" } });
+    writeFileSync(
+      path.join(proj, ".claude", "settings.json"),
+      JSON.stringify({ disableAllProjectMcpServers: true }),
+    );
+    // With the master switch on and no allowlist, everything is off.
+    expect((await listMcpToggles(proj)).every((t) => !t.enabled)).toBe(true);
+
+    // Enabling opts the server into enabledMcpjsonServers (past the master switch).
+    const on = await setMcpEnabled(proj, "alpha", true);
+    expect(on.enabled).toBe(true);
+    expect(readSettings(proj).enabledMcpjsonServers).toEqual(["alpha"]);
+    const toggles = await listMcpToggles(proj);
+    expect(toggles.find((t) => t.name === "alpha")!.enabled).toBe(true);
+    expect(toggles.find((t) => t.name === "beta")!.enabled).toBe(false);
+  });
+
+  it("writes a rotating .bak backup of pre-existing settings before editing", async () => {
+    const proj = makeProject({ alpha: { command: "a" } });
+    const settingsPath = path.join(proj, ".claude", "settings.json");
+    // Pre-existing settings with an UNRELATED key that must survive the edit.
+    writeFileSync(settingsPath, JSON.stringify({ model: "opus", env: { X: "1" } }));
+
+    await setMcpEnabled(proj, "alpha", false);
+
+    const after = readSettings(proj);
+    expect(after.model).toBe("opus"); // unrelated keys preserved
+    expect(after.env).toEqual({ X: "1" });
+    expect(after.disabledMcpjsonServers).toEqual(["alpha"]);
+    // A .bak.<ts> snapshot of the prior contents now sits beside the live file.
+    const baks = readdirSync(path.join(proj, ".claude")).filter((n) =>
+      n.startsWith("settings.json.bak."),
+    );
+    expect(baks.length).toBe(1);
+    expect(JSON.parse(readFileSync(path.join(proj, ".claude", baks[0]!), "utf8"))).toEqual({
+      model: "opus",
+      env: { X: "1" },
+    });
+  });
+
+  it("is tolerant of a project with no MCP config (returns []) and validates args", async () => {
+    const empty = tmp();
+    expect(await listMcpToggles(empty)).toEqual([]);
+    await expect(setMcpEnabled("", "x", true)).rejects.toThrow();
+    await expect(setMcpEnabled(empty, "", true)).rejects.toThrow();
+  });
+
+  it("surfaces on the Engine instance (engine.listMcpToggles / engine.setMcpEnabled)", async () => {
+    const proj = makeProject({ alpha: { command: "a" } });
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    expect((await engine.listMcpToggles(proj))[0]).toEqual({ name: "alpha", enabled: true });
+    await engine.setMcpEnabled(proj, "alpha", false);
+    expect((await engine.listMcpToggles(proj))[0]!.enabled).toBe(false);
+    engine.close();
+  });
+});
+
+describe("computeAutoTags (suggested tags from project + branch)", () => {
+  it("detects language/framework markers at the top of cwd", () => {
+    const cwd = tmp();
+    writeFileSync(path.join(cwd, "package.json"), "{}");
+    writeFileSync(path.join(cwd, "tsconfig.json"), "{}");
+    writeFileSync(path.join(cwd, "next.config.mjs"), "export default {}");
+    const tags = computeAutoTags({ cwd, gitBranch: null });
+    expect(tags).toEqual(expect.arrayContaining(["node", "typescript", "nextjs"]));
+    // No git branch -> no branch: tag.
+    expect(tags.some((t) => t.startsWith("branch:"))).toBe(false);
+  });
+
+  it("recognizes rust / go / python marker files", () => {
+    const rust = tmp();
+    writeFileSync(path.join(rust, "Cargo.toml"), "");
+    expect(computeAutoTags({ cwd: rust, gitBranch: null })).toEqual(["rust"]);
+
+    const go = tmp();
+    writeFileSync(path.join(go, "go.mod"), "");
+    expect(computeAutoTags({ cwd: go, gitBranch: null })).toEqual(["go"]);
+
+    const py = tmp();
+    writeFileSync(path.join(py, "requirements.txt"), "");
+    expect(computeAutoTags({ cwd: py, gitBranch: null })).toEqual(["python"]);
+  });
+
+  it("adds a normalized branch: tag for non-default branches, skipping main/master", () => {
+    const cwd = tmp();
+    writeFileSync(path.join(cwd, "go.mod"), "");
+    expect(computeAutoTags({ cwd, gitBranch: "feature/New Login!" })).toEqual([
+      "go",
+      "branch:feature-new-login",
+    ]);
+    // main/master/HEAD never become a branch tag.
+    expect(computeAutoTags({ cwd, gitBranch: "main" })).toEqual(["go"]);
+    expect(computeAutoTags({ cwd, gitBranch: "master" })).toEqual(["go"]);
+    expect(computeAutoTags({ cwd, gitBranch: "HEAD" })).toEqual(["go"]);
+  });
+
+  it("normalizes (lower/dedupe) and tolerates a missing/null cwd", () => {
+    expect(computeAutoTags({ cwd: null, gitBranch: null })).toEqual([]);
+    expect(computeAutoTags({ cwd: "/no/such/dir/here", gitBranch: "main" })).toEqual([]);
+    // A null cwd with a feature branch still yields just the branch tag.
+    expect(computeAutoTags({ cwd: null, gitBranch: "Feature-X" })).toEqual(["branch:feature-x"]);
+  });
+
+  it("branchTag helper handles default/detached/empty heads", () => {
+    expect(branchTag("feature/x")).toBe("branch:feature-x");
+    expect(branchTag("main")).toBeNull();
+    expect(branchTag("HEAD")).toBeNull();
+    expect(branchTag("")).toBeNull();
+    expect(branchTag(null)).toBeNull();
+  });
+
+  it("engine.autoTagSession looks up cwd+branch from the index (no persistence)", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    // A real project dir on disk so marker detection has something to read.
+    const cwd = tmp();
+    writeFileSync(path.join(cwd, "package.json"), "{}");
+    const f = path.join(proj, "tagged.jsonl");
+    writeFileSync(
+      f,
+      jl({ type: "user", cwd, gitBranch: "feat/login", message: { role: "user", content: "hi" } }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(f);
+    const tags = engine.autoTagSession("tagged");
+    expect(tags).toEqual(expect.arrayContaining(["node", "branch:feat-login"]));
+    // Pure suggestion — nothing was persisted onto the session.
+    expect(engine.getTags("tagged")).toEqual([]);
+    // Unknown session -> [].
+    expect(engine.autoTagSession("nope")).toEqual([]);
+    engine.close();
   });
 });

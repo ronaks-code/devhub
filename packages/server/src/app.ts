@@ -29,6 +29,7 @@ import { registerAttachmentsRoutes } from "./routes/attachments.js";
 import { registerHookTestRoutes } from "./routes/hook-test.js";
 import { registerExportUsageRoutes } from "./routes/export-usage.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
+import { registerTailRoutes } from "./routes/tail.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -85,7 +86,7 @@ export function buildApp(opts: BuildOptions = {}): {
   // websocket plugin above — otherwise the `{ websocket: true }` onRoute hook
   // isn't applied yet and the handler is wrongly called with (request, reply).
   app.register(async (instance) => {
-    registerWs(instance, engine);
+    registerWs(instance, engine, token);
   });
 
   app.get<{ Querystring: { q: string; limit?: number } }>(
@@ -150,6 +151,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerExportUsageRoutes(app, engine);
 
   registerOpenExternalRoutes(app, engine);
+
+  registerTailRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

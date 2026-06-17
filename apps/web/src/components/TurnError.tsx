@@ -1,4 +1,5 @@
 import { AlertTriangle, RotateCcw, X } from "lucide-react";
+import { statusMeta } from "./StatusLabel";
 
 /**
  * An inline error card shown in the chat when a turn fails — either an
@@ -64,14 +65,11 @@ export function TurnError({
   );
 }
 
-/** Friendly label for a known result error subtype. */
+/**
+ * Friendly label for a known result error subtype. Defers to the shared
+ * {@link statusMeta} mapping (so budget / rate-limit / overload / timeout subtypes
+ * read precisely too), falling back to "Turn failed" for anything unrecognized.
+ */
 function labelForSubtype(subtype: string): string {
-  switch (subtype) {
-    case "error_max_turns":
-      return "Hit the max-turns limit";
-    case "error_during_execution":
-      return "Error during execution";
-    default:
-      return "Turn failed";
-  }
+  return statusMeta(subtype)?.label ?? "Turn failed";
 }

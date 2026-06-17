@@ -133,11 +133,26 @@ function parseClientMsg(raw: unknown): IncomingMsg | null {
   return null;
 }
 
-export function registerWs(app: FastifyInstance, engine: Engine): void {
+export function registerWs(app: FastifyInstance, engine: Engine, token?: string): void {
   // Resolved once: a best-effort denial-audit helper, if the engine exposes one.
   const auditDenials = resolveDenialAudit(engine);
 
-  app.get("/api/ws/session", { websocket: true }, (socket) => {
+  app.get("/api/ws/session", { websocket: true }, (socket, req) => {
+    // Auth: when a token is configured, the REST onRequest hook deliberately
+    // skips the WS upgrade (browsers can't set an Authorization header on a
+    // WebSocket), so the handshake is guarded HERE. The web client appends
+    // `?token=<t>` to the URL; we also accept a Bearer header for non-browser
+    // clients. On mismatch we close before any turn can be driven. Dormant when
+    // no token is set (local-only default).
+    if (token) {
+      const q = (req.query as Record<string, string> | undefined)?.token;
+      const headerOk = req.headers.authorization === `Bearer ${token}`;
+      if (q !== token && !headerOk) {
+        socket.close(1008, "unauthorized");
+        return;
+      }
+    }
+
     /** The turn currently being driven, or null when idle. */
     let activeTurn: RunningTurn | null = null;
     /** Pending prompts, oldest first. Drained one-at-a-time on turn-end. */

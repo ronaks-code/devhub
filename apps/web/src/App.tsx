@@ -36,6 +36,7 @@ import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ToastStack, type ToastItem } from "./components/Toast";
+import { AuthGate, LogoutButton } from "./components/AuthGate";
 import { EmptyState, Spinner } from "./components/ui";
 import { cn } from "./lib/utils";
 
@@ -156,6 +157,9 @@ function TopBar({
         )}
         <span>·</span>
         <span>{projectCount} projects</span>
+        {/* Clear the saved remote-access token. Self-hides when none is stored
+            (the local default), so it never appears in an un-gated session. */}
+        <LogoutButton />
         <button
           onClick={() => onTab("settings")}
           className={cn(
@@ -700,7 +704,8 @@ export default function App() {
   }, [projects, settings?.theme, effectiveModel, cycleTheme, startNewChat]);
 
   return (
-    <div className="flex h-full flex-col">
+    <AuthGate>
+      <div className="flex h-full flex-col">
       <TopBar
         tab={tab}
         onTab={(t) => {
@@ -812,6 +817,7 @@ export default function App() {
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
-    </div>
+      </div>
+    </AuthGate>
   );
 }
