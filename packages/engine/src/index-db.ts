@@ -21,6 +21,8 @@ import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
 import { ProjectMetaStore } from "./project-meta.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
+import { MessageSearch } from "./search.js";
+import type { SearchFacets } from "./search.js";
 import type {
   ProjectMeta,
   ProjectSummary,
@@ -248,98 +250,12 @@ function renderableText(type: string, message: unknown): string | null {
   return null;
 }
 
-/**
- * Build a ~160-char excerpt centered on the first (case-insensitive) match of
- * `query` in `text`, wrapping the match in [brackets] and adding ellipses when
- * the window is cut from either side. Used only in LIKE mode (FTS5 has snippet()).
- */
-function likeExcerpt(text: string, query: string): string {
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx < 0) return text.slice(0, LIKE_EXCERPT_RADIUS * 2).trim();
-  const start = Math.max(0, idx - LIKE_EXCERPT_RADIUS);
-  const end = Math.min(text.length, idx + query.length + LIKE_EXCERPT_RADIUS);
-  const match = text.slice(idx, idx + query.length);
-  const core = `${text.slice(start, idx)}[${match}]${text.slice(idx + query.length, end)}`.trim();
-  return `${start > 0 ? "…" : ""}${core}${end < text.length ? "…" : ""}`;
-}
-
-/** One parsed token of a user query. `phrase` keeps multi-word "quoted" groups intact. */
-interface QueryTerm {
-  /** The literal text to match (no surrounding quotes). */
-  text: string;
-  /** Match as a leading prefix (trailing `*`). */
-  prefix: boolean;
-  /** Negated term (leading `-`): exclude documents containing it. */
-  exclude: boolean;
-  /** Whether the token was an explicitly-quoted phrase (may contain spaces). */
-  phrase: boolean;
-}
-
-/**
- * Tokenize a raw user query into terms:
- *  - "double quoted" runs become a single phrase term (spaces preserved).
- *  - a leading `-` marks an exclusion; a trailing `*` marks a prefix match.
- *  - everything else splits on whitespace into bare AND-ed terms.
- */
-function parseQueryTerms(query: string): QueryTerm[] {
-  const terms: QueryTerm[] = [];
-  const re = /-?"[^"]*"\*?|-?\S+/g;
-  for (const m of query.match(re) ?? []) {
-    let tok = m;
-    let exclude = false;
-    if (tok.startsWith("-")) {
-      exclude = true;
-      tok = tok.slice(1);
-    }
-    let phrase = false;
-    let prefix = false;
-    if (tok.startsWith('"')) {
-      phrase = true;
-      const close = tok.lastIndexOf('"');
-      const inner = close > 0 ? tok.slice(1, close) : tok.slice(1);
-      prefix = tok.slice(close + 1).includes("*");
-      tok = inner;
-    } else if (tok.endsWith("*")) {
-      prefix = true;
-      tok = tok.slice(0, -1);
-    }
-    const text = tok.trim();
-    if (!text) continue;
-    terms.push({ text, prefix, exclude, phrase });
-  }
-  return terms;
-}
-
-/** Quote a term as an FTS5 string literal (doubling embedded quotes), optionally a prefix. */
-function fts5Term(t: QueryTerm): string {
-  const quoted = `"${t.text.replace(/"/g, '""')}"`;
-  return t.prefix ? `${quoted}*` : quoted;
-}
-
-/**
- * Build a safe FTS5 MATCH expression from a raw query: space-separated terms are
- * AND-ed (FTS5 implicit AND), "quoted phrases" stay phrases, trailing `*` is a
- * prefix, and `-term` becomes `NOT term`. Returns null when there is no positive
- * term to match (FTS5 rejects a pure-negation query).
- */
-function buildMatchExpr(query: string): string | null {
-  const terms = parseQueryTerms(query);
-  const include = terms.filter((t) => !t.exclude);
-  const exclude = terms.filter((t) => t.exclude);
-  if (include.length === 0) return null;
-  let expr = include.map(fts5Term).join(" AND ");
-  for (const t of exclude) expr += ` NOT ${fts5Term(t)}`;
-  return expr;
-}
-
 // Load node:sqlite via require so bundlers/test-runners (Vite/vitest) don't try to
 // resolve this newer builtin through their module graph — Node resolves it natively.
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 /** Max characters of renderable text we mirror per message into the search store. */
 const MAX_SEARCH_TEXT = 4000;
-/** Characters of context to show around the first match in LIKE-mode excerpts. */
-const LIKE_EXCERPT_RADIUS = 80;
 
 export class TranscriptIndex {
   private db: SqliteDatabase;
@@ -351,6 +267,8 @@ export class TranscriptIndex {
   readonly projectMeta: ProjectMetaStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
+  /** Full-text search over mirrored message text (shares this DB + searchMode). */
+  private readonly searcher: MessageSearch;
 
   constructor(dbPath?: string) {
     const file = dbPath ?? path.join(appDataDir(), "index.db");
@@ -372,6 +290,7 @@ export class TranscriptIndex {
     this.settings = new SettingsStore(this.db);
     this.projectMeta = new ProjectMetaStore(this.db);
     this.searchMode = this.initSearchStore();
+    this.searcher = new MessageSearch(this.db, this.searchMode);
     this.upsert = this.db.prepare(`
       INSERT INTO sessions (
         sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
@@ -723,154 +642,17 @@ export class TranscriptIndex {
   }
 
   /**
-   * Cross-project full-text search over mirrored message text. Returns the best
-   * matching hit per session (deduped), newest sessions first. FTS5 mode uses
-   * MATCH + rank + snippet(); LIKE mode scans `text LIKE %query%` and builds the
-   * excerpt by hand. Joins `sessions` (which already excludes claude-mem noise)
-   * for project/title/cwd/timestamp.
+   * Cross-project full-text search over mirrored message text. Delegates to the
+   * `MessageSearch` module (which owns the FTS5/LIKE backends, query parsing, and
+   * row→hit mapping). Backward-compatible: `search(query)` and `search(query, n)`
+   * keep the original behavior; pass a facets object to narrow by
+   * projectId/role/toolName/since/until/gitBranch.
    */
-  search(query: string, limit = 50): SearchHit[] {
-    const q = query.trim();
-    if (!q) return [];
-    const lim = Math.max(1, Math.min(limit, 500));
-    return this.searchMode === "fts5"
-      ? this.searchFts(q, lim)
-      : this.searchLike(q, lim);
-  }
-
-  private searchFts(query: string, limit: number): SearchHit[] {
-    // Parse the query into a real FTS5 MATCH expression (AND-ed terms, phrases,
-    // prefix*, -exclusion). A pure-negation query has nothing to match -> [].
-    const match = buildMatchExpr(query);
-    if (!match) return [];
-
-    // Pick ONE best (lowest-rank) row per session IN SQL via ROW_NUMBER(), keep the
-    // top `limit` sessions, then re-join `messages_fts` (with MATCH so snippet() has
-    // its query context — snippet() can't be used inside a window subquery) to render
-    // the excerpt. `text` is column index 4 now that toolName precedes it.
-    const rows = this.db
-      .prepare(
-        `WITH ranked AS (
-           SELECT f.rowid AS rid,
-                  ROW_NUMBER() OVER (PARTITION BY f.sessionId ORDER BY rank) AS rn,
-                  rank AS rnk
-           FROM messages_fts f
-           WHERE messages_fts MATCH ?1
-         ),
-         best AS (
-           SELECT rid, rnk FROM ranked WHERE rn = 1 ORDER BY rnk LIMIT ?2
-         )
-         SELECT f.sessionId AS sessionId, f.role AS role, f.toolName AS toolName,
-                snippet(messages_fts, 4, '[', ']', '…', 12) AS excerpt,
-                s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
-                s.title AS title, s.titleSource AS titleSource,
-                m.customTitle AS customTitle
-         FROM best
-         JOIN messages_fts f ON f.rowid = best.rid AND messages_fts MATCH ?1
-         JOIN sessions s ON s.sessionId = f.sessionId
-         LEFT JOIN session_meta m ON m.sessionId = f.sessionId
-         ORDER BY best.rnk`,
-      )
-      .all(match, limit) as unknown as Array<{
-      sessionId: string;
-      role: string;
-      toolName: string | null;
-      excerpt: string | null;
-      projectId: string | null;
-      cwd: string | null;
-      lastTs: string | null;
-      title: string | null;
-      titleSource: string | null;
-      customTitle: string | null;
-    }>;
-
-    return rows.map((r) => this.toHit(r, (r.excerpt ?? "").trim()));
-  }
-
-  private searchLike(query: string, limit: number): SearchHit[] {
-    // No FTS5: emulate the parsed query with LIKE. Each positive term must be
-    // present (AND); each negated term must be absent (NOT LIKE). Prefix/phrase
-    // collapse to plain substring matches here (LIKE has no token boundaries).
-    const terms = parseQueryTerms(query);
-    const include = terms.filter((t) => !t.exclude);
-    const exclude = terms.filter((t) => t.exclude);
-    if (include.length === 0) return [];
-
-    const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const clauses: string[] = [];
-    const params: string[] = [];
-    for (const t of include) {
-      clauses.push(`t.text LIKE ? ESCAPE '\\'`);
-      params.push(likePattern(t.text));
-    }
-    for (const t of exclude) {
-      clauses.push(`t.text NOT LIKE ? ESCAPE '\\'`);
-      params.push(likePattern(t.text));
-    }
-    const where = clauses.join(" AND ");
-
-    // Pick the newest row per session (ROW_NUMBER) and cap to `limit` sessions in SQL.
-    const rows = this.db
-      .prepare(
-        `WITH matched AS (
-           SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.text AS text,
-                  ROW_NUMBER() OVER (PARTITION BY t.sessionId ORDER BY t.seq DESC) AS rn
-           FROM messages_text t
-           WHERE ${where}
-         )
-         SELECT mt.sessionId AS sessionId, mt.role AS role, mt.toolName AS toolName, mt.text AS text,
-                s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
-                s.title AS title, s.titleSource AS titleSource,
-                m.customTitle AS customTitle
-         FROM matched mt
-         JOIN sessions s ON s.sessionId = mt.sessionId
-         LEFT JOIN session_meta m ON m.sessionId = mt.sessionId
-         WHERE mt.rn = 1
-         ORDER BY s.lastTs DESC
-         LIMIT ?`,
-      )
-      .all(...params, limit) as unknown as Array<{
-      sessionId: string;
-      role: string;
-      toolName: string | null;
-      text: string | null;
-      projectId: string | null;
-      cwd: string | null;
-      lastTs: string | null;
-      title: string | null;
-      titleSource: string | null;
-      customTitle: string | null;
-    }>;
-
-    // Center the excerpt on the first positive term that actually appears.
-    const focus = include[0]!.text;
-    return rows.map((r) => this.toHit(r, likeExcerpt(r.text ?? "", focus)));
-  }
-
-  /** Shared row -> SearchHit mapping (title precedence: custom > stored title). */
-  private toHit(
-    r: {
-      sessionId: string;
-      role: string;
-      projectId: string | null;
-      cwd: string | null;
-      lastTs: string | null;
-      title: string | null;
-      customTitle: string | null;
-    },
-    snippet: string,
-  ): SearchHit {
-    const custom = r.customTitle && r.customTitle.trim() ? r.customTitle.trim() : null;
-    return {
-      sessionId: r.sessionId,
-      projectId: r.projectId ?? "unknown",
-      projectName: r.cwd ? projectName(r.cwd) : "",
-      title: custom ?? r.title ?? r.sessionId.slice(0, 8),
-      cwd: r.cwd,
-      role: r.role,
-      snippet,
-      timestamp: r.lastTs,
-    };
+  search(query: string, facets: number | SearchFacets = {}): SearchHit[] {
+    // Tolerate the legacy positional `limit` arg (search(q, 50)) for callers that
+    // predate facets, while preferring the richer { limit, ...facets } object.
+    const opts = typeof facets === "number" ? { limit: facets } : facets;
+    return this.searcher.search(query, opts);
   }
 
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------

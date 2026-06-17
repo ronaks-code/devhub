@@ -4,11 +4,12 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
-import { stat, readdir, readFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { TranscriptIndex } from "./index-db.js";
+import type { SearchFacets } from "./search.js";
+import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
-import { liveSessionsDir } from "./paths.js";
 import { readSessionMessages, listSubagentFiles, normalizeLine, streamRawLines } from "./parser.js";
 import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
@@ -27,11 +28,6 @@ import type {
   TokenUsage,
 } from "./types.js";
 import { EMPTY_USAGE } from "./types.js";
-
-/** A cwd belongs to an internal/plugin store, not a real coding session. */
-function isInternalCwd(cwd: string): boolean {
-  return cwd.includes("/.claude-mem/") || cwd.includes("claude-mem");
-}
 
 export class Engine {
   readonly index: TranscriptIndex;
@@ -146,49 +142,25 @@ export class Engine {
     return this.index.getSessionSummary(sessionId);
   }
 
-  search(query: string, opts: { limit?: number } = {}): SearchHit[] {
-    return this.index.search(query, opts.limit);
+  /**
+   * Cross-project full-text search. `{ limit }` alone preserves the original
+   * behavior; the optional facets (projectId/role/toolName/since/until/gitBranch)
+   * narrow the results and are AND-ed onto the text match.
+   */
+  search(query: string, opts: SearchFacets = {}): SearchHit[] {
+    return this.index.search(query, opts);
   }
 
   /**
    * Currently-running claude processes, read from ~/.claude/sessions/<pid>.json.
-   * These files are ephemeral and may be stale — we just reflect what's on disk.
-   * Tolerant: missing dir => [], unparseable/internal entries are skipped.
-   * Sorted by `updatedAt` (most recently active first).
+   * Delegates to the `running` module, which reads the ephemeral files AND probes
+   * each PID for liveness — stale/zombie entries are flagged (`alive: false`,
+   * `status: "dead"`) so faces don't present a dead file as a live session.
+   * Tolerant: missing dir => [], unparseable/internal entries skipped, sorted by
+   * `updatedAt` (most recently active first).
    */
   async getRunningSessions(): Promise<RunningSession[]> {
-    let names: string[];
-    try {
-      names = await readdir(liveSessionsDir());
-    } catch {
-      return []; // no sessions dir yet
-    }
-    const out: RunningSession[] = [];
-    for (const name of names) {
-      if (!name.endsWith(".json")) continue;
-      let raw: Record<string, unknown>;
-      try {
-        raw = JSON.parse(await readFile(path.join(liveSessionsDir(), name), "utf8"));
-      } catch {
-        continue; // skip unreadable / unparseable files
-      }
-      if (!raw || typeof raw !== "object") continue;
-      const cwd = typeof raw.cwd === "string" ? raw.cwd : null;
-      if (cwd && isInternalCwd(cwd)) continue; // drop claude-mem etc.
-      out.push({
-        pid: typeof raw.pid === "number" ? raw.pid : 0,
-        sessionId: typeof raw.sessionId === "string" ? raw.sessionId : "",
-        cwd,
-        status: typeof raw.status === "string" ? raw.status : "unknown",
-        model: typeof raw.model === "string" ? raw.model : null,
-        startedAt: typeof raw.startedAt === "number" ? raw.startedAt : null,
-        updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : null,
-        name: typeof raw.name === "string" ? raw.name : null,
-        entrypoint: typeof raw.entrypoint === "string" ? raw.entrypoint : null,
-      });
-    }
-    out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    return out;
+    return listRunningSessions();
   }
 
   /** Aggregate usage/activity analytics computed from the index. */
@@ -325,6 +297,9 @@ export class Engine {
 }
 
 export { TranscriptIndex } from "./index-db.js";
+export { MessageSearch } from "./search.js";
+export type { SearchFacets } from "./search.js";
+export { listRunningSessions, isPidAlive } from "./running.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";

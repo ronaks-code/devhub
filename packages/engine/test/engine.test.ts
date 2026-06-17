@@ -18,6 +18,7 @@ import { costUsd, pricingForModel, MODEL_PRICING } from "../src/pricing.js";
 import { detectSourceKind } from "../src/discovery.js";
 import { parseStatus } from "../src/git.js";
 import { createLineSplitter } from "../src/driver/buffer.js";
+import { listRunningSessions, isPidAlive } from "../src/running.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-test-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
@@ -451,6 +452,215 @@ describe("TranscriptIndex search", () => {
     expect(hits.length).toBe(3);
     expect(new Set(hits.map((h) => h.sessionId)).size).toBe(3);
     idx.close();
+  });
+});
+
+describe("TranscriptIndex faceted search", () => {
+  // Two projects, distinct branches/timestamps, plus a tool_use row, all sharing
+  // the word "deploy" so the text match is constant and only the facet varies.
+  const buildFaceted = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwdA = "/home/me/alpha";
+    const cwdB = "/home/me/beta";
+
+    // sessA: project alpha, branch main, older timestamp; user + assistant + a Bash tool_use.
+    writeFileSync(
+      path.join(proj, "sessA.jsonl"),
+      jl({
+        type: "user",
+        cwd: cwdA,
+        gitBranch: "main",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "how do I deploy alpha?" },
+      }) +
+        jl({
+          type: "assistant",
+          cwd: cwdA,
+          gitBranch: "main",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Run the deploy script." },
+              { type: "tool_use", id: "tu1", name: "Bash", input: { command: "./deploy.sh alpha" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+
+    // sessB: project beta, branch feature, newer timestamp; user-only.
+    writeFileSync(
+      path.join(proj, "sessB.jsonl"),
+      jl({
+        type: "user",
+        cwd: cwdB,
+        gitBranch: "feature",
+        timestamp: "2026-03-01T00:00:00.000Z",
+        message: { role: "user", content: "deploy beta to staging" },
+      }),
+    );
+
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(path.join(proj, "sessA.jsonl"));
+    await idx.indexSession(path.join(proj, "sessB.jsonl"));
+    return { idx, cwdA, cwdB };
+  };
+
+  it("plain query (no facets) matches both sessions; backward-compatible", async () => {
+    const { idx } = await buildFaceted(tmp());
+    expect(idx.search("deploy").map((h) => h.sessionId).sort()).toEqual(["sessA", "sessB"]);
+    // legacy positional limit still works
+    expect(idx.search("deploy", 1).length).toBe(1);
+    idx.close();
+  });
+
+  it("projectId facet restricts to one project", async () => {
+    const { idx, cwdA } = await buildFaceted(tmp());
+    const alphaId = projectIdFromCwd(cwdA);
+    const hits = idx.search("deploy", { projectId: alphaId });
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessA"]);
+    expect(hits[0]!.projectId).toBe(alphaId);
+    idx.close();
+  });
+
+  it("role facet keeps only matching message rows", async () => {
+    const { idx } = await buildFaceted(tmp());
+    // Only the assistant text row mentions deploy in sessA; sessB's is a user row.
+    expect(idx.search("deploy", { role: "assistant" }).map((h) => h.sessionId)).toEqual(["sessA"]);
+    expect(idx.search("deploy", { role: "user" }).map((h) => h.sessionId).sort()).toEqual([
+      "sessA",
+      "sessB",
+    ]);
+    idx.close();
+  });
+
+  it("toolName facet matches mirrored tool_use rows", async () => {
+    const { idx } = await buildFaceted(tmp());
+    const hits = idx.search("deploy", { toolName: "Bash" });
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessA"]);
+    expect(hits[0]!.role).toBe("tool");
+    // a tool that was never invoked yields nothing
+    expect(idx.search("deploy", { toolName: "Read" })).toEqual([]);
+    idx.close();
+  });
+
+  it("gitBranch facet filters by branch", async () => {
+    const { idx } = await buildFaceted(tmp());
+    expect(idx.search("deploy", { gitBranch: "feature" }).map((h) => h.sessionId)).toEqual(["sessB"]);
+    expect(idx.search("deploy", { gitBranch: "main" }).map((h) => h.sessionId)).toEqual(["sessA"]);
+    idx.close();
+  });
+
+  it("since/until facets filter on last activity", async () => {
+    const { idx } = await buildFaceted(tmp());
+    // sessB's last activity is 2026-03; sessA's is 2026-01.
+    expect(idx.search("deploy", { since: "2026-02-01T00:00:00.000Z" }).map((h) => h.sessionId)).toEqual([
+      "sessB",
+    ]);
+    expect(idx.search("deploy", { until: "2026-02-01T00:00:00.000Z" }).map((h) => h.sessionId)).toEqual([
+      "sessA",
+    ]);
+    idx.close();
+  });
+
+  it("facets compose (projectId + role together)", async () => {
+    const { idx, cwdB } = await buildFaceted(tmp());
+    const betaId = projectIdFromCwd(cwdB);
+    // beta has only a user row; asking for an assistant row in beta yields nothing.
+    expect(idx.search("deploy", { projectId: betaId, role: "assistant" })).toEqual([]);
+    expect(idx.search("deploy", { projectId: betaId, role: "user" }).map((h) => h.sessionId)).toEqual([
+      "sessB",
+    ]);
+    idx.close();
+  });
+});
+
+describe("running-session liveness", () => {
+  // listRunningSessions reads liveSessionsDir(), which lives under CLAUDE_CONFIG_DIR.
+  // Point it at a temp dir per test and restore afterward so we never touch ~/.claude.
+  const withConfigDir = async <T>(fn: (sessionsDir: string) => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const sessionsDir = path.join(root, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    try {
+      return await fn(sessionsDir);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("isPidAlive: own pid alive, an unused high pid dead, non-positive dead", () => {
+    expect(isPidAlive(process.pid)).toBe(true);
+    // A very high pid is virtually never a live process -> ESRCH -> dead.
+    expect(isPidAlive(2 ** 30)).toBe(false);
+    expect(isPidAlive(0)).toBe(false);
+    expect(isPidAlive(-1)).toBe(false);
+  });
+
+  it("flags a stale/zombie session file with status=dead and alive=false", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const deadPid = 2 ** 30; // no such process
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "ghost", cwd: "/home/me/x", status: "busy" }),
+      );
+      // A live entry: our own process pid, which is definitely alive.
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "live", cwd: "/home/me/y", status: "idle", updatedAt: 100 }),
+      );
+
+      const all = await listRunningSessions();
+      const dead = all.find((s) => s.sessionId === "ghost")!;
+      const live = all.find((s) => s.sessionId === "live")!;
+      expect(dead.alive).toBe(false);
+      expect(dead.status).toBe("dead"); // stale "busy" overridden
+      expect(live.alive).toBe(true);
+      expect(live.status).toBe("idle"); // live entry keeps its reported status
+    });
+  });
+
+  it("dropDead omits stale entries entirely", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const deadPid = 2 ** 30;
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "ghost", cwd: "/home/me/x", status: "busy" }),
+      );
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "live", cwd: "/home/me/y", status: "idle" }),
+      );
+      const kept = await listRunningSessions({ dropDead: true });
+      expect(kept.map((s) => s.sessionId)).toEqual(["live"]);
+    });
+  });
+
+  it("missing dir => [], internal/claude-mem cwd skipped, unparseable skipped", async () => {
+    // No sessions dir created here: point at a fresh temp root with no sessions/.
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = tmp();
+    try {
+      expect(await listRunningSessions()).toEqual([]);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+
+    await withConfigDir(async (sessionsDir) => {
+      writeFileSync(path.join(sessionsDir, "bad.json"), "{not json");
+      writeFileSync(
+        path.join(sessionsDir, "mem.json"),
+        JSON.stringify({ pid: process.pid, sessionId: "mem", cwd: "/home/me/.claude-mem/store" }),
+      );
+      writeFileSync(path.join(sessionsDir, "ignore.txt"), "not a json file");
+      expect(await listRunningSessions()).toEqual([]); // all three skipped
+    });
   });
 });
 

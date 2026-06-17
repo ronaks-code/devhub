@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { createContext, memo, useContext, type ReactNode } from "react";
 import { Wrench, Terminal, Webhook, ListPlus, Brain, FileDiff, Check, X } from "lucide-react";
 import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -7,6 +7,39 @@ import { DiffView, parseEditInput } from "./DiffView";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * The active in-transcript find query, threaded to leaf blocks without prop
+ * drilling. Empty string = no find active (the common, zero-overhead case).
+ */
+const HighlightContext = createContext<string>("");
+
+/** Split `text` on case-insensitive occurrences of `query`, wrapping matches in <mark>. */
+function HighlightText({ text }: { text: string }): ReactNode {
+  const query = useContext(HighlightContext);
+  if (!query) return text;
+  const needle = query.toLowerCase();
+  const hay = text.toLowerCase();
+  if (!hay.includes(needle)) return text;
+  const out: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < text.length) {
+    const at = hay.indexOf(needle, i);
+    if (at === -1) {
+      out.push(text.slice(i));
+      break;
+    }
+    if (at > i) out.push(text.slice(i, at));
+    out.push(
+      <mark key={key++} className="rounded bg-amber-400/30 px-0.5 text-amber-100">
+        {text.slice(at, at + needle.length)}
+      </mark>,
+    );
+    i = at + needle.length;
+  }
+  return <>{out}</>;
+}
 
 function prettyInput(input: unknown): string {
   try {
@@ -144,10 +177,24 @@ function ToolResult({ result }: { result: ToolResultBlock }) {
   );
 }
 
+/** A text block: rendered as markdown normally, or plain highlighted text while
+ *  a find is active (so matches are visible without fighting the markdown AST). */
+function TextBlock({ text }: { text: string }) {
+  const query = useContext(HighlightContext);
+  if (query && text.toLowerCase().includes(query.toLowerCase())) {
+    return (
+      <div className="whitespace-pre-wrap text-[13.5px] leading-relaxed text-zinc-200">
+        <HighlightText text={text} />
+      </div>
+    );
+  }
+  return <Markdown text={text} />;
+}
+
 function Block({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case "text":
-      return <Markdown text={block.text} />;
+      return <TextBlock text={block.text} />;
     case "thinking":
       return (
         <details className="my-1 rounded-lg border border-zinc-800/60 bg-zinc-900/20">
@@ -191,14 +238,18 @@ const ROLE_META: Record<string, { label: string; bar: string; chip: string }> = 
 export const MessageView = memo(function MessageView({
   m,
   streaming,
+  highlight = "",
 }: {
   m: NormalizedMessage;
   /** Show a blinking cursor at the end (live-streaming assistant bubble). */
   streaming?: boolean;
+  /** Active in-transcript find query; matches inside text blocks get marked. */
+  highlight?: string;
 }) {
   const meta = ROLE_META[m.role] ?? ROLE_META.meta!;
   const dim = m.role === "system" || m.role === "attachment" || m.role === "meta" || m.role === "queue";
   return (
+    <HighlightContext.Provider value={highlight}>
     <div className="group flex gap-3 px-4 py-2.5">
       <div className={cn("mt-1 w-0.5 shrink-0 rounded-full", meta.bar)} />
       <div className="min-w-0 flex-1">
@@ -229,5 +280,6 @@ export const MessageView = memo(function MessageView({
         </div>
       </div>
     </div>
+    </HighlightContext.Provider>
   );
 });

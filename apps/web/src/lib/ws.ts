@@ -1,6 +1,14 @@
 import type { ClientMsg, ServerMsg, TurnResult, SessionInit } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "@claude-ui/engine/types";
 
+/** A pending tool-permission request from the agent (persistent-path only). */
+export interface PermissionRequestFrame {
+  id: string;
+  toolName: string;
+  toolInput: unknown;
+  suggestions?: string[];
+}
+
 export interface ChatHandlers {
   onMessage?: (m: NormalizedMessage) => void;
   onSession?: (sessionId: string, init: SessionInit) => void;
@@ -10,6 +18,12 @@ export interface ChatHandlers {
   onResult?: (result: TurnResult) => void;
   onError?: (message: string) => void;
   onTurnEnd?: () => void;
+  /**
+   * The agent asks the user to approve/deny one tool call. Only fired on the
+   * persistent (stream-json) session path; dormant on the default per-turn
+   * driver. Answer with {t:"permission-response"} via the returned conn.send.
+   */
+  onPermissionRequest?: (req: PermissionRequestFrame) => void;
   onOpen?: () => void;
   onClose?: () => void;
 }
@@ -115,6 +129,14 @@ export function openChat(handlers: ChatHandlers): ChatConn {
         break;
       case "turn-end":
         handlers.onTurnEnd?.();
+        break;
+      case "permission-request":
+        handlers.onPermissionRequest?.({
+          id: msg.id,
+          toolName: msg.toolName,
+          toolInput: msg.toolInput,
+          suggestions: msg.suggestions,
+        });
         break;
     }
   };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { MessageSquarePlus, Send, Square, Sparkles } from "lucide-react";
+import { MessageSquarePlus, RotateCcw, Send, Square, Sparkles } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
@@ -10,6 +10,7 @@ import { cn } from "../lib/utils";
 import { indexToolResults, pairMessage } from "../lib/transcript";
 import { useDraft } from "../hooks/useDraft";
 import { MessageView } from "./MessageView";
+import { PermissionCard, type PendingPermission } from "./PermissionCard";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
 const MODELS = [
@@ -76,6 +77,12 @@ export function ChatPane({
   );
   // Key of the assistant bubble currently receiving deltas (null = none in flight).
   const [liveKey, setLiveKey] = useState<number | null>(null);
+  // A pending inline permission request from the agent (persistent-path only;
+  // dormant on the default per-turn driver). Cleared once answered or the turn ends.
+  const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
+  // The most recent user prompt of this conversation, so "Regenerate" can resend
+  // it (resuming the session) for a fresh response.
+  const lastPromptRef = useRef<string | null>(null);
 
   const connRef = useRef<ChatConn | null>(null);
   const keyRef = useRef(0);
@@ -152,16 +159,19 @@ export function ChatPane({
       onMessage: (m) => finalizeMessage(m),
       onStatus: (kind) => setStatus(kind),
       onResult: (result) => setLastResult(result),
+      onPermissionRequest: (req) => setPendingPermission(req),
       onError: (message) => {
         setErrorMsg(message);
         setRunning(false);
         setStatus(null);
+        setPendingPermission(null);
         liveKeyRef.current = null;
         setLiveKey(null);
       },
       onTurnEnd: () => {
         setRunning(false);
         setStatus(null);
+        setPendingPermission(null);
         liveKeyRef.current = null;
         setLiveKey(null);
       },
@@ -170,6 +180,13 @@ export function ChatPane({
     return conn;
   }, [appendDelta, finalizeMessage]);
 
+  // Forward the user's Allow/Deny decision to the agent and dismiss the card.
+  // Never auto-decides: only fires from an explicit button press in PermissionCard.
+  const respondPermission = useCallback((id: string, decision: "allow" | "deny") => {
+    connRef.current?.send({ t: "permission-response", id, decision });
+    setPendingPermission((cur) => (cur && cur.id === id ? null : cur));
+  }, []);
+
   useEffect(() => {
     return () => {
       connRef.current?.close();
@@ -177,41 +194,56 @@ export function ChatPane({
     };
   }, []);
 
+  // Shared turn kickoff. `echo` controls whether we render a local user bubble
+  // (true for a typed send; false for regenerate, which reuses the prompt that
+  // already shows in the transcript). Snaps to the bottom and resets per-turn UI.
+  const runPrompt = useCallback(
+    (prompt: string, echo: boolean) => {
+      if (echo) {
+        const localUser: NormalizedMessage = {
+          seq: -1,
+          uuid: null,
+          parentUuid: null,
+          role: "user",
+          type: "user",
+          timestamp: new Date().toISOString(),
+          blocks: [{ type: "text", text: prompt }],
+        };
+        push(localUser);
+      }
+
+      lastPromptRef.current = prompt;
+      // A fresh turn always snaps back to the bottom to follow the reply.
+      stickToBottomRef.current = true;
+      setErrorMsg(null);
+      setLastResult(null);
+      setPendingPermission(null);
+      setStatus("starting");
+      setRunning(true);
+      liveKeyRef.current = null;
+      setLiveKey(null);
+
+      const conn = ensureConn();
+      conn.send({ t: "prompt", cwd, prompt, sessionId, model, permissionMode });
+    },
+    [push, ensureConn, cwd, sessionId, model, permissionMode],
+  );
+
   const send = useCallback(() => {
     const prompt = draft.trim();
     if (!prompt || running) return;
-
-    const localUser: NormalizedMessage = {
-      seq: -1,
-      uuid: null,
-      parentUuid: null,
-      role: "user",
-      type: "user",
-      timestamp: new Date().toISOString(),
-      blocks: [{ type: "text", text: prompt }],
-    };
-    push(localUser);
-
-    // A fresh prompt always snaps back to the bottom to follow the reply.
-    stickToBottomRef.current = true;
     clearDraft();
-    setErrorMsg(null);
-    setLastResult(null);
-    setStatus("starting");
-    setRunning(true);
-    liveKeyRef.current = null;
-    setLiveKey(null);
+    runPrompt(prompt, true);
+  }, [draft, running, clearDraft, runPrompt]);
 
-    const conn = ensureConn();
-    conn.send({
-      t: "prompt",
-      cwd,
-      prompt,
-      sessionId,
-      model,
-      permissionMode,
-    });
-  }, [draft, running, push, clearDraft, ensureConn, cwd, sessionId, model, permissionMode]);
+  // Resend the last user prompt (resuming the session) to get a fresh response.
+  // Reuses the prompt already in the transcript, so it doesn't echo a duplicate
+  // user bubble.
+  const regenerate = useCallback(() => {
+    const prompt = lastPromptRef.current?.trim();
+    if (!prompt || running) return;
+    runPrompt(prompt, false);
+  }, [running, runPrompt]);
 
   const stop = useCallback(() => {
     connRef.current?.send({ t: "interrupt" });
@@ -222,6 +254,7 @@ export function ChatPane({
     connRef.current = null;
     keyRef.current = 0;
     liveKeyRef.current = null;
+    lastPromptRef.current = null;
     setLiveKey(null);
     stickToBottomRef.current = true;
     setItems([]);
@@ -230,6 +263,7 @@ export function ChatPane({
     setStatus(null);
     setLastResult(null);
     setErrorMsg(null);
+    setPendingPermission(null);
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -380,8 +414,14 @@ export function ChatPane({
         )}
       </div>
 
+      {/* Inline tool-permission request (persistent-path only; dormant on the
+          default per-turn driver). Answered via a permission-response send. */}
+      {pendingPermission && (
+        <PermissionCard request={pendingPermission} onDecision={respondPermission} />
+      )}
+
       {/* Status / result footer */}
-      {(running || lastResult || errorMsg) && (
+      {(running || lastResult || errorMsg || (!running && lastPromptRef.current)) && (
         <div className="flex flex-wrap items-center gap-3 border-t border-zinc-800/80 bg-zinc-900/30 px-5 py-1.5 text-[11px]">
           {running && (
             <span className="flex items-center gap-1.5 text-clay-300">
@@ -402,6 +442,17 @@ export function ChatPane({
             </span>
           )}
           {errorMsg && <span className="text-red-400">{errorMsg}</span>}
+          {/* Resend the last prompt for a fresh response (resumes the session). */}
+          {!running && lastPromptRef.current && (
+            <button
+              onClick={regenerate}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
+              title="Regenerate the last response"
+            >
+              <RotateCcw className="h-3 w-3" />
+              Regenerate
+            </button>
+          )}
         </div>
       )}
 

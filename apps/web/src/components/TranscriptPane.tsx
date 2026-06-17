@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MessagesSquare,
@@ -12,9 +12,12 @@ import {
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
 import { MessageView } from "./MessageView";
+import { GitPanel } from "./GitPanel";
+import { FindBar } from "./FindBar";
 import { Badge, EmptyState, Spinner } from "./ui";
 import { compactNumber, formatBytes, totalTokens } from "../lib/format";
 import { pairToolResults } from "../lib/transcript";
+import { cn } from "../lib/utils";
 
 export function TranscriptPane({
   page,
@@ -36,12 +39,52 @@ export function TranscriptPane({
     [page?.messages],
   );
 
+  // In-transcript find (Cmd/Ctrl-F): the bar owns its query/cursor and reports
+  // the active match's message index + live query back up here for scroll+highlight.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [activeMatch, setActiveMatch] = useState<number | null>(null);
+  const onFindQueryChange = useCallback((q: string) => setFindQuery(q), []);
+  const onActiveMatchChange = useCallback((i: number | null) => setActiveMatch(i), []);
+
   const virtualizer = useVirtualizer({
     count: messages.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 120,
     overscan: 10,
   });
+
+  // Cmd/Ctrl-F opens the find bar (preventing the browser's native find), and
+  // Escape closes it. Scoped to when a transcript is loaded.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        setFindOpen(true);
+      } else if (e.key === "Escape" && findOpen) {
+        setFindOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [findOpen]);
+
+  // Closing the find bar clears the highlight/cursor state.
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindQuery("");
+    setActiveMatch(null);
+  }, []);
+
+  // Scroll the virtualizer to the active match's message whenever it changes.
+  useEffect(() => {
+    if (activeMatch == null) return;
+    const id = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(activeMatch, { align: "center" }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [activeMatch, virtualizer]);
 
   // Jump to the latest message when a NEW session opens (not on load-more).
   useEffect(() => {
@@ -74,7 +117,14 @@ export function TranscriptPane({
 
   const s = page.session;
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
+    <div className="relative flex min-w-0 flex-1 flex-col bg-zinc-950">
+      <FindBar
+        open={findOpen}
+        messages={messages}
+        onClose={closeFind}
+        onQueryChange={onFindQueryChange}
+        onActiveMatchChange={onActiveMatchChange}
+      />
       <div className="border-b border-zinc-800/80 px-5 py-3">
         <div className="flex items-center gap-2">
           <h1 className="truncate text-[15px] font-semibold text-zinc-100">{s.title}</h1>
@@ -123,6 +173,10 @@ export function TranscriptPane({
         </div>
       </div>
 
+      {/* Read-only git panel for the session's working directory (collapsed by
+          default; fetches on expand). Only shown when we know the cwd. */}
+      {s.cwd ? <GitPanel cwd={s.cwd} /> : null}
+
       {page.truncatedFromStart && (
         <button
           onClick={onLoadMore}
@@ -149,9 +203,12 @@ export function TranscriptPane({
                 width: "100%",
                 transform: `translateY(${vi.start}px)`,
               }}
-              className="border-b border-zinc-900/70"
+              className={cn(
+                "border-b border-zinc-900/70",
+                findOpen && activeMatch === vi.index && "bg-amber-500/5 ring-1 ring-inset ring-amber-500/30",
+              )}
             >
-              <MessageView m={messages[vi.index]!} />
+              <MessageView m={messages[vi.index]!} highlight={findOpen ? findQuery : ""} />
             </div>
           ))}
         </div>

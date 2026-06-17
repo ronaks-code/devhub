@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Folder, Search, Layers } from "lucide-react";
 import type { ProjectSummary } from "../lib/types";
 import { cn } from "../lib/utils";
 import { relativeTime } from "../lib/format";
+import { useListKeyboardNav } from "../hooks/useListKeyboardNav";
 
 export function ProjectsPane({
   projects,
@@ -22,6 +23,18 @@ export function ProjectsPane({
     );
   }, [projects, q]);
 
+  // j/k + arrow + Enter navigation. Enter selects the highlighted project; the
+  // row refs let the hook keep the focused item scrolled into view.
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const nav = useListKeyboardNav({
+    count: filtered.length,
+    onSelect: (i) => {
+      const p = filtered[i];
+      if (p) onSelect(p.id);
+    },
+    getItemElement: (i) => itemRefs.current[i],
+  });
+
   return (
     <div className="flex w-72 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-900/30">
       <div className="flex items-center justify-between px-4 pb-2 pt-3">
@@ -39,17 +52,29 @@ export function ProjectsPane({
           />
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {filtered.map((p) => {
+      <div
+        {...nav.containerProps}
+        className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
+      >
+        {filtered.map((p, i) => {
           const active = p.id === selectedId;
+          const focused = i === nav.focusedIndex;
           return (
             <button
               key={p.id}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
               data-testid="project"
+              {...nav.getItemProps(i)}
               onClick={() => onSelect(p.id)}
               className={cn(
                 "group mb-0.5 flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition",
-                active ? "bg-clay-500/10 ring-1 ring-clay-500/30" : "hover:bg-zinc-800/50",
+                active
+                  ? "bg-clay-500/10 ring-1 ring-clay-500/30"
+                  : focused
+                    ? "bg-zinc-800/60 ring-1 ring-zinc-700"
+                    : "hover:bg-zinc-800/50",
               )}
             >
               <Folder

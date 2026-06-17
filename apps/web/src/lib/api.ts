@@ -7,6 +7,10 @@ import type {
   Stats,
 } from "./types";
 import type { AppSettings } from "@claude-ui/engine/types";
+// Git result shapes. Mirrored locally (not imported from the engine root, which
+// pulls in Node-only code) so the web bundle stays free of server deps. Kept in
+// lockstep with packages/engine/src/git.ts.
+import type { GitStatus, GitLogEntry } from "./types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { accept: "application/json" } });
@@ -50,6 +54,15 @@ export const api = {
     }),
   stats: () => get<Stats>("/api/stats"),
   running: () => get<RunningSession[]>("/api/running"),
+  // Read-only git status for a project cwd. The server returns null when the
+  // directory is not a git repo (or git is unavailable); rejects unknown cwds.
+  gitStatus: (cwd: string) =>
+    get<GitStatus | null>(`/api/git/status?cwd=${encodeURIComponent(cwd)}`),
+  // Recent commits (newest first), capped server-side. [] when not a repo.
+  gitLog: (cwd: string, limit?: number) =>
+    get<GitLogEntry[]>(
+      `/api/git/log?cwd=${encodeURIComponent(cwd)}` + (limit ? `&limit=${limit}` : ""),
+    ),
   getSettings: () => get<AppSettings>("/api/settings"),
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>

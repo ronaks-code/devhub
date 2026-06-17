@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Search, Pin, Pencil, MessageSquare, Coins, GitBranch, Check, X } from "lucide-react";
 import type { ProjectSummary, SessionSummary } from "../lib/types";
 import { cn } from "../lib/utils";
 import { compactNumber, relativeTime, totalTokens } from "../lib/format";
 import { IconButton } from "./ui";
+import { useListKeyboardNav } from "../hooks/useListKeyboardNav";
 
 export function SessionsPane({
   project,
@@ -29,6 +30,18 @@ export function SessionsPane({
     if (!s) return sessions;
     return sessions.filter((x) => x.title.toLowerCase().includes(s));
   }, [sessions, q]);
+
+  // j/k + arrow + Enter navigation. Enter opens the highlighted session; the
+  // inline rename input is guarded inside the hook so typing isn't hijacked.
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const nav = useListKeyboardNav({
+    count: filtered.length,
+    onSelect: (i) => {
+      const s = filtered[i];
+      if (s) onSelect(s.sessionId);
+    },
+    getItemElement: (i) => itemRefs.current[i],
+  });
 
   function startEdit(s: SessionSummary) {
     setEditingId(s.sessionId);
@@ -63,16 +76,32 @@ export function SessionsPane({
           />
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {filtered.map((s) => {
+      <div
+        {...nav.containerProps}
+        className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
+      >
+        {filtered.map((s, i) => {
           const active = s.sessionId === selectedId;
           const editing = s.sessionId === editingId;
+          const focused = i === nav.focusedIndex;
+          const itemProps = nav.getItemProps(i);
           return (
             <div
               key={s.sessionId}
+              ref={(el) => {
+                itemRefs.current[i] = el;
+              }}
+              role={itemProps.role}
+              aria-selected={itemProps["aria-selected"]}
+              data-focused={itemProps["data-focused"]}
+              onMouseEnter={itemProps.onMouseEnter}
               className={cn(
                 "group mb-0.5 rounded-lg px-2.5 py-2 transition",
-                active ? "bg-clay-500/10 ring-1 ring-clay-500/30" : "hover:bg-zinc-900",
+                active
+                  ? "bg-clay-500/10 ring-1 ring-clay-500/30"
+                  : focused
+                    ? "bg-zinc-900 ring-1 ring-zinc-700"
+                    : "hover:bg-zinc-900",
               )}
             >
               <div className="flex items-start gap-1.5">

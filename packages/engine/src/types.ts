@@ -133,7 +133,13 @@ export interface RunningSession {
   pid: number;
   sessionId: string;
   cwd: string | null;
-  status: string; // "busy" | "idle" | "waiting" | ...
+  status: string; // "busy" | "idle" | "waiting" | "dead" | ...
+  /**
+   * Whether the PID is still a live OS process (probed with `process.kill(pid, 0)`).
+   * False for stale/zombie `<pid>.json` files Claude Code left behind; such entries
+   * also carry `status: "dead"`.
+   */
+  alive: boolean;
   model?: string | null;
   startedAt?: number | null;
   updatedAt?: number | null;
