@@ -49,6 +49,17 @@ export function formatNumber(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
+/**
+ * Rough token estimate for a chunk of text. There's no tokenizer in the browser
+ * bundle, so we use the well-worn ~4-chars-per-token heuristic (English prose +
+ * code average out near this). It's deliberately labeled "approx" wherever it's
+ * shown — good enough for a "how big is my CLAUDE.md" gut check, not billing.
+ */
+export function approxTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
 /** Total tokens that count as "context used" for a quick badge. */
 export function totalTokens(u: {
   inputTokens: number;

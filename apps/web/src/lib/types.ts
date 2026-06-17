@@ -115,6 +115,30 @@ export interface HooksInput {
 }
 
 /**
+ * A CLAUDE.md document from GET /api/config/claudemd. Mirrors the engine's
+ * `ClaudeMdDoc` (config/index.ts); defined locally so the web bundle stays free
+ * of Node-only engine code. When no file exists yet the server returns
+ * `{ scope, filePath: null, content: "" }`, so `filePath` is nullable and an
+ * empty `content` is a valid "not created yet" state. Kept in lockstep with
+ * packages/engine/src/config/index.ts.
+ */
+export interface ClaudeMdDoc {
+  scope: ConfigScope;
+  /** Absolute path of the CLAUDE.md, or null when it doesn't exist yet. */
+  filePath: string | null;
+  /** Raw markdown contents ("" when the file doesn't exist yet). */
+  content: string;
+}
+
+/** Response from PUT /api/config/claudemd — the persisted scope + path. */
+export interface ClaudeMdWriteResult {
+  ok: boolean;
+  scope: ConfigScope;
+  /** Absolute path of the CLAUDE.md that was written. */
+  filePath: string;
+}
+
+/**
  * One subagent definition from GET /api/config/agents (an `agents/*.md` file with
  * frontmatter). Mirrors the engine's `AgentDef` (config/index.ts); defined locally
  * so the web bundle stays free of the Node-only engine config code. Kept in

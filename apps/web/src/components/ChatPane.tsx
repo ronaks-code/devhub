@@ -282,8 +282,16 @@ export function ChatPane({
   // dismiss the card. Never auto-decides: only fires from an explicit button
   // press in PermissionCard. Scope is dormant on the per-turn driver but rides
   // along in the payload so the persistent path can honor it later.
-  const respondPermission = useCallback((id: string, { decision, scope }: PermissionDecision) => {
-    connRef.current?.send({ t: "permission-response", id, decision, scope });
+  const respondPermission = useCallback((id: string, { decision, scope, message }: PermissionDecision) => {
+    connRef.current?.send({
+      t: "permission-response",
+      id,
+      decision,
+      scope,
+      // Optional deny feedback (PermissionCard → DenyFeedback). Only include it
+      // when present so a plain deny/allow payload is unchanged.
+      ...(message ? { message } : {}),
+    });
     setPendingPermission((cur) => (cur && cur.id === id ? null : cur));
   }, []);
 

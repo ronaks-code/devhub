@@ -1,13 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
+import { Activity, CalendarDays, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
 import type { DailyUsage, RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
 import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
+import { useStatsPolling } from "../hooks/useStatsPolling";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
+import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
 import { Badge, EmptyState, Spinner } from "./ui";
+
+/** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
+function oneYearAgoYmd(): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 1);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 /** Sum of the four token buckets for one rolled-up day. */
 function dayTokens(d: DailyUsage): number {
@@ -26,7 +38,8 @@ function totalCostUsd(stats: Stats): number {
   return costUsd(undefined, stats.totalUsage);
 }
 
-const RUNNING_POLL_MS = 4000;
+/** How often to re-poll running/stats/rollups (paused while the tab is hidden). */
+const DASH_POLL_MS = 5000;
 
 /** Last path segment of a working directory (the "project" name). */
 function lastSegment(cwd: string | null): string {
@@ -104,59 +117,50 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
 }
 
 export function DashboardPane() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [running, setRunning] = useState<RunningSession[] | null>(null);
   // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
   // to a 30-day window (resolved by PeriodSelector's first onChange below).
   const [period, setPeriod] = useState<PeriodRange>({ id: "30d" });
-  const [rollups, setRollups] = useState<DailyUsage[] | null>(null);
-  const [rollupsError, setRollupsError] = useState(false);
+  // What the contribution heatmap colors by (sessions reads cleanest by default).
+  const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>("sessions");
 
-  // Re-query the daily-usage series whenever the period window changes. The
-  // server returns only days WITH activity inside [since, until]; we sum them
-  // client-side for the period totals (no engine change needed).
+  // Auto-refreshing stats / running / period-rollups. The hook polls on an
+  // interval, pauses while the tab is hidden, and refreshes on return — so
+  // "running now" and the totals stay fresh without a manual reload.
+  const { stats, running, rollups, rollupsError } = useStatsPolling({
+    intervalMs: DASH_POLL_MS,
+    since: period.since,
+    until: period.until,
+  });
+
+  // The heatmap always wants ~1 year of daily activity, independent of the
+  // period selector above. Fetched once (and on tab return) rather than polled
+  // tightly, since a day's activity barely shifts in seconds.
+  const [yearRollups, setYearRollups] = useState<DailyUsage[] | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setRollups(null);
-    setRollupsError(false);
-    api
-      .rollups(period.since, period.until)
-      .then((r) => {
-        if (!cancelled) setRollups(r);
-      })
-      .catch(() => {
-        if (!cancelled) setRollupsError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [period.since, period.until]);
-
-  // Stats once on mount; running once on mount, then poll every 4s.
-  useEffect(() => {
-    let cancelled = false;
-
-    api
-      .stats()
-      .then((s) => {
-        if (!cancelled) setStats(s);
-      })
-      .catch(() => {});
-
-    const loadRunning = () => {
+    const load = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       api
-        .running()
+        .rollups(oneYearAgoYmd())
         .then((r) => {
-          if (!cancelled) setRunning(r);
+          if (!cancelled) setYearRollups(r);
         })
-        .catch(() => {});
+        .catch(() => {
+          if (!cancelled) setYearRollups([]);
+        });
     };
-    loadRunning();
-    const id = window.setInterval(loadRunning, RUNNING_POLL_MS);
-
+    load();
+    const onVisible = () => {
+      if (typeof document === "undefined" || !document.hidden) load();
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisible);
+    }
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisible);
+      }
     };
   }, []);
 
@@ -194,6 +198,9 @@ export function DashboardPane() {
       onPeriod={setPeriod}
       rollups={rollups}
       rollupsError={rollupsError}
+      yearRollups={yearRollups}
+      heatmapMetric={heatmapMetric}
+      onHeatmapMetric={setHeatmapMetric}
     />
   );
 }
@@ -214,6 +221,9 @@ function DashboardBody({
   onPeriod,
   rollups,
   rollupsError,
+  yearRollups,
+  heatmapMetric,
+  onHeatmapMetric,
 }: {
   stats: Stats;
   tokens: number;
@@ -226,6 +236,10 @@ function DashboardBody({
   onPeriod: (range: PeriodRange) => void;
   rollups: DailyUsage[] | null;
   rollupsError: boolean;
+  /** ~1 year of daily usage for the contribution heatmap (null while loading). */
+  yearRollups: DailyUsage[] | null;
+  heatmapMetric: HeatmapMetric;
+  onHeatmapMetric: (m: HeatmapMetric) => void;
 }) {
   // Period totals: sum the in-range days client-side. Oldest→newest for the chart.
   const usage = useMemo(() => {
@@ -350,6 +364,36 @@ function DashboardBody({
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
               No usage in this period.
             </div>
+          )}
+        </section>
+
+        {/* Contribution heatmap — 12 months of daily activity, GitHub-style. */}
+        <section>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <SectionTitle icon={<CalendarDays className="h-3.5 w-3.5" />}>Activity heatmap</SectionTitle>
+            <div className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
+              {(["sessions", "tokens"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => onHeatmapMetric(m)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition",
+                    heatmapMetric === m
+                      ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                      : "text-zinc-500 hover:text-zinc-300",
+                  )}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+          {yearRollups === null ? (
+            <div className="flex h-32 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30">
+              <Spinner className="h-5 w-5" />
+            </div>
+          ) : (
+            <CalendarHeatmap days={yearRollups} metric={heatmapMetric} />
           )}
         </section>
 

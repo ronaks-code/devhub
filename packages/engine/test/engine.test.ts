@@ -32,6 +32,8 @@ import { projectRollups, costByProject, usageByModel } from "../src/aggregates.j
 import { MAX_INLINE_IMAGE_BYTES } from "../src/types.js";
 import { testMcpServer } from "../src/config/mcp-test.js";
 import type { McpServerDef } from "../src/config/index.js";
+import { parseSearchQuery, mergeFacets } from "../src/query-parser.js";
+import { searchSymbols } from "../src/symbols.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -3073,5 +3075,366 @@ describe("index worker parse phase (parse-session.scanSession)", () => {
       if (prev === undefined) delete process.env.CLAUDE_UI_INDEX_WORKER;
       else process.env.CLAUDE_UI_INDEX_WORKER = prev;
     }
+  });
+});
+
+describe("parseSearchQuery (inline filter tokens)", () => {
+  it("plain query with no tokens round-trips unchanged (facets empty)", () => {
+    const { text, facets } = parseSearchQuery("how do I deploy the widget");
+    expect(text).toBe("how do I deploy the widget");
+    expect(facets).toEqual({});
+  });
+
+  it("blank/whitespace query yields empty text and no facets", () => {
+    expect(parseSearchQuery("   ")).toEqual({ text: "", facets: {} });
+    expect(parseSearchQuery("")).toEqual({ text: "", facets: {} });
+  });
+
+  it("lifts the documented mixed example into text + facets", () => {
+    const { text, facets } = parseSearchQuery(
+      "tool:Bash role:assistant after:2026-01-01 before:2026-02-01 model:opus free text",
+    );
+    expect(text).toBe("free text");
+    expect(facets).toEqual({
+      toolName: "Bash",
+      role: "assistant",
+      since: "2026-01-01",
+      until: "2026-02-01",
+      modelLike: "opus",
+    });
+  });
+
+  it("supports since/until aliases and project/branch/tag tokens", () => {
+    const { text, facets } = parseSearchQuery(
+      "since:2026-01-01 until:2026-02-01 project:abc123 branch:main tag:alpha needle",
+    );
+    expect(text).toBe("needle");
+    expect(facets).toEqual({
+      since: "2026-01-01",
+      until: "2026-02-01",
+      projectId: "abc123",
+      gitBranch: "main",
+      tag: "alpha",
+    });
+  });
+
+  it("normalizes role to lower-case", () => {
+    expect(parseSearchQuery("role:Assistant x").facets.role).toBe("assistant");
+  });
+
+  it("supports a quoted token value with spaces", () => {
+    const { text, facets } = parseSearchQuery('tool:"My Custom Tool" hello');
+    expect(facets.toolName).toBe("My Custom Tool");
+    expect(text).toBe("hello");
+  });
+
+  it("leaves unrecognized key:value, URLs, and ratios in the text verbatim", () => {
+    const { text, facets } = parseSearchQuery("foo:bar http://example.com 3:4 needle");
+    expect(facets).toEqual({});
+    expect(text).toBe("foo:bar http://example.com 3:4 needle");
+  });
+
+  it("a dangling recognized key with no value stays in the text (not dropped)", () => {
+    const { text, facets } = parseSearchQuery("tool: deploy");
+    // "tool:" has an empty value -> not a facet; the word "deploy" survives.
+    expect(facets).toEqual({});
+    expect(text).toBe("tool: deploy");
+  });
+
+  it("preserves quoted phrases, prefix*, and -exclusion in the free text", () => {
+    const { text, facets } = parseSearchQuery('role:user "exact phrase" prefix* -nope');
+    expect(facets.role).toBe("user");
+    expect(text).toBe('"exact phrase" prefix* -nope');
+  });
+
+  it("a query of ONLY tokens leaves empty text but populated facets", () => {
+    const { text, facets } = parseSearchQuery("tool:Bash role:assistant");
+    expect(text).toBe("");
+    expect(facets).toEqual({ toolName: "Bash", role: "assistant" });
+  });
+
+  it("mergeFacets lets caller facets win over inline tokens; preserves limit", () => {
+    const parsed = parseSearchQuery("role:user tool:Bash hi").facets;
+    const merged = mergeFacets(parsed, { role: "assistant", limit: 10 });
+    expect(merged.role).toBe("assistant"); // caller wins
+    expect(merged.toolName).toBe("Bash"); // inherited from token
+    expect(merged.limit).toBe(10);
+  });
+});
+
+describe("search integration with inline tokens (TranscriptIndex.search)", () => {
+  // Reuse the faceted fixture shape: two projects, distinct branches/timestamps,
+  // both containing "deploy", plus a Bash tool_use in sessA.
+  const build = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    writeFileSync(
+      path.join(proj, "sessA.jsonl"),
+      jl({
+        type: "user",
+        cwd: "/home/me/alpha",
+        gitBranch: "main",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        message: { role: "user", content: "how do I deploy alpha?" },
+      }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/alpha",
+          gitBranch: "main",
+          timestamp: "2026-01-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [
+              { type: "text", text: "Run the deploy script." },
+              { type: "tool_use", id: "tu1", name: "Bash", input: { command: "./deploy.sh alpha" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    writeFileSync(
+      path.join(proj, "sessB.jsonl"),
+      jl({
+        type: "user",
+        cwd: "/home/me/beta",
+        gitBranch: "feature",
+        timestamp: "2026-03-01T00:00:00.000Z",
+        message: { role: "user", content: "deploy beta to staging" },
+      }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/beta",
+          gitBranch: "feature",
+          timestamp: "2026-03-01T00:01:00.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "Sure, deploying beta now." }],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(path.join(proj, "sessA.jsonl"));
+    await idx.indexSession(path.join(proj, "sessB.jsonl"));
+    return idx;
+  };
+
+  it("plain query still matches both sessions (behavior unchanged)", async () => {
+    const idx = await build(tmp());
+    expect(idx.search("deploy").map((h) => h.sessionId).sort()).toEqual(["sessA", "sessB"]);
+    idx.close();
+  });
+
+  it("inline role: token narrows like the role facet", async () => {
+    const idx = await build(tmp());
+    // role:user -> only the user prompts match "deploy"
+    const hits = idx.search("deploy role:user");
+    expect(hits.map((h) => h.sessionId).sort()).toEqual(["sessA", "sessB"]);
+    expect(hits.every((h) => h.role === "user")).toBe(true);
+    idx.close();
+  });
+
+  it("inline tool: token restricts to the matching tool row", async () => {
+    const idx = await build(tmp());
+    const hits = idx.search("deploy tool:Bash");
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessA"]);
+    idx.close();
+  });
+
+  it("inline model:opus matches the full stored id via forgiving substring", async () => {
+    const idx = await build(tmp());
+    const hits = idx.search("deploy model:opus");
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessA"]);
+    // sonnet session is excluded
+    expect(idx.search("deploy model:sonnet").map((h) => h.sessionId)).toEqual(["sessB"]);
+    idx.close();
+  });
+
+  it("inline after:/before: narrow by session recency", async () => {
+    const idx = await build(tmp());
+    // sessB is 2026-03; sessA is 2026-01
+    expect(idx.search("deploy after:2026-02-01").map((h) => h.sessionId)).toEqual(["sessB"]);
+    expect(idx.search("deploy before:2026-02-01").map((h) => h.sessionId)).toEqual(["sessA"]);
+    idx.close();
+  });
+
+  it("caller facet overrides an inline token of the same key", async () => {
+    const idx = await build(tmp());
+    // Inline token says role:assistant, but the caller pins role:user -> caller wins,
+    // so we get the user prompts (both sessions) not the assistant replies.
+    const hits = idx.search("deploy role:assistant", { role: "user" });
+    expect(hits.every((h) => h.role === "user")).toBe(true);
+    expect(hits.map((h) => h.sessionId).sort()).toEqual(["sessA", "sessB"]);
+    idx.close();
+  });
+
+  it("caller exact model facet ANDs with an inline modelLike token", async () => {
+    const idx = await build(tmp());
+    // modelLike:opus (from token) AND model=claude-opus-4-8 (caller) both select sessA.
+    expect(idx.search("deploy model:opus", { model: "claude-opus-4-8" }).map((h) => h.sessionId)).toEqual([
+      "sessA",
+    ]);
+    // Contradictory: token modelLike:opus AND caller model=sonnet id -> no row.
+    expect(idx.search("deploy model:opus", { model: "claude-sonnet-4-6" })).toEqual([]);
+    idx.close();
+  });
+
+  it("facet-only query (no free text) lists sessions matching the facets", async () => {
+    const idx = await build(tmp());
+    const hits = idx.search("tool:Bash");
+    expect(hits.map((h) => h.sessionId)).toEqual(["sessA"]);
+    // a truly blank query is still empty
+    expect(idx.search("   ")).toEqual([]);
+    idx.close();
+  });
+});
+
+describe("searchSymbols (on-demand code-symbol search)", () => {
+  const writeProj = (dir: string) => {
+    const root = path.join(dir, "proj");
+    mkdirSync(root, { recursive: true });
+    mkdirSync(path.join(root, "src"), { recursive: true });
+    writeFileSync(
+      path.join(root, "src", "widget.ts"),
+      [
+        "export function renderWidget(x: number) { return x; }",
+        "export class WidgetStore {}",
+        "export interface WidgetProps { id: string }",
+        "export type WidgetId = string;",
+        "export const WIDGET_LIMIT = 50;",
+        "const internalHelper = () => 1;",
+      ].join("\n"),
+    );
+    writeFileSync(
+      path.join(root, "src", "service.py"),
+      ["def fetch_widget(id):", "    return id", "class WidgetService:", "    pass"].join("\n"),
+    );
+    // Noise dirs + a binary-ish file that must be skipped.
+    mkdirSync(path.join(root, "node_modules", "dep"), { recursive: true });
+    writeFileSync(path.join(root, "node_modules", "dep", "index.js"), "function shouldNotMatch(){}");
+    mkdirSync(path.join(root, ".git"), { recursive: true });
+    writeFileSync(path.join(root, ".git", "config.ts"), "function alsoSkipped(){}");
+    writeFileSync(path.join(root, "logo.png"), "binarygibberish function nope(){}");
+    return root;
+  };
+
+  it("finds declarations by substring across languages", async () => {
+    const root = writeProj(tmp());
+    const hits = await searchSymbols(root, "widget");
+    const byName = new Map(hits.map((h) => [h.name, h]));
+    expect(byName.has("renderWidget")).toBe(true);
+    expect(byName.get("renderWidget")!.kind).toBe("function");
+    expect(byName.get("WidgetStore")!.kind).toBe("class");
+    expect(byName.get("WidgetProps")!.kind).toBe("interface");
+    expect(byName.get("WidgetId")!.kind).toBe("type");
+    expect(byName.get("WIDGET_LIMIT")!.kind).toBe("const");
+    expect(byName.get("fetch_widget")!.kind).toBe("def");
+    expect(byName.get("WidgetService")!.kind).toBe("class");
+    // every hit has a 1-based line and an absolute file path
+    for (const h of hits) {
+      expect(h.line).toBeGreaterThan(0);
+      expect(path.isAbsolute(h.file)).toBe(true);
+    }
+  });
+
+  it("reports the correct 1-based line number", async () => {
+    const root = writeProj(tmp());
+    const hits = await searchSymbols(root, "renderWidget");
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.line).toBe(1);
+    expect(hits[0]!.name).toBe("renderWidget");
+  });
+
+  it("skips node_modules, .git, and binary/non-source files", async () => {
+    const root = writeProj(tmp());
+    const names = (await searchSymbols(root, "")).map((h) => h.name);
+    expect(names).not.toContain("shouldNotMatch"); // node_modules
+    expect(names).not.toContain("alsoSkipped"); // .git
+    expect(names).not.toContain("nope"); // logo.png (non-source ext)
+  });
+
+  it("a blank needle lists every matched declaration in scope", async () => {
+    const root = writeProj(tmp());
+    const names = (await searchSymbols(root, "")).map((h) => h.name).sort();
+    expect(names).toContain("internalHelper");
+    expect(names).toContain("renderWidget");
+    expect(names).toContain("fetch_widget");
+  });
+
+  it("respects the limit cap", async () => {
+    const root = writeProj(tmp());
+    const hits = await searchSymbols(root, "widget", { limit: 2 });
+    expect(hits).toHaveLength(2);
+  });
+
+  it("returns [] for a non-existent directory (best-effort, no throw)", async () => {
+    expect(await searchSymbols("/no/such/dir/anywhere", "x")).toEqual([]);
+  });
+});
+
+describe("Engine.searchSymbols (allowlist enforcement)", () => {
+  // Index a session whose cwd IS the project root, so getProjects() reports that cwd
+  // as a known project; symbol search must then be allowed under it and refused
+  // elsewhere.
+  const setup = async (dir: string) => {
+    const projectRoot = path.join(dir, "myproj");
+    mkdirSync(path.join(projectRoot, "src"), { recursive: true });
+    writeFileSync(
+      path.join(projectRoot, "src", "app.ts"),
+      "export function launchApp() {}\nexport class AppController {}",
+    );
+    // A sibling directory that is NOT a known project (must be refused).
+    const outside = path.join(dir, "outside");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, "secret.ts"), "export function secretFn() {}");
+
+    // Index a transcript whose true cwd === projectRoot so it becomes a known project.
+    const txDir = path.join(dir, "-tx");
+    mkdirSync(txDir, { recursive: true });
+    writeFileSync(
+      path.join(txDir, "sess.jsonl"),
+      jl({ type: "user", cwd: projectRoot, message: { role: "user", content: "build the app" } }),
+    );
+    const eng = new Engine(path.join(dir, "i.db"));
+    await eng.index.indexSession(path.join(txDir, "sess.jsonl"));
+    return { eng, projectRoot, outside };
+  };
+
+  it("allows symbol search inside a known project cwd", async () => {
+    const { eng, projectRoot } = await setup(tmp());
+    const hits = await eng.searchSymbols(projectRoot, "app");
+    expect(hits.map((h) => h.name).sort()).toEqual(["AppController", "launchApp"]);
+    eng.close();
+  });
+
+  it("allows search in a nested subdirectory of a known project", async () => {
+    const { eng, projectRoot } = await setup(tmp());
+    const hits = await eng.searchSymbols(path.join(projectRoot, "src"), "launch");
+    expect(hits.map((h) => h.name)).toEqual(["launchApp"]);
+    eng.close();
+  });
+
+  it("refuses a directory that is not under any known project (returns [])", async () => {
+    const { eng, outside } = await setup(tmp());
+    expect(await eng.searchSymbols(outside, "secret")).toEqual([]);
+    eng.close();
+  });
+
+  it("does NOT treat a sibling with a shared prefix as inside the project", async () => {
+    const { eng, projectRoot } = await setup(tmp());
+    // /…/myproj is known; /…/myproj-evil shares the string prefix but is a sibling.
+    const evil = projectRoot + "-evil";
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(path.join(evil, "x.ts"), "export function evilFn() {}");
+    expect(await eng.searchSymbols(evil, "evil")).toEqual([]);
+    eng.close();
+  });
+
+  it("returns [] for a blank cwd", async () => {
+    const { eng } = await setup(tmp());
+    expect(await eng.searchSymbols("  ", "x")).toEqual([]);
+    eng.close();
   });
 });

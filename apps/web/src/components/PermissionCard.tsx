@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { ShieldQuestion, Check, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { PermissionCardBody } from "./PermissionCardBody";
+import { DenyFeedback } from "./DenyFeedback";
 
 /**
  * A pending tool-permission request, mirroring the {t:"permission-request"}
@@ -28,6 +30,13 @@ export type PermissionScope = "once" | "session" | "always";
 export interface PermissionDecision {
   decision: "allow" | "deny";
   scope: PermissionScope;
+  /**
+   * Optional free-text feedback that rides along on a DENY, sent as `message` in
+   * the permission-response so a server on the persistent path can hand the
+   * reason back to the model instead of a bare refusal. Absent for allow / a
+   * plain deny.
+   */
+  message?: string;
 }
 
 /** Allow buttons, one per scope — the label doubles as the affordance. */
@@ -55,6 +64,9 @@ export function PermissionCard({
   request: PendingPermission;
   onDecision: (id: string, decision: PermissionDecision) => void;
 }) {
+  // When true, the Deny button has opened the optional feedback box (the buttons
+  // row hides while it's up). Reset implicitly when the card unmounts on decide.
+  const [denying, setDenying] = useState(false);
   return (
     <div className="mx-4 my-2 overflow-hidden rounded-xl border border-amber-700/50 bg-amber-500/5">
       <div className="flex items-center gap-2 border-b border-amber-700/30 px-3 py-2">
@@ -82,37 +94,49 @@ export function PermissionCard({
         </ul>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
-        <button
-          onClick={() => onDecision(request.id, { decision: "deny", scope: "once" })}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1 text-[12px] font-medium text-zinc-300 ring-1 ring-zinc-700 transition hover:bg-zinc-700 hover:text-zinc-100"
-        >
-          <X className="h-3.5 w-3.5" />
-          Deny
-        </button>
+      {/* Deny opens an optional feedback box (DenyFeedback); confirming there
+          dispatches the deny with the typed message. Allow buttons decide
+          immediately. */}
+      {denying ? (
+        <DenyFeedback
+          onConfirm={(message) =>
+            onDecision(request.id, { decision: "deny", scope: "once", message })
+          }
+          onCancel={() => setDenying(false)}
+        />
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+          <button
+            onClick={() => setDenying(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1 text-[12px] font-medium text-zinc-300 ring-1 ring-zinc-700 transition hover:bg-zinc-700 hover:text-zinc-100"
+          >
+            <X className="h-3.5 w-3.5" />
+            Deny
+          </button>
 
-        <div className="ml-auto flex items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] text-amber-200/70">Allow:</span>
-          {ALLOW_SCOPES.map(({ scope, label, title }, i) => (
-            <button
-              key={scope}
-              title={title}
-              onClick={() => onDecision(request.id, { decision: "allow", scope })}
-              className={cn(
-                "inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-white transition",
-                // The primary "Once" is solid; the broader scopes are tinted so
-                // the safest choice reads as the default.
-                i === 0
-                  ? "rounded-lg bg-emerald-600 hover:bg-emerald-500"
-                  : "rounded-lg bg-emerald-600/15 text-emerald-200 ring-1 ring-emerald-600/40 hover:bg-emerald-600/25",
-              )}
-            >
-              {i === 0 ? <Check className="h-3.5 w-3.5" /> : null}
-              {label}
-            </button>
-          ))}
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className="mr-0.5 text-[11px] text-amber-200/70">Allow:</span>
+            {ALLOW_SCOPES.map(({ scope, label, title }, i) => (
+              <button
+                key={scope}
+                title={title}
+                onClick={() => onDecision(request.id, { decision: "allow", scope })}
+                className={cn(
+                  "inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-white transition",
+                  // The primary "Once" is solid; the broader scopes are tinted so
+                  // the safest choice reads as the default.
+                  i === 0
+                    ? "rounded-lg bg-emerald-600 hover:bg-emerald-500"
+                    : "rounded-lg bg-emerald-600/15 text-emerald-200 ring-1 ring-emerald-600/40 hover:bg-emerald-600/25",
+                )}
+              >
+                {i === 0 ? <Check className="h-3.5 w-3.5" /> : null}
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

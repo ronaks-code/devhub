@@ -22,6 +22,8 @@ import type {
   AgentDef,
   DailyUsage,
   Worktree,
+  ClaudeMdDoc,
+  ClaudeMdWriteResult,
 } from "./types";
 
 async function get<T>(url: string): Promise<T> {
@@ -179,6 +181,37 @@ const config = {
     get<AgentDef[]>(
       "/api/config/agents" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
     ),
+
+  /**
+   * Read a CLAUDE.md. Global scope reads ~/.claude/CLAUDE.md; with `scope:
+   * "project"` and a (known) project `cwd` it reads <cwd>/CLAUDE.md. The server
+   * returns `{ scope, filePath: null, content: "" }` when the file doesn't exist
+   * yet, so callers treat an empty doc as a "create it" starting point. Backed by
+   * GET /api/config/claudemd.
+   */
+  getClaudeMd: (scope: ConfigScope = "global", cwd?: string) =>
+    get<ClaudeMdDoc>(
+      "/api/config/claudemd" +
+        ((): string => {
+          const qs = new URLSearchParams();
+          qs.set("scope", scope);
+          if (scope === "project" && cwd) qs.set("cwd", cwd);
+          return `?${qs.toString()}`;
+        })(),
+    ),
+
+  /**
+   * Write a CLAUDE.md via PUT /api/config/claudemd. Global scope writes
+   * ~/.claude/CLAUDE.md; project scope writes <cwd>/CLAUDE.md (cwd validated
+   * server-side against known projects). The server does the safe write
+   * (.bak backup -> atomic write); the web side only POSTs the new contents.
+   */
+  putClaudeMd: (scope: ConfigScope, content: string, cwd?: string) =>
+    send<ClaudeMdWriteResult>("/api/config/claudemd", "PUT", {
+      scope,
+      content,
+      ...(scope === "project" && cwd ? { cwd } : {}),
+    }),
 };
 
 export const api = {

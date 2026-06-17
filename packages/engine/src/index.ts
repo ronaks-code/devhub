@@ -23,6 +23,8 @@ import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { listMcpServers } from "./config/index.js";
 import { testMcpServer } from "./config/mcp-test.js";
 import type { McpTestResult } from "./config/mcp-test.js";
+import { searchSymbols } from "./symbols.js";
+import type { SymbolHit, SymbolSearchOptions } from "./symbols.js";
 import type {
   AppSettings,
   EngineEvent,
@@ -251,6 +253,41 @@ export class Engine {
   }
 
   /**
+   * On-demand code-symbol search within ONE project tree: greps the project's source
+   * files for declaration-like matches (function/class/const/def/type/interface/...)
+   * whose name contains `q`, returning `[{ name, kind, file, line }]`. Lightweight —
+   * there is NO persistent symbol index; each call walks the tree under a capped
+   * budget (skipping node_modules/.git/build dirs and binaries).
+   *
+   * ALLOWLIST: `cwd` must be a known project directory — exactly one of (or nested
+   * under) a cwd the index has seen via {@link getProjects}. A path outside every
+   * known project is rejected with `[]` (never read), so this can't be turned into an
+   * arbitrary-filesystem reader. Returns `[]` for a blank/unknown cwd.
+   */
+  async searchSymbols(cwd: string, q: string, opts: SymbolSearchOptions = {}): Promise<SymbolHit[]> {
+    const target = (cwd ?? "").trim();
+    if (!target || !this.isKnownProjectPath(target)) return [];
+    return searchSymbols(target, q, opts);
+  }
+
+  /**
+   * True when `target` is, or is nested under, a project cwd the index knows about
+   * (the symbol-search allowlist). Both sides are resolved and compared on path
+   * SEGMENT boundaries so a sibling like `/home/me/widget-shop-evil` is NOT treated
+   * as inside `/home/me/widget-shop`. Archived projects still count — the user can
+   * search their code.
+   */
+  private isKnownProjectPath(target: string): boolean {
+    const resolved = path.resolve(target);
+    for (const p of this.index.getProjects({ includeArchived: true })) {
+      if (!p.cwd) continue;
+      const root = path.resolve(p.cwd);
+      if (resolved === root || resolved.startsWith(root + path.sep)) return true;
+    }
+    return false;
+  }
+
+  /**
    * Where this calendar month's APPROXIMATE spend sits relative to the user's soft
    * monthly budget (`settings.monthlyBudgetUsd`). Month-to-date cost is the current
    * UTC month's slice of the {@link dailyUsage} series; `alert` is "warn" at >=80%
@@ -463,6 +500,10 @@ export class Engine {
 export { TranscriptIndex } from "./index-db.js";
 export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";
+export { parseSearchQuery, mergeFacets } from "./query-parser.js";
+export type { ParsedQuery } from "./query-parser.js";
+export { searchSymbols } from "./symbols.js";
+export type { SymbolHit, SymbolKind, SymbolSearchOptions } from "./symbols.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { dailyUsage } from "./rollups.js";

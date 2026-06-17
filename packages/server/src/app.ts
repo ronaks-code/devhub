@@ -20,6 +20,8 @@ import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerAssetsRoutes } from "./routes/assets.js";
 import { registerPrRoutes } from "./routes/pr.js";
 import { registerSavedViewsRoutes } from "./routes/saved-views.js";
+import { registerSummaryRoutes } from "./routes/summary.js";
+import { registerSymbolsRoutes } from "./routes/symbols.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -109,6 +111,10 @@ export function buildApp(opts: BuildOptions = {}): {
   registerPrRoutes(app, engine);
 
   registerSavedViewsRoutes(app, engine);
+
+  registerSummaryRoutes(app, engine);
+
+  registerSymbolsRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

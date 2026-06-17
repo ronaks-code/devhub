@@ -4,6 +4,7 @@ import { cn } from "../lib/utils";
 import { DiffView, parseEditInput } from "./DiffView";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
+import { ReadCard } from "./tools/ReadCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -102,6 +103,12 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
   // its fallback when the input doesn't carry a string command.
   if (name === "Bash") {
     return <BashCard block={block} fallback={() => <GenericToolCard block={block} live={live} />} />;
+  }
+
+  // Read gets a file viewer: path header + syntax-highlighted, line-numbered
+  // content. Falls back to the generic card when the input has no file_path.
+  if (name === "Read") {
+    return <ReadCard block={block} fallback={() => <GenericToolCard block={block} live={live} />} />;
   }
 
   const result = block.result;

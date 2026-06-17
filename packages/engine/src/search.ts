@@ -16,6 +16,7 @@
  */
 import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
 import { projectName } from "./paths.js";
+import { parseSearchQuery } from "./query-parser.js";
 import type { SearchHit } from "./types.js";
 
 /** Optional facet filters narrowing a search. All are AND-ed onto the text match. */
@@ -38,6 +39,14 @@ export interface SearchFacets {
   tag?: string;
   /** Only sessions that ran on this model id (exact match against sessions.model). */
   model?: string;
+  /**
+   * Forgiving model filter: matches any session whose `sessions.model` CONTAINS this
+   * value (case-insensitive substring), so a short alias like "opus" matches a stored
+   * id like "claude-opus-4-8". Set by the inline `model:` query token; the exact-match
+   * {@link SearchFacets.model} stays reserved for programmatic callers. When both are
+   * present they AND together.
+   */
+  modelLike?: string;
 }
 
 /** Default/clamp bounds for the result cap. */
@@ -194,6 +203,14 @@ function facetClauses(
   if (facets.projectId) add((ph) => `s.projectId = ${ph}`, facets.projectId);
   if (facets.gitBranch) add((ph) => `s.gitBranch = ${ph}`, facets.gitBranch);
   if (facets.model) add((ph) => `s.model = ${ph}`, facets.model);
+  // Forgiving model match: case-insensitive substring on the stored id. LIKE is
+  // ASCII-case-insensitive in SQLite, and model ids are ASCII, so a lower-cased
+  // needle wrapped in %…% matches regardless of the stored id's case. `\`/`%`/`_`
+  // are escaped so a value can't smuggle wildcards.
+  if (facets.modelLike) {
+    const escaped = facets.modelLike.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+    add((ph) => `s.model LIKE ${ph} ESCAPE '\\'`, `%${escaped}%`);
+  }
   if (facets.since) add((ph) => `s.lastTs >= ${ph}`, facets.since);
   if (facets.until) add((ph) => `s.lastTs <= ${ph}`, facets.until);
   return { clauses, params };
@@ -234,17 +251,94 @@ export class MessageSearch {
 
   /**
    * Cross-project full-text search. Returns the best matching hit per session
-   * (deduped). Facets (projectId/role/toolName/since/until/gitBranch/tag) are
+   * (deduped). Facets (projectId/role/toolName/since/until/gitBranch/tag/model) are
    * optional and AND-ed onto the text match; `{ limit }` alone keeps the original
    * behavior.
+   *
+   * The query string also understands inline filter tokens (e.g.
+   * `tool:Bash role:assistant after:2026-01-01 model:opus free text`): recognized
+   * tokens are stripped into facets and the rest stays the FTS query. Caller-supplied
+   * facets take precedence over the same facet typed inline, and a plain query with
+   * no tokens is unchanged. See {@link parseSearchQuery}.
    */
   search(query: string, facets: SearchFacets = {}): SearchHit[] {
-    const q = query.trim();
-    if (!q) return [];
-    const lim = Math.max(1, Math.min(facets.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+    const { text, facets: parsed } = parseSearchQuery(query);
+    // Caller facets win over inline tokens; the caller's `limit` is preserved (the
+    // parser never sets it).
+    const merged: SearchFacets = { ...parsed, ...facets };
+    const q = text.trim();
+    const lim = Math.max(1, Math.min(merged.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+    if (!q) {
+      // No free text left. If the user typed facet-only tokens (e.g. "tool:Bash"),
+      // list the sessions matching those facets, newest first; a truly blank query
+      // (no text AND no recognized tokens) still returns nothing, as before.
+      if (Object.keys(parsed).length === 0) return [];
+      return this.searchFacetsOnly(lim, merged);
+    }
     return this.searchMode === "fts5"
-      ? this.searchFts(q, lim, facets)
-      : this.searchLike(q, lim, facets);
+      ? this.searchFts(q, lim, merged)
+      : this.searchLike(q, lim, merged);
+  }
+
+  /**
+   * Facet-only listing: the user typed recognized filter tokens but no free text
+   * (e.g. "tool:Bash role:assistant"). There is nothing to text-match, so we return
+   * the best (newest) eligible mirrored row per session that satisfies the facets,
+   * ordered by session recency. The mirrored-text table is whichever backend is
+   * active (`messages_fts` carries the same columns and is selectable without MATCH);
+   * either way the row shape is identical.
+   */
+  private searchFacetsOnly(limit: number, facets: SearchFacets): SearchHit[] {
+    const textTable = this.searchMode === "fts5" ? "messages_fts" : "messages_text";
+    // role/toolName filter the mirrored row (alias `t`); session-level facets join
+    // `sessions` (alias `s`). LIKE-style anonymous placeholders throughout.
+    const facet = facetClauses(facets, "t", () => "?");
+    const clauses = [...facet.clauses];
+    const params = [...facet.params];
+
+    const tag = tagClause(facets.tag, "tm", "?");
+    if (tag) {
+      clauses.push(tag.clause);
+      params.push(tag.param);
+    }
+    const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = t.sessionId" : "";
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
+    const rows = this.db
+      .prepare(
+        `WITH matched AS (
+           SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.seq AS seq, t.text AS text,
+                  ROW_NUMBER() OVER (PARTITION BY t.sessionId ORDER BY t.seq DESC) AS rn
+           FROM ${textTable} t
+           JOIN sessions s ON s.sessionId = t.sessionId${metaJoin}
+           ${where}
+         )
+         SELECT mt.sessionId AS sessionId, mt.role AS role, mt.toolName AS toolName, mt.seq AS seq, mt.text AS text,
+                s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
+                s.title AS title, s.titleSource AS titleSource,
+                m.customTitle AS customTitle
+         FROM matched mt
+         JOIN sessions s ON s.sessionId = mt.sessionId
+         LEFT JOIN session_meta m ON m.sessionId = mt.sessionId
+         WHERE mt.rn = 1
+         ORDER BY s.lastTs DESC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as unknown as Array<{
+      sessionId: string;
+      role: string;
+      toolName: string | null;
+      seq: number | null;
+      text: string | null;
+      projectId: string | null;
+      cwd: string | null;
+      lastTs: string | null;
+      title: string | null;
+      titleSource: string | null;
+      customTitle: string | null;
+    }>;
+    // No text match, so the excerpt is just the head of the row's mirrored text.
+    return rows.map((r) => toHit(r, (r.text ?? "").slice(0, LIKE_EXCERPT_RADIUS * 2).trim()));
   }
 
   /**
