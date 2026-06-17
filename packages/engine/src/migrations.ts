@@ -1,0 +1,65 @@
+/**
+ * Schema migrations gated by SQLite's `PRAGMA user_version`.
+ *
+ * The base schema is still created with CREATE TABLE IF NOT EXISTS in index-db.ts
+ * (so a brand-new DB stands up fully). Migrations here are ADDITIVE ONLY — they
+ * add columns / indexes / tables on top of an already-populated DB and never drop
+ * or recreate a table that holds data. Each step must be idempotent (guarded by
+ * IF NOT EXISTS or a column-presence check) so re-running is harmless.
+ *
+ * To add a migration: append a step to MIGRATIONS. Its index+1 becomes the new
+ * user_version. Never reorder or remove existing steps.
+ */
+import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
+
+type Migration = (db: SqliteDatabase) => void;
+
+/** True when `table` already has a column named `column`. */
+function hasColumn(db: SqliteDatabase, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  return rows.some((r) => r.name === column);
+}
+
+/**
+ * Ordered, append-only list of migration steps. Step at index i takes the DB from
+ * user_version i to i+1. Keep every step idempotent.
+ */
+const MIGRATIONS: Migration[] = [
+  // v1: settings key/value table. Idempotent via IF NOT EXISTS.
+  // (SettingsStore also creates this lazily; defining it here keeps user_version
+  //  meaningful and lets future settings-related migrations chain off a known base.)
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );`);
+  },
+];
+
+/**
+ * Bring `db` up to the latest schema version. Reads PRAGMA user_version, runs each
+ * pending step inside its own transaction, then bumps user_version. Safe to call on
+ * every startup; a fully-migrated DB does no work.
+ */
+export function runMigrations(db: SqliteDatabase): void {
+  const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
+  let current = row ? Number(row.user_version) : 0;
+
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    const step = MIGRATIONS[v]!;
+    db.exec("BEGIN");
+    try {
+      step(db);
+      // user_version doesn't accept bound params; v+1 is a trusted integer.
+      db.exec(`PRAGMA user_version = ${v + 1}`);
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+    current = v + 1;
+  }
+}
+
+// Re-export so callers can guard column-adding migrations without re-implementing.
+export { hasColumn };

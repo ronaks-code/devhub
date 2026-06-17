@@ -16,6 +16,41 @@ const BASE_TAIL = 2 * 1024 * 1024;
 
 type Tab = "browse" | "chat" | "dashboard";
 
+// Lightweight UI-state persistence: remembers the active tab and selected
+// project across reloads. Guarded for SSR (no window) and malformed JSON.
+const UI_STATE_KEY = "claude-ui:ui";
+
+interface PersistedUiState {
+  tab?: Tab;
+  projectId?: string | null;
+  // Reserved for future use; persisted only when present so existing config survives.
+  theme?: string;
+  density?: string;
+}
+
+function readUiState(): PersistedUiState {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(UI_STATE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as PersistedUiState) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiState(state: PersistedUiState): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
+  } catch {
+    /* storage unavailable or quota exceeded — non-fatal */
+  }
+}
+
+const VALID_TABS: readonly Tab[] = ["browse", "chat", "dashboard"];
+
 function TopBar({
   tab,
   onTab,
@@ -83,7 +118,7 @@ function TopBar({
 
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(() => readUiState().projectId ?? null);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [tailBytes, setTailBytes] = useState<number | undefined>(undefined);
@@ -91,7 +126,10 @@ export default function App() {
   const [loadingPage, setLoadingPage] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [sessionCount, setSessionCount] = useState(0);
-  const [tab, setTab] = useState<Tab>("browse");
+  const [tab, setTab] = useState<Tab>(() => {
+    const t = readUiState().tab;
+    return t && VALID_TABS.includes(t) ? t : "browse";
+  });
   const [searchOpen, setSearchOpen] = useState(false);
   // Seeds ChatPane to resume an existing session (--resume) after a handoff
   // from the Browse transcript. Cleared once consumed.
@@ -99,10 +137,19 @@ export default function App() {
   // Carries a session to auto-select after a search-driven project switch.
   const pendingSessionRef = useRef<string | null>(null);
 
+  // Persist UI state (active tab + selected project) so a reload lands the user
+  // back where they were. Merge over any existing keys (e.g. theme/density) so
+  // we never clobber settings this component doesn't own.
+  useEffect(() => {
+    writeUiState({ ...readUiState(), tab, projectId });
+  }, [tab, projectId]);
+
   const refreshProjects = useCallback(async () => {
     const p = await api.projects();
     setProjects(p);
-    setProjectId((prev) => prev ?? p[0]?.id ?? null);
+    // Keep the current selection when it still exists (covers a restored
+    // projectId); otherwise fall back to the first project.
+    setProjectId((prev) => (prev && p.some((x) => x.id === prev) ? prev : p[0]?.id ?? null));
   }, []);
 
   const refreshSessions = useCallback(async (pid: string) => {

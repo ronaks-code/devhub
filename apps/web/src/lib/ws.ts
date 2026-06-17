@@ -35,12 +35,46 @@ export function openChat(handlers: ChatHandlers): ChatConn {
   const queue: string[] = [];
   let closed = false;
 
+  // Coalesce a fast {t:"delta"} token stream: accumulate chunks and flush the
+  // concatenated text once per animation frame, so we call onDelta a few times
+  // per frame instead of once per token (which would thrash React renders).
+  let deltaBuf = "";
+  let rafId: number | null = null;
+  const canRaf =
+    typeof window !== "undefined" && typeof window.requestAnimationFrame === "function";
+
+  const flushDeltas = () => {
+    if (rafId != null) {
+      window.cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    if (deltaBuf.length === 0) return;
+    const text = deltaBuf;
+    deltaBuf = "";
+    handlers.onDelta?.(text);
+  };
+
+  const scheduleFlush = () => {
+    if (!canRaf) {
+      // No rAF available (e.g. SSR/tests): flush synchronously, preserving order.
+      flushDeltas();
+      return;
+    }
+    if (rafId != null) return;
+    rafId = window.requestAnimationFrame(() => {
+      rafId = null;
+      flushDeltas();
+    });
+  };
+
   ws.onopen = () => {
     for (const raw of queue.splice(0)) ws.send(raw);
     handlers.onOpen?.();
   };
 
   ws.onclose = () => {
+    // Emit any buffered remainder before signalling close, preserving order.
+    flushDeltas();
     handlers.onClose?.();
   };
 
@@ -55,6 +89,10 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     } catch {
       return; // ignore malformed frames
     }
+    // Any non-delta frame must observe the full streamed text first: flush the
+    // buffer synchronously so e.g. a final "message" sees the live bubble that
+    // the deltas built up, keeping handler ordering identical to the wire order.
+    if (msg.t !== "delta") flushDeltas();
     switch (msg.t) {
       case "session":
         handlers.onSession?.(msg.sessionId, msg.init);
@@ -63,7 +101,8 @@ export function openChat(handlers: ChatHandlers): ChatConn {
         handlers.onMessage?.(msg.message);
         break;
       case "delta":
-        handlers.onDelta?.(msg.text);
+        deltaBuf += msg.text;
+        scheduleFlush();
         break;
       case "status":
         handlers.onStatus?.(msg.kind);
@@ -90,6 +129,12 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     close() {
       closed = true;
       queue.length = 0;
+      // Cancel any pending frame; flush the remainder so no streamed text is lost.
+      if (rafId != null && canRaf) {
+        window.cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      flushDeltas();
       try {
         ws.close();
       } catch {

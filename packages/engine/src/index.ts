@@ -9,7 +9,9 @@ import { TranscriptIndex } from "./index-db.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { liveSessionsDir } from "./paths.js";
 import { readSessionMessages, listSubagentFiles, normalizeLine, streamRawLines } from "./parser.js";
+import type { SettingsStore } from "./settings.js";
 import type {
+  AppSettings,
   EngineEvent,
   NormalizedMessage,
   ProjectSummary,
@@ -29,13 +31,27 @@ function isInternalCwd(cwd: string): boolean {
 
 export class Engine {
   readonly index: TranscriptIndex;
+  /** User preferences (shares the index's DB connection). */
+  readonly settings: SettingsStore;
   private emitter = new EventEmitter();
   private indexing = false;
   ready = false;
 
   constructor(dbPath?: string) {
     this.index = new TranscriptIndex(dbPath);
+    this.settings = this.index.settings;
     this.emitter.setMaxListeners(0);
+  }
+
+  /** Full app settings (stored values layered over defaults). */
+  getSettings(): AppSettings {
+    return this.settings.getAll();
+  }
+
+  /** Merge a partial settings update; only provided keys are written. */
+  setSettings(partial: Partial<AppSettings>): AppSettings {
+    this.settings.setAll(partial);
+    return this.settings.getAll();
   }
 
   /** Subscribe to engine events (index progress, session add/change). Returns an unsubscribe fn. */
@@ -68,7 +84,13 @@ export class Engine {
       const sorted = withMtime.map((x) => x.f);
       let done = 0;
       for (const f of sorted) {
-        await this.index.indexSession(f);
+        // Isolate per-file failures: one corrupt/locked transcript logs a warning
+        // and is skipped, instead of aborting the entire index pass.
+        try {
+          await this.index.indexSession(f);
+        } catch (err) {
+          console.warn(`[engine] skipping unindexable session ${f}:`, err);
+        }
         done++;
         if (done % 10 === 0 || done === sorted.length) {
           this.emit({ kind: "index-progress", done, total: sorted.length });
@@ -244,6 +266,7 @@ export class Engine {
 }
 
 export { TranscriptIndex } from "./index-db.js";
+export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";
 export * as paths from "./paths.js";

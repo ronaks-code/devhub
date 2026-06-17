@@ -1,0 +1,1956 @@
+{
+  "totalSelected": 200,
+  "notes": "De-duplicated heavily: many areas repeated the same idea (WebSocket auto-reconnect appeared in chat-streaming, data-integrity, running-sessions; queue-while-running appeared in chat-streaming + chat-composer + running-sessions; LCS/word-diff appeared in transcript-render + polish; persistent stream-json driver appeared 4x; settings persistence + configurable host appeared in polish + platform-meta + faces; light theme + semantic tokens appeared 3x; schema-version/migrations 3x; FTS column-drift repair 2x; image inline render 3x; archive 2x). Each merged idea is represented once and assigned to the layer/file that truly owns it. Selection favored high-impact/low-effort and foundational enablers. Scheduling: foundational modules first (settings store + AppSettings, multi-source schema + migrations, persistent stream-json driver/control-protocol, durable archive, GitService, config module) since permission-UI, git-UI and config-UI all depend on them. Within EACH wave every item owns a DISTINCT file/dir; heavily-contended web components (ChatPane, MessageView, DiffView, Markdown, SessionsPane, SearchPalette, DashboardPane, App, ui, lib/ws) appear at most once per wave with recurring work pushed later; new self-contained files maximize parallelism. ownsFiles lists the primary file each agent edits plus brand-new files it creates.",
+  "waves": [
+    {
+      "wave": 1,
+      "theme": "Foundations: settings store, schema/migrations, perf PRAGMAs, error-safety",
+      "items": [
+        {
+          "title": "Settings persistence layer in engine (settings table + typed AppSettings)",
+          "area": "platform-meta",
+          "blurb": "Key/value settings store in index.db with a typed AppSettings interface in pure types, the single source of truth every face reads.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/settings.ts (new) + types.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Schema version + ordered migration runner (PRAGMA user_version)",
+          "area": "engine-perf-archive",
+          "blurb": "Versioned migration table so column/FTS changes evolve without nuking index.db; gates tags, sources, settings, model columns.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/migrations.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Tune SQLite PRAGMAs (synchronous=NORMAL, busy_timeout, mmap, cache, foreign_keys)",
+          "area": "engine-perf-archive",
+          "blurb": "Cheap one-line PRAGMAs at DB open that cut index-write time and query latency and avoid SQLITE_BUSY throws under watcher+indexAll concurrency.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/index-db.ts",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Per-file try/catch in indexAll so one bad transcript can't abort the index",
+          "area": "data-integrity-tests",
+          "blurb": "Wrap indexSession in the indexAll loop; log+skip failures so a single corrupt file never leaves the index half-built.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/index.ts",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Type-safe request schemas on server routes (replace as any)",
+          "area": "data-integrity-tests",
+          "blurb": "Fastify JSON schemas validate/clamp query+body so bad params return 400 instead of NaN flowing into the engine.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/app.ts",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Discriminated-union runtime guard for incoming ClientMsg",
+          "area": "data-integrity-tests",
+          "blurb": "Validate WS frame t/fields so a malformed prompt can't spawn a turn with undefined cwd.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/ws.ts",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Persist UI state to localStorage (active tab, last project, theme, density)",
+          "area": "platform-meta",
+          "blurb": "Remember last tab/project/view so the app reopens where you left off instead of resetting to browse+first project.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/App.tsx",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Coalesce/buffer streamed deltas with rAF flush in the client",
+          "area": "chat-streaming",
+          "blurb": "Batch incoming text_deltas into a ref and flush on requestAnimationFrame so a fast token stream doesn't thrash React.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/ws.ts",
+          "impact": 5,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 2,
+      "theme": "Enablers: persistent stream-json driver, durable archive, multi-source schema, currency helpers",
+      "items": [
+        {
+          "title": "Persistent stream-json driver process (control-protocol foundation)",
+          "area": "permissions-safety",
+          "blurb": "Run claude --input-format stream-json --output-format stream-json once per session instead of -p per turn \u2014 the prerequisite for inline permissions, steering, and lower latency.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/cli.ts",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Durable full-transcript archive beating the 30-day delete + watcher unlink handling",
+          "area": "engine-perf-archive",
+          "blurb": "Copy/compress raw JSONL into ~/.claude-ui and handle file deletion + startup reconciliation so sessions survive auto-delete and vanished files don't linger.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/archive.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Multi-CLI SourceKind in discovery (claude/codex/gemini/cursor)",
+          "area": "platform-meta",
+          "blurb": "Add a source concept to discovery so other CLIs' transcripts can be ingested under one index.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/discovery.ts",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Cost engine: token-to-dollars pricing table per model",
+          "area": "dashboard-analytics",
+          "blurb": "Central pricing map (input/output/cache per model) so every face can show real $ instead of raw tokens.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/pricing.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Extend WS protocol with permission-request/response frames",
+          "area": "permissions-safety",
+          "blurb": "Typed ServerMsg permission-request (id, toolName, toolInput, suggestions) + ClientMsg permission-response so server<->web speak permissions natively.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/types.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "GET/PUT /api/settings endpoints",
+          "area": "platform-meta",
+          "blurb": "REST surface over the engine settings store so web/desktop persist prefs.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/settings.ts (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Currency/number formatting helpers (formatUsd, formatTokens)",
+          "area": "dashboard-analytics",
+          "blurb": "Shared $/token formatters so every face renders money consistently.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/format.ts",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Virtualize the ChatPane message list",
+          "area": "chat-streaming",
+          "blurb": "Reuse the TranscriptPane virtualizer so long live chats stay smooth and don't re-layout every node per token.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ChatPane.tsx",
+          "impact": 5,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 3,
+      "theme": "Settings UI, GitService, config module, draft persistence, real diff",
+      "items": [
+        {
+          "title": "GitService engine module (status/diff/branch/log via child_process)",
+          "area": "git-integration",
+          "blurb": "Foundational module running git per project cwd returning typed status/diff/branch/log \u2014 every git feature builds on it.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/git.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Config tab + engine config module (reads/writes real Claude files)",
+          "area": "claude-config",
+          "blurb": "Typed config API over settings.json/.claude.json/hooks/agents/skills/commands/CLAUDE.md/plugins mirroring the Engine class.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/index.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Real LCS line-matching diff (not all-old-then-all-new)",
+          "area": "transcript-render",
+          "blurb": "Myers/LCS diff so unchanged lines render once and only true changes get +/- \u2014 diffs become readable.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DiffView.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Settings UI panel (Settings tab) with model/permission/theme/host/token",
+          "area": "platform-meta",
+          "blurb": "Dedicated settings screen editing prefs instead of env-only config.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SettingsPane.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Draft persistence per project/session in localStorage",
+          "area": "chat-composer",
+          "blurb": "Save the in-progress draft keyed by cwd+sessionId so switching tabs or reloading never loses typing.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useDraft.ts (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Project favorites/archive/sort via project_meta table",
+          "area": "browse-projects",
+          "blurb": "Mirror session_meta with a project_meta table (favorite, archived, custom name, color, tags) plus sort control.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/project-meta.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Universal command palette (actions, not just search)",
+          "area": "polish-aesthetics",
+          "blurb": "Extend Cmd-K to run commands \u2014 switch tab, new chat, change model, jump to project, toggle theme.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/CommandPalette.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Cap driver stdout line buffer to prevent unbounded memory growth",
+          "area": "data-integrity-tests",
+          "blurb": "A claude process emitting a huge line with no newline grows buf forever; add a max-line guard that flushes/errors instead of OOM.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/buffer.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 4,
+      "theme": "Inline permissions, faceted search, git panel, projects keyboard nav",
+      "items": [
+        {
+          "title": "Inline per-tool approve/deny via can_use_tool control_request",
+          "area": "permissions-safety",
+          "blurb": "Surface an Approve/Deny card in chat and send back control_response so users gate each tool in real time.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/PermissionCard.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Faceted filters in search() (project/date/role/tool/model/branch)",
+          "area": "search",
+          "blurb": "Structured filter object so users scope hits by facet instead of only free-text.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/search.ts (new, extracted)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Git status panel per project in Browse",
+          "area": "git-integration",
+          "blurb": "Staged/unstaged/untracked files with +/- counts and branch for the selected project's cwd.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/GitPanel.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "/api/git/* REST routes with cwd allowlisting",
+          "area": "git-integration",
+          "blurb": "Expose status/diff/log/branch over Fastify, validating cwd against known project dirs.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/git.ts (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Keyboard navigation in Projects/Sessions panes (j/k, arrows, enter)",
+          "area": "browse-projects",
+          "blurb": "Move and open with the keyboard, matching the search palette.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useListKeyboardNav.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Regenerate last turn",
+          "area": "chat-streaming",
+          "blurb": "Redo the prior response by re-sending the last user prompt with the same or swapped model.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ChatPane.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "In-transcript find bar (Cmd-F) with match nav and count",
+          "area": "transcript-nav",
+          "blurb": "Real Cmd-F over message text that finds matches in virtualized/off-screen messages and scrolls them in.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/FindBar.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Process liveness check to drop stale/zombie session files",
+          "area": "running-sessions",
+          "blurb": "Verify each pid with process.kill(pid,0) so the board shows only truly-live sessions.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/running.ts (new, extracted)",
+          "impact": 5,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 5,
+      "theme": "Search ranking, MCP manager, permission rules, transcript outline",
+      "items": [
+        {
+          "title": "Recency-weighted ranking + BM25 field/role weighting",
+          "area": "search",
+          "blurb": "Blend bm25 with session lastTs time-decay and weight user prompts/assistant text above tool noise.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/search.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "MCP server manager (list/add/edit/remove across all scopes)",
+          "area": "claude-config",
+          "blurb": "One screen for every MCP server resolved from .claude.json user/project scope and .mcp.json, with type and owning scope.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/McpManager.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Permission rule editor (allow/ask/deny) writing settings.json",
+          "area": "permissions-safety",
+          "blurb": "Read/write permissions.allow/ask/deny with add/remove/edit of rules like Bash(git:*).",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/permissions.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Outline / table-of-contents side rail for transcripts",
+          "area": "transcript-nav",
+          "blurb": "Collapsible rail listing every user turn (and tool runs) as clickable scrollToIndex entries.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TranscriptOutline.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Tool-specific renderer for TodoWrite",
+          "area": "transcript-render",
+          "blurb": "Render the todo list as real checkboxes with status and strikethrough, not a JSON dump.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/TodoWriteCard.tsx (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Activate the dormant tags system end to end (engine + meta)",
+          "area": "sessions-org",
+          "blurb": "setTags/getTags backed by a session_tags join table replacing the unused CSV column.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/tags.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Don't force-scroll when user has scrolled up + jump-to-latest pill",
+          "area": "chat-streaming",
+          "blurb": "Only auto-scroll when pinned to bottom and show a jump-to-latest pill otherwise.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useStickToBottom.ts (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Surface waitingFor + statusUpdatedAt on running cards",
+          "area": "running-sessions",
+          "blurb": "Engine drops these fields the session JSON carries; map them so cards show 'waiting on permission' + how long.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/running.ts",
+          "impact": 5,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 6,
+      "theme": "Approve-and-remember, commit composer, role filters, light theme tokens",
+      "items": [
+        {
+          "title": "Approve-and-remember scoping (Once/Session/Always)",
+          "area": "permissions-safety",
+          "blurb": "Each inline approval offers just-once, session, or always \u2014 mapping to updatedPermissions and a settings allow-rule write.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/PermissionCard.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Semantic CSS color tokens (replace raw zinc/clay literals)",
+          "area": "polish-aesthetics",
+          "blurb": "--color-bg/surface/border/text/accent vars so themes swap by changing tokens.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/index.css",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Commit composer with AI-generated message from staged diff",
+          "area": "git-integration",
+          "blurb": "Compose a commit and one-click draft the message from the staged diff via the driver.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/CommitComposer.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Role/tool/errors filter chips above the transcript",
+          "area": "transcript-nav",
+          "blurb": "Toggle chips (You/Claude/tools/thinking/errors) that hide non-matching messages.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TranscriptFilters.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Show estimated $ cost on dashboard, not just tokens",
+          "area": "dashboard-analytics",
+          "blurb": "Total-spend card + dollar figures on every breakdown using the pricing table.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DashboardPane.tsx",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Up-arrow prompt history recall in composer",
+          "area": "chat-composer",
+          "blurb": "On empty caret, Up cycles previous prompts per project like a shell.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/usePromptHistory.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Store per-session model(s) as a first-class facet (schema migration)",
+          "area": "search",
+          "blurb": "Add model column(s) during indexing so cost breakdowns and model filters are possible.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/index-db.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Cross-project All Sessions view",
+          "area": "sessions-org",
+          "blurb": "Global flat session list so users triage everything in one place.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/all-sessions.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 7,
+      "theme": "Dangerous-command classifier, jump-to-match, per-day usage, edit-and-resend",
+      "items": [
+        {
+          "title": "Dangerous-command classifier with severity tiers",
+          "area": "permissions-safety",
+          "blurb": "Classify Bash (rm -rf, force-push, DROP, sudo, curl|sh) and badge approval cards red/amber.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/classify-command.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Jump-to-match: carry message seq in SearchHit and scroll/highlight",
+          "area": "search",
+          "blurb": "Open a session scrolled to the exact matched message instead of the top.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SearchPalette.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Per-day token & cost time series rollup",
+          "area": "dashboard-analytics",
+          "blurb": "Daily usage rollup table so the chart plots tokens/$ per day, the most useful trend.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/rollups.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Edit-and-resend a user message (fork conversation here)",
+          "area": "chat-composer",
+          "blurb": "Click a prior user bubble to edit and resend, truncating everything after it.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ChatPane.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Reuse DiffView for real git diffs (working tree + commits)",
+          "area": "git-integration",
+          "blurb": "Feed git-diff into DiffView so uncommitted changes render with the same UI as tool edits.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/GitDiffView.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Multi-select + bulk actions in SessionsPane",
+          "area": "sessions-org",
+          "blurb": "Checkboxes/shift-click and a bulk bar (pin, tag, archive, delete).",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SessionsPane.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Detect prefix-rewrite/rotation, not just append/shrink",
+          "area": "engine-perf-archive",
+          "blurb": "Hash a header window and full-reindex when the prefix changes so stale prefixes don't persist.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/index.ts",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Auto-reconnect WebSocket with backoff + resume",
+          "area": "chat-streaming",
+          "blurb": "Exponential-backoff reconnect that re-binds handlers and re-resumes the live session.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/ws.ts",
+          "impact": 5,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 8,
+      "theme": "Hooks editor, what-changed panel, monthly budget, slash palette",
+      "items": [
+        {
+          "title": "Hooks editor mapped to real settings.json shape",
+          "area": "claude-config",
+          "blurb": "Structured editor for the hooks object (event -> matcher -> command/timeout) instead of raw JSON.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/HooksEditor.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "'What changed' file-change summary panel",
+          "area": "transcript-nav",
+          "blurb": "Aggregate all Edit/Write/MultiEdit cards into a per-file list with click-to-jump.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/FileChangeSummary.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Monthly budget with progress bar + threshold alerts",
+          "area": "dashboard-analytics",
+          "blurb": "Set a monthly $ budget; show spend-to-date and warn at 80/100%.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/budget.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Slash-command palette wired to SessionInit.slashCommands",
+          "area": "chat-composer",
+          "blurb": "Typing / at line start opens a filterable menu of the real commands the CLI reports.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SlashPalette.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Show all matches per session (expandable), not just best row",
+          "area": "search",
+          "blurb": "Group hits by session with a count and expand to every matching message.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/search.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "PATCH /api/projects/:id for project meta",
+          "area": "browse-projects",
+          "blurb": "Write endpoint for favorite/archive/rename/color/tags backing all project_meta features.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/projects.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Stop O(n) re-render per streamed token (isolate live bubble)",
+          "area": "chat-streaming",
+          "blurb": "Isolate the in-progress bubble into its own state/ref so only one node updates per token.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/LiveBubble.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Tool-specific renderer for Bash",
+          "area": "transcript-render",
+          "blurb": "Shell-styled block with $ prompt and separate stdout/stderr/exit instead of raw JSON.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/BashCard.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 9,
+      "theme": "Settings scope diff, checkpoint/rewind, queue messages, error-only nav",
+      "items": [
+        {
+          "title": "Settings scope diff/merge view (user/project/local/enterprise)",
+          "area": "claude-config",
+          "blurb": "Four-layer precedence side by side, highlighting which layer wins per key.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/resolve.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Checkpoint + rewind of file changes per turn",
+          "area": "git-integration",
+          "blurb": "Snapshot touched files before each turn (git blob refs) so you can revert just the agent's edits.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/checkpoint.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Queue messages while a turn is running (steerable composer)",
+          "area": "chat-composer",
+          "blurb": "Hold typed messages in an amber queue and auto-send next when the turn ends.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/ws.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Errors-only jump filter + next/prev error shortcuts",
+          "area": "transcript-nav",
+          "blurb": "Show only failing tool results plus their call \u2014 fastest path to where it broke.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useErrorNav.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Per-model cost & token breakdown widget",
+          "area": "dashboard-analytics",
+          "blurb": "Stacked bar/table of spend and tokens by Opus/Sonnet/Haiku.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/ModelBreakdown.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Word-level intra-line diff highlighting",
+          "area": "transcript-render",
+          "blurb": "Highlight only the chars that changed within a line via token diff.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DiffView.tsx",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Cross-project fuzzy project switcher (Cmd-P)",
+          "area": "browse-projects",
+          "blurb": "Fuzzy palette scoped to just projects for instant jumping.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ProjectSwitcher.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Stuck/waiting-for-permission detection + needs-you sort",
+          "area": "running-sessions",
+          "blurb": "Flag sessions waiting too long and sort them to the top \u2014 turns the board into an action queue.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/running.ts",
+          "impact": 5,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 10,
+      "theme": "Permission UI polish, MCP health check, archive sessions, image render",
+      "items": [
+        {
+          "title": "Show the tool's actual input in the approval card (diff/command)",
+          "area": "permissions-safety",
+          "blurb": "Reuse DiffView/ToolCard so Edit/Write asks render a diff and Bash asks render the command.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/PermissionCardBody.tsx (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "MCP server health check / connection test",
+          "area": "claude-config",
+          "blurb": "Spawn the stdio command (or ping URL), run the initialize handshake, report tools or the exact error.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/mcp-test.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Archive (hide) sessions without deleting",
+          "area": "sessions-org",
+          "blurb": "archived flag drops sessions from default lists but keeps them searchable for inbox-zero.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/session-meta.ts (extend)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Render images inline instead of the image stub",
+          "area": "transcript-render",
+          "blurb": "Surface base64/source so screenshots and pasted images display, with zoom.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ImageBlock.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Message permalinks (#uuid in URL) + flash on jump",
+          "area": "transcript-nav",
+          "blurb": "Each message gets an anchor; URL hash reopens scrolled to that message and flashes it.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useMessagePermalink.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "@-file mention autocomplete from the project tree",
+          "area": "chat-composer",
+          "blurb": "Typing @ pops a fuzzy file picker rooted at cwd and inserts @path the CLI expands.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/MentionPicker.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Inline image/file listing endpoint for transcript assets",
+          "area": "transcript-render",
+          "blurb": "Serve session image blocks/attachments so the web ImageBlock can fetch them.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/assets.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Aggregate getProjects/getStats in SQL with a cache",
+          "area": "engine-perf-archive",
+          "blurb": "Move sums to GROUP BY queries and memoize until next write, cutting dashboard latency at scale.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/aggregates.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 11,
+      "theme": "PR creation, agents library, period selector, tool-running state",
+      "items": [
+        {
+          "title": "One-click Create PR with AI-drafted title/body (gh)",
+          "area": "git-integration",
+          "blurb": "Run gh pr create from the panel, pre-filling from branch commits via Claude.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/pr.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Subagents/agents library (~/.claude/agents/*.md)",
+          "area": "claude-config",
+          "blurb": "List/create/edit/delete agent markdown with frontmatter form + body editor.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/AgentsLibrary.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Period selector (7d/30d/90d/all/custom) for dashboard",
+          "area": "dashboard-analytics",
+          "blurb": "Toggle the time window for every chart and stat.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/PeriodSelector.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Show tool 'running' state + elapsed before its result lands",
+          "area": "chat-streaming",
+          "blurb": "Pending/spinner state on the tool card so long Bash/MCP calls visibly run.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ToolCard.tsx (extract/new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Saved searches / smart folders",
+          "area": "search",
+          "blurb": "Name and pin a query+filters combo that reappears as a one-click saved search.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/saved-views.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Tag-based filter bar on the sessions list",
+          "area": "sessions-org",
+          "blurb": "Render distinct tags as toggle chips to filter sessions instantly.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TagFilterBar.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Worktree panel: list/create/remove git worktrees",
+          "area": "git-integration",
+          "blurb": "Manage git worktree entries so parallel sessions run on isolated checkouts.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/WorktreePanel.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Move heavy indexing off the event loop (worker_threads)",
+          "area": "engine-perf-archive",
+          "blurb": "Run the synchronous indexer in a worker so HTTP/SSE stays responsive during cold start.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/index-worker.ts (new)",
+          "impact": 4,
+          "effort": "L"
+        }
+      ]
+    },
+    {
+      "wave": 12,
+      "theme": "CLAUDE.md editor, deny-with-feedback, calendar heatmap, @-symbol search",
+      "items": [
+        {
+          "title": "Global CLAUDE.md editor with live markdown preview + token count",
+          "area": "claude-config",
+          "blurb": "Split editor/preview for ~/.claude/CLAUDE.md with token-cost estimate.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/ClaudeMdEditor.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Deny-with-feedback box on permission denials",
+          "area": "permissions-safety",
+          "blurb": "A text field whose contents go into control_response deny message so Claude can adjust.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DenyFeedback.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Calendar contribution heatmap (12-month)",
+          "area": "dashboard-analytics",
+          "blurb": "Year-long daily heatmap of sessions/tokens like GitHub's grid.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/CalendarHeatmap.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "@-symbol mention (code symbols) backed by FTS index",
+          "area": "chat-composer",
+          "blurb": "Typing @sym surfaces indexed code symbols and inserts a file:line reference.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/symbols.ts (new)",
+          "impact": 4,
+          "effort": "L"
+        },
+        {
+          "title": "Inline filter token syntax (tool: role: after: before:)",
+          "area": "search",
+          "blurb": "Parse scoping tokens in the query box so power users scope without leaving the keyboard.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/query-parser.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "On-demand AI summary using the CLI driver",
+          "area": "sessions-org",
+          "blurb": "Generate a 2-3 sentence transcript summary and cache it in session_meta.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/summary.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Auto-refresh dashboard stats via poll/SSE",
+          "area": "dashboard-analytics",
+          "blurb": "Re-fetch stats so analytics aren't stale until reload.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useStatsPolling.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Tool-specific renderer for Read (path header, highlight, gutter)",
+          "area": "transcript-render",
+          "blurb": "File path + line range header, syntax highlight by extension, strip cat -n gutter.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/ReadCard.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 13,
+      "theme": "Skills manager, branch switcher, retry/queue, mini-map",
+      "items": [
+        {
+          "title": "Skills manager reading SKILL.md frontmatter",
+          "area": "claude-config",
+          "blurb": "Browse all skills with parsed frontmatter; edit via form + markdown body, plugin-owned badge.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/SkillsManager.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Branch switcher dropdown + create-branch before chat",
+          "area": "git-integration",
+          "blurb": "List local branches and checkout on select (guarded against dirty trees); new-branch on chat start.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/BranchSwitcher.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Retry button on turn error + resend-last",
+          "area": "chat-streaming",
+          "blurb": "One-click Retry re-issues the same prompt with the existing sessionId.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TurnError.tsx (new)",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Mini-map scrollbar of the transcript",
+          "area": "transcript-nav",
+          "blurb": "Thin gutter of colored ticks per message you can click to jump.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TranscriptMinimap.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Switch FTS tokenizer to porter/trigram for stemming + substring",
+          "area": "search",
+          "blurb": "Stem refactor/refactoring and match substrings as you type.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/fts-schema.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Tool-specific renderer for Task (subagent)",
+          "area": "transcript-render",
+          "blurb": "Render Task calls with subagent type + prompt summary and inline expand into the subagent transcript.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/TaskCard.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Per-project default settings (model/permission per repo)",
+          "area": "platform-meta",
+          "blurb": "Project-scoped overrides so a repo opens chats with its preferred model/mode.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/project-settings.ts (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Desktop server sidecar (standalone, no separate terminal)",
+          "area": "faces-tui-desktop",
+          "blurb": "Bundle the server as a Tauri sidecar spawned on launch so desktop serves /api in production.",
+          "primaryLayer": "desktop",
+          "ownsFiles": "apps/desktop/src-tauri/src/lib.rs",
+          "impact": 5,
+          "effort": "L"
+        }
+      ]
+    },
+    {
+      "wave": 14,
+      "theme": "TUI live chat, audit log, edit approvals, project detail header",
+      "items": [
+        {
+          "title": "TUI live chat mode (in-process driver, streaming)",
+          "area": "faces-tui-desktop",
+          "blurb": "Chat screen in Ink calling runTurn directly and streaming tokens \u2014 a true terminal replacement.",
+          "primaryLayer": "tui",
+          "ownsFiles": "apps/tui/src/screens/Chat.tsx (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Audit log of every permission decision",
+          "area": "permissions-safety",
+          "blurb": "Persist each approve/deny (tool, input digest, decision, scope, ts, session) to a SQLite table.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/audit.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Editable approval: tweak command/args before allowing",
+          "area": "permissions-safety",
+          "blurb": "Edit the proposed Bash command or content in the card and send via updatedInput.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/EditableApproval.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Per-project detail header with full stats",
+          "area": "browse-projects",
+          "blurb": "Header card: total tokens, cost, sessions, first/last activity, top branches.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ProjectDetailHeader.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Link sessions to the commits they produced",
+          "area": "git-integration",
+          "blurb": "Correlate session time window + cwd + branch with git log to show commits made during this chat.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/session-commits.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Session notes (freeform markdown per session)",
+          "area": "sessions-org",
+          "blurb": "notes column + a notes panel in the transcript view.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SessionNotes.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Stream thinking deltas as a live thinking block",
+          "area": "chat-streaming",
+          "blurb": "Capture thinking_delta and emit a channel so the collapsible thinking block fills in live.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/cli.ts",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Reading mode: hide tools, render prose only",
+          "area": "transcript-nav",
+          "blurb": "One-key toggle collapsing tool noise to read You/Claude prose as a clean conversation.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useReadingMode.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 15,
+      "theme": "TUI search, push notifications, secret redaction, syntax diffs",
+      "items": [
+        {
+          "title": "TUI full-text search palette",
+          "area": "faces-tui-desktop",
+          "blurb": "'/' overlay calling engine.search() with highlights, jumping to the matching session.",
+          "primaryLayer": "tui",
+          "ownsFiles": "apps/tui/src/screens/Search.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Desktop/system notification on session finish or stall",
+          "area": "running-sessions",
+          "blurb": "Fire an OS/web notification when a running session goes busy->idle or needs permission.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/notifications.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Secret/credential redaction in approval cards and audit log",
+          "area": "permissions-safety",
+          "blurb": "Detect tokens/keys in tool inputs and mask them in UI and persisted audit.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/redact.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Syntax-highlighted diffs",
+          "area": "transcript-render",
+          "blurb": "Run diff lines through the highlighter with +/- backgrounds layered on top.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DiffView.tsx",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Filename/file-path search facet from tool I/O",
+          "area": "search",
+          "blurb": "Index a path field so path:index-db.ts finds every session that touched that file.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/search.ts",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Long-output show-more instead of hard 600-char cut",
+          "area": "transcript-render",
+          "blurb": "Expand/collapse and lazy-load the full spilled file so users can read the rest.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ResultBody.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Permissions editor with rule autocomplete + tester",
+          "area": "claude-config",
+          "blurb": "Categorized searchable allow/deny/ask list with autocomplete and a would-this-be-allowed tester.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/PermissionsEditor.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Most expensive sessions list (top spenders)",
+          "area": "dashboard-analytics",
+          "blurb": "Click-through table of the priciest sessions to inspect cost outliers.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/TopSpenders.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 16,
+      "theme": "Live Ops board, config watcher, keyboard approvals, prompt templates",
+      "items": [
+        {
+          "title": "Dedicated Live Ops board tab (multi-session grid)",
+          "area": "running-sessions",
+          "blurb": "First-class Live tab with status, elapsed, cost-so-far, controls per card.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/LiveOpsBoard.tsx (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Live config file watcher (reuse watchTranscripts pattern)",
+          "area": "claude-config",
+          "blurb": "Watch config files and push SSE events so the Config tab updates the instant a file changes.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/watcher.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Keyboard-driven approvals (A/D/S/E) + pending queue",
+          "area": "permissions-safety",
+          "blurb": "Single-key shortcuts to clear a stream of asks with a count badge and jump-to-next.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useApprovalKeyboard.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Prompt templates / snippets library",
+          "area": "chat-composer",
+          "blurb": "Save reusable prompt snippets and insert via a quick menu or shortcut expansion.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SnippetLibrary.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Stage/unstage/discard file actions from status panel",
+          "area": "git-integration",
+          "blurb": "Click a file to add/reset/checkout it \u2014 a lightweight SCM tab.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/git-actions.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Collapse unchanged context in diffs with expanders",
+          "area": "transcript-render",
+          "blurb": "Show a few lines of context around each change and a '\u2026 N unchanged' expander.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/DiffContext.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Inbox/triage view for new + unsorted sessions",
+          "area": "sessions-org",
+          "blurb": "Queue of recent untagged/untitled sessions with quick keyboard triage actions.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/InboxPane.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Live context/token meter during the turn",
+          "area": "chat-streaming",
+          "blurb": "Parse message_delta usage from stream-json to show a running token + %-of-context meter.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/cli.ts",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 17,
+      "theme": "Effective config, ahead/behind sync, config linter, semantic search",
+      "items": [
+        {
+          "title": "Effective-config resolver for a given project",
+          "area": "claude-config",
+          "blurb": "Compute the fully-merged runtime config (settings layers + MCP scopes + CLAUDE.md + plugins).",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/effective.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Ahead/behind indicator with push/pull + commit-and-push",
+          "area": "git-integration",
+          "blurb": "Show N ahead/M behind origin and offer push/pull and a one-shot commit+push.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/GitSync.tsx (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Config linter / health check dashboard",
+          "area": "claude-config",
+          "blurb": "Scan all config for problems (missing hook scripts, MCP not on PATH, dead dirs, bad frontmatter).",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/config-lint.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Semantic / embedding search as a second ranked lane",
+          "area": "search",
+          "blurb": "Optional local-embedding vector index so conceptual queries match without exact keywords.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/embeddings.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Time-of-day / hour-of-week activity heatmap",
+          "area": "dashboard-analytics",
+          "blurb": "GitHub-style heatmap of when you code to spot peak hours.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/HourHeatmap.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Tool-specific renderer for Grep/Glob",
+          "area": "transcript-render",
+          "blurb": "File-grouped match list with line numbers and highlighted spans.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/GrepCard.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Per-turn cost + token breakdown footer",
+          "area": "chat-streaming",
+          "blurb": "Expand the result chip to show input/output/cache tokens, duration, turns.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TurnFooter.tsx (new)",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Cache getRunningSessions with mtime-gated rereads",
+          "area": "engine-perf-archive",
+          "blurb": "Cache parsed entries keyed on mtime so polling is near-free.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/running.ts",
+          "impact": 2,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 18,
+      "theme": "Stop running session, restore-from-backup, transcript timestamps, image paste",
+      "items": [
+        {
+          "title": "Stop a running external session from the UI (SIGTERM by pid)",
+          "area": "running-sessions",
+          "blurb": "POST /api/running/:pid/stop to kill a runaway interactive session.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/running.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Atomic write + .bak rotation for every config save + restore picker",
+          "area": "claude-config",
+          "blurb": "All writes snapshot the prior file then write atomically; list/diff/restore backups in one click.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/safe-write.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Timestamps + duration on each turn",
+          "area": "chat-streaming",
+          "blurb": "Subtle per-turn time and 'took 12s' for temporal context.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/TurnMeta.tsx (new)",
+          "impact": 2,
+          "effort": "S"
+        },
+        {
+          "title": "Image paste + drag-drop attachments",
+          "area": "chat-composer",
+          "blurb": "Paste/drop an image; server writes a temp file the prompt references so Claude sees it.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useImageAttach.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Attachment upload endpoint (temp file write)",
+          "area": "chat-composer",
+          "blurb": "Server endpoint that stores pasted/dropped files and returns a referenceable path.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/attachments.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Detect/repair missing toolName FTS column on old index.db",
+          "area": "search",
+          "blurb": "Detect stale 4-col messages_fts and auto-rebuild instead of crashing on insert.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/fts-schema.ts",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Tool-specific renderer for WebFetch/WebSearch",
+          "area": "transcript-render",
+          "blurb": "Clickable URL/query header with favicon and clean rendered body.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/tools/WebCard.tsx (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Project leaderboard (cost/tokens/sessions/last-active)",
+          "area": "dashboard-analytics",
+          "blurb": "Sortable ranked table beyond the top-8 bars.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/ProjectLeaderboard.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 19,
+      "theme": "TUI dashboard, config search, hook dry-run, KaTeX/JSON render",
+      "items": [
+        {
+          "title": "TUI dashboard screen (running sessions + stats)",
+          "area": "faces-tui-desktop",
+          "blurb": "Render getRunningSessions() and getStats() (totals, top projects, sparkline) in the terminal.",
+          "primaryLayer": "tui",
+          "ownsFiles": "apps/tui/src/screens/Dashboard.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Config search across all files (Cmd-K for config)",
+          "area": "claude-config",
+          "blurb": "Index config files into FTS so you jump to a rule/hook/MCP/skill/key by name.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/index-config.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Hook dry-run / test harness",
+          "area": "claude-config",
+          "blurb": "Feed a synthetic tool-use event to a hook command and show stdout/stderr/exit + block vs allow.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/hook-test.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "KaTeX math + pretty-printed JSON in markdown/tool results",
+          "area": "transcript-render",
+          "blurb": "remark-math + rehype-katex and a collapsible JSON tree for valid-JSON inputs/results.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/Markdown.tsx",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Date-range facet with quick presets",
+          "area": "search",
+          "blurb": "today/7d/30d/custom mapped to firstTs/lastTs bounds \u2014 the most common narrowing.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SearchDateFilter.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "CSV export of usage (per-session/day/project)",
+          "area": "dashboard-analytics",
+          "blurb": "Download analytics tables to CSV for spreadsheets and accounting.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/export-usage.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Open project externally (editor/Finder/terminal)",
+          "area": "browse-projects",
+          "blurb": "Launch the true cwd in VS Code, file manager, or terminal.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/open-external.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Group consecutive assistant tool-runs visually",
+          "area": "chat-streaming",
+          "blurb": "Subtle grouping/indentation + collapse-all so a tool-heavy turn stays scannable.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ToolGroup.tsx (new)",
+          "impact": 2,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 20,
+      "theme": "Rate-limit handling, plugins view, mark interrupted, skeletons",
+      "items": [
+        {
+          "title": "Rate-limit awareness banner + auto-resume after window clears",
+          "area": "running-sessions",
+          "blurb": "Detect 429/rate-limit, parse reset time, show a countdown banner and auto re-run --resume.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/rate-limit.ts (new)",
+          "impact": 5,
+          "effort": "L"
+        },
+        {
+          "title": "Plugins view from installed_plugins.json + marketplaces",
+          "area": "claude-config",
+          "blurb": "Render installed plugins grouped by marketplace with contributions and enable/disable.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/config/PluginsView.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Mark interrupted turns with a 'stopped' badge",
+          "area": "chat-streaming",
+          "blurb": "On interrupt, finalize the bubble and render an explicit stopped-by-you marker.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/StoppedBadge.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Skeleton loaders instead of bare spinners",
+          "area": "polish-aesthetics",
+          "blurb": "Shimmer skeletons matching final layout for transcript/dashboard/sessions.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/Skeleton.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Graceful interrupt instead of hard SIGTERM (SIGINT, grace, SIGTERM)",
+          "area": "chat-streaming",
+          "blurb": "Softer cancel so the CLI flushes a clean final result; escalate to SIGKILL on timeout.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/interrupt.ts (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Per-session cost shown in session list/header",
+          "area": "dashboard-analytics",
+          "blurb": "Display estimated $ and token total on each session row while browsing.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SessionsPane.tsx",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Open-file-in-editor button on every file path",
+          "area": "git-integration",
+          "blurb": "Clickable paths in diffs/status that launch code -g file:line.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/OpenInEditor.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Search inside subagent transcripts (indexed, tagged with agentId)",
+          "area": "search",
+          "blurb": "Mirror subagent files into the index so inline-subagent work is findable.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/subagents.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 21,
+      "theme": "Mobile/remote auth, tray, MCP toggles, toasts",
+      "items": [
+        {
+          "title": "Mobile/remote access: LAN bind + token auth + login screen",
+          "area": "faces-tui-desktop",
+          "blurb": "Gate HOST=0.0.0.0 with a required token and a web token-entry screen attaching the bearer to fetch/SSE/WS.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/AuthGate.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "macOS tray icon + show/hide + dock badge for running sessions",
+          "area": "faces-tui-desktop",
+          "blurb": "Menu-bar presence with show/hide/quit and a running-session count badge.",
+          "primaryLayer": "desktop",
+          "ownsFiles": "apps/desktop/src-tauri/src/tray.rs (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "MCP enable/disable toggles per project",
+          "area": "claude-config",
+          "blurb": "Toggle .mcp.json servers on/off via enabledMcpjsonServers/disabledMcpServers with trust state surfaced.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/config/mcp-toggle.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Toast / notification system (aria-live)",
+          "area": "polish-aesthetics",
+          "blurb": "Lightweight toast region for rename/pin/copy/error feedback.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/Toast.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Auto-tag by language/framework and git branch",
+          "area": "sessions-org",
+          "blurb": "Heuristically tag sessions from file extensions in tool I/O and from gitBranch.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/auto-tag.ts (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Live tail of active session transcript while it runs",
+          "area": "running-sessions",
+          "blurb": "Stream the newest messages of a selected running session without resuming.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/tail.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Heading anchors + in-transcript TOC for long answers",
+          "area": "transcript-render",
+          "blurb": "Slug anchors on markdown headings + optional jump list for very long messages.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/Markdown.tsx",
+          "impact": 2,
+          "effort": "M"
+        },
+        {
+          "title": "Smarter status labels from system subtypes",
+          "area": "chat-streaming",
+          "blurb": "Map raw subtypes to friendly phrases (compacting context, running tool) + icon per phase.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/StatusLabel.tsx (new)",
+          "impact": 2,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 22,
+      "theme": "Global error boundary, dirty-tree dashboard, scope selector, recents",
+      "items": [
+        {
+          "title": "Global error boundary + retryable fetch error surfacing",
+          "area": "polish-aesthetics",
+          "blurb": "ErrorBoundary with reload + central handler so swallowed fetch failures surface as inline errors.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ErrorBoundary.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Dashboard widget: repos with uncommitted changes across projects",
+          "area": "git-integration",
+          "blurb": "Aggregate dirty-tree status so you see every repo needing attention in one place.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/DirtyRepos.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Global vs project scope toggle in the palette",
+          "area": "search",
+          "blurb": "Tab to restrict the open palette to the current project vs all projects.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SearchPalette.tsx",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Recently-viewed / jump-back list",
+          "area": "sessions-org",
+          "blurb": "Track last-opened sessions and show a Recent shortcut list.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useRecentSessions.ts (new)",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Global hotkey to summon the desktop window",
+          "area": "faces-tui-desktop",
+          "blurb": "Global-shortcut (Cmd+Shift+C) to toggle the window from anywhere.",
+          "primaryLayer": "desktop",
+          "ownsFiles": "apps/desktop/src-tauri/src/shortcut.rs (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Detect dead-but-busy sessions (crashed mid-turn)",
+          "area": "running-sessions",
+          "blurb": "If a file says busy but the pid is gone, flag crashed and offer cleanup/resume.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/running.ts",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "GFM task-list checkboxes + linkify URLs/paths in plain text",
+          "area": "transcript-render",
+          "blurb": "Style [ ]/[x] as themed checkboxes and make URLs/absolute paths clickable.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/linkify.ts (new)",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Cumulative session cost running total in header",
+          "area": "dashboard-analytics",
+          "blurb": "Accumulate cost/tokens across turns in a header badge.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/SessionCostBadge.tsx (new)",
+          "impact": 3,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 23,
+      "theme": "Resume after reload, TUI transcript render, sandbox, focus rings",
+      "items": [
+        {
+          "title": "Resume an interrupted turn after reload (server-side live turn)",
+          "area": "chat-streaming",
+          "blurb": "Persist the live turn keyed by sessionId so a reconnect re-attaches to the in-flight stream.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/live-turns.ts (new)",
+          "impact": 4,
+          "effort": "L"
+        },
+        {
+          "title": "Rich TUI transcript rendering (roles, colors, tool diffs)",
+          "area": "faces-tui-desktop",
+          "blurb": "Per-block rendering with colored role labels, wrapped text, tool framing, dimmed thinking.",
+          "primaryLayer": "tui",
+          "ownsFiles": "apps/tui/src/components/Transcript.tsx (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Sandbox toggle for headless sessions (no-internet/isolated)",
+          "area": "permissions-safety",
+          "blurb": "Expose the CLI sandbox so a session runs tools auto-allowed but network-isolated.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/sandbox.ts (new)",
+          "impact": 4,
+          "effort": "L"
+        },
+        {
+          "title": "focus-visible rings + aria-labels on icon buttons/tabs",
+          "area": "polish-aesthetics",
+          "blurb": "Consistent clay focus ring and accessible names/roles so keyboard users see focus.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ui.tsx",
+          "impact": 5,
+          "effort": "S"
+        },
+        {
+          "title": "Stable rowid mapping for FTS to avoid full-session DELETE on append",
+          "area": "engine-perf-archive",
+          "blurb": "Key FTS rows by (sessionId,seq) with replace so appends don't churn unchanged rows.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/fts-write.ts (new)",
+          "impact": 2,
+          "effort": "M"
+        },
+        {
+          "title": "Click chart bar to drill into that day's sessions",
+          "area": "dashboard-analytics",
+          "blurb": "Make activity bars navigate to a filtered session list for that day.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/dashboard/ActivityChart.tsx (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Branch/fork a turn into a new conversation",
+          "area": "chat-streaming",
+          "blurb": "Branch-from-here opens a new chat resuming the session up to that point.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/driver/fork.ts (new)",
+          "impact": 3,
+          "effort": "L"
+        },
+        {
+          "title": "Bulk permission import from observed Bash calls",
+          "area": "claude-config",
+          "blurb": "Scan indexed transcripts for repeated safe calls and propose an allowlist diff.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/allowlist-suggest.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        }
+      ]
+    },
+    {
+      "wave": 24,
+      "theme": "Tests: driver, server, parser fixtures, transcript pairing",
+      "items": [
+        {
+          "title": "Unit tests for the CLI driver line parser",
+          "area": "data-integrity-tests",
+          "blurb": "Feed canned stream-json frames to assert handlers fire \u2014 zero driver tests today.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/test/driver.test.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Integration tests for all server REST endpoints",
+          "area": "data-integrity-tests",
+          "blurb": "app.inject coverage for projects/sessions/messages/search/rename/pin/404/traversal.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/test/app.test.ts (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Golden-fixture corpus of real-world transcript line shapes",
+          "area": "data-integrity-tests",
+          "blurb": "Anonymized samples of every line type/version as fixtures so parser regressions hit reality.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/test/fixtures/ (new)",
+          "impact": 5,
+          "effort": "M"
+        },
+        {
+          "title": "Unit tests for transcript.ts tool-result pairing",
+          "area": "data-integrity-tests",
+          "blurb": "Cover happy path, orphan result, empty-user drop, key stability.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/transcript.test.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Tests for FTS5-special-char queries not throwing",
+          "area": "data-integrity-tests",
+          "blurb": "Assert a(b) and NEAR/2 queries are neutralized and don't error.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/test/query.test.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "CI workflow running typecheck + test on every push",
+          "area": "data-integrity-tests",
+          "blurb": "GitHub Action gating merges across all packages.",
+          "primaryLayer": "engine",
+          "ownsFiles": ".github/workflows/ci.yml (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Tests for project grouping / orphan-folder recovery",
+          "area": "data-integrity-tests",
+          "blurb": "Two encoded folders to one cwd merge into one project \u2014 asserted on fixtures.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/test/discovery.test.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Idempotency test: re-index same file N times yields identical rows",
+          "area": "data-integrity-tests",
+          "blurb": "Full re-index twice asserts byte-identical search rows, counts, usage.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/test/index-idempotency.test.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        }
+      ]
+    },
+    {
+      "wave": 25,
+      "theme": "Final polish: reduced-motion, responsive, copy actions, deep links, exports",
+      "items": [
+        {
+          "title": "Responsive / mobile layout with collapsible panes",
+          "area": "polish-aesthetics",
+          "blurb": "Collapse to a drawer + single pane with back nav below a breakpoint.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ResponsiveShell.tsx (new)",
+          "impact": 4,
+          "effort": "L"
+        },
+        {
+          "title": "prefers-reduced-motion + perf mode toggle",
+          "area": "polish-aesthetics",
+          "blurb": "Gate animations behind the media query and offer plain-text-while-streaming mode.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/hooks/useReducedMotion.ts (new)",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Copy any message (full text/markdown) hover action",
+          "area": "transcript-render",
+          "blurb": "Per-message copy of raw markdown + plain text.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/CopyMessage.tsx (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Copy session deep-link / URL routing (?project&session)",
+          "area": "polish-aesthetics",
+          "blurb": "URL routing so refresh/share restores the exact view.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/lib/router.ts (new)",
+          "impact": 3,
+          "effort": "M"
+        },
+        {
+          "title": "Single-session export (Markdown + JSON)",
+          "area": "platform-meta",
+          "blurb": "Export one transcript as clean Markdown or raw JSON from the viewer.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/export-session.ts (new)",
+          "impact": 4,
+          "effort": "S"
+        },
+        {
+          "title": "Full-archive export + import bundle",
+          "area": "platform-meta",
+          "blurb": "Export all sessions + sidecar meta as a portable bundle and re-import with preview-diff.",
+          "primaryLayer": "engine",
+          "ownsFiles": "packages/engine/src/portable.ts (new)",
+          "impact": 4,
+          "effort": "M"
+        },
+        {
+          "title": "Keyboard shortcut cheat-sheet overlay (?)",
+          "area": "polish-aesthetics",
+          "blurb": "Press ? to show all shortcuts, discoverable and consistent with the palette footer.",
+          "primaryLayer": "web",
+          "ownsFiles": "apps/web/src/components/ShortcutOverlay.tsx (new)",
+          "impact": 3,
+          "effort": "S"
+        },
+        {
+          "title": "Health/diagnostics page (CLI version, paths, search mode, index health)",
+          "area": "platform-meta",
+          "blurb": "Surface claude binary version, FTS-vs-LIKE mode, config dirs, DB size for troubleshooting.",
+          "primaryLayer": "server",
+          "ownsFiles": "packages/server/src/routes/health.ts (new)",
+          "impact": 3,
+          "effort": "S"
+        }
+      ]
+    }
+  ]
+}

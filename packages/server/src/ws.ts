@@ -9,7 +9,48 @@
  */
 import type { FastifyInstance } from "fastify";
 import { createDriver, type Engine } from "@claude-ui/engine";
-import type { ClientMsg, RunningTurn, ServerMsg } from "@claude-ui/engine/driver";
+import { PERMISSION_MODES } from "@claude-ui/engine/driver";
+import type {
+  ClientMsg,
+  PermissionMode,
+  RunningTurn,
+  ServerMsg,
+} from "@claude-ui/engine/driver";
+
+type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
+
+/**
+ * Runtime guard for a parsed frame. JSON.parse gives us `any`-shaped data, so we
+ * verify the discriminant and required fields before driving a turn — a malformed
+ * "prompt" (missing/blank cwd or prompt) must never reach the engine with
+ * undefined values. Returns a narrowed ClientMsg or null for anything invalid.
+ */
+function parseClientMsg(raw: unknown): ClientMsg | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if (m.t === "interrupt") return { t: "interrupt" };
+  if (m.t === "prompt") {
+    if (typeof m.cwd !== "string" || m.cwd.length === 0) return null;
+    if (typeof m.prompt !== "string" || m.prompt.length === 0) return null;
+    if (m.sessionId !== undefined && typeof m.sessionId !== "string") return null;
+    if (m.model !== undefined && typeof m.model !== "string") return null;
+    if (
+      m.permissionMode !== undefined &&
+      !PERMISSION_MODES.includes(m.permissionMode as PermissionMode)
+    ) {
+      return null;
+    }
+    return {
+      t: "prompt",
+      cwd: m.cwd,
+      prompt: m.prompt,
+      sessionId: m.sessionId,
+      model: m.model,
+      permissionMode: m.permissionMode as PromptMsg["permissionMode"],
+    };
+  }
+  return null;
+}
 
 export function registerWs(app: FastifyInstance, _engine: Engine): void {
   app.get("/api/ws/session", { websocket: true }, (socket) => {
@@ -22,11 +63,17 @@ export function registerWs(app: FastifyInstance, _engine: Engine): void {
     };
 
     socket.on("message", (raw: unknown) => {
-      let msg: ClientMsg;
+      let parsed: unknown;
       try {
-        msg = JSON.parse(String(raw)) as ClientMsg;
+        parsed = JSON.parse(String(raw));
       } catch {
         send({ t: "error", message: "invalid json" });
+        return;
+      }
+
+      const msg = parseClientMsg(parsed);
+      if (!msg) {
+        send({ t: "error", message: "invalid request" });
         return;
       }
 

@@ -54,10 +54,21 @@ export function buildApp(opts: BuildOptions = {}): {
     registerWs(instance, engine);
   });
 
-  app.get("/api/search", async (req) =>
-    engine.search(String((req.query as any).q ?? ""), {
-      limit: Number((req.query as any).limit) || 50,
-    }),
+  app.get<{ Querystring: { q: string; limit?: number } }>(
+    "/api/search",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          required: ["q"],
+          properties: {
+            q: { type: "string" },
+            limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+          },
+        },
+      },
+    },
+    async (req) => engine.search(req.query.q, { limit: req.query.limit ?? 50 }),
   );
 
   app.get("/api/running", async () => engine.getRunningSessions());
@@ -66,39 +77,103 @@ export function buildApp(opts: BuildOptions = {}): {
 
   app.get("/api/projects", async () => engine.getProjects());
 
-  app.get("/api/projects/:id/sessions", async (req) => {
-    const { id } = req.params as { id: string };
-    return engine.getProjectSessions(id);
-  });
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/sessions",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+      },
+    },
+    async (req) => engine.getProjectSessions(req.params.id),
+  );
 
-  app.get("/api/sessions/:id/messages", async (req, reply) => {
-    const { id } = req.params as { id: string };
-    const q = req.query as { tailBytes?: string };
-    const tailBytes = q.tailBytes ? Math.max(64 * 1024, Number(q.tailBytes)) : undefined;
-    const page = await engine.getSessionMessages(id, { tailBytes });
-    if (!page) return reply.code(404).send({ error: "not found" });
-    return page;
-  });
+  app.get<{ Params: { id: string }; Querystring: { tailBytes?: number } }>(
+    "/api/sessions/:id/messages",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        querystring: {
+          type: "object",
+          properties: { tailBytes: { type: "integer", minimum: 0 } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const { tailBytes } = req.query;
+      const page = await engine.getSessionMessages(req.params.id, {
+        tailBytes: tailBytes !== undefined ? Math.max(64 * 1024, tailBytes) : undefined,
+      });
+      if (!page) return reply.code(404).send({ error: "not found" });
+      return page;
+    },
+  );
 
   // Read a single subagent transcript (path must live under ~/.claude/projects).
-  app.get("/api/sessions/:id/subagent", async (req, reply) => {
-    const q = req.query as { path?: string };
-    const file = q.path ? path.resolve(q.path) : "";
-    const root = path.resolve(paths.projectsDir());
-    if (!file.startsWith(root + path.sep) || !file.endsWith(".jsonl")) {
-      return reply.code(400).send({ error: "invalid path" });
-    }
-    return engine.getSubagentMessages(file);
-  });
+  app.get<{ Params: { id: string }; Querystring: { path: string } }>(
+    "/api/sessions/:id/subagent",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        querystring: {
+          type: "object",
+          required: ["path"],
+          properties: { path: { type: "string" } },
+        },
+      },
+    },
+    async (req, reply) => {
+      const file = path.resolve(req.query.path);
+      const root = path.resolve(paths.projectsDir());
+      if (!file.startsWith(root + path.sep) || !file.endsWith(".jsonl")) {
+        return reply.code(400).send({ error: "invalid path" });
+      }
+      return engine.getSubagentMessages(file);
+    },
+  );
 
   // Rename / pin (sidecar — never touches the transcript).
-  app.patch("/api/sessions/:id", async (req) => {
-    const { id } = req.params as { id: string };
-    const body = (req.body ?? {}) as { customTitle?: string | null; pinned?: boolean };
-    if ("customTitle" in body) engine.index.setCustomTitle(id, body.customTitle ?? null);
-    if ("pinned" in body) engine.index.setPinned(id, body.pinned === true);
-    return engine.getSession(id) ?? { ok: true };
-  });
+  app.patch<{
+    Params: { id: string };
+    Body: { customTitle?: string | null; pinned?: boolean };
+  }>(
+    "/api/sessions/:id",
+    {
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            customTitle: { type: ["string", "null"] },
+            pinned: { type: "boolean" },
+          },
+        },
+      },
+    },
+    async (req) => {
+      const { id } = req.params;
+      const body = req.body ?? {};
+      if ("customTitle" in body) engine.index.setCustomTitle(id, body.customTitle ?? null);
+      if ("pinned" in body) engine.index.setPinned(id, body.pinned === true);
+      return engine.getSession(id) ?? { ok: true };
+    },
+  );
 
   // SSE live updates (index progress + session add/change).
   app.get("/api/events", (req, reply) => {

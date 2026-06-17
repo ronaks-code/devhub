@@ -12,6 +12,7 @@ import {
 import { encodeCwd, projectIdFromCwd } from "../src/paths.js";
 import { TranscriptIndex } from "../src/index-db.js";
 import { Engine } from "../src/index.js";
+import { DEFAULT_SETTINGS } from "../src/types.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-test-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
@@ -445,6 +446,43 @@ describe("TranscriptIndex search", () => {
     expect(hits.length).toBe(3);
     expect(new Set(hits.map((h) => h.sessionId)).size).toBe(3);
     idx.close();
+  });
+});
+
+describe("settings store", () => {
+  it("returns defaults on a fresh DB, then round-trips set/get/getAll", () => {
+    const dir = tmp();
+    const engine = new Engine(path.join(dir, "i.db"));
+
+    // Fresh DB => defaults (and undefined for keys with no default).
+    expect(engine.getSettings()).toEqual(DEFAULT_SETTINGS);
+    expect(engine.settings.get("theme")).toBe("system");
+    expect(engine.settings.get("defaultModel")).toBeUndefined();
+
+    // setAll merges only the provided keys; JSON-typed values round-trip.
+    engine.setSettings({ defaultModel: "claude-opus-4-8", monthlyBudgetUsd: 42.5, theme: "dark" });
+    expect(engine.settings.get("defaultModel")).toBe("claude-opus-4-8");
+    expect(engine.settings.get("monthlyBudgetUsd")).toBe(42.5);
+    expect(engine.settings.get("theme")).toBe("dark");
+    // Untouched keys keep their defaults.
+    expect(engine.settings.get("density")).toBe("comfortable");
+
+    // null is a real, stored value (not "no value").
+    engine.settings.set("lastProjectId", null);
+    expect(engine.settings.get("lastProjectId")).toBeNull();
+
+    const all = engine.getSettings();
+    expect(all.defaultModel).toBe("claude-opus-4-8");
+    expect(all.monthlyBudgetUsd).toBe(42.5);
+    expect(all.theme).toBe("dark");
+
+    engine.close();
+
+    // Persisted across a reopen of the same DB file (shared index.db).
+    const reopened = new Engine(path.join(dir, "i.db"));
+    expect(reopened.settings.get("defaultModel")).toBe("claude-opus-4-8");
+    expect(reopened.settings.get("monthlyBudgetUsd")).toBe(42.5);
+    reopened.close();
   });
 });
 

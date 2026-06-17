@@ -16,6 +16,8 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { appDataDir, projectIdFromCwd, projectName } from "./paths.js";
 import { streamRawLines, usageFromMessage, isCommandOrMetaPrompt } from "./parser.js";
+import { runMigrations } from "./migrations.js";
+import { SettingsStore } from "./settings.js";
 import type {
   ProjectSummary,
   SearchHit,
@@ -339,6 +341,8 @@ export class TranscriptIndex {
   private db: SqliteDatabase;
   private upsert: StatementSync;
   private selectOne: StatementSync;
+  /** User preferences, sharing this index's DB connection. */
+  readonly settings: SettingsStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
 
@@ -346,8 +350,20 @@ export class TranscriptIndex {
     const file = dbPath ?? path.join(appDataDir(), "index.db");
     mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
+    // Concurrency/throughput pragmas. WAL + synchronous=NORMAL is the recommended
+    // durable-enough/fast combo; busy_timeout lets the watcher and indexAll wait
+    // out a brief lock instead of throwing SQLITE_BUSY; mmap/cache speed reads.
     this.db.exec("PRAGMA journal_mode = WAL;");
+    this.db.exec("PRAGMA synchronous = NORMAL;");
+    this.db.exec("PRAGMA busy_timeout = 5000;");
+    this.db.exec("PRAGMA mmap_size = 268435456;"); // 256 MB
+    this.db.exec("PRAGMA cache_size = -16000;"); // ~16 MB page cache
+    this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
+    // Apply additive schema migrations BEFORE preparing statements that may depend
+    // on migrated columns/tables.
+    runMigrations(this.db);
+    this.settings = new SettingsStore(this.db);
     this.searchMode = this.initSearchStore();
     this.upsert = this.db.prepare(`
       INSERT INTO sessions (

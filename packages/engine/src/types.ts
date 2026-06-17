@@ -148,6 +148,36 @@ export type EngineEvent =
   | { kind: "session-added"; sessionId: string; projectId: string }
   | { kind: "ready" };
 
+/**
+ * User-facing app preferences, persisted in the `settings` key/value table.
+ * Every field is optional: a missing key means "use the default / not set yet".
+ * Values are stored as JSON so types round-trip (numbers, null, strings) intact.
+ */
+export interface AppSettings {
+  /** Preferred model id for new sessions (e.g. "claude-opus-4-8"). */
+  defaultModel?: string;
+  /** Preferred permission mode for new sessions (e.g. "default", "acceptEdits"). */
+  defaultPermissionMode?: string;
+  /** UI theme. */
+  theme?: "dark" | "light" | "system";
+  /** UI density token (e.g. "comfortable", "compact"). */
+  density?: string;
+  /** Last project the user had open (for restore-on-launch). */
+  lastProjectId?: string | null;
+  /** Last tab/view the user had open. */
+  lastTab?: string;
+  /** Soft monthly spend budget in USD, or null when unset. */
+  monthlyBudgetUsd?: number | null;
+}
+
+/** Baseline settings applied under any value the user hasn't explicitly set. */
+export const DEFAULT_SETTINGS: AppSettings = {
+  theme: "system",
+  density: "comfortable",
+  lastProjectId: null,
+  monthlyBudgetUsd: null,
+};
+
 export const EMPTY_USAGE: TokenUsage = {
   inputTokens: 0,
   outputTokens: 0,
