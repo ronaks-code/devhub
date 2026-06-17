@@ -247,6 +247,109 @@ export class MessageSearch {
       : this.searchLike(q, lim, facets);
   }
 
+  /**
+   * ALL matching message rows WITHIN a single session — NOT deduped to one best
+   * hit per session the way {@link search} is. Ordered by `seq` ascending (the
+   * in-session message order) so the UI can render an expandable "all matches in
+   * this conversation" list. `limit` caps the row count (default/clamped like
+   * `search`). No ranking/recency is applied; ordering is purely positional.
+   *
+   * Returns `SearchHit[]` for shape parity with `search`, but every hit carries the
+   * same sessionId and `seq` is the matched row's in-session index (the jump target).
+   */
+  searchInSession(sessionId: string, query: string, opts: { limit?: number } = {}): SearchHit[] {
+    const sid = sessionId.trim();
+    const q = query.trim();
+    if (!sid || !q) return [];
+    const lim = Math.max(1, Math.min(opts.limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+    return this.searchMode === "fts5"
+      ? this.searchInSessionFts(sid, q, lim)
+      : this.searchInSessionLike(sid, q, lim);
+  }
+
+  private searchInSessionFts(sessionId: string, query: string, limit: number): SearchHit[] {
+    const match = buildMatchExpr(query);
+    if (!match) return [];
+    // Restrict to the one session, return every matching row ordered by seq.
+    // Numbered params: ?1 match, ?2 sessionId, ?3 limit.
+    const rows = this.db
+      .prepare(
+        `SELECT f.sessionId AS sessionId, f.role AS role, f.toolName AS toolName, f.seq AS seq,
+                snippet(messages_fts, 4, '[', ']', '…', 12) AS excerpt,
+                s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
+                s.title AS title, s.titleSource AS titleSource,
+                m.customTitle AS customTitle
+         FROM messages_fts f
+         JOIN sessions s ON s.sessionId = f.sessionId
+         LEFT JOIN session_meta m ON m.sessionId = f.sessionId
+         WHERE messages_fts MATCH ?1 AND f.sessionId = ?2
+         ORDER BY f.seq ASC
+         LIMIT ?3`,
+      )
+      .all(match, sessionId, limit) as unknown as Array<{
+      sessionId: string;
+      role: string;
+      toolName: string | null;
+      seq: number | null;
+      excerpt: string | null;
+      projectId: string | null;
+      cwd: string | null;
+      lastTs: string | null;
+      title: string | null;
+      titleSource: string | null;
+      customTitle: string | null;
+    }>;
+    return rows.map((r) => toHit(r, (r.excerpt ?? "").trim()));
+  }
+
+  private searchInSessionLike(sessionId: string, query: string, limit: number): SearchHit[] {
+    const terms = parseQueryTerms(query);
+    const include = terms.filter((t) => !t.exclude);
+    const exclude = terms.filter((t) => t.exclude);
+    if (include.length === 0) return [];
+
+    const likePattern = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const clauses: string[] = ["t.sessionId = ?"];
+    const params: string[] = [sessionId];
+    for (const t of include) {
+      clauses.push(`t.text LIKE ? ESCAPE '\\'`);
+      params.push(likePattern(t.text));
+    }
+    for (const t of exclude) {
+      clauses.push(`t.text NOT LIKE ? ESCAPE '\\'`);
+      params.push(likePattern(t.text));
+    }
+    const where = clauses.join(" AND ");
+    const rows = this.db
+      .prepare(
+        `SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.seq AS seq, t.text AS text,
+                s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
+                s.title AS title, s.titleSource AS titleSource,
+                m.customTitle AS customTitle
+         FROM messages_text t
+         JOIN sessions s ON s.sessionId = t.sessionId
+         LEFT JOIN session_meta m ON m.sessionId = t.sessionId
+         WHERE ${where}
+         ORDER BY t.seq ASC
+         LIMIT ?`,
+      )
+      .all(...params, limit) as unknown as Array<{
+      sessionId: string;
+      role: string;
+      toolName: string | null;
+      seq: number | null;
+      text: string | null;
+      projectId: string | null;
+      cwd: string | null;
+      lastTs: string | null;
+      title: string | null;
+      titleSource: string | null;
+      customTitle: string | null;
+    }>;
+    const focus = include[0]!.text;
+    return rows.map((r) => toHit(r, likeExcerpt(r.text ?? "", focus)));
+  }
+
   private searchFts(query: string, limit: number, facets: SearchFacets): SearchHit[] {
     // Parse the query into a real FTS5 MATCH expression (AND-ed terms, phrases,
     // prefix*, -exclusion). A pure-negation query has nothing to match -> [].

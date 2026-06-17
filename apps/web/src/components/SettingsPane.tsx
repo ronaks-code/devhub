@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, Save, Server, SlidersHorizontal } from "lucide-react";
+import { Check, Loader2, Save, Server, SlidersHorizontal, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";
+import { HooksEditor } from "./config/HooksEditor";
 
 /** Sub-tabs within the Settings view. */
-type SettingsSection = "preferences" | "mcp";
+type SettingsSection = "preferences" | "mcp" | "hooks";
 
 const MODELS = [
   "claude-opus-4-8",
@@ -303,6 +304,7 @@ export function SettingsPane({
   const TABS: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
     { id: "preferences", label: "Preferences", icon: <SlidersHorizontal className="h-3.5 w-3.5" /> },
     { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
+    { id: "hooks", label: "Hooks", icon: <Webhook className="h-3.5 w-3.5" /> },
   ];
 
   return (
@@ -313,7 +315,9 @@ export function SettingsPane({
           <p className="mt-1 text-[12.5px] text-zinc-500">
             {section === "mcp"
               ? "Manage the Model Context Protocol servers Claude Code can use."
-              : "Defaults for new sessions and your spend budget. Saved on the server."}
+              : section === "hooks"
+                ? "Commands Claude Code runs on lifecycle events, edited as JSON."
+                : "Defaults for new sessions and your spend budget. Saved on the server."}
           </p>
         </header>
 
@@ -335,7 +339,13 @@ export function SettingsPane({
           ))}
         </div>
 
-        {section === "preferences" ? preferencesBody : <McpManager projectCwd={projectCwd} />}
+        {section === "preferences" ? (
+          preferencesBody
+        ) : section === "mcp" ? (
+          <McpManager projectCwd={projectCwd} />
+        ) : (
+          <HooksEditor projectCwd={projectCwd} />
+        )}
       </div>
     </div>
   );

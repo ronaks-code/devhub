@@ -85,3 +85,23 @@ export interface McpServerInput {
   /** For sse/http servers. */
   url?: string;
 }
+
+/**
+ * Response from GET /api/config/hooks — the merged hooks map plus the settings.json
+ * files that contributed (lowest precedence first). `hooks` keys are hook events
+ * (e.g. "PreToolUse") mapping to matcher entries; the entry shape is passed through
+ * from Claude Code as-is. Mirrors the engine's SettingsLayered (config/index.ts);
+ * defined locally so the web bundle stays free of the Node-only engine config code.
+ */
+export interface HooksConfig {
+  hooks: Record<string, unknown[]>;
+  /** settings.json paths that fed the merged view, lowest precedence first. */
+  sources: string[];
+  scope: ConfigScope;
+}
+
+/** Payload for PUT /api/config/hooks: replace the hooks map at the given scope. */
+export interface HooksInput {
+  /** Full hooks map to persist (event -> matcher entries). */
+  hooks: Record<string, unknown[]>;
+}

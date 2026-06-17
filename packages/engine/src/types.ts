@@ -169,6 +169,23 @@ export interface RunningSession {
   statusUpdatedAt?: number | null;
 }
 
+/**
+ * Where the current calendar month's APPROXIMATE spend sits relative to the user's
+ * soft monthly budget (`AppSettings.monthlyBudgetUsd`). Month-to-date cost is the
+ * current UTC month's slice of the per-day cost series. Lives here (pure) so faces
+ * can `import type` it; computed by the engine's `budget` module.
+ */
+export interface BudgetStatus {
+  /** The configured soft budget in USD, or null when the user hasn't set one. */
+  monthlyBudgetUsd: number | null;
+  /** APPROXIMATE USD spent so far this calendar month (UTC). */
+  monthToDateUsd: number;
+  /** Fraction of the budget consumed; 0 when no (or a non-positive) budget is set. */
+  pct: number;
+  /** "none" while under 80% (or no budget), "warn" at >=80%, "over" at >=100%. */
+  alert: "none" | "warn" | "over";
+}
+
 export interface Stats {
   totalSessions: number;
   totalProjects: number;
@@ -189,6 +206,8 @@ export interface Stats {
   }>;
   /** Sessions active per day (by last activity), oldest→newest. */
   activity: Array<{ date: string; sessions: number }>;
+  /** Monthly spend budget status (for the dashboard's budget bar). */
+  budget: BudgetStatus;
 }
 
 export interface SearchHit {

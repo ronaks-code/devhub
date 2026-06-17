@@ -17,6 +17,8 @@ import type {
   ConfigScope,
   McpServerDef,
   McpServerInput,
+  HooksConfig,
+  HooksInput,
 } from "./types";
 
 async function get<T>(url: string): Promise<T> {
@@ -71,6 +73,16 @@ export interface McpWriteResult {
   server?: Record<string, unknown>;
 }
 
+/** Response shape for a hooks write (PUT /api/config/hooks). */
+export interface HooksWriteResult {
+  ok: boolean;
+  scope: ConfigScope;
+  /** Path of the settings.json that was written. */
+  file?: string;
+  /** The hooks map as persisted (echoed back by the server). */
+  hooks?: Record<string, unknown[]>;
+}
+
 /**
  * Helpers over the MCP-server config REST surface (served by the server package
  * from the engine config module). The web side only wires the HTTP calls —
@@ -93,6 +105,30 @@ const config = {
   /** Remove a named MCP server. Scope follows `cwd` (project) or none (global). */
   mcpDelete: (name: string, cwd?: string) =>
     send<McpWriteResult>("/api/config/mcp", "DELETE", { name, cwd }),
+
+  /**
+   * The merged hooks map + contributing settings.json paths. With a (known)
+   * project `cwd` the global+project layers are merged; without one it's the
+   * global layer only. Backed by GET /api/config/hooks.
+   */
+  getHooks: (cwd?: string) =>
+    get<HooksConfig>(
+      "/api/config/hooks" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+    ),
+
+  /**
+   * Replace the hooks map at the given scope via PUT /api/config/hooks. The
+   * server requires an explicit `scope`; project scope also needs the project
+   * `cwd` (validated server-side against known projects). Writes go through the
+   * server's safe-write (validate -> .bak backup -> atomic write to the scoped
+   * settings.json); the web side only wires the call.
+   */
+  putHooks: (scope: ConfigScope, input: HooksInput, cwd?: string) =>
+    send<HooksWriteResult>("/api/config/hooks", "PUT", {
+      scope,
+      hooks: input.hooks,
+      ...(scope === "project" && cwd ? { cwd } : {}),
+    }),
 };
 
 export const api = {

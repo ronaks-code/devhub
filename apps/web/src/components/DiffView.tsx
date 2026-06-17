@@ -120,6 +120,23 @@ function diffHunk(oldStr: string, newStr: string): DiffLine[] {
   return out;
 }
 
+/**
+ * Count added/removed lines across all hunks of a parsed edit, using the same
+ * LCS line diff the viewer renders — so the +/- totals in FileChangeSummary match
+ * exactly what DiffView shows. Context lines (sign " ") aren't counted.
+ */
+export function countEditLines(edit: EditInput): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const h of edit.hunks) {
+    for (const line of diffHunk(h.oldStr, h.newStr)) {
+      if (line.sign === "+") added++;
+      else if (line.sign === "-") removed++;
+    }
+  }
+  return { added, removed };
+}
+
 export function LineRow({ line }: { line: DiffLine }) {
   const bg =
     line.sign === "+"

@@ -9,6 +9,7 @@ import { TranscriptIndex } from "./index-db.js";
 import type { SearchFacets } from "./search.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
+import { budgetStatus, type BudgetStatus } from "./budget.js";
 import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
@@ -183,6 +184,25 @@ export class Engine {
   }
 
   /**
+   * ALL matching message rows within ONE session (not deduped to a single best
+   * hit), ordered by in-session `seq`, for an expandable "all matches in this
+   * conversation" view. `{ limit }` caps the row count.
+   */
+  searchInSession(sessionId: string, query: string, opts: { limit?: number } = {}): SearchHit[] {
+    return this.index.searchInSession(sessionId, query, opts);
+  }
+
+  /**
+   * Where this calendar month's APPROXIMATE spend sits relative to the user's soft
+   * monthly budget (`settings.monthlyBudgetUsd`). Month-to-date cost is the current
+   * UTC month's slice of the {@link dailyUsage} series; `alert` is "warn" at >=80%
+   * and "over" at >=100%. Returns `alert: "none"` (and `pct: 0`) when no budget set.
+   */
+  getBudgetStatus(): BudgetStatus {
+    return budgetStatus(this.settings.get("monthlyBudgetUsd"), this.index.dailyUsage());
+  }
+
+  /**
    * Currently-running claude processes, read from ~/.claude/sessions/<pid>.json.
    * Delegates to the `running` module, which reads the ephemeral files AND probes
    * each PID for liveness — stale/zombie entries are flagged (`alive: false`,
@@ -244,6 +264,7 @@ export class Engine {
       totalCostUsd,
       topProjects,
       activity: this.buildActivity(),
+      budget: this.getBudgetStatus(),
     };
   }
 
@@ -351,6 +372,8 @@ export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { dailyUsage } from "./rollups.js";
 export type { DailyUsage, DailyUsageOptions } from "./rollups.js";
+export { budgetStatus } from "./budget.js";
+export type { BudgetStatus } from "./budget.js";
 export { classifyCommand, classifyShell } from "./classify-command.js";
 export type { CommandSeverity, CommandClassification } from "./classify-command.js";
 export { listRunningSessions, isPidAlive } from "./running.js";

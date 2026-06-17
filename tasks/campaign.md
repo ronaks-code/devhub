@@ -17,7 +17,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W5 Search ranking, MCP manager, permission rules, transcript outline, tags, TodoWrite card ✅
 - [x] W6 Approve-and-remember, commit composer, role filters, theme tokens, prompt history, model facet, all-sessions ✅
 - [x] W7 Dangerous-command classifier, jump-to-match, per-day usage, edit-resend, git diff, bulk sessions, WS reconnect ✅
-- [ ] W8 Hooks editor, what-changed panel, monthly budget, slash palette
+- [x] W8 Hooks editor, what-changed panel, monthly budget, slash palette, live-bubble, Bash card ✅
 - [ ] W9 Settings scope diff, checkpoint/rewind, queue messages, error states
 - [ ] W10 Permission polish, MCP health, archive sessions, inline images
 - [ ] W11 PR creation, agents library, period selector, tool-running status
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W8** ✅ (green: tc×4 + 97 tests + build + search/session + stats.budget + chat). engine: `budget.ts` monthly budget status, `searchInSession` (all matches), budget in Stats. server: `/api/search/session`, PATCH `/api/projects/:id` meta, hooks-write. web: LiveBubble (token deltas re-render ONLY the live bubble via useSyncExternalStore — big perf win), BashCard, SlashPalette, HooksEditor, FileChangeSummary. (server used an in-package structural cast for searchInSession during the parallel window; engine delivered it; runtime verified.)
 - **W7** ✅ (green: tc×4 + 90 tests + build + /api/rollups 200 + chat). engine: `classify-command.ts` severity tiers, `rollups.ts` per-day token/cost series, SearchHit.seq, prefix-rewrite reindex (headSig, migration v5). server: `/api/rollups` + tags in PATCH. web: jump-to-match, edit-and-resend (fork), GitDiffView (real git diffs), multi-select + bulk pin/tag, WS auto-reconnect w/ backoff.
 - **W6** ✅ (green: tc×4 + 76 tests + build + all-sessions/stats/chat smoke). engine: model facet (migration v4), `all-sessions.ts` cross-project list, git write ops (stage/commit/branch), cost in Stats. server: git commit/stage/branch + AI `suggest-message` (driver-drafted) + `/api/all-sessions`. web: permission scoping UI, CSS semantic theme tokens (light-mode groundwork), CommitComposer, TranscriptFilters, dashboard $, prompt-history recall. INTEGRATOR FIX: deleted a stale server `engine-augment.d.ts` shim → surfaced + fixed a real `createBranch` arity bug.
 - **W5** ✅ (green: tc×4 + 57 tests + build + config-API + ranked-search + chat). engine: BM25+role-weight+recency ranking, `tags.ts` (engine tags + `tag` facet + SessionSummary.tags, migration v3), running waitingFor/statusUpdatedAt. server: permission-rule editor (writes user settings.json) + full `/api/config/*` (mcp/agents/skills/commands/hooks/CLAUDE.md, safe writes). web: McpManager, TranscriptOutline TOC, TodoWriteCard, useStickToBottom. (server lane's mid-flight tc-fail was concurrent-edit noise; gate green.)

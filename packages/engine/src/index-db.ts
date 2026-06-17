@@ -815,6 +815,15 @@ export class TranscriptIndex {
     return this.searcher.search(query, opts);
   }
 
+  /**
+   * ALL matching message rows within a SINGLE session (not deduped to one best
+   * hit), ordered by in-session `seq`. Powers an expandable "all matches in this
+   * conversation" view. Delegates to {@link MessageSearch.searchInSession}.
+   */
+  searchInSession(sessionId: string, query: string, opts: { limit?: number } = {}): SearchHit[] {
+    return this.searcher.searchInSession(sessionId, query, opts);
+  }
+
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------
 
   setCustomTitle(sessionId: string, title: string | null): void {

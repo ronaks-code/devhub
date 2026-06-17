@@ -10,6 +10,7 @@ import {
   ArrowUp,
   ArrowDown,
   ListTree,
+  FileDiff,
   MessageSquarePlus,
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
@@ -17,6 +18,7 @@ import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { TranscriptOutline } from "./TranscriptOutline";
+import { FileChangeSummary } from "./FileChangeSummary";
 import {
   TranscriptFilters,
   applyFilters,
@@ -68,6 +70,9 @@ export function TranscriptPane({
   const [activeMatch, setActiveMatch] = useState<number | null>(null);
   // Collapsible outline (TOC) side-rail listing user turns + major tool actions.
   const [outlineOpen, setOutlineOpen] = useState(false);
+  // Collapsible "what changed" side-rail: files touched by edits with +/- counts.
+  // Mutually exclusive with the outline so two rails never crowd the viewer.
+  const [changesOpen, setChangesOpen] = useState(false);
   const onFindQueryChange = useCallback((q: string) => setFindQuery(q), []);
   const onActiveMatchChange = useCallback((i: number | null) => setActiveMatch(i), []);
 
@@ -219,9 +224,28 @@ export function TranscriptPane({
           <h1 className="truncate text-[15px] font-semibold text-zinc-100">{s.title}</h1>
           {loading && <Spinner className="h-3.5 w-3.5" />}
           <button
-            onClick={() => setOutlineOpen((v) => !v)}
+            onClick={() => {
+              setChangesOpen((v) => !v);
+              setOutlineOpen(false);
+            }}
             className={cn(
               "ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              changesOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={changesOpen ? "Hide changes" : "Show what changed"}
+          >
+            <FileDiff className="h-3.5 w-3.5" />
+            Changes
+          </button>
+          <button
+            onClick={() => {
+              setOutlineOpen((v) => !v);
+              setChangesOpen(false);
+            }}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
               outlineOpen
                 ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
                 : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
@@ -355,6 +379,18 @@ export function TranscriptPane({
           onJump={jumpToIndex}
           onClose={() => setOutlineOpen(false)}
           activeIndex={findOpen ? activeMatch : null}
+        />
+      ) : null}
+
+      {changesOpen ? (
+        <FileChangeSummary
+          messages={messages}
+          onJump={(i) => {
+            // Stop following the live tail so the view rests on the edit card.
+            stick.unpin();
+            jumpToIndex(i);
+          }}
+          onClose={() => setChangesOpen(false)}
         />
       ) : null}
       </div>

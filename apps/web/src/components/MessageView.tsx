@@ -5,6 +5,7 @@ import { cn } from "../lib/utils";
 import { Markdown } from "./Markdown";
 import { DiffView, parseEditInput } from "./DiffView";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
+import { BashCard } from "./tools/BashCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -74,12 +75,18 @@ function ResultBody({ result }: { result: ToolResultBlock }) {
  */
 function ToolCard({ block }: { block: PairedToolUse }) {
   const name = block.name || "tool";
-  const result = block.result;
-  const isError = result?.isError ?? false;
 
   // TodoWrite gets a dedicated checklist renderer instead of raw JSON.
   if (name === "TodoWrite") return <TodoWriteCard block={block} />;
 
+  // Bash gets a command/stdout renderer with exit styling; the generic card is
+  // its fallback when the input doesn't carry a string command.
+  if (name === "Bash") {
+    return <BashCard block={block} fallback={() => <GenericToolCard block={block} />} />;
+  }
+
+  const result = block.result;
+  const isError = result?.isError ?? false;
   const edit = EDIT_TOOLS.has(name) ? parseEditInput(name, block.input) : null;
 
   if (edit) {
@@ -111,7 +118,19 @@ function ToolCard({ block }: { block: PairedToolUse }) {
     );
   }
 
-  // Non-edit tools: compact input + (collapsed) result.
+  // Non-edit tools: the generic compact input + (collapsed) result card.
+  return <GenericToolCard block={block} />;
+}
+
+/**
+ * The default tool_use card: compact JSON input + a collapsed result body. Used
+ * for every tool without a dedicated renderer, and as the BashCard fallback when
+ * a Bash input can't be parsed.
+ */
+function GenericToolCard({ block }: { block: PairedToolUse }) {
+  const name = block.name || "tool";
+  const result = block.result;
+  const isError = result?.isError ?? false;
   const resultLong = (result?.content ?? "").length > 600;
   return (
     <details

@@ -11,6 +11,8 @@ import { indexToolResults, pairMessage } from "../lib/transcript";
 import { useDraft } from "../hooks/useDraft";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { MessageView } from "./MessageView";
+import { LiveBubble, LiveStream } from "./LiveBubble";
+import { SlashPalette, filterCommands } from "./SlashPalette";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
 import { usePromptHistory } from "../hooks/usePromptHistory";
 import { EmptyState, IconButton, Spinner } from "./ui";
@@ -79,8 +81,10 @@ export function ChatPane({
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(
     defaultPermissionMode ?? DEFAULT_PERMISSION,
   );
-  // Key of the assistant bubble currently receiving deltas (null = none in flight).
-  const [liveKey, setLiveKey] = useState<number | null>(null);
+  // True while the in-flight assistant turn is streaming text into the LiveBubble.
+  // Deltas flow through liveStreamRef (an external store) — NOT React state — so a
+  // token re-renders only LiveBubble, never this pane's finalized message list.
+  const [liveActive, setLiveActive] = useState(false);
   // True while the chat socket is retrying after an unexpected drop. Drives a
   // subtle "reconnecting" hint; the live session resumes on the next prompt.
   const [reconnecting, setReconnecting] = useState(false);
@@ -95,10 +99,22 @@ export function ChatPane({
   // The most recent user prompt of this conversation, so "Regenerate" can resend
   // it (resuming the session) for a fresh response.
   const lastPromptRef = useRef<string | null>(null);
+  // Slash commands advertised by the session (from the {t:"session"} init frame),
+  // surfaced in the SlashPalette when the composer starts with "/".
+  const [slashCommands, setSlashCommands] = useState<string[]>([]);
+  // Highlighted row in the slash palette; reset whenever the palette (re)opens or
+  // the query changes. Steered by Arrow keys in the composer's keydown handler.
+  const [slashIndex, setSlashIndex] = useState(0);
 
   const connRef = useRef<ChatConn | null>(null);
   const keyRef = useRef(0);
-  const liveKeyRef = useRef<number | null>(null);
+  // The streamed-text store for the in-flight turn. One per pane; LiveBubble
+  // subscribes to it. Holds no React state, so appending a token doesn't re-render
+  // ChatPane (only the subscribed LiveBubble).
+  const liveStreamRef = useRef<LiveStream>(new LiveStream());
+  // Mirrors `liveActive` for synchronous reads inside socket handlers (which fire
+  // outside React's render cycle).
+  const liveActiveRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // True between an unexpected drop and the subsequent reconnect, so the
@@ -114,51 +130,37 @@ export function ChatPane({
     setItems((prev) => [...prev, { key: nextKey(), message }]);
   }, []);
 
-  // Append streamed text to the in-flight assistant bubble, creating it on the
-  // first delta of a turn.
+  // Append streamed text to the in-flight assistant bubble. Deltas go into the
+  // external LiveStream (not React state), so only the subscribed LiveBubble
+  // re-renders per token. The first delta of a turn flips `liveActive` once to
+  // mount the bubble.
   const appendDelta = useCallback((text: string) => {
-    if (liveKeyRef.current == null) {
-      // First delta of a turn: spin up a fresh live assistant bubble.
-      const key = nextKey();
-      liveKeyRef.current = key;
-      setLiveKey(key);
-      const live: NormalizedMessage = {
-        seq: -1,
-        uuid: null,
-        parentUuid: null,
-        role: "assistant",
-        type: "assistant",
-        timestamp: new Date().toISOString(),
-        blocks: [{ type: "text", text }],
-      };
-      setItems((prev) => [...prev, { key, message: live }]);
-      return;
+    if (!liveActiveRef.current) {
+      liveActiveRef.current = true;
+      setLiveActive(true);
     }
-    const liveKey = liveKeyRef.current;
-    setItems((prev) =>
-      prev.map((it) => {
-        if (it.key !== liveKey) return it;
-        const blocks = [...it.message.blocks];
-        const last = blocks[blocks.length - 1];
-        if (last && last.type === "text") {
-          blocks[blocks.length - 1] = { type: "text", text: last.text + text };
-        } else {
-          blocks.push({ type: "text", text });
-        }
-        return { ...it, message: { ...it.message, blocks } };
-      }),
-    );
+    liveStreamRef.current.append(text);
   }, []);
 
-  // The full assistant message arrived: replace/finalize the live bubble so we
-  // don't duplicate the streamed text, then clear the live pointer.
+  // Tear down the in-flight live bubble (turn ended/aborted with no finalized
+  // assistant message). Drops the streamed text rather than stranding a cursor.
+  const clearLive = useCallback(() => {
+    liveActiveRef.current = false;
+    setLiveActive(false);
+    liveStreamRef.current.reset();
+  }, []);
+
+  // The full assistant message arrived. When a turn was streaming, the finalized
+  // message supersedes the live bubble: push it into the stable `items` list and
+  // reset the stream so the (now-duplicated) streamed text disappears in the same
+  // commit the finalized message appears — no flicker, no double text.
   const finalizeMessage = useCallback(
     (message: NormalizedMessage) => {
-      const liveKey = liveKeyRef.current;
-      if (message.role === "assistant" && liveKey != null) {
-        liveKeyRef.current = null;
-        setLiveKey(null);
-        setItems((prev) => prev.map((it) => (it.key === liveKey ? { ...it, message } : it)));
+      if (message.role === "assistant" && liveActiveRef.current) {
+        liveActiveRef.current = false;
+        setLiveActive(false);
+        liveStreamRef.current.reset();
+        push(message);
         return;
       }
       push(message);
@@ -170,7 +172,12 @@ export function ChatPane({
   const ensureConn = useCallback((): ChatConn => {
     if (connRef.current) return connRef.current;
     const conn = openChat({
-      onSession: (id) => setSessionId(id),
+      onSession: (id, init) => {
+        setSessionId(id);
+        // Capture the session's slash commands for the composer palette. Guard
+        // the shape — older servers may omit it.
+        if (Array.isArray(init?.slashCommands)) setSlashCommands(init.slashCommands);
+      },
       onDelta: (text) => appendDelta(text),
       onMessage: (m) => finalizeMessage(m),
       onStatus: (kind) => setStatus(kind),
@@ -192,8 +199,7 @@ export function ChatPane({
           setRunning(false);
           setStatus(null);
           setPendingPermission(null);
-          liveKeyRef.current = null;
-          setLiveKey(null);
+          clearLive();
         }
       },
       onError: (message) => {
@@ -201,20 +207,18 @@ export function ChatPane({
         setRunning(false);
         setStatus(null);
         setPendingPermission(null);
-        liveKeyRef.current = null;
-        setLiveKey(null);
+        clearLive();
       },
       onTurnEnd: () => {
         setRunning(false);
         setStatus(null);
         setPendingPermission(null);
-        liveKeyRef.current = null;
-        setLiveKey(null);
+        clearLive();
       },
     });
     connRef.current = conn;
     return conn;
-  }, [appendDelta, finalizeMessage]);
+  }, [appendDelta, finalizeMessage, clearLive]);
 
   // Forward the user's Allow/Deny decision (with its scope) to the agent and
   // dismiss the card. Never auto-decides: only fires from an explicit button
@@ -258,13 +262,12 @@ export function ChatPane({
       setPendingPermission(null);
       setStatus("starting");
       setRunning(true);
-      liveKeyRef.current = null;
-      setLiveKey(null);
+      clearLive();
 
       const conn = ensureConn();
       conn.send({ t: "prompt", cwd, prompt, sessionId, model, permissionMode });
     },
-    [push, ensureConn, cwd, sessionId, model, permissionMode, stick.pin],
+    [push, ensureConn, cwd, sessionId, model, permissionMode, stick.pin, clearLive],
   );
 
   const send = useCallback(() => {
@@ -314,9 +317,8 @@ export function ChatPane({
     connRef.current?.close();
     connRef.current = null;
     keyRef.current = 0;
-    liveKeyRef.current = null;
     lastPromptRef.current = null;
-    setLiveKey(null);
+    clearLive();
     stick.pin();
     setItems([]);
     setSessionId(undefined);
@@ -326,9 +328,71 @@ export function ChatPane({
     setErrorMsg(null);
     setPendingPermission(null);
     setEditingFork(false);
-  }, []);
+  }, [clearLive, stick.pin]);
+
+  // The composer is in "slash mode" when, with a turn idle, the draft is a single
+  // leading-"/" token (no space/newline yet) — e.g. "/" or "/comp". The query is
+  // the text after the slash. Anything else (a space, a second line, normal text)
+  // closes the palette so typing a message that merely starts with "/path" works.
+  const slashMatch = !running ? /^\/(\S*)$/.exec(draft) : null;
+  const slashQuery = slashMatch ? slashMatch[1]! : null;
+  const slashMatches = useMemo(
+    () => (slashQuery == null ? [] : filterCommands(slashCommands, slashQuery)),
+    [slashQuery, slashCommands],
+  );
+  const slashOpen = slashQuery != null && slashMatches.length > 0;
+
+  // Keep the highlighted row valid as the filtered list changes (e.g. typing
+  // narrows it). Clamp into range; reset to the top when the query changes shape.
+  useEffect(() => {
+    setSlashIndex((i) => (i >= slashMatches.length ? 0 : i));
+  }, [slashMatches.length]);
+
+  // Insert a chosen slash command into the composer as "/name " (trailing space
+  // so the user can type arguments) and refocus the textarea.
+  const insertSlash = useCallback(
+    (command: string) => {
+      setDraft(`/${command} `);
+      setSlashIndex(0);
+      const el = textareaRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.focus();
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+      }
+    },
+    [setDraft],
+  );
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Slash palette takes keyboard priority while open: Arrow to move, Enter/Tab
+    // to insert the highlighted command, Escape to dismiss (clearing the draft).
+    if (slashOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSlashIndex((i) => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+        e.preventDefault();
+        const pick = slashMatches[slashIndex] ?? slashMatches[0];
+        if (pick) insertSlash(pick);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setDraft("");
+        setSlashIndex(0);
+        return;
+      }
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
@@ -381,24 +445,29 @@ export function ChatPane({
     overscan: 10,
   });
 
-  // Follow the newest message as the list grows, deltas stream into the live
-  // bubble, or a turn ends — but only while the user is parked at the bottom.
-  // liveLen captures the streamed text length so each delta re-triggers the
-  // scroll (deltas mutate the live bubble in place, not the list length).
+  // Follow the newest FINALIZED message as the list grows or a turn ends — but
+  // only while the user is parked at the bottom. Streaming growth (the LiveBubble)
+  // is followed separately via `followLiveBottom` (passed to LiveBubble) so a
+  // token never re-renders this pane.
   const lastIndex = view.length - 1;
-  const liveLen =
-    liveKey == null
-      ? 0
-      : (view[lastIndex]?.message.blocks ?? []).reduce(
-          (n, b) => n + (b.type === "text" ? b.text.length : 0),
-          0,
-        );
   useEffect(() => {
     if (lastIndex < 0) return;
     return stick.followToIndex(() =>
       virtualizer.scrollToIndex(lastIndex, { align: "end" }),
     );
-  }, [lastIndex, running, liveKey, liveLen, virtualizer, stick.followToIndex]);
+  }, [lastIndex, running, liveActive, virtualizer, stick.followToIndex]);
+
+  // Keep the streaming LiveBubble in view as it grows, but only while pinned.
+  // LiveBubble invokes this on each delta (it owns the per-token re-render); we
+  // scroll the container to its bottom, which lands on the live bubble below the
+  // virtualized (finalized) block. `followToIndex` reads the pin state
+  // synchronously, so a scrolled-up user is never yanked back down.
+  const followLiveBottom = useCallback(() => {
+    stick.followToIndex(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [stick.followToIndex]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
@@ -474,34 +543,44 @@ export function ChatPane({
             }
           />
         ) : (
-          <div
-            style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
-          >
-            {virtualizer.getVirtualItems().map((vi) => {
-              const it = view[vi.index]!;
-              return (
-                <div
-                  key={it.key}
-                  data-index={vi.index}
-                  ref={virtualizer.measureElement}
-                  style={{
-                    position: "absolute",
-                    top: 0,
-                    left: 0,
-                    width: "100%",
-                    transform: `translateY(${vi.start}px)`,
-                  }}
-                  className="border-b border-zinc-900/70"
-                >
-                  <MessageView
-                    m={it.message}
-                    streaming={running && it.key === liveKey}
-                    onEdit={!running ? editFromMessage : undefined}
-                  />
-                </div>
-              );
-            })}
-          </div>
+          <>
+            <div
+              style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
+            >
+              {virtualizer.getVirtualItems().map((vi) => {
+                const it = view[vi.index]!;
+                return (
+                  <div
+                    key={it.key}
+                    data-index={vi.index}
+                    ref={virtualizer.measureElement}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${vi.start}px)`,
+                    }}
+                    className="border-b border-zinc-900/70"
+                  >
+                    <MessageView
+                      m={it.message}
+                      onEdit={!running ? editFromMessage : undefined}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+            {/* The in-flight streaming bubble lives BELOW the virtualized
+                (finalized) block, in normal flow, and subscribes to the delta
+                store itself — so a streamed token re-renders only it, not the
+                finalized list above. Finalizing moves its text into `view`. */}
+            {liveActive ? (
+              <div className="border-b border-zinc-900/70">
+                <LiveBubble stream={liveStreamRef.current} onGrow={followLiveBottom} />
+              </div>
+            ) : null}
+          </>
         )}
       </div>
 
@@ -566,6 +645,17 @@ export function ChatPane({
 
       {/* Composer */}
       <div className="border-t border-zinc-800/80 px-4 py-3">
+        {/* Slash command palette — opens when the draft is a single "/token".
+            Arrow/Enter are handled in the composer's onKeyDown so focus stays in
+            the textarea; clicking a row inserts it too. */}
+        {slashOpen ? (
+          <SlashPalette
+            query={slashQuery!}
+            commands={slashCommands}
+            activeIndex={slashIndex}
+            onPick={insertSlash}
+          />
+        ) : null}
         {/* Fork-from-here banner: shown after "Edit & resend" until the message
             is sent or the user cancels. Sending resumes the session, so it
             continues/forks the conversation from that earlier turn. */}

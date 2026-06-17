@@ -24,6 +24,7 @@ import { listRunningSessions, isPidAlive } from "../src/running.js";
 import { runMigrations, hasColumn } from "../src/migrations.js";
 import { classifyCommand, classifyShell } from "../src/classify-command.js";
 import { dailyUsage } from "../src/rollups.js";
+import { budgetStatus } from "../src/budget.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -1849,5 +1850,162 @@ describe("migrations (headSig column backfill)", () => {
     runMigrations(db); // re-run is harmless
     expect(hasColumn(db, "sessions", "headSig")).toBe(true);
     db.close();
+  });
+});
+
+describe("budgetStatus (monthly spend budget)", () => {
+  // Fixed "now" so the current-month slice is deterministic: 2026-06-15 UTC.
+  const now = new Date("2026-06-15T00:00:00.000Z");
+  const day = (date: string, costUsd: number): import("../src/rollups.js").DailyUsage => ({
+    date,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    costUsd,
+    sessions: 1,
+  });
+
+  it("sums only the current calendar month (UTC) into month-to-date", () => {
+    const series = [
+      day("2026-05-31", 100), // previous month — excluded
+      day("2026-06-01", 20),
+      day("2026-06-10", 30),
+      day("2026-07-01", 999), // future month — excluded
+    ];
+    const s = budgetStatus(200, series, now);
+    expect(s.monthToDateUsd).toBeCloseTo(50, 6); // 20 + 30 only
+    expect(s.monthlyBudgetUsd).toBe(200);
+    expect(s.pct).toBeCloseTo(0.25, 6);
+    expect(s.alert).toBe("none");
+  });
+
+  it("warns at >=80% and flags over at >=100%", () => {
+    // budget 100; spend 80 -> warn, spend 100 -> over.
+    expect(budgetStatus(100, [day("2026-06-05", 79.99)], now).alert).toBe("none");
+    expect(budgetStatus(100, [day("2026-06-05", 80)], now).alert).toBe("warn");
+    expect(budgetStatus(100, [day("2026-06-05", 99.99)], now).alert).toBe("warn");
+    expect(budgetStatus(100, [day("2026-06-05", 100)], now).alert).toBe("over");
+    expect(budgetStatus(100, [day("2026-06-05", 250)], now).alert).toBe("over");
+    expect(budgetStatus(100, [day("2026-06-05", 250)], now).pct).toBeCloseTo(2.5, 6);
+  });
+
+  it("no budget (null/undefined/<=0) => pct 0, alert none, but still reports spend", () => {
+    const series = [day("2026-06-05", 42)];
+    for (const b of [null, undefined, 0, -5] as Array<number | null | undefined>) {
+      const s = budgetStatus(b, series, now);
+      expect(s.monthToDateUsd).toBeCloseTo(42, 6);
+      expect(s.pct).toBe(0);
+      expect(s.alert).toBe("none");
+    }
+    expect(budgetStatus(null, series, now).monthlyBudgetUsd).toBeNull();
+  });
+
+  it("Engine.getBudgetStatus reads the live setting + index, and feeds getStats", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    // One session THIS month (UTC): opus 1,000,000 input tokens => $5.
+    const thisMonth = `${new Date().toISOString().slice(0, 7)}-15T12:00:00.000Z`;
+    writeFileSync(
+      path.join(proj, "s1.jsonl"),
+      jl({ type: "user", cwd: "/home/me/bdg", timestamp: thisMonth, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/bdg",
+          timestamp: thisMonth,
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 1_000_000, output_tokens: 0 },
+          },
+        }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(path.join(proj, "s1.jsonl"));
+
+    // No budget set yet => alert none, but month-to-date reflects the $5 spend.
+    let b = engine.getBudgetStatus();
+    expect(b.monthlyBudgetUsd).toBeNull();
+    expect(b.monthToDateUsd).toBeCloseTo(5, 5);
+    expect(b.alert).toBe("none");
+
+    // Set a $10 budget => 50% used, still "none".
+    engine.setSettings({ monthlyBudgetUsd: 10 });
+    b = engine.getBudgetStatus();
+    expect(b.monthlyBudgetUsd).toBe(10);
+    expect(b.pct).toBeCloseTo(0.5, 5);
+    expect(b.alert).toBe("none");
+
+    // Tighten to $4 => $5 spend is over budget.
+    engine.setSettings({ monthlyBudgetUsd: 4 });
+    expect(engine.getBudgetStatus().alert).toBe("over");
+
+    // getStats embeds the same budget status.
+    const stats = engine.getStats();
+    expect(stats.budget.alert).toBe("over");
+    expect(stats.budget.monthToDateUsd).toBeCloseTo(5, 5);
+    engine.close();
+  });
+});
+
+describe("searchInSession (all matches within one session)", () => {
+  const build = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/insession";
+    // Session A: "kiwi" appears in seq 0, 2, 3 (not seq 1).
+    writeFileSync(
+      path.join(proj, "sessA.jsonl"),
+      jl({ type: "user", cwd, message: { role: "user", content: "kiwi first prompt" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          message: { role: "assistant", content: [{ type: "text", text: "no fruit here" }], usage: { input_tokens: 1, output_tokens: 1 } },
+        }) +
+        jl({ type: "user", cwd, message: { role: "user", content: "another kiwi mention" } }) +
+        jl({ type: "user", cwd, message: { role: "user", content: "final kiwi line" } }),
+    );
+    // Session B also contains "kiwi" — must NOT leak into A's results.
+    writeFileSync(
+      path.join(proj, "sessB.jsonl"),
+      jl({ type: "user", cwd, message: { role: "user", content: "kiwi over here in B" } }),
+    );
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(path.join(proj, "sessA.jsonl"));
+    await idx.indexSession(path.join(proj, "sessB.jsonl"));
+    return { idx };
+  };
+
+  it("returns ALL matching rows in one session, ordered by seq, scoped to that session", async () => {
+    const { idx } = await build(tmp());
+    const hits = idx.searchInSession("sessA", "kiwi");
+    // 3 matching rows (seq 0, 2, 3) — NOT deduped to one best hit.
+    expect(hits.map((h) => h.seq)).toEqual([0, 2, 3]);
+    // Every hit belongs to the requested session only.
+    expect(new Set(hits.map((h) => h.sessionId))).toEqual(new Set(["sessA"]));
+    for (const h of hits) expect(h.snippet.toLowerCase()).toContain("kiwi");
+    idx.close();
+  });
+
+  it("respects limit and returns [] for blank query / unknown session", async () => {
+    const { idx } = await build(tmp());
+    expect(idx.searchInSession("sessA", "kiwi", { limit: 2 }).map((h) => h.seq)).toEqual([0, 2]);
+    expect(idx.searchInSession("sessA", "   ")).toEqual([]);
+    expect(idx.searchInSession("nope", "kiwi")).toEqual([]);
+    // a word present in B but absent from A yields nothing for A
+    expect(idx.searchInSession("sessA", "marshmallow")).toEqual([]);
+    idx.close();
+  });
+
+  it("Engine.searchInSession delegates to the index", async () => {
+    const dir = tmp();
+    const { idx } = await build(dir);
+    idx.close();
+    const engine = new Engine(path.join(dir, "i.db"));
+    const hits = engine.searchInSession("sessA", "kiwi");
+    expect(hits.map((h) => h.seq)).toEqual([0, 2, 3]);
+    engine.close();
   });
 });
