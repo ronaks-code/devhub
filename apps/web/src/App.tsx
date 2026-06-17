@@ -4,6 +4,7 @@ import {
   Cpu,
   Folder,
   Hexagon,
+  History,
   Inbox,
   LayoutDashboard,
   MessageSquarePlus,
@@ -14,6 +15,7 @@ import {
   Settings,
   Sparkles,
   Sun,
+  Trash2,
 } from "lucide-react";
 import { api, subscribeEvents, type AppSettings } from "./lib/api";
 import type {
@@ -37,7 +39,11 @@ import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { SessionCostBadge } from "./components/SessionCostBadge";
 import { EmptyState, Spinner } from "./components/ui";
+import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
+import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
 import { cn } from "./lib/utils";
 
 const BASE_TAIL = 2 * 1024 * 1024;
@@ -86,6 +92,102 @@ function writeUiState(state: PersistedUiState): void {
 
 const VALID_TABS: readonly Tab[] = ["browse", "chat", "ops", "inbox", "dashboard", "settings"];
 
+/**
+ * A small "Recent" jump-back dropdown in the header: the last sessions the user
+ * opened, most-recent-first, reopened on click. Closes on outside-click / Escape.
+ * Self-hides its button when there's no history yet, so it never adds dead chrome.
+ */
+function RecentMenu({
+  recents,
+  onOpen,
+  onClear,
+}: {
+  recents: RecentSession[];
+  onOpen: (projectId: string, sessionId: string) => void;
+  onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // Nothing opened yet — hide the affordance entirely.
+  if (recents.length === 0) return null;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-2 py-1 text-[12px] ring-1 ring-zinc-800 transition",
+          open ? "text-zinc-200" : "text-zinc-500 hover:text-zinc-300",
+        )}
+        title="Recently opened sessions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <History className="h-3.5 w-3.5" />
+        <span>Recent</span>
+      </button>
+      {open ? (
+        <div
+          className="absolute right-0 top-full z-50 mt-1.5 w-72 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/50"
+          role="menu"
+        >
+          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-1.5">
+            <span className="text-[10.5px] font-medium uppercase tracking-wide text-zinc-500">
+              Recently opened
+            </span>
+            <button
+              onClick={() => {
+                onClear();
+                setOpen(false);
+              }}
+              className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10.5px] text-zinc-600 transition hover:bg-zinc-800 hover:text-zinc-300"
+              title="Clear recent list"
+            >
+              <Trash2 className="h-3 w-3" />
+              Clear
+            </button>
+          </div>
+          <div className="max-h-[60vh] overflow-y-auto py-1">
+            {recents.map((r) => (
+              <button
+                key={r.sessionId}
+                onClick={() => {
+                  onOpen(r.projectId, r.sessionId);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition hover:bg-zinc-800/60"
+                role="menuitem"
+              >
+                <MessagesSquare className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200">
+                  {r.title}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TopBar({
   tab,
   onTab,
@@ -94,6 +196,11 @@ function TopBar({
   progress,
   sessionCount,
   projectCount,
+  recents,
+  onOpenRecent,
+  onClearRecents,
+  projectSessions,
+  projectName,
 }: {
   tab: Tab;
   onTab: (t: Tab) => void;
@@ -102,6 +209,11 @@ function TopBar({
   progress: { done: number; total: number } | null;
   sessionCount: number;
   projectCount: number;
+  recents: RecentSession[];
+  onOpenRecent: (projectId: string, sessionId: string) => void;
+  onClearRecents: () => void;
+  projectSessions: SessionSummary[];
+  projectName?: string | null;
 }) {
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-950 px-4">
@@ -147,6 +259,13 @@ function TopBar({
       </button>
 
       <div className="ml-auto flex items-center gap-3 text-[11px] text-zinc-500">
+        <RecentMenu
+          recents={recents}
+          onOpen={onOpenRecent}
+          onClear={onClearRecents}
+        />
+        {/* Running total of the active project's loaded-session spend (est.). */}
+        <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
         {progress ? (
           <span className="flex items-center gap-1.5 text-clay-300">
             <Spinner className="h-3 w-3" />
@@ -224,6 +343,19 @@ export default function App() {
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+  // Push a toast and return its id (so a caller can dismiss it later — e.g. a
+  // fetch-error Retry that succeeds). Capped at 4 visible, like the notify path.
+  const pushToast = useCallback((toast: Omit<ToastItem, "id">) => {
+    const id = ++toastSeq.current;
+    setToasts((prev) => [...prev.slice(-3), { ...toast, id }]);
+    return id;
+  }, []);
+
+  // Recently-opened sessions (jump-back list), persisted in localStorage.
+  const { recents, pushRecent, clearRecents } = useRecentSessions();
+
+  // Surface non-401 API fetch failures as retryable error toasts.
+  useFetchErrorToasts(pushToast, dismissToast);
 
   // Persist UI state (active tab + selected project) so a reload lands the user
   // back where they were. Merge over any existing keys (e.g. theme/density) so
@@ -277,7 +409,15 @@ export default function App() {
     api
       .messages(sessionId, tailBytes)
       .then((p) => {
-        if (!cancelled) setPage(p);
+        if (cancelled) return;
+        setPage(p);
+        // Record the just-opened transcript in the jump-back list (most-recent
+        // first, de-duped). Uses the loaded page's authoritative title/project.
+        pushRecent({
+          sessionId: p.session.sessionId,
+          title: p.session.title,
+          projectId: p.session.projectId,
+        });
       })
       .catch(() => {})
       .finally(() => {
@@ -286,7 +426,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId, tailBytes]);
+  }, [sessionId, tailBytes, pushRecent]);
 
   // Handle a `notify` SSE event: show a transient toast, and (when the tab is
   // hidden) fire a browser Notification so a finished/waiting session is noticed
@@ -700,8 +840,20 @@ export default function App() {
       });
     }
 
+    // Recently-opened sessions — a jump-back list straight in the palette.
+    for (const r of recents) {
+      list.push({
+        id: `recent-${r.sessionId}`,
+        title: `Reopen ${r.title}`,
+        group: "Recent",
+        keywords: "recent jump back history session",
+        icon: <History className="h-3.5 w-3.5" />,
+        run: () => openSession(r.projectId, r.sessionId),
+      });
+    }
+
     return list;
-  }, [projects, settings?.theme, effectiveModel, cycleTheme, startNewChat]);
+  }, [projects, settings?.theme, effectiveModel, cycleTheme, startNewChat, recents, openSession]);
 
   return (
     <AuthGate>
@@ -718,7 +870,13 @@ export default function App() {
         progress={progress}
         sessionCount={sessionCount}
         projectCount={projects.length}
+        recents={recents}
+        onOpenRecent={openSession}
+        onClearRecents={clearRecents}
+        projectSessions={sessions}
+        projectName={project?.name}
       />
+      <ErrorBoundary>
       <div className="flex min-h-0 flex-1">
         {tab === "settings" ? (
           <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
@@ -799,8 +957,15 @@ export default function App() {
           </>
         )}
       </div>
+      </ErrorBoundary>
 
-      <SearchPalette open={searchOpen} onClose={() => setSearchOpen(false)} onPick={onPickHit} />
+      <SearchPalette
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onPick={onPickHit}
+        activeProjectId={projectId}
+        activeProjectName={project?.name}
+      />
 
       <ProjectSwitcher
         open={projectSwitcherOpen}

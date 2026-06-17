@@ -100,34 +100,106 @@ function notifyUnauthorized(): void {
   }
 }
 
+/**
+ * One failed (NON-401) API call, surfaced to the app so it can offer a Retry.
+ * `retry` re-runs the exact call that failed and resolves/rejects like the
+ * original — the ErrorBoundary's toast hook awaits it to clear/re-show the toast.
+ * `url`/`method` are for a human-readable message ("Couldn't load /api/projects").
+ */
+export interface ApiFetchError {
+  url: string;
+  method: string;
+  /** The original Error (network failure or non-OK HTTP status). */
+  error: Error;
+  /** Re-issue the same request. Throws on a repeat failure (and re-notifies). */
+  retry: () => Promise<unknown>;
+}
+
+// Subscribers (the app's ErrorBoundary toast bridge) notified when a fetch fails
+// for a reason OTHER than 401 (those flow through {@link onUnauthorized}) and other
+// than a graceful NotImplementedError (callers handle those locally). Additive and
+// dormant unless someone subscribes — existing call sites are unchanged.
+const fetchErrorListeners = new Set<(e: ApiFetchError) => void>();
+
+/** Subscribe to non-401 fetch failures from any API call. Returns an unsubscribe fn. */
+export function onFetchError(fn: (e: ApiFetchError) => void): () => void {
+  fetchErrorListeners.add(fn);
+  return () => fetchErrorListeners.delete(fn);
+}
+
+function notifyFetchError(e: ApiFetchError): void {
+  for (const fn of fetchErrorListeners) {
+    try {
+      fn(e);
+    } catch {
+      /* a listener throwing must not break the request path */
+    }
+  }
+}
+
+/**
+ * Run a request thunk; on a non-401, non-NotImplemented failure, notify the
+ * fetch-error listeners (with a `retry` that re-runs the same thunk) before
+ * rethrowing — so the original caller's own catch/await still sees the error
+ * exactly as before. 401s and NotImplementedErrors pass straight through
+ * untouched (they have dedicated handling). Pure pass-through when nobody's
+ * subscribed.
+ */
+async function withFetchErrorNotify<T>(
+  url: string,
+  method: string,
+  thunk: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await thunk();
+  } catch (err) {
+    const e = err instanceof Error ? err : new Error(String(err));
+    const passthrough =
+      e instanceof UnauthorizedError || e instanceof NotImplementedError;
+    if (!passthrough && fetchErrorListeners.size > 0) {
+      notifyFetchError({
+        url,
+        method,
+        error: e,
+        retry: () => withFetchErrorNotify(url, method, thunk),
+      });
+    }
+    throw err;
+  }
+}
+
 /** Merge the stored bearer token into a header bag (no-op when no token is set). */
 function withAuth(headers: Record<string, string>): Record<string, string> {
   const token = getToken();
   return token ? { ...headers, authorization: `Bearer ${token}` } : headers;
 }
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: withAuth({ accept: "application/json" }) });
-  if (res.status === 401) {
-    notifyUnauthorized();
-    throw new UnauthorizedError(url);
-  }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  return (await res.json()) as T;
+function get<T>(url: string): Promise<T> {
+  return withFetchErrorNotify(url, "GET", async () => {
+    const res = await fetch(url, { headers: withAuth({ accept: "application/json" }) });
+    if (res.status === 401) {
+      notifyUnauthorized();
+      throw new UnauthorizedError(url);
+    }
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+    return (await res.json()) as T;
+  });
 }
 
-async function send<T>(url: string, method: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
-    method,
-    headers: withAuth({ "content-type": "application/json" }),
-    body: body == null ? undefined : JSON.stringify(body),
+function send<T>(url: string, method: string, body?: unknown): Promise<T> {
+  return withFetchErrorNotify(url, method, async () => {
+    const res = await fetch(url, {
+      method,
+      headers: withAuth({ "content-type": "application/json" }),
+      body: body == null ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 401) {
+      notifyUnauthorized();
+      throw new UnauthorizedError(url);
+    }
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+    return (await res.json()) as T;
   });
-  if (res.status === 401) {
-    notifyUnauthorized();
-    throw new UnauthorizedError(url);
-  }
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
-  return (await res.json()) as T;
 }
 
 /**

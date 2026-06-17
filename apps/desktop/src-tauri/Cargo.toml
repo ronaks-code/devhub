@@ -25,3 +25,6 @@ log = "0.4"
 # PNG app icon for use as the tray image (see src/tray.rs).
 tauri = { version = "2.5.0", features = ["tray-icon", "image-png"] }
 tauri-plugin-log = "2.0.0-rc"
+# Global hotkey to summon the window from anywhere (see src/shortcut.rs). 2.x
+# tracks the Tauri v2 series this app is on.
+tauri-plugin-global-shortcut = "2"

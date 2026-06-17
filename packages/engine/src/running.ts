@@ -10,6 +10,12 @@
  * no signal — just an existence/permission check) and FLAG dead processes with
  * `alive: false` and `status: "dead"` so faces can grey them out or drop them,
  * rather than presenting a stale file as a running session.
+ *
+ * We also FLAG dead-but-busy sessions with `stale: true`: an entry whose file claims an
+ * active status (busy/waiting) but whose pid is dead, or whose turn has been pinned alive
+ * in that status past a staleness threshold — i.e. it crashed/wedged mid-turn. That lets
+ * a face tell a genuinely-working busy session apart from a zombie, while the existing
+ * `alive`/`status` fields stay untouched for older consumers.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
@@ -22,6 +28,16 @@ import type { RunningSession } from "./types.js";
  * isn't going to clear on its own. 60s balances "a momentary pause" against "stuck".
  */
 export const DEFAULT_NEEDS_YOU_MS = 60_000;
+
+/**
+ * Default staleness threshold (ms) past which a STILL-ALIVE `busy`/`waiting` session is
+ * treated as dead-but-busy (a hung turn): it's been pinned in an active status this long
+ * without its file moving, so it almost certainly crashed/wedged mid-turn rather than
+ * doing real work. 5min is long enough to never flag a genuinely-grinding turn (big
+ * builds, long tool calls) yet short enough to surface a zombie before the user gives up.
+ * A DEAD pid is flagged immediately regardless of age (see {@link computeStale}).
+ */
+export const DEFAULT_STALE_BUSY_MS = 5 * 60_000;
 
 /** A cwd belongs to an internal/plugin store, not a real coding session. */
 function isInternalCwd(cwd: string): boolean {
@@ -44,6 +60,33 @@ function computeNeedsYou(
   if (!alive || status !== "waiting") return false;
   if (statusUpdatedAt === null) return true; // unknown age -> surface it
   return now - statusUpdatedAt >= thresholdMs;
+}
+
+/**
+ * Is this session DEAD-BUT-BUSY (crashed/wedged mid-turn)? True only when the file's
+ * recorded status implies activity (`busy`/`waiting`) AND one of:
+ *  - the PID is dead (`!alive`)                          -> it died mid-turn, or
+ *  - it's still alive but has sat in that active status   -> a hung turn that isn't
+ *    longer than `staleBusyMs` (gauged off `statusUpdatedAt`)  progressing on its own.
+ * A live, recently-updated busy/waiting session is HEALTHY (not stale); a missing
+ * `statusUpdatedAt` on a live session can't prove staleness, so we don't flag it (only
+ * a dead pid flags it then). Non-active statuses (idle/dead/...) are never stale.
+ *
+ * Note we read the file's ORIGINAL `fileStatus` here, not the dead-overridden `status`:
+ * a crashed `busy` file is reported with `status: "dead"`, but we still want `stale`
+ * true so a face can tell a clean-idle dead file apart from a crashed-mid-turn one.
+ */
+function computeStale(
+  alive: boolean,
+  fileStatus: string,
+  statusUpdatedAt: number | null,
+  staleBusyMs: number,
+  now: number,
+): boolean {
+  if (fileStatus !== "busy" && fileStatus !== "waiting") return false;
+  if (!alive) return true; // died mid-turn
+  if (statusUpdatedAt === null) return false; // alive + unknown age -> assume working
+  return now - statusUpdatedAt >= staleBusyMs; // alive but hung past the threshold
 }
 
 /**
@@ -193,10 +236,17 @@ export async function listRunningSessions(
     needsYouThresholdMs?: number;
     /** When true, sort sessions that need the user FIRST (then by `updatedAt`). */
     needsYouFirst?: boolean;
+    /**
+     * Staleness threshold (ms) for the dead-but-busy `stale` flag on a STILL-ALIVE
+     * `busy`/`waiting` session; defaults to {@link DEFAULT_STALE_BUSY_MS}. A dead pid is
+     * flagged stale regardless of this threshold.
+     */
+    staleBusyMs?: number;
   } = {},
 ): Promise<RunningSession[]> {
   const dir = liveSessionsDir();
   const thresholdMs = opts.needsYouThresholdMs ?? DEFAULT_NEEDS_YOU_MS;
+  const staleBusyMs = opts.staleBusyMs ?? DEFAULT_STALE_BUSY_MS;
   const now = Date.now();
   let names: string[];
   try {
@@ -247,6 +297,11 @@ export async function listRunningSessions(
       statusUpdatedAt: parsed.statusUpdatedAt,
       // Blocked-on-the-user detection: a waiting session stale past the threshold.
       needsYou: computeNeedsYou(alive, status, parsed.statusUpdatedAt, thresholdMs, now),
+      // Dead-but-busy detection: an active (busy/waiting) file whose pid died or whose
+      // turn has hung past the threshold. Gauged off the ORIGINAL file status so a
+      // crashed-mid-turn entry (now reported "dead") is still distinguishable from a
+      // clean-idle one. See {@link computeStale}.
+      stale: computeStale(alive, parsed.fileStatus, parsed.statusUpdatedAt, staleBusyMs, now),
     });
   }
   // Default order: most recently active first. With `needsYouFirst`, float the

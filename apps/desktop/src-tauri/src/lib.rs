@@ -14,6 +14,7 @@
 //!   CLAUDE_UI_SERVER_PORT  port to probe for readiness    (default: 8787)
 //!   CLAUDE_UI_NO_SPAWN     if set ("1"/"true"), never spawn — assume external server
 
+mod shortcut;
 mod tray;
 
 use std::io::Read;
@@ -228,6 +229,10 @@ fn wait_for_health(host: &str, port: u16, timeout: Duration) -> bool {
 pub fn run() {
     tauri::Builder::default()
         .manage(ServerProcess::default())
+        // Global-shortcut plugin powers the "summon window" hotkey (see
+        // src/shortcut.rs). Register the plugin on the builder; the chord ->
+        // action wiring is attached in setup() once the app handle exists.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -253,6 +258,13 @@ pub fn run() {
             // a tray build failure shouldn't stop the app from opening its window.
             if let Err(err) = tray::setup_tray(app.handle(), host.clone(), port) {
                 log::warn!("[claude-ui] failed to set up tray: {err}");
+            }
+
+            // Global hotkey (CmdOrCtrl+Shift+K) to summon the window from anywhere.
+            // Best-effort, same as the tray: a registration failure (e.g. the chord
+            // is already claimed by another app) shouldn't stop the window opening.
+            if let Err(err) = shortcut::setup_shortcut(app.handle()) {
+                log::warn!("[claude-ui] failed to set up summon shortcut: {err}");
             }
 
             // Give the server a moment to come up. The webview talks to the API

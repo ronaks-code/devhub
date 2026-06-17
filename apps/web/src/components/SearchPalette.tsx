@@ -1,9 +1,35 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, CornerDownLeft, Folder } from "lucide-react";
+import { Search, CornerDownLeft, Folder, Globe } from "lucide-react";
 import type { SearchHitWithSeq } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 import { SearchDateFilter } from "./SearchDateFilter";
+
+/** Search scope: everything, or just the active project. */
+type SearchScope = "global" | "project";
+
+/** Where the scope preference is remembered between opens. */
+const SCOPE_KEY = "claude-ui:search-scope";
+
+/** Read the persisted scope (defaults to "global" — the original behavior). */
+function readScope(): SearchScope {
+  if (typeof window === "undefined") return "global";
+  try {
+    return window.localStorage.getItem(SCOPE_KEY) === "project" ? "project" : "global";
+  } catch {
+    return "global";
+  }
+}
+
+/** Persist the chosen scope. Non-fatal on storage errors. */
+function writeScope(scope: SearchScope): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SCOPE_KEY, scope);
+  } catch {
+    /* storage unavailable or quota exceeded — non-fatal */
+  }
+}
 
 /** Render FTS snippet markers ([match]) as styled highlights. */
 function Highlighted({ text }: { text: string }) {
@@ -27,17 +53,35 @@ export function SearchPalette({
   open,
   onClose,
   onPick,
+  activeProjectId,
+  activeProjectName,
 }: {
   open: boolean;
   onClose: () => void;
   onPick: (hit: SearchHitWithSeq) => void;
+  /** The currently-selected project, enabling the "Project" scope. From the App. */
+  activeProjectId?: string | null;
+  /** That project's display name, for the scope toggle label. */
+  activeProjectName?: string | null;
 }) {
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHitWithSeq[]>([]);
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
+  // Global vs. Project scope, remembered across opens. "project" only narrows when
+  // a project is actually active; otherwise it behaves like "global".
+  const [scope, setScope] = useState<SearchScope>(() => readScope());
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+
+  // The scope actually applied: "project" requires an active project to mean
+  // anything. Without one we always search globally.
+  const effectiveProject = scope === "project" && activeProjectId ? activeProjectId : null;
+
+  const setScopePersisted = (next: SearchScope) => {
+    setScope(next);
+    writeScope(next);
+  };
 
   // Reset + focus each time the palette opens.
   useEffect(() => {
@@ -61,13 +105,21 @@ export function SearchPalette({
     setLoading(true);
     let cancelled = false;
     const t = setTimeout(() => {
-      fetch(`/api/search?q=${encodeURIComponent(term)}&limit=30`, {
-        headers: { accept: "application/json" },
-      })
+      // Pass projectId when scoped (the current server ignores unknown query
+      // params; this future-proofs server-side narrowing). We ALSO filter the
+      // returned hits to the project client-side so scoping works today against a
+      // server that doesn't yet narrow.
+      const url =
+        `/api/search?q=${encodeURIComponent(term)}&limit=30` +
+        (effectiveProject ? `&projectId=${encodeURIComponent(effectiveProject)}` : "");
+      fetch(url, { headers: { accept: "application/json" } })
         .then((r) => (r.ok ? (r.json() as Promise<SearchHitWithSeq[]>) : []))
         .then((res) => {
           if (cancelled) return;
-          setHits(res);
+          const scoped = effectiveProject
+            ? res.filter((h) => h.projectId === effectiveProject)
+            : res;
+          setHits(scoped);
           setActive(0);
         })
         .catch(() => {
@@ -81,7 +133,7 @@ export function SearchPalette({
       cancelled = true;
       clearTimeout(t);
     };
-  }, [q, open]);
+  }, [q, open, effectiveProject]);
 
   // Keep the active row in view.
   useEffect(() => {
@@ -124,16 +176,61 @@ export function SearchPalette({
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search all sessions…"
+            placeholder={
+              effectiveProject
+                ? `Search ${activeProjectName || "this project"}…`
+                : "Search all sessions…"
+            }
             className="w-full bg-transparent text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none"
           />
           {loading && <Spinner className="h-3.5 w-3.5" />}
         </div>
 
-        {/* Date-range facet: writes after:/before: tokens into the query, which the
-            engine query-parser lifts into search facets (no separate API param). */}
-        <div className="border-b border-zinc-800 px-4 py-2">
-          <SearchDateFilter query={q} onChange={setQ} />
+        {/* Scope toggle (Global vs. Project) + date-range facet. Scope is remembered
+            across opens; "Project" is disabled with no active project. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-zinc-800 px-4 py-2">
+          <div className="inline-flex items-center rounded-lg bg-zinc-950 p-0.5 ring-1 ring-zinc-800">
+            <button
+              type="button"
+              onClick={() => setScopePersisted("global")}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition",
+                scope === "global"
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                  : "text-zinc-500 hover:text-zinc-300",
+              )}
+              title="Search across every project"
+            >
+              <Globe className="h-3 w-3" />
+              Global
+            </button>
+            <button
+              type="button"
+              onClick={() => setScopePersisted("project")}
+              disabled={!activeProjectId}
+              className={cn(
+                "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-40",
+                scope === "project" && activeProjectId
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                  : "text-zinc-500 hover:text-zinc-300 disabled:hover:text-zinc-500",
+              )}
+              title={
+                activeProjectId
+                  ? "Search only the active project"
+                  : "Select a project to scope the search to it"
+              }
+            >
+              <Folder className="h-3 w-3" />
+              <span className="max-w-[10rem] truncate">
+                {activeProjectName || "Project"}
+              </span>
+            </button>
+          </div>
+          {/* Date-range facet: writes after:/before: tokens into the query, which the
+              engine query-parser lifts into search facets (no separate API param). */}
+          <div className="min-w-0 flex-1">
+            <SearchDateFilter query={q} onChange={setQ} />
+          </div>
         </div>
 
         <div ref={listRef} className="max-h-[55vh] overflow-y-auto py-1.5">
@@ -190,6 +287,19 @@ export function SearchPalette({
           <span>↑↓ navigate</span>
           <span>↵ open</span>
           <span>esc close</span>
+          <span className="ml-auto inline-flex items-center gap-1">
+            {effectiveProject ? (
+              <>
+                <Folder className="h-3 w-3" />
+                {activeProjectName || "project"}
+              </>
+            ) : (
+              <>
+                <Globe className="h-3 w-3" />
+                all projects
+              </>
+            )}
+          </span>
         </div>
       </div>
     </div>

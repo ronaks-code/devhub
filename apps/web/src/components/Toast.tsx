@@ -18,6 +18,12 @@ export interface ToastItem {
   level?: "info" | "success" | "warning" | "error";
   /** Invoked when the toast body is clicked (e.g. open the related session). */
   onClick?: () => void;
+  /**
+   * Label for the click affordance shown under the body (default "Open session →").
+   * Lets non-navigation toasts (e.g. a fetch-error Retry) read correctly. Only shown
+   * when {@link onClick} is set.
+   */
+  actionLabel?: string;
   /** Auto-dismiss after this many ms (default {@link DEFAULT_DURATION}); 0 = never. */
   duration?: number;
 }
@@ -109,7 +115,9 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) =
           <div className="mt-0.5 line-clamp-2 text-[12px] text-zinc-400">{item.body}</div>
         ) : null}
         {clickable ? (
-          <div className="mt-1 text-[11px] font-medium text-clay-300">Open session →</div>
+          <div className="mt-1 text-[11px] font-medium text-clay-300">
+            {item.actionLabel ?? "Open session →"}
+          </div>
         ) : null}
       </button>
       <button

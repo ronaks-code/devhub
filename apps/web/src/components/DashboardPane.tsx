@@ -12,6 +12,7 @@ import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap
 import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
+import { DirtyRepos } from "./dashboard/DirtyRepos";
 import { Badge, EmptyState, Spinner } from "./ui";
 import { DashboardSkeleton } from "./Skeleton";
 
@@ -466,6 +467,14 @@ function DashboardBody({
         <section>
           <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Project leaderboard</SectionTitle>
           <ProjectLeaderboard onOpenProject={onOpenProject} />
+        </section>
+
+        {/* Dirty repos — projects with uncommitted git changes, most-changed
+            first; click a row to open it. Queries each project's git status with
+            capped concurrency and skips non-repos. */}
+        <section>
+          <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Uncommitted changes</SectionTitle>
+          <DirtyRepos onOpenProject={onOpenProject} />
         </section>
 
         {/* Top spenders — most expensive sessions (est. cost, click to open) */}

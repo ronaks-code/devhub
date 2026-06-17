@@ -1,4 +1,4 @@
-import { memo, useMemo, useState, type ReactNode } from "react";
+import { Children, Fragment, memo, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -8,6 +8,8 @@ import hljs from "highlight.js/lib/core";
 import jsonLang from "highlight.js/lib/languages/json";
 import { Check, Copy, Hash, List } from "lucide-react";
 import { cn } from "../lib/utils";
+import { linkifyText } from "../lib/linkify";
+import { OpenInEditor, useCwd } from "./OpenInEditor";
 
 // A minimal highlight.js instance registered with only the JSON grammar — used
 // to re-highlight a fenced ```json block AFTER we pretty-print it (rehype-highlight
@@ -74,6 +76,68 @@ function langOf(children: ReactNode): string | null {
     if (m) return m[1]!;
   }
   return null;
+}
+
+/**
+ * A bare file path rendered as a styled, clickable token. When the active pane
+ * exposes a project cwd (via {@link useCwd}), an inline {@link OpenInEditor} button
+ * sits beside it so the path opens in the user's editor. Without a cwd it degrades
+ * to a plain styled span (OpenInEditor renders nothing), so cwd-less transcripts
+ * still read fine. Never rendered inside code — the linkify pass only touches the
+ * text children of block elements (see {@link Linkify}).
+ */
+function FilePathToken({ path }: { path: string }) {
+  const cwd = useCwd();
+  return (
+    <span className="inline-flex items-baseline gap-0.5 align-baseline">
+      <code className="rounded bg-zinc-800/70 px-1 py-0.5 font-mono text-[12px] text-clay-200">
+        {path}
+      </code>
+      {cwd ? <OpenInEditor file={path} className="px-0.5 py-0" /> : null}
+    </span>
+  );
+}
+
+/**
+ * Walk a block element's rendered children and promote URLs / file paths found in
+ * its plain-text runs into clickable affordances. STRING children are linkified;
+ * any already-rendered element child (an inline `<code>`, `<a>`, `<strong>`, …) is
+ * passed through untouched — so code is never linkified (react-markdown renders
+ * code via its own `code` component before this ever sees it).
+ */
+function Linkify({ children }: { children: ReactNode }): ReactNode {
+  return Children.map(children, (child, i) => {
+    if (typeof child !== "string") return child;
+    const tokens = linkifyText(child);
+    // Fast path: nothing linkable, return the original string unchanged.
+    if (tokens.length === 1 && tokens[0]!.kind === "text") return child;
+    return (
+      <Fragment key={i}>
+        {tokens.map((tok, j) => {
+          if (tok.kind === "url") {
+            return (
+              <a
+                key={j}
+                href={tok.href}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-clay-300 underline decoration-clay-500/40 underline-offset-2 transition hover:text-clay-400 hover:decoration-clay-400"
+              >
+                {tok.value}
+              </a>
+            );
+          }
+          if (tok.kind === "path") return <FilePathToken key={j} path={tok.value} />;
+          return <Fragment key={j}>{tok.value}</Fragment>;
+        })}
+      </Fragment>
+    );
+  });
+}
+
+/** True for a `li` react-markdown hands us that GFM tagged as a task-list item. */
+function isTaskListItem(props: { className?: string }): boolean {
+  return /\btask-list-item\b/.test(props.className ?? "");
 }
 
 /**
@@ -310,14 +374,55 @@ export const Markdown = memo(function Markdown({
               {children}
             </h4>
           ),
-          p: ({ children }) => <p className="my-1.5 first:mt-0 last:mb-0">{children}</p>,
-          ul: ({ children }) => (
-            <ul className="my-1.5 list-disc space-y-0.5 pl-5 marker:text-zinc-600">{children}</ul>
+          p: ({ children }) => (
+            <p className="my-1.5 first:mt-0 last:mb-0">
+              <Linkify>{children}</Linkify>
+            </p>
+          ),
+          ul: ({ children, className }) => (
+            // A GFM task list (`- [ ]`) drops the disc bullet — the checkbox is the
+            // marker — and tightens the indent; ordinary lists keep the disc.
+            <ul
+              className={cn(
+                "my-1.5 space-y-0.5 marker:text-zinc-600",
+                /\bcontains-task-list\b/.test(className ?? "")
+                  ? "list-none pl-1"
+                  : "list-disc pl-5",
+              )}
+            >
+              {children}
+            </ul>
           ),
           ol: ({ children }) => (
             <ol className="my-1.5 list-decimal space-y-0.5 pl-5 marker:text-zinc-600">{children}</ol>
           ),
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          li: ({ children, className }) =>
+            isTaskListItem({ className }) ? (
+              // Task-list item: the checkbox renders inline (see the `input`
+              // renderer); flex-align it with the text and linkify the rest.
+              <li className="flex items-baseline gap-1.5 leading-relaxed">
+                <Linkify>{children}</Linkify>
+              </li>
+            ) : (
+              <li className="leading-relaxed">
+                <Linkify>{children}</Linkify>
+              </li>
+            ),
+          // GFM task-list checkboxes (`- [ ]` / `- [x]`) render as real, disabled
+          // checkboxes tinted to the theme. remark-gfm already marks them disabled;
+          // we keep that (read-only — a transcript checkbox isn't interactive) and
+          // pass `checked` straight through so open/closed state is faithful.
+          input: ({ type, checked, disabled }) =>
+            type === "checkbox" ? (
+              <input
+                type="checkbox"
+                checked={!!checked}
+                disabled={disabled ?? true}
+                readOnly
+                aria-hidden
+                className="mt-0.5 h-3 w-3 shrink-0 translate-y-px cursor-default rounded-sm border-zinc-700 bg-zinc-800 accent-clay-500"
+              />
+            ) : null,
           a: ({ children, href }) => (
             <a
               href={href}
@@ -350,7 +455,9 @@ export const Markdown = memo(function Markdown({
             </th>
           ),
           td: ({ children }) => (
-            <td className="border-b border-zinc-800/60 px-3 py-1.5 text-zinc-300">{children}</td>
+            <td className="border-b border-zinc-800/60 px-3 py-1.5 text-zinc-300">
+              <Linkify>{children}</Linkify>
+            </td>
           ),
           // <pre> only wraps block code, so it owns the chrome (copy + label).
           pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,

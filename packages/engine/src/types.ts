@@ -224,6 +224,15 @@ export interface RunningSession {
    * sessions to the top. Always false for dead/non-waiting sessions.
    */
   needsYou?: boolean;
+  /**
+   * True when this session looks DEAD-BUT-BUSY (crashed mid-turn): its file claims an
+   * active status (`busy`/`waiting`) but it's clearly not making progress — either the
+   * PID is dead (`alive: false`) or it's been pinned in that active status past the
+   * staleness threshold while still alive (a hung turn). Distinguishes a genuinely
+   * working session (busy + alive + fresh) and a clean idle one (both false) from a
+   * zombie that should be cleaned up or retried. Always false for non-active statuses.
+   */
+  stale?: boolean;
 }
 
 /**

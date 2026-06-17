@@ -2620,6 +2620,105 @@ describe("running-session needs-you detection", () => {
   });
 });
 
+describe("running-session dead-but-busy detection", () => {
+  const withConfigDir = async <T>(fn: (sessionsDir: string) => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const sessionsDir = path.join(root, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    try {
+      return await fn(sessionsDir);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("flags a busy file with a DEAD pid as stale (crashed mid-turn)", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const deadPid = 2 ** 30; // no such process
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "crashed", cwd: "/home/me/x", status: "busy" }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.sessionId).toBe("crashed");
+      expect(s!.alive).toBe(false); // existing field intact
+      expect(s!.status).toBe("dead"); // existing override intact
+      expect(s!.stale).toBe(true); // NEW: distinguishable from a clean-idle dead file
+    });
+  });
+
+  it("a clean-idle file with a DEAD pid is NOT stale", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const deadPid = 2 ** 30;
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "idle-ghost", cwd: "/home/me/x", status: "idle" }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.status).toBe("dead");
+      expect(s!.stale).toBe(false); // idle => never dead-but-busy
+    });
+  });
+
+  it("a live, freshly-updated busy session is healthy (not stale)", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "working", cwd: "/home/me/y", status: "busy", statusUpdatedAt: now - 1000 }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.alive).toBe(true);
+      expect(s!.status).toBe("busy");
+      expect(s!.stale).toBe(false); // grinding turn, recently updated -> healthy
+    });
+  });
+
+  it("a live busy session pinned past the threshold is stale (hung turn)", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "hung", cwd: "/home/me/z", status: "busy", statusUpdatedAt: now - 10 * 60_000 }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.alive).toBe(true);
+      expect(s!.stale).toBe(true); // alive but wedged in busy past DEFAULT_STALE_BUSY_MS
+    });
+  });
+
+  it("a live busy session with no statusUpdatedAt is not flagged (can't prove staleness)", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "ageless", cwd: "/home/me/w", status: "busy" }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.alive).toBe(true);
+      expect(s!.stale).toBe(false); // unknown age on a live pid -> assume working
+    });
+  });
+
+  it("respects a custom staleBusyMs threshold", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "tunable", cwd: "/home/me/t", status: "waiting", statusUpdatedAt: now - 30_000 }),
+      );
+      // Under the default (5min) a 30s-old wait is fresh...
+      const [fresh] = await listRunningSessions();
+      expect(fresh!.stale).toBe(false);
+      // ...but with a 10s threshold the same file reads as stale.
+      const [stale] = await listRunningSessions({ staleBusyMs: 10_000 });
+      expect(stale!.stale).toBe(true);
+    });
+  });
+});
+
 describe("checkpoint (file-history list + restore)", () => {
   // Checkpoints live under CLAUDE_CONFIG_DIR/file-history/<sessionId>/. Point the
   // config dir at a temp root so we never read real ~/.claude data.
