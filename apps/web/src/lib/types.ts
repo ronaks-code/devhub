@@ -1,3 +1,5 @@
+import type { SearchHit } from "@claude-ui/engine/types";
+
 export type {
   ProjectSummary,
   SessionSummary,
@@ -11,7 +13,20 @@ export type {
   TitleSource,
   Stats,
   RunningSession,
+  SearchHit,
 } from "@claude-ui/engine/types";
+
+/**
+ * A search hit widened at the web boundary with the matching message's `seq`.
+ * The engine `SearchHit` does not (yet) carry `seq`, and we can't edit that
+ * package — so we extend it here instead of shimming the engine type. `seq` is
+ * optional: when the server starts returning it, jump-to-match becomes exact;
+ * until then the field is simply absent and we fall back to opening the session.
+ */
+export interface SearchHitWithSeq extends SearchHit {
+  /** 0-based message sequence index within the session window of the match. */
+  seq?: number;
+}
 
 // Read-only git result shapes used by the GitPanel. Defined here (rather than
 // imported from the engine root, which bundles Node-only code) to keep the web
@@ -31,6 +46,13 @@ export interface GitLogEntry {
   subject: string;
   authorName: string;
   date: string;
+}
+
+/** A unified diff for one file, or the whole working tree when `file` is null. */
+export interface GitDiff {
+  file: string | null;
+  /** Raw unified-diff text (may be empty when there are no changes). */
+  patch: string;
 }
 
 // MCP server config shapes. Mirrored locally (rather than imported from the

@@ -13,6 +13,7 @@ import type { AppSettings } from "@claude-ui/engine/types";
 import type {
   GitStatus,
   GitLogEntry,
+  GitDiff,
   ConfigScope,
   McpServerDef,
   McpServerInput,
@@ -112,6 +113,12 @@ export const api = {
     send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
       pinned,
     }),
+  // Replace a session's tag set (normalized server-side: trim/lower/de-dupe).
+  // Backs the SessionsPane bulk "tag" action; the PATCH route accepts `tags`.
+  setTags: (sessionId: string, tags: string[]) =>
+    send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
+      tags,
+    }),
   stats: () => get<Stats>("/api/stats"),
   running: () => get<RunningSession[]>("/api/running"),
   // Read-only git status for a project cwd. The server returns null when the
@@ -122,6 +129,13 @@ export const api = {
   gitLog: (cwd: string, limit?: number) =>
     get<GitLogEntry[]>(
       `/api/git/log?cwd=${encodeURIComponent(cwd)}` + (limit ? `&limit=${limit}` : ""),
+    ),
+  // Unified working-tree diff. With `file`, diffs just that path; without it,
+  // the whole tree. null when `cwd` is not a git repo (or the diff is over-cap).
+  gitDiff: (cwd: string, file?: string) =>
+    get<GitDiff | null>(
+      `/api/git/diff?cwd=${encodeURIComponent(cwd)}` +
+        (file ? `&file=${encodeURIComponent(file)}` : ""),
     ),
   // Ask the server to draft a commit message for the working tree's changes.
   // The server (via GitService) reads the staged/unstaged diff; the web side only

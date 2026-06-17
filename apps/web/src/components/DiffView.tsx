@@ -1,7 +1,7 @@
 import { memo } from "react";
 
 /** One line of a unified diff. " " = unchanged context, "-" = removed, "+" = added. */
-type DiffLine = { sign: " " | "-" | "+"; text: string };
+export type DiffLine = { sign: " " | "-" | "+"; text: string };
 
 /** Parsed file-edit shape for the tools we special-case. */
 export interface EditInput {
@@ -120,7 +120,7 @@ function diffHunk(oldStr: string, newStr: string): DiffLine[] {
   return out;
 }
 
-function LineRow({ line }: { line: DiffLine }) {
+export function LineRow({ line }: { line: DiffLine }) {
   const bg =
     line.sign === "+"
       ? "bg-emerald-500/10 text-emerald-200"
@@ -136,6 +136,18 @@ function LineRow({ line }: { line: DiffLine }) {
     </div>
   );
 }
+
+/** Render an already-parsed unified diff (e.g. a raw git patch) in the same
+ *  red/green styling as {@link DiffView}, without the LCS synthesis step. */
+export const DiffLines = memo(function DiffLines({ lines }: { lines: DiffLine[] }) {
+  return (
+    <div className="font-mono text-[12px] leading-relaxed">
+      {lines.map((line, i) => (
+        <LineRow key={i} line={line} />
+      ))}
+    </div>
+  );
+});
 
 /** Red/green unified LCS diff for a parsed file edit. */
 export const DiffView = memo(function DiffView({ edit }: { edit: EditInput }) {

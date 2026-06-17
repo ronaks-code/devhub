@@ -43,6 +43,12 @@ export interface StickToBottom {
   scrollToLatest: (scroll: () => void) => void;
   /** Force-pin without scrolling (e.g. when a fresh turn/session starts). */
   pin: () => void;
+  /**
+   * Force-unpin without scrolling. Used when we deliberately scroll to a
+   * mid-history position (e.g. a search jump) so the live-follow effect doesn't
+   * immediately yank the view back to the tail.
+   */
+  unpin: () => void;
 }
 
 /**
@@ -77,6 +83,10 @@ export function useStickToBottom(
     setPinned(true);
   }, [setPinned]);
 
+  const unpin = useCallback(() => {
+    setPinned(false);
+  }, [setPinned]);
+
   const followToIndex = useCallback((scroll: () => void): (() => void) | void => {
     if (!pinnedRef.current) return;
     const id = requestAnimationFrame(scroll);
@@ -108,5 +118,6 @@ export function useStickToBottom(
     followToIndex,
     scrollToLatest,
     pin,
+    unpin,
   };
 }

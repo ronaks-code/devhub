@@ -34,12 +34,19 @@ export function TranscriptPane({
   loading,
   onLoadMore,
   onContinue,
+  jumpTarget,
 }: {
   page: SessionMessagesPage | null;
   loading: boolean;
   onLoadMore: () => void;
   /** Hand off to the Chat tab to resume this session (--resume). */
   onContinue?: (sessionId: string, cwd: string) => void;
+  /**
+   * A search-pick request to scroll to + briefly highlight one message by its
+   * `seq`. The `nonce` changes per pick so re-picking the same hit re-fires the
+   * jump. Null = no pending jump (normal "follow the tail" behavior).
+   */
+  jumpTarget?: { seq: number; nonce: number } | null;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const lastSession = useRef<string | undefined>(undefined);
@@ -63,6 +70,14 @@ export function TranscriptPane({
   const [outlineOpen, setOutlineOpen] = useState(false);
   const onFindQueryChange = useCallback((q: string) => setFindQuery(q), []);
   const onActiveMatchChange = useCallback((i: number | null) => setActiveMatch(i), []);
+
+  // The list index of a search-driven jump target, briefly highlighted after we
+  // scroll to it. Null = nothing highlighted. Set by the jump effect below and
+  // auto-cleared on a timer.
+  const [jumpIndex, setJumpIndex] = useState<number | null>(null);
+  // Remembers which jump nonce we've already handled, so the jump effect fires
+  // exactly once per search pick (and once the matching page has loaded).
+  const handledJumpRef = useRef<number | null>(null);
 
   const virtualizer = useVirtualizer({
     count: messages.length,
@@ -114,18 +129,52 @@ export function TranscriptPane({
     return () => cancelAnimationFrame(id);
   }, [activeMatch, virtualizer]);
 
+  // Whether a search-driven jump is still pending for the current pick. When so,
+  // the jump effect (not the bottom-snap) should own the first scroll.
+  const jumpPending =
+    jumpTarget != null && handledJumpRef.current !== jumpTarget.nonce;
+
   // Jump to the latest message when a NEW session opens (not on load-more).
   // Opening a session re-pins so live updates follow until the user scrolls up.
+  // Skipped when a search pick wants us to land on a specific message instead.
   useEffect(() => {
     if (!page || messages.length === 0) return;
     if (lastSession.current === page.session.sessionId) return;
     lastSession.current = page.session.sessionId;
+    if (jumpPending) return; // the jump effect will scroll + highlight instead
     stick.pin();
     const id = requestAnimationFrame(() =>
       virtualizer.scrollToIndex(messages.length - 1, { align: "end" }),
     );
     return () => cancelAnimationFrame(id);
-  }, [page, messages.length, virtualizer, stick.pin]);
+  }, [page, messages.length, virtualizer, stick.pin, jumpPending]);
+
+  // Scroll to + briefly highlight a search-picked message once its session's
+  // page has loaded. Matches by `seq` (stable within the window) against the
+  // paired+filtered list. If the target was filtered out (or isn't in the loaded
+  // window), we fall back to the bottom so the session still opens sensibly.
+  useEffect(() => {
+    if (!jumpTarget || !page || messages.length === 0) return;
+    if (handledJumpRef.current === jumpTarget.nonce) return;
+    // Wait until the loaded page is the session the pick targeted (a project/
+    // session switch loads asynchronously; lastSession tracks the active one).
+    if (lastSession.current !== page.session.sessionId) return;
+    handledJumpRef.current = jumpTarget.nonce;
+    const idx = messages.findIndex((m) => m.seq === jumpTarget.seq);
+    if (idx < 0) return; // target not in the visible/loaded set — leave as-is
+    // The match is (usually) above the live tail, so stop following the tail
+    // and let the view rest on the match instead.
+    stick.unpin();
+    setJumpIndex(idx);
+    const raf = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(idx, { align: "center" }),
+    );
+    const clear = setTimeout(() => setJumpIndex(null), 2200);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(clear);
+    };
+  }, [jumpTarget, page, messages, virtualizer, stick]);
 
   // Follow live growth (same session gains messages) only while pinned. The new
   // session jump above owns the first paint; this handles subsequent updates.
@@ -272,8 +321,9 @@ export function TranscriptPane({
                   transform: `translateY(${vi.start}px)`,
                 }}
                 className={cn(
-                  "border-b border-zinc-900/70",
+                  "border-b border-zinc-900/70 transition-colors duration-500",
                   findOpen && activeMatch === vi.index && "bg-amber-500/5 ring-1 ring-inset ring-amber-500/30",
+                  jumpIndex === vi.index && "bg-clay-500/10 ring-1 ring-inset ring-clay-500/40",
                 )}
               >
                 <MessageView m={messages[vi.index]!} highlight={findOpen ? findQuery : ""} />

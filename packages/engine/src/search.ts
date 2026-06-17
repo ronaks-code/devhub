@@ -316,7 +316,7 @@ export class MessageSearch {
            WHERE r.rn = 1
            ORDER BY score LIMIT ?2
          )
-         SELECT f.sessionId AS sessionId, f.role AS role, f.toolName AS toolName,
+         SELECT f.sessionId AS sessionId, f.role AS role, f.toolName AS toolName, f.seq AS seq,
                 snippet(messages_fts, 4, '[', ']', '…', 12) AS excerpt,
                 s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
                 s.title AS title, s.titleSource AS titleSource,
@@ -331,6 +331,7 @@ export class MessageSearch {
       sessionId: string;
       role: string;
       toolName: string | null;
+      seq: number | null;
       excerpt: string | null;
       projectId: string | null;
       cwd: string | null;
@@ -383,13 +384,13 @@ export class MessageSearch {
     const rows = this.db
       .prepare(
         `WITH matched AS (
-           SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.text AS text,
+           SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.seq AS seq, t.text AS text,
                   ROW_NUMBER() OVER (PARTITION BY t.sessionId ORDER BY t.seq DESC) AS rn
            FROM messages_text t
            JOIN sessions s ON s.sessionId = t.sessionId${metaJoin}
            WHERE ${where}
          )
-         SELECT mt.sessionId AS sessionId, mt.role AS role, mt.toolName AS toolName, mt.text AS text,
+         SELECT mt.sessionId AS sessionId, mt.role AS role, mt.toolName AS toolName, mt.seq AS seq, mt.text AS text,
                 s.projectId AS projectId, s.cwd AS cwd, s.lastTs AS lastTs,
                 s.title AS title, s.titleSource AS titleSource,
                 m.customTitle AS customTitle
@@ -404,6 +405,7 @@ export class MessageSearch {
       sessionId: string;
       role: string;
       toolName: string | null;
+      seq: number | null;
       text: string | null;
       projectId: string | null;
       cwd: string | null;
@@ -424,6 +426,7 @@ function toHit(
   r: {
     sessionId: string;
     role: string;
+    seq: number | null;
     projectId: string | null;
     cwd: string | null;
     lastTs: string | null;
@@ -442,5 +445,7 @@ function toHit(
     role: r.role,
     snippet,
     timestamp: r.lastTs,
+    // The matched row's in-session message index; 0 when absent (legacy rows).
+    seq: typeof r.seq === "number" ? r.seq : Number(r.seq ?? 0) || 0,
   };
 }

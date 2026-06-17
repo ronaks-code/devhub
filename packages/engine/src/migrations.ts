@@ -76,6 +76,18 @@ const MIGRATIONS: Migration[] = [
       db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
     }
   },
+  // v5: per-session head signature (a fingerprint of the transcript's first bytes).
+  // Lets the incremental indexer detect a PREFIX REWRITE / rotation (the file was
+  // re-created rather than appended to) and force a full re-index from byte 0
+  // instead of trusting indexedBytes. A fresh DB gets the column from the base
+  // SCHEMA; a legacy DB picks it up here. Existing rows read NULL until their next
+  // index pass populates it (a null signature is treated as "unknown", which the
+  // indexer handles conservatively). Guarded by a column-presence check.
+  (db) => {
+    if (hasTable(db, "sessions") && !hasColumn(db, "sessions", "headSig")) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN headSig TEXT`);
+    }
+  },
 ];
 
 /**

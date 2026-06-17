@@ -201,6 +201,16 @@ export interface SearchHit {
   /** Matching text excerpt (may include highlight markers). */
   snippet: string;
   timestamp: string | null;
+  /**
+   * Index of the best-matching message WITHIN the session (the mirrored message
+   * `seq` of the matched row), so the UI can jump straight to the match. ALWAYS
+   * populated by `search()` (0 when the underlying seq is unknown — e.g. legacy
+   * mirrored rows predating seq tracking). Declared OPTIONAL for backward-compat:
+   * existing consumers that pre-declared their own optional `seq` (the web face's
+   * `SearchHitWithSeq`) keep type-checking, and any older caller constructing a
+   * `SearchHit` literal isn't forced to supply it.
+   */
+  seq?: number;
 }
 
 export interface SessionMessagesPage {

@@ -14,6 +14,7 @@ import { registerGitRoutes } from "./routes/git.js";
 import { registerPermissionsRoutes } from "./routes/permissions.js";
 import { registerConfigRoutes } from "./routes/config.js";
 import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
+import { registerRollupsRoutes } from "./routes/rollups.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -92,6 +93,8 @@ export function buildApp(opts: BuildOptions = {}): {
 
   registerAllSessionsRoutes(app, engine);
 
+  registerRollupsRoutes(app, engine);
+
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",
     {
@@ -158,10 +161,13 @@ export function buildApp(opts: BuildOptions = {}): {
     },
   );
 
-  // Rename / pin (sidecar — never touches the transcript).
+  // Rename / pin / tag (sidecar — never touches the transcript). Tags are stored
+  // in session_meta and normalized by the engine on write (trim/lower/de-dupe); the
+  // schema only guards the *shape* (array of short strings), capped so a single
+  // request can't stuff the index with oversized or unbounded tag lists.
   app.patch<{
     Params: { id: string };
-    Body: { customTitle?: string | null; pinned?: boolean };
+    Body: { customTitle?: string | null; pinned?: boolean; tags?: string[] };
   }>(
     "/api/sessions/:id",
     {
@@ -177,6 +183,11 @@ export function buildApp(opts: BuildOptions = {}): {
           properties: {
             customTitle: { type: ["string", "null"] },
             pinned: { type: "boolean" },
+            tags: {
+              type: "array",
+              maxItems: 50,
+              items: { type: "string", minLength: 1, maxLength: 64 },
+            },
           },
         },
       },
@@ -186,6 +197,7 @@ export function buildApp(opts: BuildOptions = {}): {
       const body = req.body ?? {};
       if ("customTitle" in body) engine.index.setCustomTitle(id, body.customTitle ?? null);
       if ("pinned" in body) engine.index.setPinned(id, body.pinned === true);
+      if ("tags" in body && body.tags) engine.setTags(id, body.tags);
       return engine.getSession(id) ?? { ok: true };
     },
   );

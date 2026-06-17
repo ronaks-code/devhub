@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Search, CornerDownLeft, Folder } from "lucide-react";
-import type { SearchHit } from "@claude-ui/engine/types";
+import type { SearchHitWithSeq } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 
@@ -29,10 +29,10 @@ export function SearchPalette({
 }: {
   open: boolean;
   onClose: () => void;
-  onPick: (hit: SearchHit) => void;
+  onPick: (hit: SearchHitWithSeq) => void;
 }) {
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [hits, setHits] = useState<SearchHitWithSeq[]>([]);
   const [loading, setLoading] = useState(false);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,7 +63,7 @@ export function SearchPalette({
       fetch(`/api/search?q=${encodeURIComponent(term)}&limit=30`, {
         headers: { accept: "application/json" },
       })
-        .then((r) => (r.ok ? (r.json() as Promise<SearchHit[]>) : []))
+        .then((r) => (r.ok ? (r.json() as Promise<SearchHitWithSeq[]>) : []))
         .then((res) => {
           if (cancelled) return;
           setHits(res);

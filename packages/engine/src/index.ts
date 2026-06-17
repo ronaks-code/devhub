@@ -8,6 +8,7 @@ import { stat } from "node:fs/promises";
 import { TranscriptIndex } from "./index-db.js";
 import type { SearchFacets } from "./search.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
+import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
@@ -193,6 +194,15 @@ export class Engine {
     return listRunningSessions();
   }
 
+  /**
+   * Per-day token & cost time series for usage/spend charts. Each session's totals
+   * land on the UTC day of its last activity; cost is per-session (model-priced) and
+   * summed per day. Optional since/until/projectId narrow the window.
+   */
+  dailyUsage(opts: DailyUsageOptions = {}): DailyUsage[] {
+    return this.index.dailyUsage(opts);
+  }
+
   /** Aggregate usage/activity analytics computed from the index. */
   getStats(): Stats {
     const totalSessions = this.index.getSessionCount();
@@ -339,6 +349,10 @@ export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
+export { dailyUsage } from "./rollups.js";
+export type { DailyUsage, DailyUsageOptions } from "./rollups.js";
+export { classifyCommand, classifyShell } from "./classify-command.js";
+export type { CommandSeverity, CommandClassification } from "./classify-command.js";
 export { listRunningSessions, isPidAlive } from "./running.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, MessageSquarePlus, RotateCcw, Send, Square, Sparkles } from "lucide-react";
+import { ArrowDown, MessageSquarePlus, Pencil, RotateCcw, Send, Square, Sparkles, Wifi } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
@@ -81,6 +81,14 @@ export function ChatPane({
   );
   // Key of the assistant bubble currently receiving deltas (null = none in flight).
   const [liveKey, setLiveKey] = useState<number | null>(null);
+  // True while the chat socket is retrying after an unexpected drop. Drives a
+  // subtle "reconnecting" hint; the live session resumes on the next prompt.
+  const [reconnecting, setReconnecting] = useState(false);
+  // True once the user has clicked "Edit & resend" on a prior user message and
+  // the composer holds that (editable) text. Sending resumes the session, so it
+  // continues/forks the conversation from that earlier turn. Cleared on send,
+  // on a manual composer edit that diverges, or via the "cancel" affordance.
+  const [editingFork, setEditingFork] = useState(false);
   // A pending inline permission request from the agent (persistent-path only;
   // dormant on the default per-turn driver). Cleared once answered or the turn ends.
   const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
@@ -92,6 +100,10 @@ export function ChatPane({
   const keyRef = useRef(0);
   const liveKeyRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // True between an unexpected drop and the subsequent reconnect, so the
+  // reconnect handler knows to clear the (now-dead) in-flight turn state.
+  const reconnectedRef = useRef(false);
   // Auto-scroll only follows new content while the user is parked at the bottom;
   // if they scroll up to read history we stop and show a "jump to latest" pill.
   const stick = useStickToBottom(scrollRef);
@@ -164,6 +176,26 @@ export function ChatPane({
       onStatus: (kind) => setStatus(kind),
       onResult: (result) => setLastResult(result),
       onPermissionRequest: (req) => setPendingPermission(req),
+      onConnectionState: (state) => {
+        if (state === "reconnecting") {
+          reconnectedRef.current = true;
+          setReconnecting(true);
+          return;
+        }
+        // Reconnected after a drop: the server canceled the in-flight turn on
+        // socket close, so we'll never receive its turn-end. Clear the stuck
+        // "running" UI so the user can resume — the next prompt re-sends the
+        // live sessionId, continuing the same CLI session.
+        setReconnecting(false);
+        if (reconnectedRef.current) {
+          reconnectedRef.current = false;
+          setRunning(false);
+          setStatus(null);
+          setPendingPermission(null);
+          liveKeyRef.current = null;
+          setLiveKey(null);
+        }
+      },
       onError: (message) => {
         setErrorMsg(message);
         setRunning(false);
@@ -240,6 +272,7 @@ export function ChatPane({
     if (!prompt || running) return;
     history.add(prompt);
     clearDraft();
+    setEditingFork(false);
     runPrompt(prompt, true);
   }, [draft, running, clearDraft, runPrompt, history]);
 
@@ -251,6 +284,27 @@ export function ChatPane({
     if (!prompt || running) return;
     runPrompt(prompt, false);
   }, [running, runPrompt]);
+
+  // "Edit & resend" from a prior user bubble: drop its text into the composer,
+  // mark this as a fork-from-here send, and focus the textarea for editing. The
+  // actual resend goes through the normal send() path, which includes the live
+  // sessionId — so the CLI resumes (forks) the session from that point.
+  const editFromMessage = useCallback(
+    (text: string) => {
+      if (running) return;
+      setDraft(text);
+      setEditingFork(true);
+      const el = textareaRef.current;
+      if (el) {
+        requestAnimationFrame(() => {
+          el.focus();
+          // Caret to the end so the user can keep typing immediately.
+          el.selectionStart = el.selectionEnd = el.value.length;
+        });
+      }
+    },
+    [running, setDraft],
+  );
 
   const stop = useCallback(() => {
     connRef.current?.send({ t: "interrupt" });
@@ -271,6 +325,7 @@ export function ChatPane({
     setLastResult(null);
     setErrorMsg(null);
     setPendingPermission(null);
+    setEditingFork(false);
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -350,7 +405,18 @@ export function ChatPane({
       {/* Header */}
       <div className="flex flex-wrap items-center gap-2 border-b border-zinc-800/80 px-5 py-2.5">
         <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[15px] font-semibold text-zinc-100">{projectName}</h1>
+          <h1 className="flex items-center gap-2 truncate text-[15px] font-semibold text-zinc-100">
+            <span className="truncate">{projectName}</span>
+            {reconnecting && (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10.5px] font-medium text-amber-300 ring-1 ring-amber-500/20"
+                title="Lost the connection — retrying. The session resumes on your next message."
+              >
+                <Wifi className="h-3 w-3 animate-pulse" />
+                reconnecting…
+              </span>
+            )}
+          </h1>
           <div className="truncate text-[11px] text-zinc-600" title={cwd} dir="rtl">
             {cwdShort}
           </div>
@@ -427,7 +493,11 @@ export function ChatPane({
                   }}
                   className="border-b border-zinc-900/70"
                 >
-                  <MessageView m={it.message} streaming={running && it.key === liveKey} />
+                  <MessageView
+                    m={it.message}
+                    streaming={running && it.key === liveKey}
+                    onEdit={!running ? editFromMessage : undefined}
+                  />
                 </div>
               );
             })}
@@ -496,8 +566,27 @@ export function ChatPane({
 
       {/* Composer */}
       <div className="border-t border-zinc-800/80 px-4 py-3">
+        {/* Fork-from-here banner: shown after "Edit & resend" until the message
+            is sent or the user cancels. Sending resumes the session, so it
+            continues/forks the conversation from that earlier turn. */}
+        {editingFork && !running ? (
+          <div className="mb-2 flex items-center gap-2 rounded-lg bg-clay-500/10 px-2.5 py-1.5 text-[11px] text-clay-200 ring-1 ring-clay-500/20">
+            <Pencil className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Editing an earlier message — sending will continue this session, forking
+              the conversation from here.
+            </span>
+            <button
+              onClick={() => setEditingFork(false)}
+              className="shrink-0 rounded px-1.5 py-0.5 font-medium text-clay-300 transition hover:bg-clay-500/15 hover:text-clay-100"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2 rounded-xl bg-zinc-900 p-2 ring-1 ring-zinc-800 focus-within:ring-clay-500/40">
           <textarea
+            ref={textareaRef}
             value={draft}
             onChange={(e) => {
               // A manual edit abandons history navigation (we're back on a live line).

@@ -38,12 +38,26 @@ export interface ChatHandlers {
   onPermissionRequest?: (req: PermissionRequestFrame) => void;
   onOpen?: () => void;
   onClose?: () => void;
+  /**
+   * Connection liveness for a subtle UI hint. "open" once the socket is up,
+   * "reconnecting" while a backoff retry is pending after an unexpected drop.
+   * Distinct from onOpen/onClose (which still fire) so the pane can show a
+   * "reconnecting…" pill without conflating it with a turn ending.
+   */
+  onConnectionState?: (state: ConnectionState) => void;
 }
+
+export type ConnectionState = "open" | "reconnecting";
 
 export interface ChatConn {
   send: (msg: OutgoingMsg) => void;
   close: () => void;
 }
+
+// Exponential backoff: 0.5s, 1s, 2s, 4s … capped at 15s, with jitter to avoid a
+// thundering herd of synchronized retries.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 15_000;
 
 /**
  * Opens the live-session WebSocket (same-origin; Vite dev proxy upgrades it).
@@ -57,9 +71,19 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     location.host +
     "/api/ws/session";
 
-  const ws = new WebSocket(url);
+  // Frames typed before the socket is OPEN. We only ever push frames here that
+  // haven't been sent on the wire, so a reconnect flush can never duplicate an
+  // already-delivered prompt. Resume itself is handled by ChatPane: it re-sends
+  // the live sessionId on the NEXT prompt, so the new socket continues the same
+  // CLI session rather than starting a fresh one.
   const queue: string[] = [];
+  // The current live socket. Swapped out on each reconnect; null while a backoff
+  // retry is pending (sends buffer into `queue` meanwhile).
+  let ws: WebSocket | null = null;
+  // Set once the caller calls close(): stops all reconnect attempts for good.
   let closed = false;
+  let attempts = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Coalesce a fast {t:"delta"} token stream: accumulate chunks and flush the
   // concatenated text once per animation frame, so we call onDelta a few times
@@ -93,22 +117,7 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     });
   };
 
-  ws.onopen = () => {
-    for (const raw of queue.splice(0)) ws.send(raw);
-    handlers.onOpen?.();
-  };
-
-  ws.onclose = () => {
-    // Emit any buffered remainder before signalling close, preserving order.
-    flushDeltas();
-    handlers.onClose?.();
-  };
-
-  ws.onerror = () => {
-    handlers.onError?.("WebSocket connection error");
-  };
-
-  ws.onmessage = (ev) => {
+  const onWsMessage = (ev: MessageEvent) => {
     let msg: ServerMsg;
     try {
       msg = JSON.parse(ev.data as string) as ServerMsg;
@@ -153,16 +162,71 @@ export function openChat(handlers: ChatHandlers): ChatConn {
     }
   };
 
+  // Schedule a reconnect after an unexpected drop, with exponential backoff +
+  // jitter. Surfaces "reconnecting" so the pane can show a subtle hint.
+  const scheduleReconnect = () => {
+    if (closed || reconnectTimer != null) return;
+    handlers.onConnectionState?.("reconnecting");
+    const delay =
+      Math.min(RECONNECT_BASE_MS * 2 ** attempts, RECONNECT_MAX_MS) *
+      (0.5 + Math.random() * 0.5);
+    attempts++;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (!closed) connect();
+    }, delay);
+  };
+
+  function connect() {
+    if (closed) return;
+    const socket = new WebSocket(url);
+    ws = socket;
+
+    socket.onopen = () => {
+      attempts = 0; // reset backoff on a healthy connection
+      // Flush only genuinely-unsent frames (never re-send delivered prompts).
+      for (const raw of queue.splice(0)) socket.send(raw);
+      handlers.onConnectionState?.("open");
+      handlers.onOpen?.();
+    };
+
+    socket.onclose = () => {
+      // Emit any buffered remainder before reacting, preserving order. A new
+      // socket starts with an empty deltaBuf, so deltas are never duplicated.
+      flushDeltas();
+      handlers.onClose?.();
+      // Only retry on an UNEXPECTED drop: a caller close() flips `closed` first.
+      if (!closed && ws === socket) {
+        ws = null;
+        scheduleReconnect();
+      }
+    };
+
+    socket.onerror = () => {
+      // Don't surface a hard error on a transient drop — onclose drives the
+      // reconnect. Errors only matter to the user when we've given up (closed).
+      if (closed) handlers.onError?.("WebSocket connection error");
+    };
+
+    socket.onmessage = onWsMessage;
+  }
+
+  connect();
+
   return {
     send(msg: OutgoingMsg) {
       if (closed) return;
       const raw = JSON.stringify(msg);
-      if (ws.readyState === WebSocket.OPEN) ws.send(raw);
-      else queue.push(raw);
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(raw);
+      else queue.push(raw); // flushed on (re)connect — order preserved
     },
     close() {
       closed = true;
       queue.length = 0;
+      if (reconnectTimer != null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       // Cancel any pending frame; flush the remainder so no streamed text is lost.
       if (rafId != null && canRaf) {
         window.cancelAnimationFrame(rafId);
@@ -170,10 +234,11 @@ export function openChat(handlers: ChatHandlers): ChatConn {
       }
       flushDeltas();
       try {
-        ws.close();
+        ws?.close();
       } catch {
         /* already closing */
       }
+      ws = null;
     },
   };
 }

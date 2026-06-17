@@ -14,8 +14,12 @@ import {
   Sun,
 } from "lucide-react";
 import { api, subscribeEvents, type AppSettings } from "./lib/api";
-import type { ProjectSummary, SessionMessagesPage, SessionSummary } from "./lib/types";
-import type { SearchHit } from "@claude-ui/engine/types";
+import type {
+  ProjectSummary,
+  SearchHitWithSeq,
+  SessionMessagesPage,
+  SessionSummary,
+} from "./lib/types";
 import type { PermissionMode } from "@claude-ui/engine/driver";
 import { ProjectsPane } from "./components/ProjectsPane";
 import { SessionsPane } from "./components/SessionsPane";
@@ -193,6 +197,10 @@ export default function App() {
   const [chatModel, setChatModel] = useState<string | null>(null);
   // Carries a session to auto-select after a search-driven project switch.
   const pendingSessionRef = useRef<string | null>(null);
+  // The message seq a search pick wants the transcript to jump to + highlight,
+  // once it loads. Bumped each pick (via a nonce) so re-picking the SAME hit
+  // re-triggers the jump even when seq is unchanged. Null = no pending jump.
+  const [jumpTarget, setJumpTarget] = useState<{ seq: number; nonce: number } | null>(null);
 
   // Persist UI state (active tab + selected project) so a reload lands the user
   // back where they were. Merge over any existing keys (e.g. theme/density) so
@@ -321,11 +329,16 @@ export default function App() {
     setSessionId(id);
   };
 
-  // Picking a search hit jumps to the Browse viewer at that project + session.
-  const onPickHit = (hit: SearchHit) => {
+  // Picking a search hit jumps to the Browse viewer at that project + session,
+  // then (when the hit carries a `seq`) tells the transcript to scroll to and
+  // briefly highlight that exact message once it loads.
+  const onPickHit = (hit: SearchHitWithSeq) => {
     setSearchOpen(false);
     setTab("browse");
     setTailBytes(undefined);
+    setJumpTarget(
+      typeof hit.seq === "number" ? { seq: hit.seq, nonce: Date.now() } : null,
+    );
     if (hit.projectId === projectId) {
       // Same project: the project effect won't re-run, so select directly.
       setSessionId(hit.sessionId);
@@ -342,6 +355,26 @@ export default function App() {
   };
   const handlePin = async (id: string, pinned: boolean) => {
     await api.setPinned(id, pinned);
+    if (projectId) await refreshSessions(projectId);
+  };
+  // Bulk pin/unpin: PATCH each session, then refresh once. Errors on individual
+  // PATCHes are swallowed per-id so one failure doesn't abort the rest.
+  const handleBulkPin = async (ids: string[], pinned: boolean) => {
+    await Promise.allSettled(ids.map((id) => api.setPinned(id, pinned)));
+    if (projectId) await refreshSessions(projectId);
+  };
+  // Bulk add-a-tag: union the new tag onto each session's existing tags (the
+  // server normalizes + de-dupes), then refresh once.
+  const handleBulkAddTag = async (ids: string[], tag: string) => {
+    const t = tag.trim();
+    if (!t) return;
+    const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+    await Promise.allSettled(
+      ids.map((id) => {
+        const existing = byId.get(id)?.tags ?? [];
+        return api.setTags(id, [...existing, t]);
+      }),
+    );
     if (projectId) await refreshSessions(projectId);
   };
   const handleLoadMore = () => setTailBytes((b) => (b ?? BASE_TAIL) * 2);
@@ -499,12 +532,15 @@ export default function App() {
               onSelect={onSelectSession}
               onRename={handleRename}
               onTogglePin={handlePin}
+              onBulkPin={handleBulkPin}
+              onBulkAddTag={handleBulkAddTag}
             />
             <TranscriptPane
               page={page}
               loading={loadingPage}
               onLoadMore={handleLoadMore}
               onContinue={handleContinue}
+              jumpTarget={jumpTarget}
             />
           </>
         ) : (

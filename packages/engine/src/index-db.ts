@@ -12,7 +12,8 @@
 import { createRequire } from "node:module";
 import type { DatabaseSync as SqliteDatabase, StatementSync } from "node:sqlite";
 import { mkdirSync, existsSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { stat, open } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { appDataDir, projectIdFromCwd, projectName } from "./paths.js";
 import { streamRawLines, usageFromMessage, isCommandOrMetaPrompt } from "./parser.js";
@@ -27,6 +28,8 @@ import type { SearchFacets } from "./search.js";
 import { costUsd } from "./pricing.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
+import { dailyUsage } from "./rollups.js";
+import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 import type {
   ProjectMeta,
   ProjectSummary,
@@ -57,6 +60,7 @@ interface Row {
   indexedBytes: number;
   hasSubagents: number;
   model: string | null;
+  headSig: string | null;
   customTitle: string | null;
   pinned: number;
   tags: string | null;
@@ -82,7 +86,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   mtimeMs INTEGER NOT NULL DEFAULT 0,
   indexedBytes INTEGER NOT NULL DEFAULT 0,
   hasSubagents INTEGER NOT NULL DEFAULT 0,
-  model TEXT
+  model TEXT,
+  headSig TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(projectId);
 CREATE INDEX IF NOT EXISTS idx_sessions_lastTs ON sessions(lastTs);
@@ -99,7 +104,7 @@ const SELECT_COLS = `
   s.sessionId, s.filePath, s.cwd, s.projectId, s.title, s.titleSource, s.gitBranch,
   s.firstTs, s.lastTs, s.messageCount, s.inputTokens, s.outputTokens,
   s.cacheReadTokens, s.cacheCreationTokens, s.sizeBytes, s.mtimeMs, s.indexedBytes,
-  s.hasSubagents, s.model, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags
+  s.hasSubagents, s.model, s.headSig, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags
 `;
 
 function n(v: unknown): number {
@@ -273,6 +278,42 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 /** Max characters of renderable text we mirror per message into the search store. */
 const MAX_SEARCH_TEXT = 4000;
 
+/**
+ * Bytes of the transcript HEAD fingerprinted to detect a prefix rewrite / rotation.
+ * Claude Code transcripts are append-only, so identical leading bytes mean the file
+ * grew by appending; if these bytes change, the file was REWRITTEN (rotated /
+ * re-created / corrupted) and must be re-indexed from byte 0. 4 KiB comfortably
+ * spans several leading JSONL lines (the session header + first turns).
+ */
+const HEAD_SIG_BYTES = 4096;
+
+/**
+ * Fingerprint of a transcript's first {@link HEAD_SIG_BYTES} bytes: a sha1 of the
+ * leading bytes, prefixed with how many bytes were actually read (so a file shorter
+ * than the window still produces a stable, length-aware signature). Returns null on
+ * any read error (a null signature is treated as "unknown" by the change detector,
+ * which then falls back to size-based heuristics). Reads at most one small chunk —
+ * cheap even for a multi-hundred-MB transcript.
+ */
+async function readHeadSig(filePath: string): Promise<string | null> {
+  let fh;
+  try {
+    fh = await open(filePath, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.alloc(HEAD_SIG_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_SIG_BYTES, 0);
+    const hash = createHash("sha1").update(buf.subarray(0, bytesRead)).digest("hex");
+    return `${bytesRead}:${hash}`;
+  } catch {
+    return null;
+  } finally {
+    await fh.close();
+  }
+}
+
 export class TranscriptIndex {
   private db: SqliteDatabase;
   private upsert: StatementSync;
@@ -314,18 +355,18 @@ export class TranscriptIndex {
       INSERT INTO sessions (
         sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
         firstTs, lastTs, messageCount, inputTokens, outputTokens,
-        cacheReadTokens, cacheCreationTokens, sizeBytes, mtimeMs, indexedBytes, hasSubagents, model
+        cacheReadTokens, cacheCreationTokens, sizeBytes, mtimeMs, indexedBytes, hasSubagents, model, headSig
       ) VALUES (
         $sessionId, $filePath, $cwd, $projectId, $title, $titleSource, $gitBranch,
         $firstTs, $lastTs, $messageCount, $inputTokens, $outputTokens,
-        $cacheReadTokens, $cacheCreationTokens, $sizeBytes, $mtimeMs, $indexedBytes, $hasSubagents, $model
+        $cacheReadTokens, $cacheCreationTokens, $sizeBytes, $mtimeMs, $indexedBytes, $hasSubagents, $model, $headSig
       )
       ON CONFLICT(sessionId) DO UPDATE SET
         filePath=$filePath, cwd=$cwd, projectId=$projectId, title=$title, titleSource=$titleSource,
         gitBranch=$gitBranch, firstTs=$firstTs, lastTs=$lastTs, messageCount=$messageCount,
         inputTokens=$inputTokens, outputTokens=$outputTokens, cacheReadTokens=$cacheReadTokens,
         cacheCreationTokens=$cacheCreationTokens, sizeBytes=$sizeBytes, mtimeMs=$mtimeMs,
-        indexedBytes=$indexedBytes, hasSubagents=$hasSubagents, model=$model
+        indexedBytes=$indexedBytes, hasSubagents=$hasSubagents, model=$model, headSig=$headSig
     `);
     this.selectOne = this.db.prepare(
       `SELECT ${SELECT_COLS} FROM sessions s LEFT JOIN session_meta m USING (sessionId) WHERE s.sessionId = ?`,
@@ -390,8 +431,23 @@ export class TranscriptIndex {
       return "unchanged";
     }
 
+    // Fingerprint the file head. Transcripts are APPEND-ONLY, so the leading bytes
+    // are stable as a file grows — a changed head means the file was rewritten
+    // (rotated / re-created / corrupted), not appended to.
+    const headSig = await readHeadSig(filePath);
+
+    // Incremental (read only the appended tail) is safe ONLY when the file grew AND
+    // its head is byte-for-byte unchanged. If the head changed (prefix rewrite), or
+    // we can't fingerprint it, or it shrank, fall back to a FULL re-index from byte 0
+    // so a rewritten transcript can never be read as a bogus "append" onto stale
+    // offsets. (A shrunken file already wouldn't satisfy st.size > indexedBytes.)
+    const headUnchanged =
+      !!existing &&
+      existing.headSig != null &&
+      headSig != null &&
+      existing.headSig === headSig;
     const incremental =
-      !!existing && existing.indexedBytes > 0 && st.size > existing.indexedBytes;
+      !!existing && existing.indexedBytes > 0 && st.size > existing.indexedBytes && headUnchanged;
     const startByte = incremental ? existing!.indexedBytes : 0;
 
     let messageCount = incremental ? existing!.messageCount : 0;
@@ -545,6 +601,7 @@ export class TranscriptIndex {
         indexedBytes: st.size,
         hasSubagents,
         model,
+        headSig,
       });
       this.writeSearchText(sessionId, searchTexts, startByte === 0);
       this.db.exec("COMMIT");
@@ -614,6 +671,15 @@ export class TranscriptIndex {
    */
   listAllSessions(opts: ListAllSessionsOptions = {}): SessionSummary[] {
     return listAllSessions<Row>(this.db, SELECT_COLS, rowToSummary, opts);
+  }
+
+  /**
+   * Per-day token & cost time series (oldest→newest), bucketed by each session's
+   * last-activity day. Delegates to the `rollups` module, which owns the query +
+   * aggregation. Optional since/until/projectId filters narrow the window.
+   */
+  dailyUsage(opts: DailyUsageOptions = {}): DailyUsage[] {
+    return dailyUsage(this.db, opts);
   }
 
   /**

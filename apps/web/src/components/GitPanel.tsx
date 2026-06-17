@@ -14,6 +14,7 @@ import type { GitLogEntry, GitStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { relativeTime } from "../lib/format";
 import { CommitComposer } from "./CommitComposer";
+import { GitDiffView } from "./GitDiffView";
 import { Spinner } from "./ui";
 
 /** A compact count chip with an icon — only rendered when n > 0. */
@@ -40,6 +41,99 @@ function CountChip({
       {icon}
       {n}
     </span>
+  );
+}
+
+/** One changed-file row. Click to expand its real working-tree diff inline. */
+function FileRow({
+  cwd,
+  file,
+  icon,
+  tone,
+  expandable,
+}: {
+  cwd: string;
+  file: string;
+  icon: React.ReactNode;
+  tone: string;
+  /** Untracked files have no working-tree diff, so they aren't expandable. */
+  expandable: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        onClick={expandable ? () => setOpen((v) => !v) : undefined}
+        disabled={!expandable}
+        title={expandable ? (open ? "Hide diff" : "Show diff") : "Untracked — no diff"}
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11.5px]",
+          expandable ? "transition hover:bg-zinc-800/60" : "cursor-default",
+        )}
+      >
+        {expandable ? (
+          <ChevronRight
+            className={cn("h-3 w-3 shrink-0 text-zinc-600 transition-transform", open && "rotate-90")}
+          />
+        ) : (
+          <span className="w-3 shrink-0" />
+        )}
+        <span className={cn("shrink-0", tone)}>{icon}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-zinc-300" title={file}>
+          {file}
+        </span>
+      </button>
+      {expandable && open ? <GitDiffView cwd={cwd} file={file} /> : null}
+    </div>
+  );
+}
+
+/** The changed-file lists (staged, unstaged, untracked), each row expandable. */
+function ChangedFiles({ cwd, status }: { cwd: string; status: GitStatus }) {
+  const groups: Array<{
+    key: string;
+    files: string[];
+    icon: React.ReactNode;
+    tone: string;
+    expandable: boolean;
+  }> = [
+    {
+      key: "staged",
+      files: status.staged,
+      icon: <Plus className="h-3 w-3" />,
+      tone: "text-emerald-400",
+      expandable: true,
+    },
+    {
+      key: "unstaged",
+      files: status.unstaged,
+      icon: <Pencil className="h-3 w-3" />,
+      tone: "text-amber-400",
+      expandable: true,
+    },
+    {
+      key: "untracked",
+      files: status.untracked,
+      icon: <FileQuestion className="h-3 w-3" />,
+      tone: "text-zinc-500",
+      expandable: false,
+    },
+  ];
+  return (
+    <div className="mt-2 space-y-0.5">
+      {groups.flatMap((g) =>
+        g.files.map((f) => (
+          <FileRow
+            key={`${g.key}:${f}`}
+            cwd={cwd}
+            file={f}
+            icon={g.icon}
+            tone={g.tone}
+            expandable={g.expandable}
+          />
+        )),
+      )}
+    </div>
   );
 }
 
@@ -176,6 +270,10 @@ export function GitPanel({ cwd }: { cwd: string }) {
                   <span className="text-[11px] text-zinc-600">Working tree clean</span>
                 ) : null}
               </div>
+
+              {/* Changed-file list — click a tracked file to expand its real
+                  working-tree diff (GET /api/git/diff?cwd=&file=). */}
+              {dirty ? <ChangedFiles cwd={cwd} status={status} /> : null}
 
               {log.length > 0 ? (
                 <div className="mt-2 space-y-1">

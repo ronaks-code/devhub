@@ -1,5 +1,17 @@
-import { useMemo, useRef, useState } from "react";
-import { Search, Pin, Pencil, MessageSquare, Coins, GitBranch, Check, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Search,
+  Pin,
+  PinOff,
+  Pencil,
+  MessageSquare,
+  Coins,
+  GitBranch,
+  Check,
+  X,
+  Tag,
+  CheckSquare,
+} from "lucide-react";
 import type { ProjectSummary, SessionSummary } from "../lib/types";
 import { cn } from "../lib/utils";
 import { compactNumber, relativeTime, totalTokens } from "../lib/format";
@@ -13,6 +25,8 @@ export function SessionsPane({
   onSelect,
   onRename,
   onTogglePin,
+  onBulkPin,
+  onBulkAddTag,
 }: {
   project: ProjectSummary | null;
   sessions: SessionSummary[];
@@ -20,16 +34,85 @@ export function SessionsPane({
   onSelect: (id: string) => void;
   onRename: (id: string, title: string | null) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
+  /** Bulk pin/unpin the given sessions (PATCH each). */
+  onBulkPin?: (ids: string[], pinned: boolean) => void | Promise<void>;
+  /** Union a tag onto each given session (PATCH each with merged tags). */
+  onBulkAddTag?: (ids: string[], tag: string) => void | Promise<void>;
 }) {
   const [q, setQ] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Multi-select: the set of checked session ids + the last index toggled (the
+  // shift-click range anchor). Distinct from the single "open" selection so the
+  // existing click-to-open behavior is preserved unchanged.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const anchorRef = useRef<number | null>(null);
+  // Inline "add tag" input shown from the bulk bar. Null = closed.
+  const [tagDraft, setTagDraft] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return sessions;
     return sessions.filter((x) => x.title.toLowerCase().includes(s));
   }, [sessions, q]);
+
+  // Drop any selected ids that are no longer in the (filtered or full) list, so
+  // a project switch / filter never leaves the bulk bar acting on stale ids.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(sessions.map((s) => s.sessionId));
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (live.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sessions]);
+
+  const selectedIds = useMemo(() => [...selected], [selected]);
+
+  // Toggle one row's selection. Shift extends a contiguous range from the anchor
+  // so a click-then-shift-click selects everything between (mouse-friendly).
+  const toggleAt = useCallback(
+    (index: number, shift: boolean) => {
+      const target = filtered[index];
+      if (!target) return;
+      setSelected((prev) => {
+        const next = new Set(prev);
+        if (shift && anchorRef.current != null) {
+          const [lo, hi] =
+            anchorRef.current <= index
+              ? [anchorRef.current, index]
+              : [index, anchorRef.current];
+          // The anchor's current membership decides whether the range adds or
+          // removes — matches the OS file-list convention closely enough.
+          const adding = !prev.has(target.sessionId);
+          for (let i = lo; i <= hi; i++) {
+            const id = filtered[i]?.sessionId;
+            if (!id) continue;
+            if (adding) next.add(id);
+            else next.delete(id);
+          }
+        } else if (next.has(target.sessionId)) {
+          next.delete(target.sessionId);
+        } else {
+          next.add(target.sessionId);
+        }
+        return next;
+      });
+      anchorRef.current = index;
+    },
+    [filtered],
+  );
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+    setTagDraft(null);
+    anchorRef.current = null;
+  }, []);
 
   // j/k + arrow + Enter navigation. Enter opens the highlighted session; the
   // inline rename input is guarded inside the hook so typing isn't hijacked.
@@ -43,6 +126,38 @@ export function SessionsPane({
     getItemElement: (i) => itemRefs.current[i],
   });
 
+  // Keyboard multi-select: `x` toggles the focused row's checkbox; Escape clears
+  // the whole selection. Runs alongside the nav hook (which owns j/k/Enter/Space)
+  // — `x` isn't claimed there, so the two never fight. Skipped while typing.
+  const onContainerKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        t &&
+        (t.tagName === "INPUT" ||
+          t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          t.isContentEditable);
+      if (!typing) {
+        if (e.key === "x" || e.key === "X") {
+          if (nav.focusedIndex >= 0) {
+            e.preventDefault();
+            toggleAt(nav.focusedIndex, e.shiftKey);
+          }
+          return;
+        }
+        if (e.key === "Escape" && selected.size > 0) {
+          e.preventDefault();
+          clearSelection();
+          return;
+        }
+      }
+      // Delegate everything else to the list navigator.
+      nav.containerProps.onKeyDown(e);
+    },
+    [nav, toggleAt, selected.size, clearSelection],
+  );
+
   function startEdit(s: SessionSummary) {
     setEditingId(s.sessionId);
     setDraft(s.title);
@@ -52,6 +167,21 @@ export function SessionsPane({
     onRename(s.sessionId, t.length ? t : null);
     setEditingId(null);
   }
+
+  // How many of the selected rows are pinned, so the bulk bar can offer the
+  // sensible primary action (pin if any unpinned, unpin if all pinned).
+  const selectedPinnedCount = useMemo(() => {
+    let n = 0;
+    for (const s of sessions) if (selected.has(s.sessionId) && s.pinned) n++;
+    return n;
+  }, [sessions, selected]);
+  const allSelectedPinned = selected.size > 0 && selectedPinnedCount === selected.size;
+
+  const commitTag = useCallback(() => {
+    const t = (tagDraft ?? "").trim();
+    if (t && onBulkAddTag) void onBulkAddTag(selectedIds, t);
+    setTagDraft(null);
+  }, [tagDraft, onBulkAddTag, selectedIds]);
 
   return (
     <div className="flex w-80 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950">
@@ -76,14 +206,85 @@ export function SessionsPane({
           />
         </div>
       </div>
+
+      {/* Bulk action bar — appears once one or more sessions are checked. Pin /
+          unpin and add-a-tag fan out PATCH /api/sessions/:id per selected id. */}
+      {selected.size > 0 && (
+        <div className="mx-3 mb-2 rounded-lg bg-clay-500/10 px-2.5 py-2 ring-1 ring-clay-500/25">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] font-medium text-clay-200">
+              {selected.size} selected
+            </span>
+            <div className="ml-auto flex items-center gap-1">
+              <button
+                onClick={() => onBulkPin?.(selectedIds, !allSelectedPinned)}
+                className="inline-flex items-center gap-1 rounded-md bg-zinc-900/60 px-2 py-1 text-[11px] font-medium text-zinc-200 ring-1 ring-zinc-700 transition hover:bg-zinc-800"
+                title={allSelectedPinned ? "Unpin selected" : "Pin selected"}
+              >
+                {allSelectedPinned ? (
+                  <PinOff className="h-3 w-3" />
+                ) : (
+                  <Pin className="h-3 w-3" />
+                )}
+                {allSelectedPinned ? "Unpin" : "Pin"}
+              </button>
+              <button
+                onClick={() => setTagDraft((v) => (v == null ? "" : null))}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ring-1 transition",
+                  tagDraft != null
+                    ? "bg-clay-500/20 text-clay-100 ring-clay-500/40"
+                    : "bg-zinc-900/60 text-zinc-200 ring-zinc-700 hover:bg-zinc-800",
+                )}
+                title="Add a tag to the selected sessions"
+              >
+                <Tag className="h-3 w-3" />
+                Tag
+              </button>
+              <IconButton
+                className="p-1 text-zinc-400 hover:text-zinc-100"
+                title="Clear selection (Esc)"
+                onClick={clearSelection}
+              >
+                <X className="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
+          </div>
+          {tagDraft != null && (
+            <div className="mt-2 flex items-center gap-1">
+              <input
+                autoFocus
+                value={tagDraft}
+                onChange={(e) => setTagDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitTag();
+                  if (e.key === "Escape") setTagDraft(null);
+                }}
+                placeholder="Tag name…"
+                className="w-full rounded bg-zinc-900 px-1.5 py-1 text-[12px] text-zinc-100 ring-1 ring-clay-500/40 focus:outline-none"
+              />
+              <IconButton
+                className="p-1 text-emerald-400"
+                onClick={commitTag}
+                title="Apply tag"
+              >
+                <Check className="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
+          )}
+        </div>
+      )}
+
       <div
         {...nav.containerProps}
+        onKeyDown={onContainerKeyDown}
         className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
       >
         {filtered.map((s, i) => {
           const active = s.sessionId === selectedId;
           const editing = s.sessionId === editingId;
           const focused = i === nav.focusedIndex;
+          const checked = selected.has(s.sessionId);
           const itemProps = nav.getItemProps(i);
           return (
             <div
@@ -97,17 +298,40 @@ export function SessionsPane({
               onMouseEnter={itemProps.onMouseEnter}
               className={cn(
                 "group mb-0.5 rounded-lg px-2.5 py-2 transition",
-                active
-                  ? "bg-clay-500/10 ring-1 ring-clay-500/30"
-                  : focused
-                    ? "bg-zinc-900 ring-1 ring-zinc-700"
-                    : "hover:bg-zinc-900",
+                checked
+                  ? "bg-clay-500/15 ring-1 ring-clay-500/40"
+                  : active
+                    ? "bg-clay-500/10 ring-1 ring-clay-500/30"
+                    : focused
+                      ? "bg-zinc-900 ring-1 ring-zinc-700"
+                      : "hover:bg-zinc-900",
               )}
             >
               <div className="flex items-start gap-1.5">
+                {/* Selection checkbox — always visible once any selection is
+                    active, otherwise reveal on hover so it stays unobtrusive. */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleAt(i, e.shiftKey);
+                  }}
+                  className={cn(
+                    "-ml-0.5 mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
+                    checked
+                      ? "border-clay-500 bg-clay-500 text-white"
+                      : "border-zinc-700 text-transparent hover:border-zinc-500",
+                    !checked && selected.size === 0 && "opacity-0 group-hover:opacity-100",
+                  )}
+                  title={checked ? "Deselect (x)" : "Select (x, shift to range)"}
+                  aria-pressed={checked}
+                  aria-label={checked ? "Deselect session" : "Select session"}
+                >
+                  <Check className="h-3 w-3" />
+                </button>
+
                 <IconButton
                   className={cn(
-                    "-ml-1 mt-0.5 p-1",
+                    "mt-0.5 p-1",
                     s.pinned ? "text-clay-400 hover:text-clay-300" : "opacity-0 group-hover:opacity-100",
                   )}
                   title={s.pinned ? "Unpin" : "Pin"}
@@ -173,6 +397,19 @@ export function SessionsPane({
                         </span>
                       ) : null}
                     </div>
+                    {s.tags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {s.tags.map((t) => (
+                          <span
+                            key={t}
+                            className="inline-flex items-center gap-0.5 rounded bg-zinc-800/80 px-1.5 py-0.5 text-[9.5px] font-medium text-zinc-400"
+                          >
+                            <Tag className="h-2.5 w-2.5" />
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </button>
                 )}
 
@@ -196,6 +433,14 @@ export function SessionsPane({
           <div className="px-3 py-6 text-center text-xs text-zinc-600">Select a project</div>
         )}
       </div>
+
+      {/* Subtle hint footer for the multi-select affordance. */}
+      {project && filtered.length > 0 && selected.size === 0 && (
+        <div className="flex items-center gap-1.5 border-t border-zinc-900/80 px-3 py-1.5 text-[10px] text-zinc-700">
+          <CheckSquare className="h-3 w-3" />
+          <span>Hover a row's checkbox (or press x) to multi-select</span>
+        </div>
+      )}
     </div>
   );
 }
