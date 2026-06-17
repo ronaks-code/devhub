@@ -97,6 +97,10 @@ export async function listRunningSessions(
       updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : null,
       name: typeof raw.name === "string" ? raw.name : null,
       entrypoint: typeof raw.entrypoint === "string" ? raw.entrypoint : null,
+      // What a waiting session is blocked on + when its status last changed, so the
+      // dashboard can surface *why* a session is paused and how stale that is.
+      waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : null,
+      statusUpdatedAt: typeof raw.statusUpdatedAt === "number" ? raw.statusUpdatedAt : null,
     });
   }
   out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

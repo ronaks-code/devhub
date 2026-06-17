@@ -142,6 +142,25 @@ export class Engine {
     return this.index.getSessionSummary(sessionId);
   }
 
+  /** Read one session's tags (normalized; empty when untagged). */
+  getTags(sessionId: string): string[] {
+    return this.index.getTags(sessionId);
+  }
+
+  /**
+   * Replace a session's tags. Values are normalized on write (trimmed, lower-cased,
+   * de-duped) and stored as a JSON array in session_meta.tags. Returns the persisted
+   * set. These also feed the `tag` search facet and the `tags` SessionSummary field.
+   */
+  setTags(sessionId: string, tags: string[]): string[] {
+    return this.index.setTags(sessionId, tags);
+  }
+
+  /** Every distinct tag in use with its session count (count desc, then name asc). */
+  getAllTags(): Array<{ tag: string; count: number }> {
+    return this.index.getAllTags();
+  }
+
   /**
    * Cross-project full-text search. `{ limit }` alone preserves the original
    * behavior; the optional facets (projectId/role/toolName/since/until/gitBranch)
@@ -312,6 +331,7 @@ export { GitService, parseStatus } from "./git.js";
 export type { GitStatus, GitBranch, GitLogEntry, GitDiff } from "./git.js";
 export { ProjectMetaStore } from "./project-meta.js";
 export type { ProjectMetaPatch } from "./project-meta.js";
+export { TagStore, parseTags, normalizeTags } from "./tags.js";
 export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
 export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
 export * as config from "./config/index.js";

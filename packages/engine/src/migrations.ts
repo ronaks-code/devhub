@@ -46,6 +46,16 @@ const MIGRATIONS: Migration[] = [
       color TEXT
     );`);
   },
+  // v3: session tags. Stored as a JSON array string in session_meta.tags. A fresh
+  // DB already gets this column from the base SCHEMA, but a DB created before tags
+  // existed won't have it — add it here, guarded by a column-presence check so the
+  // step is idempotent and harmless on a DB that already has the column.
+  (db) => {
+    // session_meta is created by the base SCHEMA, so it always exists by now.
+    if (!hasColumn(db, "session_meta", "tags")) {
+      db.exec(`ALTER TABLE session_meta ADD COLUMN tags TEXT`);
+    }
+  },
 ];
 
 /**

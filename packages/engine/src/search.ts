@@ -34,6 +34,8 @@ export interface SearchFacets {
   until?: string;
   /** Only sessions on this git branch. */
   gitBranch?: string;
+  /** Only sessions carrying this tag (case-insensitive; matched against session_meta.tags). */
+  tag?: string;
 }
 
 /** Default/clamp bounds for the result cap. */
@@ -41,6 +43,34 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
 /** Characters of context to show around the first match in LIKE-mode excerpts. */
 const LIKE_EXCERPT_RADIUS = 80;
+
+/**
+ * Per-role multipliers applied to a row's bm25 score (FTS5 mode). bm25 returns
+ * NEGATIVE numbers where more-negative == more relevant, so a LARGER multiplier
+ * makes a match score more strongly. We weight real conversation (assistant/user
+ * `text`) above the mirrored tool I/O (command lines + tool_result bodies), which
+ * is high-volume noise that otherwise drowns out the substantive answer.
+ */
+const ROLE_WEIGHT: Record<string, number> = {
+  assistant: 3.0,
+  user: 2.0,
+  tool: 1.0,
+};
+const DEFAULT_ROLE_WEIGHT = 2.0;
+
+/**
+ * Recency boost (FTS5 mode). Each matched session's best bm25 score is nudged
+ * toward "worse" in proportion to how stale the session is, so that two similarly
+ * relevant sessions are tie-broken by recency (recent first). The penalty is
+ * `min(ageDays, RECENCY_CAP_DAYS) / RECENCY_CAP_DAYS * RECENCY_WEIGHT` — i.e. a
+ * brand-new session adds ~0 and a year-old one adds the full `RECENCY_WEIGHT`.
+ *
+ * `RECENCY_WEIGHT` is sized to sit on the same order of magnitude as a typical
+ * bm25 delta (~1e-5..1e-6 for these short docs) so recency refines, but does not
+ * steamroll, raw textual relevance.
+ */
+const RECENCY_CAP_DAYS = 365.0;
+const RECENCY_WEIGHT = 5e-6;
 
 /** One parsed token of a user query. `phrase` keeps multi-word "quoted" groups intact. */
 interface QueryTerm {
@@ -167,6 +197,29 @@ function facetClauses(
 }
 
 /**
+ * SQL clause + bound param for the `tag` facet, matched against `session_meta.tags`
+ * under the given alias (joined by the caller). Tags are stored as a JSON array of
+ * normalized (trimmed, lower-cased) strings, e.g. `["alpha","beta"]`, so an exact
+ * tag is a substring match on its quoted JSON token: `tags LIKE '%"alpha"%'`. The
+ * needle is lower-cased to mirror the stored normalization, and `"`/`%`/`_`/`\`
+ * are escaped so a tag containing them can't break the LIKE pattern. Returns null
+ * when the facet is unset or the (trimmed) tag is empty.
+ */
+function tagClause(
+  tag: string | undefined,
+  metaAlias: string,
+  placeholder: string,
+): { clause: string; param: string } | null {
+  const t = (tag ?? "").trim().toLowerCase();
+  if (!t) return null;
+  const escaped = t.replace(/[\\%_"]/g, (c) => `\\${c}`);
+  return {
+    clause: `${metaAlias}.tags LIKE ${placeholder} ESCAPE '\\'`,
+    param: `%"${escaped}"%`,
+  };
+}
+
+/**
  * Search over a session-index DB's mirrored message text. Owns no schema — it is
  * handed the live db connection and the active search backend by `TranscriptIndex`.
  */
@@ -178,8 +231,9 @@ export class MessageSearch {
 
   /**
    * Cross-project full-text search. Returns the best matching hit per session
-   * (deduped). Facets (projectId/role/toolName/since/until/gitBranch) are optional
-   * and AND-ed onto the text match; `{ limit }` alone keeps the original behavior.
+   * (deduped). Facets (projectId/role/toolName/since/until/gitBranch/tag) are
+   * optional and AND-ed onto the text match; `{ limit }` alone keeps the original
+   * behavior.
    */
   search(query: string, facets: SearchFacets = {}): SearchHit[] {
     const q = query.trim();
@@ -197,29 +251,67 @@ export class MessageSearch {
     if (!match) return [];
 
     // Facets that touch the messages_fts row (role/toolName) must be applied INSIDE
-    // the ranked CTE (so we pick the best *eligible* row per session); session-level
+    // the scored CTE (so we pick the best *eligible* row per session); session-level
     // facets (projectId/gitBranch/since/until) join `sessions` and filter there.
     // The query already binds ?1 (match) and ?2 (limit), so facet params continue
     // from ?3 — SQLite disallows mixing numbered and anonymous placeholders.
     const { clauses, params } = facetClauses(facets, "f", (i) => `?${i + 3}`);
-    const facetWhere = clauses.length ? ` AND ${clauses.join(" AND ")}` : "";
 
-    // Pick ONE best (lowest-rank) row per session IN SQL via ROW_NUMBER(), keep the
-    // top `limit` sessions, then re-join `messages_fts` (with MATCH so snippet() has
-    // its query context — snippet() can't be used inside a window subquery) to render
-    // the excerpt. `text` is column index 4 now that toolName precedes it.
+    // The `tag` facet lives on session_meta (not sessions), so it gets its own
+    // optional LEFT JOIN + clause inside the scored CTE. Its param continues the
+    // numbering after the regular facet params (?3..?(2+N) -> next is ?(3+N)).
+    const tag = tagClause(facets.tag, "tm", `?${params.length + 3}`);
+    const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = f.sessionId" : "";
+    const allClauses = tag ? [...clauses, tag.clause] : clauses;
+    const allParams = tag ? [...params, tag.param] : params;
+    const facetWhere = allClauses.length ? ` AND ${allClauses.join(" AND ")}` : "";
+
+    // Per-role bm25 weight as an inline CASE. Weights are trusted module constants
+    // (not user input), so embedding them as literals is safe and keeps the
+    // placeholder numbering (?1 match, ?2 limit, ?3+ facets) intact.
+    const roleCase =
+      `CASE f.role` +
+      Object.entries(ROLE_WEIGHT)
+        .map(([role, w]) => ` WHEN '${role}' THEN ${w.toFixed(4)}`)
+        .join("") +
+      ` ELSE ${DEFAULT_ROLE_WEIGHT.toFixed(4)} END`;
+
+    // RANKING (3-stage, all in SQL):
+    //  1) `scored`  — bm25(messages_fts) for each matching row, multiplied by the
+    //     per-role weight so assistant/user text outranks mirrored tool noise.
+    //     (bm25 is negative; multiplying by a larger weight makes it MORE negative
+    //     = better. It is selected as a plain column here — FTS5 forbids using the
+    //     bm25() auxiliary fn directly inside a window function's ORDER BY.)
+    //  2) `best`    — ROW_NUMBER() over that alias keeps the single best row per
+    //     session.
+    //  3) final SELECT — adds a recency penalty derived from the session `lastTs`
+    //     (stale sessions get nudged toward 0 = worse) and orders by the combined
+    //     score, then caps to `limit`. We re-MATCH messages_fts so snippet() has
+    //     its query context (it can't run inside the window subquery). `text` is
+    //     column index 4 now that toolName precedes it.
     const rows = this.db
       .prepare(
-        `WITH ranked AS (
-           SELECT f.rowid AS rid,
-                  ROW_NUMBER() OVER (PARTITION BY f.sessionId ORDER BY rank) AS rn,
-                  rank AS rnk
+        `WITH scored AS (
+           SELECT f.rowid AS rid, f.sessionId AS sessionId,
+                  bm25(messages_fts) * (${roleCase}) AS adj
            FROM messages_fts f
-           JOIN sessions s ON s.sessionId = f.sessionId
+           JOIN sessions s ON s.sessionId = f.sessionId${metaJoin}
            WHERE messages_fts MATCH ?1${facetWhere}
          ),
+         ranked AS (
+           SELECT rid, sessionId, adj,
+                  ROW_NUMBER() OVER (PARTITION BY sessionId ORDER BY adj) AS rn
+           FROM scored
+         ),
          best AS (
-           SELECT rid, rnk FROM ranked WHERE rn = 1 ORDER BY rnk LIMIT ?2
+           SELECT r.rid AS rid,
+                  r.adj
+                    + MIN(MAX(julianday('now') - julianday(s.lastTs), 0.0), ${RECENCY_CAP_DAYS})
+                      / ${RECENCY_CAP_DAYS} * ${RECENCY_WEIGHT} AS score
+           FROM ranked r
+           JOIN sessions s ON s.sessionId = r.sessionId
+           WHERE r.rn = 1
+           ORDER BY score LIMIT ?2
          )
          SELECT f.sessionId AS sessionId, f.role AS role, f.toolName AS toolName,
                 snippet(messages_fts, 4, '[', ']', '…', 12) AS excerpt,
@@ -230,9 +322,9 @@ export class MessageSearch {
          JOIN messages_fts f ON f.rowid = best.rid AND messages_fts MATCH ?1
          JOIN sessions s ON s.sessionId = f.sessionId
          LEFT JOIN session_meta m ON m.sessionId = f.sessionId
-         ORDER BY best.rnk`,
+         ORDER BY best.score`,
       )
-      .all(match, limit, ...params) as unknown as Array<{
+      .all(match, limit, ...allParams) as unknown as Array<{
       sessionId: string;
       role: string;
       toolName: string | null;
@@ -274,6 +366,14 @@ export class MessageSearch {
     const facet = facetClauses(facets, "t", () => "?");
     clauses.push(...facet.clauses);
     params.push(...facet.params);
+
+    // The `tag` facet lives on session_meta (joined as `tm` only when needed).
+    const tag = tagClause(facets.tag, "tm", "?");
+    if (tag) {
+      clauses.push(tag.clause);
+      params.push(tag.param);
+    }
+    const metaJoin = tag ? " LEFT JOIN session_meta tm ON tm.sessionId = t.sessionId" : "";
     const where = clauses.join(" AND ");
 
     // Pick the newest row per session (ROW_NUMBER) and cap to `limit` sessions in SQL.
@@ -283,7 +383,7 @@ export class MessageSearch {
            SELECT t.sessionId AS sessionId, t.role AS role, t.toolName AS toolName, t.text AS text,
                   ROW_NUMBER() OVER (PARTITION BY t.sessionId ORDER BY t.seq DESC) AS rn
            FROM messages_text t
-           JOIN sessions s ON s.sessionId = t.sessionId
+           JOIN sessions s ON s.sessionId = t.sessionId${metaJoin}
            WHERE ${where}
          )
          SELECT mt.sessionId AS sessionId, mt.role AS role, mt.toolName AS toolName, mt.text AS text,

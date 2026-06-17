@@ -10,7 +10,13 @@ import type { AppSettings } from "@claude-ui/engine/types";
 // Git result shapes. Mirrored locally (not imported from the engine root, which
 // pulls in Node-only code) so the web bundle stays free of server deps. Kept in
 // lockstep with packages/engine/src/git.ts.
-import type { GitStatus, GitLogEntry } from "./types";
+import type {
+  GitStatus,
+  GitLogEntry,
+  ConfigScope,
+  McpServerDef,
+  McpServerInput,
+} from "./types";
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { accept: "application/json" } });
@@ -33,6 +39,39 @@ export interface Health {
   ready: boolean;
   sessionCount: number;
 }
+
+/** Response shape for an MCP write (PUT/DELETE) — the server echoes the target. */
+export interface McpWriteResult {
+  ok: boolean;
+  name: string;
+  scope: ConfigScope;
+  /** Present on PUT (the persisted server entry); absent on DELETE. */
+  server?: Record<string, unknown>;
+}
+
+/**
+ * Helpers over the MCP-server config REST surface (served by the server package
+ * from the engine config module). The web side only wires the HTTP calls —
+ * validation + safe backup/atomic writes live in the engine/server.
+ *
+ * Scope is implied by `cwd`: with a (known) project `cwd` the write targets that
+ * project's `projects[<cwd>].mcpServers`; without one it targets the top-level
+ * (global) `mcpServers` map in ~/.claude.json. Writes echo the target rather
+ * than the full list, so callers re-fetch via {@link mcpList} after a change.
+ */
+const config = {
+  /** All configured MCP servers: global + (when `cwd` given) that project's. */
+  mcpList: (cwd?: string) =>
+    get<McpServerDef[]>(
+      "/api/config/mcp" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+    ),
+  /** Upsert one MCP server. A known project `cwd` writes project scope; else global. */
+  mcpSet: (name: string, server: McpServerInput, cwd?: string) =>
+    send<McpWriteResult>("/api/config/mcp", "PUT", { name, server, cwd }),
+  /** Remove a named MCP server. Scope follows `cwd` (project) or none (global). */
+  mcpDelete: (name: string, cwd?: string) =>
+    send<McpWriteResult>("/api/config/mcp", "DELETE", { name, cwd }),
+};
 
 export const api = {
   health: () => get<Health>("/api/health"),
@@ -67,6 +106,8 @@ export const api = {
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>
     send<AppSettings>("/api/settings", "PUT", patch),
+  // MCP-server config management (list/upsert/remove across scopes).
+  config,
 };
 
 export type { AppSettings };

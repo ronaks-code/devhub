@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, Save, Server } from "lucide-react";
+import { Check, Loader2, Save, Server, SlidersHorizontal } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
+import { McpManager } from "./config/McpManager";
+
+/** Sub-tabs within the Settings view. */
+type SettingsSection = "preferences" | "mcp";
 
 const MODELS = [
   "claude-opus-4-8",
@@ -79,9 +83,13 @@ const inputCls =
  */
 export function SettingsPane({
   onSettingsSaved,
+  projectCwd,
 }: {
   onSettingsSaved?: (s: AppSettings) => void;
+  /** Active project's working dir; enables project-scoped MCP server edits. */
+  projectCwd?: string;
 }) {
+  const [section, setSection] = useState<SettingsSection>("preferences");
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -140,37 +148,22 @@ export function SettingsPane({
     }
   };
 
-  if (loadError && !settings) {
-    return (
-      <div className="flex-1 overflow-y-auto bg-zinc-950 p-8">
-        <div className="mx-auto max-w-2xl rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-300">
-          Failed to load settings: {loadError}
-        </div>
-      </div>
-    );
-  }
+  const budgetStr =
+    settings?.monthlyBudgetUsd == null ? "" : String(settings.monthlyBudgetUsd);
 
-  if (!settings) {
-    return (
-      <div className="flex flex-1 items-center justify-center bg-zinc-950">
+  // The server-backed Preferences body owns its own loading/error states so the
+  // sub-tab chrome (and the MCP tab) stays usable even if settings fail to load.
+  const preferencesBody =
+    loadError && !settings ? (
+      <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-300">
+        Failed to load settings: {loadError}
+      </div>
+    ) : !settings ? (
+      <div className="flex items-center justify-center py-16">
         <Spinner className="h-5 w-5" />
       </div>
-    );
-  }
-
-  const budgetStr =
-    settings.monthlyBudgetUsd == null ? "" : String(settings.monthlyBudgetUsd);
-
-  return (
-    <div className="flex-1 overflow-y-auto bg-zinc-950">
-      <div className="mx-auto max-w-2xl px-8 py-8">
-        <header className="mb-6">
-          <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
-          <p className="mt-1 text-[12.5px] text-zinc-500">
-            Defaults for new sessions and your spend budget. Saved on the server.
-          </p>
-        </header>
-
+    ) : (
+      <>
         <section className="space-y-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5">
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <Field label="Default model" hint="Used when starting a new chat.">
@@ -304,6 +297,45 @@ export function SettingsPane({
             <span className="text-[12px] text-red-400">{loadError}</span>
           )}
         </div>
+      </>
+    );
+
+  const TABS: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
+    { id: "preferences", label: "Preferences", icon: <SlidersHorizontal className="h-3.5 w-3.5" /> },
+    { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto bg-zinc-950">
+      <div className="mx-auto max-w-2xl px-8 py-8">
+        <header className="mb-5">
+          <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
+          <p className="mt-1 text-[12.5px] text-zinc-500">
+            {section === "mcp"
+              ? "Manage the Model Context Protocol servers Claude Code can use."
+              : "Defaults for new sessions and your spend budget. Saved on the server."}
+          </p>
+        </header>
+
+        <div className="mb-6 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setSection(t.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-[12px] font-medium transition",
+                section === t.id
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                  : "text-zinc-500 hover:text-zinc-300",
+              )}
+            >
+              {t.icon}
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {section === "preferences" ? preferencesBody : <McpManager projectCwd={projectCwd} />}
       </div>
     </div>
   );

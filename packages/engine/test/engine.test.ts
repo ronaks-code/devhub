@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, statSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import {
   normalizeLine,
   resolveTitle,
@@ -19,6 +20,11 @@ import { detectSourceKind } from "../src/discovery.js";
 import { parseStatus } from "../src/git.js";
 import { createLineSplitter } from "../src/driver/buffer.js";
 import { listRunningSessions, isPidAlive } from "../src/running.js";
+import { runMigrations, hasColumn } from "../src/migrations.js";
+
+// node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
+// natively (same trick index-db.ts uses) so migration tests can open a raw DB.
+const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-test-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
@@ -577,6 +583,223 @@ describe("TranscriptIndex faceted search", () => {
   });
 });
 
+describe("TranscriptIndex ranking (bm25 weights + recency)", () => {
+  // Recency boost: two sessions with the SAME query-relevant text, differing only in
+  // last-activity timestamp. The more recent one must rank first.
+  it("ranks the more recent of two equally-relevant sessions first", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/rank";
+    const mk = (id: string, ts: string) => {
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(
+        p,
+        jl({
+          type: "user",
+          cwd,
+          timestamp: ts,
+          message: { role: "user", content: "how do I deploy the service to production" },
+        }),
+      );
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(mk("old", "2020-01-01T00:00:00.000Z"));
+    await idx.indexSession(mk("recent", "2026-06-01T00:00:00.000Z"));
+
+    const hits = idx.search("deploy production service");
+    expect(hits.map((h) => h.sessionId)).toEqual(["recent", "old"]);
+    idx.close();
+  });
+
+  // Role weighting: the substantive answer (assistant text) should outrank a session
+  // where the term only appears as mirrored tool noise, when recency is held equal.
+  it("weights assistant/user text above mirrored tool noise", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/weight";
+    const ts = "2026-05-01T00:00:00.000Z";
+
+    // answerSess: assistant explains the migration in prose.
+    writeFileSync(
+      path.join(proj, "answerSess.jsonl"),
+      jl({ type: "user", cwd, timestamp: ts, message: { role: "user", content: "tell me about it" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          timestamp: ts,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "The migration runs a schema migration step before the data migration." },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+    // toolSess: "migration" appears only inside a Bash tool_use line (role=tool).
+    writeFileSync(
+      path.join(proj, "toolSess.jsonl"),
+      jl({ type: "user", cwd, timestamp: ts, message: { role: "user", content: "run it" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          timestamp: ts,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "tu1", name: "Bash", input: { command: "./migration.sh run migration migration" } },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1 },
+          },
+        }),
+    );
+
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(path.join(proj, "answerSess.jsonl"));
+    await idx.indexSession(path.join(proj, "toolSess.jsonl"));
+
+    const hits = idx.search("migration");
+    expect(hits.map((h) => h.sessionId)).toEqual(["answerSess", "toolSess"]);
+    expect(hits[0]!.role).toBe("assistant");
+    idx.close();
+  });
+
+  // The combined score keeps multi-word relevance sane: a multi-word query should
+  // surface the session that contains all the words, recent-first.
+  it("multi-word query returns the most relevant + recent first", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/multi";
+    const mk = (id: string, ts: string, content: string) => {
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(p, jl({ type: "user", cwd, timestamp: ts, message: { role: "user", content } }));
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    // partial: only one of the two query words; full(old)/full(new): both words.
+    await idx.indexSession(mk("partial", "2026-06-10T00:00:00.000Z", "the cache layer is warm"));
+    await idx.indexSession(mk("fullOld", "2024-01-01T00:00:00.000Z", "invalidate the redis cache layer"));
+    await idx.indexSession(mk("fullNew", "2026-06-01T00:00:00.000Z", "the redis cache needs a refresh"));
+
+    const hits = idx.search("redis cache");
+    // AND semantics: only the two sessions with BOTH words; recent (fullNew) first.
+    expect(hits.map((h) => h.sessionId)).toEqual(["fullNew", "fullOld"]);
+    idx.close();
+  });
+});
+
+describe("migrations (tags column backfill)", () => {
+  it("adds session_meta.tags to a legacy DB and is idempotent", () => {
+    const file = path.join(tmp(), "legacy.db");
+    const db = new DatabaseSync(file);
+    // Simulate a DB created before tags existed: session_meta has no `tags` column,
+    // user_version sits at 2 (project_meta migration applied, tags one not yet).
+    db.exec(`CREATE TABLE session_meta (
+      sessionId TEXT PRIMARY KEY, customTitle TEXT, pinned INTEGER NOT NULL DEFAULT 0
+    );`);
+    db.exec("PRAGMA user_version = 2");
+    db.prepare("INSERT INTO session_meta (sessionId, pinned) VALUES (?, ?)").run("legacy", 1);
+    expect(hasColumn(db, "session_meta", "tags")).toBe(false);
+
+    runMigrations(db);
+    expect(hasColumn(db, "session_meta", "tags")).toBe(true);
+    // existing row preserved, new column reads NULL (untagged)
+    const row = db.prepare("SELECT pinned, tags FROM session_meta WHERE sessionId = ?").get("legacy") as {
+      pinned: number;
+      tags: string | null;
+    };
+    expect(Number(row.pinned)).toBe(1);
+    expect(row.tags).toBeNull();
+
+    // Re-running is harmless (column-presence guard); user_version is at the top.
+    runMigrations(db);
+    expect(hasColumn(db, "session_meta", "tags")).toBe(true);
+    db.close();
+  });
+});
+
+describe("session tags", () => {
+  const setup = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = "/home/me/tagged";
+    const mk = (id: string, content: string) => {
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(p, jl({ type: "user", cwd, message: { role: "user", content } }));
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(mk("s1", "investigate the auth bug in login flow"));
+    await idx.indexSession(mk("s2", "investigate the billing report export"));
+    return { idx };
+  };
+
+  it("set/get round-trips and normalizes (trim, lower-case, de-dupe)", async () => {
+    const { idx } = await setup(tmp());
+    const saved = idx.setTags("s1", ["  Bug ", "AUTH", "bug", "", "auth"]);
+    expect(saved).toEqual(["bug", "auth"]); // trimmed, lower-cased, de-duped, insertion order
+    expect(idx.getTags("s1")).toEqual(["bug", "auth"]);
+    // an untagged session reads back as []
+    expect(idx.getTags("s2")).toEqual([]);
+    idx.close();
+  });
+
+  it("tags surface on the SessionSummary", async () => {
+    const { idx } = await setup(tmp());
+    idx.setTags("s1", ["triage"]);
+    expect(idx.getSessionSummary("s1")!.tags).toEqual(["triage"]);
+    expect(idx.getSessionSummary("s2")!.tags).toEqual([]);
+    idx.close();
+  });
+
+  it("setting empty tags clears the row and drops it from getAllTags", async () => {
+    const { idx } = await setup(tmp());
+    idx.setTags("s1", ["temp"]);
+    expect(idx.getAllTags().map((t) => t.tag)).toContain("temp");
+    expect(idx.setTags("s1", [])).toEqual([]);
+    expect(idx.getTags("s1")).toEqual([]);
+    expect(idx.getAllTags().map((t) => t.tag)).not.toContain("temp");
+    idx.close();
+  });
+
+  it("getAllTags counts distinct tags across sessions (count desc, name asc)", async () => {
+    const { idx } = await setup(tmp());
+    idx.setTags("s1", ["shared", "alpha"]);
+    idx.setTags("s2", ["shared", "beta"]);
+    expect(idx.getAllTags()).toEqual([
+      { tag: "shared", count: 2 },
+      { tag: "alpha", count: 1 },
+      { tag: "beta", count: 1 },
+    ]);
+    idx.close();
+  });
+
+  it("the tag search facet narrows results to tagged sessions", async () => {
+    const { idx } = await setup(tmp());
+    idx.setTags("s1", ["auth"]);
+    // both sessions contain "investigate"; the tag facet keeps only s1.
+    expect(idx.search("investigate").map((h) => h.sessionId).sort()).toEqual(["s1", "s2"]);
+    expect(idx.search("investigate", { tag: "auth" }).map((h) => h.sessionId)).toEqual(["s1"]);
+    // case-insensitive match against the stored (lower-cased) tag
+    expect(idx.search("investigate", { tag: "AUTH" }).map((h) => h.sessionId)).toEqual(["s1"]);
+    // a tag no session carries yields nothing
+    expect(idx.search("investigate", { tag: "nope" })).toEqual([]);
+    idx.close();
+  });
+
+  it("Engine exposes getTags/setTags/getAllTags", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    expect(engine.setTags("sX", ["Foo", "foo"])).toEqual(["foo"]);
+    expect(engine.getTags("sX")).toEqual(["foo"]);
+    expect(engine.getAllTags()).toEqual([{ tag: "foo", count: 1 }]);
+    engine.close();
+  });
+});
+
 describe("running-session liveness", () => {
   // listRunningSessions reads liveSessionsDir(), which lives under CLAUDE_CONFIG_DIR.
   // Point it at a temp dir per test and restore afterward so we never touch ~/.claude.
@@ -622,6 +845,40 @@ describe("running-session liveness", () => {
       expect(dead.status).toBe("dead"); // stale "busy" overridden
       expect(live.alive).toBe(true);
       expect(live.status).toBe("idle"); // live entry keeps its reported status
+    });
+  });
+
+  it("surfaces waitingFor + statusUpdatedAt from the pid file", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: "blocked",
+          cwd: "/home/me/z",
+          status: "waiting",
+          waitingFor: "permission: Bash",
+          statusUpdatedAt: 1718000000000,
+          updatedAt: 200,
+        }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.sessionId).toBe("blocked");
+      expect(s!.status).toBe("waiting");
+      expect(s!.waitingFor).toBe("permission: Bash");
+      expect(s!.statusUpdatedAt).toBe(1718000000000);
+    });
+  });
+
+  it("defaults waitingFor/statusUpdatedAt to null when absent", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "plain", cwd: "/home/me/w", status: "idle" }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.waitingFor).toBeNull();
+      expect(s!.statusUpdatedAt).toBeNull();
     });
   });
 

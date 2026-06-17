@@ -4,6 +4,7 @@ import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { Markdown } from "./Markdown";
 import { DiffView, parseEditInput } from "./DiffView";
+import { TodoWriteCard } from "./tools/TodoWriteCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -75,6 +76,10 @@ function ToolCard({ block }: { block: PairedToolUse }) {
   const name = block.name || "tool";
   const result = block.result;
   const isError = result?.isError ?? false;
+
+  // TodoWrite gets a dedicated checklist renderer instead of raw JSON.
+  if (name === "TodoWrite") return <TodoWriteCard block={block} />;
+
   const edit = EDIT_TOOLS.has(name) ? parseEditInput(name, block.input) : null;
 
   if (edit) {

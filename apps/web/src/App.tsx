@@ -486,7 +486,7 @@ export default function App() {
       />
       <div className="flex min-h-0 flex-1">
         {tab === "settings" ? (
-          <SettingsPane onSettingsSaved={setSettings} />
+          <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
         ) : tab === "dashboard" ? (
           <DashboardPane />
         ) : tab === "browse" ? (

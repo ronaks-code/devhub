@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { MessageSquarePlus, RotateCcw, Send, Square, Sparkles } from "lucide-react";
+import { ArrowDown, MessageSquarePlus, RotateCcw, Send, Square, Sparkles } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
@@ -9,6 +9,7 @@ import { openChat, type ChatConn } from "../lib/ws";
 import { cn } from "../lib/utils";
 import { indexToolResults, pairMessage } from "../lib/transcript";
 import { useDraft } from "../hooks/useDraft";
+import { useStickToBottom } from "../hooks/useStickToBottom";
 import { MessageView } from "./MessageView";
 import { PermissionCard, type PendingPermission } from "./PermissionCard";
 import { EmptyState, IconButton, Spinner } from "./ui";
@@ -88,9 +89,9 @@ export function ChatPane({
   const keyRef = useRef(0);
   const liveKeyRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Tracks whether the user is parked at the bottom; auto-scroll only follows
-  // new content when they haven't scrolled up to read history.
-  const stickToBottomRef = useRef(true);
+  // Auto-scroll only follows new content while the user is parked at the bottom;
+  // if they scroll up to read history we stop and show a "jump to latest" pill.
+  const stick = useStickToBottom(scrollRef);
 
   const nextKey = () => ++keyRef.current;
 
@@ -214,7 +215,7 @@ export function ChatPane({
 
       lastPromptRef.current = prompt;
       // A fresh turn always snaps back to the bottom to follow the reply.
-      stickToBottomRef.current = true;
+      stick.pin();
       setErrorMsg(null);
       setLastResult(null);
       setPendingPermission(null);
@@ -226,7 +227,7 @@ export function ChatPane({
       const conn = ensureConn();
       conn.send({ t: "prompt", cwd, prompt, sessionId, model, permissionMode });
     },
-    [push, ensureConn, cwd, sessionId, model, permissionMode],
+    [push, ensureConn, cwd, sessionId, model, permissionMode, stick.pin],
   );
 
   const send = useCallback(() => {
@@ -256,7 +257,7 @@ export function ChatPane({
     liveKeyRef.current = null;
     lastPromptRef.current = null;
     setLiveKey(null);
-    stickToBottomRef.current = true;
+    stick.pin();
     setItems([]);
     setSessionId(undefined);
     setRunning(false);
@@ -296,15 +297,6 @@ export function ChatPane({
     overscan: 10,
   });
 
-  // Note whether the user is pinned to the bottom; if they scroll up to read
-  // older messages we stop auto-following so we don't yank them back down.
-  const onScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distance < 64;
-  }, []);
-
   // Follow the newest message as the list grows, deltas stream into the live
   // bubble, or a turn ends — but only while the user is parked at the bottom.
   // liveLen captures the streamed text length so each delta re-triggers the
@@ -318,12 +310,11 @@ export function ChatPane({
           0,
         );
   useEffect(() => {
-    if (lastIndex < 0 || !stickToBottomRef.current) return;
-    const id = requestAnimationFrame(() =>
+    if (lastIndex < 0) return;
+    return stick.followToIndex(() =>
       virtualizer.scrollToIndex(lastIndex, { align: "end" }),
     );
-    return () => cancelAnimationFrame(id);
-  }, [lastIndex, running, liveKey, liveLen, virtualizer]);
+  }, [lastIndex, running, liveKey, liveLen, virtualizer, stick.followToIndex]);
 
   return (
     <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
@@ -375,7 +366,8 @@ export function ChatPane({
       </div>
 
       {/* Message stream */}
-      <div ref={scrollRef} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1">
+      <div ref={scrollRef} onScroll={stick.onScroll} className="h-full overflow-y-auto">
         {view.length === 0 ? (
           <EmptyState
             icon={<Sparkles className="h-12 w-12" />}
@@ -412,6 +404,23 @@ export function ChatPane({
             })}
           </div>
         )}
+      </div>
+
+        {/* "Jump to latest" pill — shown only when the user scrolled up while
+            new content is below. Clicking re-pins and snaps to the newest. */}
+        {stick.showJumpToLatest && lastIndex >= 0 ? (
+          <button
+            onClick={() =>
+              stick.scrollToLatest(() =>
+                virtualizer.scrollToIndex(lastIndex, { align: "end" }),
+              )
+            }
+            className="absolute bottom-4 left-1/2 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-clay-500 px-3 py-1.5 text-[12px] font-medium text-white shadow-lg ring-1 ring-clay-400/50 transition hover:bg-clay-600"
+          >
+            <ArrowDown className="h-3.5 w-3.5" />
+            Jump to latest
+          </button>
+        ) : null}
       </div>
 
       {/* Inline tool-permission request (persistent-path only; dormant on the

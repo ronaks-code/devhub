@@ -84,6 +84,8 @@ export interface SessionSummary {
   mtimeMs: number;
   hasSubagents: boolean;
   pinned: boolean;
+  /** User-assigned tags (normalized: trimmed, lower-cased, de-duped). Empty when none. */
+  tags: string[];
   /** True while a full index of this file is still pending (counts/usage approximate). */
   indexed: boolean;
 }
@@ -145,6 +147,19 @@ export interface RunningSession {
   updatedAt?: number | null;
   name?: string | null;
   entrypoint?: string | null;
+  /**
+   * What a `status: "waiting"` session is blocked on (e.g. a permission prompt or a
+   * tool name), read straight from the `<pid>.json` `waitingFor` field. Null when the
+   * file doesn't report it or the session isn't waiting. Lets the dashboard show
+   * *why* a session is paused.
+   */
+  waitingFor?: string | null;
+  /**
+   * When the session's `status` last changed (epoch ms), from the file's
+   * `statusUpdatedAt`. Lets the dashboard show staleness — how long a session has sat
+   * in its current state. Null when the file doesn't report it.
+   */
+  statusUpdatedAt?: number | null;
 }
 
 export interface Stats {

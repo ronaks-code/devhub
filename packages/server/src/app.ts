@@ -11,6 +11,8 @@ import type { EngineEvent } from "@claude-ui/engine/types";
 import { registerWs } from "./ws.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
+import { registerPermissionsRoutes } from "./routes/permissions.js";
+import { registerConfigRoutes } from "./routes/config.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -82,6 +84,10 @@ export function buildApp(opts: BuildOptions = {}): {
   registerSettingsRoutes(app, engine);
 
   registerGitRoutes(app, engine);
+
+  registerPermissionsRoutes(app, engine);
+
+  registerConfigRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

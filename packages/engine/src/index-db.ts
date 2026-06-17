@@ -21,6 +21,7 @@ import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
 import { ProjectMetaStore } from "./project-meta.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
+import { TagStore, parseTags } from "./tags.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
 import type {
@@ -265,6 +266,8 @@ export class TranscriptIndex {
   readonly settings: SettingsStore;
   /** Per-project UI metadata (favorite/archived/order/color), sharing this DB. */
   readonly projectMeta: ProjectMetaStore;
+  /** Per-session tags (session_meta.tags JSON array), sharing this DB. */
+  readonly tags: TagStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
   /** Full-text search over mirrored message text (shares this DB + searchMode). */
@@ -289,6 +292,7 @@ export class TranscriptIndex {
     runMigrations(this.db);
     this.settings = new SettingsStore(this.db);
     this.projectMeta = new ProjectMetaStore(this.db);
+    this.tags = new TagStore(this.db);
     this.searchMode = this.initSearchStore();
     this.searcher = new MessageSearch(this.db, this.searchMode);
     this.upsert = this.db.prepare(`
@@ -674,6 +678,21 @@ export class TranscriptIndex {
       )
       .run(sessionId, pinned ? 1 : 0);
   }
+
+  /** Read one session's tags (normalized; empty when untagged). */
+  getTags(sessionId: string): string[] {
+    return this.tags.get(sessionId);
+  }
+
+  /** Replace a session's tags (normalized on write); returns the persisted set. */
+  setTags(sessionId: string, tags: string[]): string[] {
+    return this.tags.set(sessionId, tags);
+  }
+
+  /** Every distinct tag in use with its session count (count desc, then name asc). */
+  getAllTags(): Array<{ tag: string; count: number }> {
+    return this.tags.getAll();
+  }
 }
 
 function rowToSummary(row: Row): SessionSummary {
@@ -699,6 +718,7 @@ function rowToSummary(row: Row): SessionSummary {
     mtimeMs: n(row.mtimeMs),
     hasSubagents: row.hasSubagents === 1,
     pinned: n(row.pinned) === 1,
+    tags: parseTags(row.tags),
     indexed: true,
   };
 }
