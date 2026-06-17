@@ -36,6 +36,8 @@ export interface SearchFacets {
   gitBranch?: string;
   /** Only sessions carrying this tag (case-insensitive; matched against session_meta.tags). */
   tag?: string;
+  /** Only sessions that ran on this model id (exact match against sessions.model). */
+  model?: string;
 }
 
 /** Default/clamp bounds for the result cap. */
@@ -191,6 +193,7 @@ function facetClauses(
   if (facets.toolName) add((ph) => `${textAlias}.toolName = ${ph}`, facets.toolName);
   if (facets.projectId) add((ph) => `s.projectId = ${ph}`, facets.projectId);
   if (facets.gitBranch) add((ph) => `s.gitBranch = ${ph}`, facets.gitBranch);
+  if (facets.model) add((ph) => `s.model = ${ph}`, facets.model);
   if (facets.since) add((ph) => `s.lastTs >= ${ph}`, facets.since);
   if (facets.until) add((ph) => `s.lastTs <= ${ph}`, facets.until);
   return { clauses, params };

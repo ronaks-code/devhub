@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mkdirSync, mkdtempSync, statSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -17,7 +18,7 @@ import { DEFAULT_SETTINGS } from "../src/types.js";
 import { archiveSession, hasArchive, readArchived } from "../src/archive.js";
 import { costUsd, pricingForModel, MODEL_PRICING } from "../src/pricing.js";
 import { detectSourceKind } from "../src/discovery.js";
-import { parseStatus } from "../src/git.js";
+import { parseStatus, GitService } from "../src/git.js";
 import { createLineSplitter } from "../src/driver/buffer.js";
 import { listRunningSessions, isPidAlive } from "../src/running.js";
 import { runMigrations, hasColumn } from "../src/migrations.js";
@@ -1175,5 +1176,365 @@ describe("detectSourceKind (multi-source labeling)", () => {
     expect(detectSourceKind("/home/me/.codex/sessions")).toBe("codex");
     expect(detectSourceKind("/home/me/.gemini/logs")).toBe("gemini");
     expect(detectSourceKind("/home/me/.cursor/chats")).toBe("cursor");
+  });
+});
+
+describe("model facet (sessions.model)", () => {
+  const cwd = "/home/me/modeled";
+  const asst = (model: string, text: string) => ({
+    type: "assistant",
+    cwd,
+    message: {
+      role: "assistant",
+      model,
+      content: [{ type: "text", text }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  });
+
+  const mk = (dir: string, id: string, lines: unknown[]) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj, { recursive: true });
+    const p = path.join(proj, `${id}.jsonl`);
+    writeFileSync(p, lines.map(jl).join(""));
+    return p;
+  };
+
+  it("populates model with the most-frequent assistant model, tie-broken by last", async () => {
+    const dir = tmp();
+    // opus x2, sonnet x1 => opus wins by frequency.
+    const p = mk(dir, "s1", [
+      { type: "user", cwd, message: { role: "user", content: "hi" } },
+      asst("claude-opus-4-8", "a"),
+      asst("claude-sonnet-4-6", "b"),
+      asst("claude-opus-4-8", "c"),
+    ]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p);
+    expect(idx.getSessionSummary("s1")!.model).toBe("claude-opus-4-8");
+    idx.close();
+  });
+
+  it("ties break toward the last-seen model", async () => {
+    const dir = tmp();
+    // one each => tie; sonnet appears last, so it wins.
+    const p = mk(dir, "s1", [asst("claude-opus-4-8", "a"), asst("claude-sonnet-4-6", "b")]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p);
+    expect(idx.getSessionSummary("s1")!.model).toBe("claude-sonnet-4-6");
+    idx.close();
+  });
+
+  it("is null when no assistant line carries a model", async () => {
+    const dir = tmp();
+    const p = mk(dir, "s1", [{ type: "user", cwd, message: { role: "user", content: "no model" } }]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p);
+    expect(idx.getSessionSummary("s1")!.model).toBeNull();
+    idx.close();
+  });
+
+  it("survives an incremental append (keeps the dominant model)", async () => {
+    const dir = tmp();
+    const p = mk(dir, "s1", [asst("claude-opus-4-8", "a"), asst("claude-opus-4-8", "b")]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p);
+    expect(idx.getSessionSummary("s1")!.model).toBe("claude-opus-4-8");
+    // Append one sonnet line: opus (2) still outweighs sonnet (1) across the tally.
+    appendFileSync(p, jl(asst("claude-sonnet-4-6", "c")));
+    expect(await idx.indexSession(p)).toBe("updated");
+    expect(idx.getSessionSummary("s1")!.model).toBe("claude-opus-4-8");
+    idx.close();
+  });
+
+  it("the model search facet narrows results", async () => {
+    const dir = tmp();
+    const p1 = mk(dir, "opusS", [
+      { type: "user", cwd, message: { role: "user", content: "deploy widget" } },
+      asst("claude-opus-4-8", "ok deploy"),
+    ]);
+    const p2 = mk(dir, "sonnetS", [
+      { type: "user", cwd, message: { role: "user", content: "deploy gadget" } },
+      asst("claude-sonnet-4-6", "ok deploy"),
+    ]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p1);
+    await idx.indexSession(p2);
+    expect(idx.search("deploy").map((h) => h.sessionId).sort()).toEqual(["opusS", "sonnetS"]);
+    expect(idx.search("deploy", { model: "claude-opus-4-8" }).map((h) => h.sessionId)).toEqual([
+      "opusS",
+    ]);
+    expect(idx.search("deploy", { model: "claude-sonnet-4-6" }).map((h) => h.sessionId)).toEqual([
+      "sonnetS",
+    ]);
+    expect(idx.search("deploy", { model: "claude-haiku-4-5" })).toEqual([]);
+    idx.close();
+  });
+
+  it("a forced reindex backfills model on a row indexed before model tracking", async () => {
+    const dir = tmp();
+    const p = mk(dir, "s1", [asst("claude-opus-4-8", "a")]);
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    await idx.indexSession(p);
+    // Simulate a legacy row: NULL out model and reset indexedBytes so the next pass
+    // re-reads from byte 0 (a forced/full reindex).
+    (idx as unknown as { db: InstanceType<typeof DatabaseSync> }).db
+      .prepare("UPDATE sessions SET model = NULL, indexedBytes = 0, sizeBytes = 0, mtimeMs = 0 WHERE sessionId = ?")
+      .run("s1");
+    expect(idx.getSessionSummary("s1")!.model).toBeNull();
+    expect(await idx.indexSession(p)).toBe("updated");
+    expect(idx.getSessionSummary("s1")!.model).toBe("claude-opus-4-8");
+    idx.close();
+  });
+});
+
+describe("listAllSessions (cross-project listing)", () => {
+  const buildAll = async (dir: string) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const mk = (
+      id: string,
+      cwd: string,
+      ts: string,
+      msgs: number,
+      tokens: number,
+      model: string,
+    ) => {
+      const lines: unknown[] = [
+        { type: "user", cwd, timestamp: ts, message: { role: "user", content: `q ${id}` } },
+      ];
+      // Add (msgs-1) assistant lines, putting all tokens on the first.
+      for (let i = 0; i < msgs - 1; i++) {
+        lines.push({
+          type: "assistant",
+          cwd,
+          timestamp: ts,
+          message: {
+            role: "assistant",
+            model,
+            content: [{ type: "text", text: `a ${i}` }],
+            usage: { input_tokens: i === 0 ? tokens : 0, output_tokens: 0 },
+          },
+        });
+      }
+      const p = path.join(proj, `${id}.jsonl`);
+      writeFileSync(p, lines.map(jl).join(""));
+      return p;
+    };
+    const idx = new TranscriptIndex(path.join(dir, "i.db"));
+    // alpha: recent, few tokens, many messages. beta: old, many tokens, few messages.
+    await idx.indexSession(mk("alpha", "/home/me/alpha", "2026-05-01T00:00:00.000Z", 5, 100, "claude-opus-4-8"));
+    await idx.indexSession(mk("beta", "/home/me/beta", "2026-01-01T00:00:00.000Z", 2, 9000, "claude-sonnet-4-6"));
+    return { idx, alphaId: projectIdFromCwd("/home/me/alpha"), betaId: projectIdFromCwd("/home/me/beta") };
+  };
+
+  it("default sort is by recency (newest first), spans all projects", async () => {
+    const { idx } = await buildAll(tmp());
+    expect(idx.listAllSessions().map((s) => s.sessionId)).toEqual(["alpha", "beta"]);
+    idx.close();
+  });
+
+  it("sort by tokens and by messages", async () => {
+    const { idx } = await buildAll(tmp());
+    expect(idx.listAllSessions({ sort: "tokens" }).map((s) => s.sessionId)).toEqual(["beta", "alpha"]);
+    expect(idx.listAllSessions({ sort: "messages" }).map((s) => s.sessionId)).toEqual(["alpha", "beta"]);
+    idx.close();
+  });
+
+  it("filters by projectId and by model", async () => {
+    const { idx, alphaId } = await buildAll(tmp());
+    expect(idx.listAllSessions({ projectId: alphaId }).map((s) => s.sessionId)).toEqual(["alpha"]);
+    expect(idx.listAllSessions({ model: "claude-sonnet-4-6" }).map((s) => s.sessionId)).toEqual(["beta"]);
+    idx.close();
+  });
+
+  it("filters by tag", async () => {
+    const { idx } = await buildAll(tmp());
+    idx.setTags("beta", ["Important"]);
+    expect(idx.listAllSessions({ tag: "important" }).map((s) => s.sessionId)).toEqual(["beta"]);
+    expect(idx.listAllSessions({ tag: "nope" })).toEqual([]);
+    idx.close();
+  });
+
+  it("limit/offset page stably", async () => {
+    const { idx } = await buildAll(tmp());
+    const first = idx.listAllSessions({ limit: 1, offset: 0 });
+    const second = idx.listAllSessions({ limit: 1, offset: 1 });
+    expect(first.length).toBe(1);
+    expect(second.length).toBe(1);
+    expect(first[0]!.sessionId).not.toBe(second[0]!.sessionId);
+    // The two pages cover both sessions.
+    expect([first[0]!.sessionId, second[0]!.sessionId].sort()).toEqual(["alpha", "beta"]);
+    idx.close();
+  });
+
+  it("Engine exposes listAllSessions", async () => {
+    const dir = tmp();
+    const { idx } = await buildAll(dir);
+    idx.close();
+    const engine = new Engine(path.join(dir, "i.db"));
+    expect(engine.listAllSessions().length).toBe(2);
+    engine.close();
+  });
+});
+
+describe("git write ops (temp repo)", () => {
+  // Spin up a real git repo in a temp dir with a deterministic, repo-local identity
+  // (so a commit succeeds regardless of the machine's global git config).
+  const initRepo = (): string => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "cui-git-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "CUI Test"], { cwd: dir });
+    // Avoid GPG signing / hook interference in CI.
+    execFileSync("git", ["config", "commit.gpgsign", "false"], { cwd: dir });
+    return dir;
+  };
+
+  it("stage + commit produces a commit with the new HEAD hash", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "hello\n");
+    const git = new GitService(dir);
+
+    expect((await git.status())!.untracked).toContain("a.txt");
+    const staged = await git.stage(["a.txt"]);
+    expect(staged.ok).toBe(true);
+    expect((await git.status())!.staged).toContain("a.txt");
+
+    const res = await git.commit("first commit");
+    expect(res.ok).toBe(true);
+    expect(res.hash).toMatch(/^[0-9a-f]{40}$/);
+    // After committing, the tree is clean and the log shows our subject.
+    const st = await git.status();
+    expect(st!.staged).toEqual([]);
+    expect((await git.log(1))[0]!.subject).toBe("first commit");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("commit({ all }) stages tracked modifications before committing", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "v1\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    await git.commit("base");
+    // Modify the tracked file; commit -a should pick it up without an explicit stage.
+    writeFileSync(path.join(dir, "a.txt"), "v2\n");
+    expect((await git.status())!.unstaged).toContain("a.txt");
+    const res = await git.commit("update", { all: true });
+    expect(res.ok).toBe(true);
+    expect(res.hash).toMatch(/^[0-9a-f]{40}$/);
+    expect((await git.status())!.unstaged).toEqual([]);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("unstage removes a path from the index but keeps the change", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "x\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    expect((await git.status())!.staged).toContain("a.txt");
+    const res = await git.unstage(["a.txt"]);
+    expect(res.ok).toBe(true);
+    const st = await git.status();
+    expect(st!.staged).not.toContain("a.txt");
+    // The file is still present (now untracked), so the edit isn't lost.
+    expect(st!.untracked).toContain("a.txt");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("createBranch + checkoutBranch switch the current branch", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "x\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    await git.commit("init"); // need a commit before branches are meaningful
+
+    expect((await git.createBranch("feature")).ok).toBe(true);
+    const names = (await git.branchList()).map((b) => b.name).sort();
+    expect(names).toContain("feature");
+
+    expect((await git.checkoutBranch("feature")).ok).toBe(true);
+    expect((await git.status())!.branch).toBe("feature");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("checking out a non-existent branch fails with a typed error", async () => {
+    const dir = initRepo();
+    writeFileSync(path.join(dir, "a.txt"), "x\n");
+    const git = new GitService(dir);
+    await git.stage(["a.txt"]);
+    await git.commit("init");
+    const res = await git.checkoutBranch("does-not-exist");
+    expect(res.ok).toBe(false);
+    expect(res.error).not.toBe("");
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("empty stage/unstage are no-op successes; writes on a non-git dir fail typed", async () => {
+    const dir = initRepo();
+    const git = new GitService(dir);
+    expect((await git.stage([])).ok).toBe(true);
+    expect((await git.unstage([])).ok).toBe(true);
+
+    const nonRepo = mkdtempSync(path.join(os.tmpdir(), "cui-nogit-"));
+    const bad = new GitService(nonRepo);
+    expect(await bad.stage(["x"])).toMatchObject({ ok: false, error: "not a git repository" });
+    expect(await bad.commit("nope")).toMatchObject({ ok: false, hash: null });
+    expect((await bad.createBranch("b")).ok).toBe(false);
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(nonRepo, { recursive: true, force: true });
+  });
+});
+
+describe("Engine.getStats cost", () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  it("totals USD cost and attaches per-top-project cost", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const ts = `${today}T12:00:00.000Z`;
+    // alpha: opus, 1,000,000 input tokens => $5.00 (opus input $5/Mtok).
+    writeFileSync(
+      path.join(proj, "s1.jsonl"),
+      jl({ type: "user", cwd: "/home/me/alpha", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/alpha",
+          timestamp: ts,
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 1_000_000, output_tokens: 0 },
+          },
+        }),
+    );
+    // beta: sonnet, 1,000,000 output tokens => $15.00 (sonnet output $15/Mtok).
+    writeFileSync(
+      path.join(proj, "s2.jsonl"),
+      jl({ type: "user", cwd: "/home/me/beta", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/beta",
+          timestamp: ts,
+          message: {
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input_tokens: 0, output_tokens: 1_000_000 },
+          },
+        }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(path.join(proj, "s1.jsonl"));
+    await engine.index.indexSession(path.join(proj, "s2.jsonl"));
+
+    const stats = engine.getStats();
+    expect(stats.totalCostUsd).toBeCloseTo(20, 5); // 5 + 15
+    const byName = new Map(stats.topProjects.map((p) => [p.name, p.costUsd]));
+    expect(byName.get("alpha")).toBeCloseTo(5, 5);
+    expect(byName.get("beta")).toBeCloseTo(15, 5);
+    engine.close();
   });
 });

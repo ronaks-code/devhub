@@ -13,6 +13,7 @@ import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
 import { registerPermissionsRoutes } from "./routes/permissions.js";
 import { registerConfigRoutes } from "./routes/config.js";
+import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
 
 export interface BuildOptions {
   engine?: Engine;
@@ -88,6 +89,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerPermissionsRoutes(app, engine);
 
   registerConfigRoutes(app, engine);
+
+  registerAllSessionsRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

@@ -40,6 +40,27 @@ export interface Health {
   sessionCount: number;
 }
 
+/** Response from POST /api/git/suggest-message — an AI-drafted commit message. */
+export interface GitSuggestResult {
+  message: string;
+}
+
+/**
+ * Response from POST /api/git/commit. Mirrors the engine's GitCommitResult
+ * (GitWriteResult + hash): `ok` reports success, `error` carries the reason on
+ * failure (e.g. "nothing to commit"), and `hash` is the new HEAD (null when no
+ * commit was made). Kept in lockstep with packages/engine/src/git.ts.
+ */
+export interface GitCommitResult {
+  ok: boolean;
+  /** Trimmed git stdout (may be empty). */
+  stdout: string;
+  /** Failure reason when `ok` is false; empty on success. */
+  error: string;
+  /** New HEAD hash on success, null when the commit didn't happen. */
+  hash: string | null;
+}
+
 /** Response shape for an MCP write (PUT/DELETE) — the server echoes the target. */
 export interface McpWriteResult {
   ok: boolean;
@@ -102,6 +123,16 @@ export const api = {
     get<GitLogEntry[]>(
       `/api/git/log?cwd=${encodeURIComponent(cwd)}` + (limit ? `&limit=${limit}` : ""),
     ),
+  // Ask the server to draft a commit message for the working tree's changes.
+  // The server (via GitService) reads the staged/unstaged diff; the web side only
+  // wires the call. The cwd is allowlisted server-side like the read-only routes.
+  gitSuggestMessage: (cwd: string) =>
+    send<GitSuggestResult>("/api/git/suggest-message", "POST", { cwd }),
+  // Commit the working tree. `all:true` stages tracked changes first (git add -u
+  // semantics), matching the composer's "Commit" affordance. Writes go through
+  // GitService server-side; the web side only POSTs the intent.
+  gitCommit: (cwd: string, message: string, all = true) =>
+    send<GitCommitResult>("/api/git/commit", "POST", { cwd, message, all }),
   getSettings: () => get<AppSettings>("/api/settings"),
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>

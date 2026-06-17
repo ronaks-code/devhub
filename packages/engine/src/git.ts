@@ -51,6 +51,26 @@ export interface GitDiff {
   patch: string;
 }
 
+/**
+ * Result of a mutating git op (stage/unstage/commit/branch/checkout). Unlike the
+ * read-only ops (which return null on any failure), writes report success/failure
+ * explicitly so a face can surface *why* it failed (e.g. "not a git repo",
+ * "nothing to commit", a merge conflict) instead of silently no-op-ing.
+ */
+export interface GitWriteResult {
+  ok: boolean;
+  /** Trimmed stdout from git (may be empty). */
+  stdout: string;
+  /** Trimmed stderr / error message when `ok` is false; empty on success. */
+  error: string;
+}
+
+/** {@link GitWriteResult} plus the resolved commit hash (null when no commit was made). */
+export interface GitCommitResult extends GitWriteResult {
+  /** Full 40-char HEAD hash after the commit, or null when the commit didn't happen. */
+  hash: string | null;
+}
+
 /** Max bytes of `git diff` output we buffer (a huge diff is truncated, not OOM). */
 const MAX_DIFF_BUFFER = 8 * 1024 * 1024; // 8 MB
 /** Default safety timeout for a single git invocation. */
@@ -73,6 +93,32 @@ function runGit(cwd: string, args: string[], maxBuffer = 1024 * 1024): Promise<s
           return;
         }
         resolve(stdout);
+      },
+    );
+  });
+}
+
+/**
+ * Run a MUTATING `git <args>` in `cwd`, capturing both streams and the exit status.
+ * Resolves a {@link GitWriteResult} (never rejects): `ok:false` with the stderr (or
+ * error message) on any failure — not a repo, missing binary, non-zero exit — so
+ * callers get a typed failure instead of an exception. Args are an array (no shell),
+ * so a path/branch/message can't be interpreted as shell syntax.
+ */
+function runGitWrite(cwd: string, args: string[]): Promise<GitWriteResult> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      args,
+      { cwd, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true },
+      (err, stdout, stderr) => {
+        const out = (stdout ?? "").trim();
+        if (err) {
+          const msg = (stderr ?? "").trim() || err.message.trim();
+          resolve({ ok: false, stdout: out, error: msg });
+          return;
+        }
+        resolve({ ok: true, stdout: out, error: "" });
       },
     );
   });
@@ -238,5 +284,85 @@ export class GitService {
       });
     }
     return entries;
+  }
+
+  // -- Writes ----------------------------------------------------------------
+  //
+  // These MUTATE the project repo (index/branches/commits). They never touch a
+  // transcript and never run a shell. Each guards a non-git dir up front and
+  // returns a typed result (ok/false + error) rather than throwing. A path or
+  // branch/message is passed as an execFile arg, so it can't be shell-injected;
+  // `--` separates user paths from flags so a file named `-x` isn't read as one.
+
+  /** Verify `cwd` is a git repo; returns a failed result when it isn't. */
+  private async repoGuard(): Promise<GitWriteResult | null> {
+    if (await this.isRepo()) return null;
+    return { ok: false, stdout: "", error: "not a git repository" };
+  }
+
+  /**
+   * Stage `files` (relative to the repo). `--` ends option parsing so a path that
+   * looks like a flag is still treated as a path. No-op success when `files` is
+   * empty. Returns a failed result for a non-git dir.
+   */
+  async stage(files: string[]): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    if (files.length === 0) return { ok: true, stdout: "", error: "" };
+    return runGitWrite(this.cwd, ["add", "--", ...files]);
+  }
+
+  /**
+   * Unstage `files` (remove from the index, keep working-tree changes) via
+   * `git reset -- <files>`. Chosen over `git restore --staged` because it also works
+   * before the first commit (no HEAD yet): an unstaged file simply reverts to
+   * untracked. No-op success when `files` is empty. Returns a failed result for a
+   * non-git dir.
+   */
+  async unstage(files: string[]): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    if (files.length === 0) return { ok: true, stdout: "", error: "" };
+    return runGitWrite(this.cwd, ["reset", "-q", "--", ...files]);
+  }
+
+  /**
+   * Commit the staged changes with `message`. With `{ all: true }`, also stages all
+   * tracked modifications first (`git commit -a`). Returns a {@link GitCommitResult}
+   * carrying the new HEAD hash on success (null on failure, e.g. nothing staged).
+   */
+  async commit(message: string, opts: { all?: boolean } = {}): Promise<GitCommitResult> {
+    const guard = await this.repoGuard();
+    if (guard) return { ...guard, hash: null };
+    const args = ["commit"];
+    if (opts.all) args.push("-a");
+    // `-m` + a separate arg keeps the message a single literal (newlines, quotes,
+    // and leading dashes are all safe — no shell, and -m consumes the next arg).
+    args.push("-m", message);
+    const res = await runGitWrite(this.cwd, args);
+    if (!res.ok) return { ...res, hash: null };
+    const head = await runGit(this.cwd, ["rev-parse", "HEAD"]);
+    return { ...res, hash: head ? head.trim() : null };
+  }
+
+  /**
+   * Create branch `name` at HEAD WITHOUT switching to it (`git branch <name>`).
+   * Returns a failed result for a non-git dir or a name that already exists/invalid.
+   */
+  async createBranch(name: string): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    return runGitWrite(this.cwd, ["branch", "--", name]);
+  }
+
+  /**
+   * Check out an EXISTING branch `name` (`git checkout <name>`). Fails (typed) when
+   * the branch doesn't exist or the working tree would be overwritten; returns a
+   * failed result for a non-git dir.
+   */
+  async checkoutBranch(name: string): Promise<GitWriteResult> {
+    const guard = await this.repoGuard();
+    if (guard) return guard;
+    return runGitWrite(this.cwd, ["checkout", name]);
   }
 }

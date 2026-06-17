@@ -1,10 +1,23 @@
 import { useEffect, useState } from "react";
-import { Activity, FolderGit2, LayoutDashboard, MessagesSquare, Radio } from "lucide-react";
+import { Activity, Coins, FolderGit2, LayoutDashboard, MessagesSquare, Radio } from "lucide-react";
 import type { RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
-import { compactNumber, relativeTime, totalTokens } from "../lib/format";
+import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
+import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
 import { Badge, EmptyState, Spinner } from "./ui";
+
+/**
+ * Estimated total $ for the stats window. Prefers a server-provided `costUsd`
+ * (added to the engine's Stats later) and otherwise derives an estimate from the
+ * aggregate token usage. Stats carries no per-model breakdown, so the fallback
+ * uses costUsd's default pricing — clearly an APPROXIMATE display figure.
+ */
+function totalCostUsd(stats: Stats): number {
+  const provided = (stats as { costUsd?: number }).costUsd;
+  if (typeof provided === "number" && Number.isFinite(provided)) return provided;
+  return costUsd(undefined, stats.totalUsage);
+}
 
 const RUNNING_POLL_MS = 4000;
 
@@ -124,6 +137,14 @@ export function DashboardPane() {
   }
 
   const tokens = totalTokens(stats.totalUsage);
+  const estTotalCost = totalCostUsd(stats);
+  // Per-project cost estimate. Stats gives only a token count per project (no
+  // model/usage split), so we apportion the total estimated cost by each
+  // project's share of total tokens — enough for a relative "where the spend
+  // goes" read alongside the token bars.
+  const totalProjectTokens = stats.topProjects.reduce((n, p) => n + p.tokens, 0);
+  const projectCost = (projTokens: number): number =>
+    totalProjectTokens > 0 ? estTotalCost * (projTokens / totalProjectTokens) : 0;
   const maxProjectTokens = Math.max(1, ...stats.topProjects.map((p) => p.tokens));
   const maxDaySessions = Math.max(1, ...stats.activity.map((d) => d.sessions));
   const liveSessions = running ?? [];
@@ -168,6 +189,11 @@ export function DashboardPane() {
             label="Total tokens"
             value={compactNumber(tokens)}
           />
+          <StatCard
+            icon={<Coins className="h-3.5 w-3.5" />}
+            label="Est. cost"
+            value={formatUsd(estTotalCost)}
+          />
         </section>
 
         {/* Top projects */}
@@ -179,8 +205,11 @@ export function DashboardPane() {
                 <div key={p.projectId} className="flex flex-col gap-1">
                   <div className="flex items-baseline justify-between gap-3 text-[12px]">
                     <span className="min-w-0 truncate font-medium text-zinc-200">{p.name}</span>
-                    <span className="shrink-0 tabular-nums text-zinc-500">
-                      {compactNumber(p.tokens)}
+                    <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-zinc-500">
+                      <span className="text-clay-300/90" title="estimated cost">
+                        {formatUsd(projectCost(p.tokens))}
+                      </span>
+                      <span>{compactNumber(p.tokens)}</span>
                     </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">

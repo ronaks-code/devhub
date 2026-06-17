@@ -15,7 +15,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W3 Settings UI, GitService, config module, LCS diff, draft persistence ✅
 - [x] W4 Inline permissions (UI), faceted search, git panel, projects keyboard nav, regenerate, find bar ✅
 - [x] W5 Search ranking, MCP manager, permission rules, transcript outline, tags, TodoWrite card ✅
-- [ ] W6 Approve-and-remember, commit composer, role filters, light theme
+- [x] W6 Approve-and-remember, commit composer, role filters, theme tokens, prompt history, model facet, all-sessions ✅
 - [ ] W7 Dangerous-command classifier, jump-to-match, per-day usage
 - [ ] W8 Hooks editor, what-changed panel, monthly budget, slash palette
 - [ ] W9 Settings scope diff, checkpoint/rewind, queue messages, error states
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W6** ✅ (green: tc×4 + 76 tests + build + all-sessions/stats/chat smoke). engine: model facet (migration v4), `all-sessions.ts` cross-project list, git write ops (stage/commit/branch), cost in Stats. server: git commit/stage/branch + AI `suggest-message` (driver-drafted) + `/api/all-sessions`. web: permission scoping UI, CSS semantic theme tokens (light-mode groundwork), CommitComposer, TranscriptFilters, dashboard $, prompt-history recall. INTEGRATOR FIX: deleted a stale server `engine-augment.d.ts` shim → surfaced + fixed a real `createBranch` arity bug.
 - **W5** ✅ (green: tc×4 + 57 tests + build + config-API + ranked-search + chat). engine: BM25+role-weight+recency ranking, `tags.ts` (engine tags + `tag` facet + SessionSummary.tags, migration v3), running waitingFor/statusUpdatedAt. server: permission-rule editor (writes user settings.json) + full `/api/config/*` (mcp/agents/skills/commands/hooks/CLAUDE.md, safe writes). web: McpManager, TranscriptOutline TOC, TodoWriteCard, useStickToBottom. (server lane's mid-flight tc-fail was concurrent-edit noise; gate green.)
 - **AUDIT after W4** ✅ PASS — UI coherent across W1-W4; Settings panel (gear icon) clean + functional; no console errors except favicon 404. Minor follow-ups: verify ⌘⇧P palette keybind; attachment/hook JSON renders verbosely (covered by later JSON-render wave); add a favicon.
 - **W4** ✅ (green: tc×4 + 45 tests + build + git-API + chat smoke). web: `PermissionCard` (plumbed, dormant until persistent path), `GitPanel`, `useListKeyboardNav` (j/k in Projects/Sessions), regenerate-turn, `FindBar` (⌘F). engine: extracted `search.ts` with faceted filters (project/date/role/tool/branch, backward-compat), `running.ts` with pid-liveness. server: `/api/git/*` with cwd allowlist. ⟶ self-audit pass next.

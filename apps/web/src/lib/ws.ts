@@ -1,5 +1,17 @@
 import type { ClientMsg, ServerMsg, TurnResult, SessionInit } from "@claude-ui/engine/driver";
 import type { NormalizedMessage } from "@claude-ui/engine/types";
+import type { PermissionScope } from "../components/PermissionCard";
+
+/**
+ * Client frames we send on the chat socket. This is the engine's `ClientMsg`
+ * extended with an optional `scope` on permission-response: the engine union
+ * doesn't yet carry the scope (it's groundwork for the persistent path), and we
+ * can't edit that package, so we widen the type at this boundary. The extra field
+ * is harmless to a server that ignores it and ready for one that honors it.
+ */
+export type OutgoingMsg =
+  | ClientMsg
+  | { t: "permission-response"; id: string; decision: "allow" | "deny"; scope?: PermissionScope; message?: string };
 
 /** A pending tool-permission request from the agent (persistent-path only). */
 export interface PermissionRequestFrame {
@@ -29,7 +41,7 @@ export interface ChatHandlers {
 }
 
 export interface ChatConn {
-  send: (msg: ClientMsg) => void;
+  send: (msg: OutgoingMsg) => void;
   close: () => void;
 }
 
@@ -142,7 +154,7 @@ export function openChat(handlers: ChatHandlers): ChatConn {
   };
 
   return {
-    send(msg: ClientMsg) {
+    send(msg: OutgoingMsg) {
       if (closed) return;
       const raw = JSON.stringify(msg);
       if (ws.readyState === WebSocket.OPEN) ws.send(raw);

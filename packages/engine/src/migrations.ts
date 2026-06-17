@@ -20,6 +20,14 @@ function hasColumn(db: SqliteDatabase, table: string, column: string): boolean {
   return rows.some((r) => r.name === column);
 }
 
+/** True when a table named `table` exists. */
+function hasTable(db: SqliteDatabase, table: string): boolean {
+  const row = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
+    .get(table) as { name: string } | undefined;
+  return !!row;
+}
+
 /**
  * Ordered, append-only list of migration steps. Step at index i takes the DB from
  * user_version i to i+1. Keep every step idempotent.
@@ -54,6 +62,18 @@ const MIGRATIONS: Migration[] = [
     // session_meta is created by the base SCHEMA, so it always exists by now.
     if (!hasColumn(db, "session_meta", "tags")) {
       db.exec(`ALTER TABLE session_meta ADD COLUMN tags TEXT`);
+    }
+  },
+  // v4: per-session model id (the assistant model the session ran on). A fresh DB
+  // gets this column from the base SCHEMA; a DB created before model tracking won't
+  // have it — add it here, guarded by a column-presence check so the step is
+  // idempotent. Existing rows read NULL until a forced reindex backfills them.
+  (db) => {
+    // sessions is created by the base SCHEMA before migrations run, so it normally
+    // exists by now; guard with hasTable anyway so the step is a harmless no-op if
+    // it's ever run against a DB without the base schema.
+    if (hasTable(db, "sessions") && !hasColumn(db, "sessions", "model")) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
     }
   },
 ];

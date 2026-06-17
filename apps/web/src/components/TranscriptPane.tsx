@@ -17,6 +17,12 @@ import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { TranscriptOutline } from "./TranscriptOutline";
+import {
+  TranscriptFilters,
+  applyFilters,
+  EMPTY_FILTERS,
+  type TranscriptFilterState,
+} from "./TranscriptFilters";
 import { Badge, EmptyState, Spinner } from "./ui";
 import { compactNumber, formatBytes, totalTokens } from "../lib/format";
 import { pairToolResults } from "../lib/transcript";
@@ -38,10 +44,15 @@ export function TranscriptPane({
   const parentRef = useRef<HTMLDivElement>(null);
   const lastSession = useRef<string | undefined>(undefined);
   // Pair tool_use ⇄ tool_result so each tool call renders as one card.
-  const messages = useMemo(
+  const paired = useMemo(
     () => pairToolResults(page?.messages ?? []),
     [page?.messages],
   );
+  // Client-side filter chips (role / tool / errors-only / hide-thinking). Applied
+  // after pairing so the virtualizer, find bar, and outline all index the same
+  // visible list and their positions stay in sync.
+  const [filters, setFilters] = useState<TranscriptFilterState>(EMPTY_FILTERS);
+  const messages = useMemo(() => applyFilters(paired, filters), [paired, filters]);
 
   // In-transcript find (Cmd/Ctrl-F): the bar owns its query/cursor and reports
   // the active match's message index + live query back up here for scroll+highlight.
@@ -219,6 +230,12 @@ export function TranscriptPane({
           default; fetches on expand). Only shown when we know the cwd. */}
       {s.cwd ? <GitPanel cwd={s.cwd} /> : null}
 
+      {/* Filter chips. Derived from the FULL paired list (so toggling a filter
+          never hides the chips themselves) and applied to produce `messages`. */}
+      {paired.length > 0 ? (
+        <TranscriptFilters messages={paired} value={filters} onChange={setFilters} />
+      ) : null}
+
       {page.truncatedFromStart && (
         <button
           onClick={onLoadMore}
@@ -232,6 +249,13 @@ export function TranscriptPane({
       <div className="flex min-h-0 flex-1">
       <div className="relative min-h-0 flex-1">
         <div ref={parentRef} onScroll={stick.onScroll} className="h-full overflow-y-auto">
+          {messages.length === 0 && paired.length > 0 ? (
+            <EmptyState
+              icon={<MessagesSquare className="h-10 w-10" />}
+              title="No messages match these filters"
+              hint="Adjust or clear the filter chips above to see the rest of the transcript."
+            />
+          ) : null}
           <div
             style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
           >

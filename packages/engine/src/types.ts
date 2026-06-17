@@ -83,6 +83,13 @@ export interface SessionSummary {
   sizeBytes: number;
   mtimeMs: number;
   hasSubagents: boolean;
+  /**
+   * The model the session ran on (the most-frequent / last `message.model` across
+   * its assistant lines), e.g. "claude-opus-4-8". Null when unknown (no assistant
+   * line carried a model, or an older row predating model tracking and not yet
+   * backfilled by a forced reindex).
+   */
+  model: string | null;
   pinned: boolean;
   /** User-assigned tags (normalized: trimmed, lower-cased, de-duped). Empty when none. */
   tags: string[];
@@ -166,7 +173,20 @@ export interface Stats {
   totalSessions: number;
   totalProjects: number;
   totalUsage: TokenUsage;
-  topProjects: Array<{ projectId: string; name: string; sessions: number; tokens: number }>;
+  /**
+   * APPROXIMATE total spend in USD across all sessions, summing per-session
+   * `costUsd(session.model, session.usage)`. Display-only estimate, never billed
+   * truth; sessions with an unknown model use the fallback pricing tier.
+   */
+  totalCostUsd: number;
+  topProjects: Array<{
+    projectId: string;
+    name: string;
+    sessions: number;
+    tokens: number;
+    /** APPROXIMATE USD spend for this project (sum of its sessions' costUsd). */
+    costUsd: number;
+  }>;
   /** Sessions active per day (by last activity), oldest→newest. */
   activity: Array<{ date: string; sessions: number }>;
 }

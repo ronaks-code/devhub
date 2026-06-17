@@ -1,4 +1,5 @@
 import { ShieldQuestion, Check, X } from "lucide-react";
+import { cn } from "../lib/utils";
 
 /**
  * A pending tool-permission request, mirroring the {t:"permission-request"}
@@ -12,6 +13,22 @@ export interface PendingPermission {
   suggestions?: string[];
 }
 
+/**
+ * How long an approval applies. Sent alongside allow/deny so the persistent path
+ * can remember a decision instead of re-asking:
+ *  - "once"    → this single tool call only.
+ *  - "session" → for the rest of this live session.
+ *  - "always"  → persist (future: write to settings/permission rules).
+ * Deny is always implicitly "once" — we never persist a denial.
+ */
+export type PermissionScope = "once" | "session" | "always";
+
+/** The decision a user makes on a request: a verdict plus (for allow) a scope. */
+export interface PermissionDecision {
+  decision: "allow" | "deny";
+  scope: PermissionScope;
+}
+
 function previewInput(input: unknown): string {
   try {
     if (input == null) return "";
@@ -22,23 +39,30 @@ function previewInput(input: unknown): string {
   }
 }
 
+/** Allow buttons, one per scope — the label doubles as the affordance. */
+const ALLOW_SCOPES: Array<{ scope: PermissionScope; label: string; title: string }> = [
+  { scope: "once", label: "Once", title: "Allow this one call" },
+  { scope: "session", label: "This session", title: "Allow for the rest of this session" },
+  { scope: "always", label: "Always", title: "Always allow this tool (persisted)" },
+];
+
 /**
- * Inline approve/deny card for one pending {t:"permission-request"} frame. The
- * Allow/Deny buttons report the decision via `onDecision`, which the host wires
- * to a {t:"permission-response", id, decision} send on the chat WebSocket.
+ * Inline approve/deny card for one pending {t:"permission-request"} frame. Allow
+ * is offered at three scopes (Once / This session / Always); the chosen scope is
+ * reported via `onDecision` so the host can forward it in the permission-response.
  *
  * NOTE: the backend only emits permission-request on the persistent (stream-json)
- * session path, which is not the default per-turn driver — so this card is
- * plumbed end-to-end but may stay dormant until that path is enabled. It never
- * fabricates a decision: it only renders what the agent asked and forwards the
- * user's explicit Allow/Deny.
+ * session path, which is not the default per-turn driver — so this card (and the
+ * scope payload) is plumbed end-to-end but stays dormant until that path is
+ * enabled. It never fabricates a decision: it only renders what the agent asked
+ * and forwards the user's explicit choice.
  */
 export function PermissionCard({
   request,
   onDecision,
 }: {
   request: PendingPermission;
-  onDecision: (id: string, decision: "allow" | "deny") => void;
+  onDecision: (id: string, decision: PermissionDecision) => void;
 }) {
   const preview = previewInput(request.toolInput);
   return (
@@ -70,21 +94,36 @@ export function PermissionCard({
         </ul>
       ) : null}
 
-      <div className="flex items-center justify-end gap-2 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <button
-          onClick={() => onDecision(request.id, "deny")}
+          onClick={() => onDecision(request.id, { decision: "deny", scope: "once" })}
           className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-3 py-1 text-[12px] font-medium text-zinc-300 ring-1 ring-zinc-700 transition hover:bg-zinc-700 hover:text-zinc-100"
         >
           <X className="h-3.5 w-3.5" />
           Deny
         </button>
-        <button
-          onClick={() => onDecision(request.id, "allow")}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1 text-[12px] font-medium text-white transition hover:bg-emerald-500"
-        >
-          <Check className="h-3.5 w-3.5" />
-          Allow
-        </button>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="mr-0.5 text-[11px] text-amber-200/70">Allow:</span>
+          {ALLOW_SCOPES.map(({ scope, label, title }, i) => (
+            <button
+              key={scope}
+              title={title}
+              onClick={() => onDecision(request.id, { decision: "allow", scope })}
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 py-1 text-[12px] font-medium text-white transition",
+                // The primary "Once" is solid; the broader scopes are tinted so
+                // the safest choice reads as the default.
+                i === 0
+                  ? "rounded-lg bg-emerald-600 hover:bg-emerald-500"
+                  : "rounded-lg bg-emerald-600/15 text-emerald-200 ring-1 ring-emerald-600/40 hover:bg-emerald-600/25",
+              )}
+            >
+              {i === 0 ? <Check className="h-3.5 w-3.5" /> : null}
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

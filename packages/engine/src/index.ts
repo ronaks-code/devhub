@@ -7,6 +7,7 @@ import path from "node:path";
 import { stat } from "node:fs/promises";
 import { TranscriptIndex } from "./index-db.js";
 import type { SearchFacets } from "./search.js";
+import type { ListAllSessionsOptions } from "./all-sessions.js";
 import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
@@ -123,6 +124,16 @@ export class Engine {
     return this.index.getSessionsForProject(projectId);
   }
 
+  /**
+   * Cross-project session listing for a global "All Sessions" view: every project's
+   * sessions in one list, with optional projectId/tag/model filters, a sort
+   * ("recent" | "tokens" | "messages"), and limit/offset paging. Reuses the index
+   * (no transcript reads).
+   */
+  listAllSessions(opts: ListAllSessionsOptions = {}): SessionSummary[] {
+    return this.index.listAllSessions(opts);
+  }
+
   /** Per-project UI metadata (favorite/archived/sortOrder/color), defaults when unset. */
   getProjectMeta(projectId: string): ProjectMeta {
     return this.index.getProjectMeta(projectId);
@@ -195,6 +206,12 @@ export class Engine {
       totalUsage.cacheCreationTokens += p.totalUsage.cacheCreationTokens;
     }
 
+    // Per-project USD cost is computed per session (each session priced by its own
+    // model) and rolled up by projectId, then summed for the grand total.
+    const costByProject = this.index.getCostByProject();
+    let totalCostUsd = 0;
+    for (const c of costByProject.values()) totalCostUsd += c;
+
     const topProjects = projects
       .map((p) => ({
         projectId: p.id,
@@ -205,6 +222,7 @@ export class Engine {
           p.totalUsage.outputTokens +
           p.totalUsage.cacheReadTokens +
           p.totalUsage.cacheCreationTokens,
+        costUsd: costByProject.get(p.id) ?? 0,
       }))
       .sort((a, b) => b.tokens - a.tokens)
       .slice(0, 8);
@@ -213,6 +231,7 @@ export class Engine {
       totalSessions,
       totalProjects: projects.length,
       totalUsage,
+      totalCostUsd,
       topProjects,
       activity: this.buildActivity(),
     };
@@ -318,6 +337,8 @@ export class Engine {
 export { TranscriptIndex } from "./index-db.js";
 export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";
+export { listAllSessions } from "./all-sessions.js";
+export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { listRunningSessions, isPidAlive } from "./running.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
@@ -328,7 +349,14 @@ export { archiveSession, hasArchive, readArchived, archiveDir, archivePath } fro
 export { costUsd, pricingForModel, MODEL_PRICING, FALLBACK_PRICING } from "./pricing.js";
 export type { ModelPricing } from "./pricing.js";
 export { GitService, parseStatus } from "./git.js";
-export type { GitStatus, GitBranch, GitLogEntry, GitDiff } from "./git.js";
+export type {
+  GitStatus,
+  GitBranch,
+  GitLogEntry,
+  GitDiff,
+  GitWriteResult,
+  GitCommitResult,
+} from "./git.js";
 export { ProjectMetaStore } from "./project-meta.js";
 export type { ProjectMetaPatch } from "./project-meta.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";

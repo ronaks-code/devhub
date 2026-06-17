@@ -12,6 +12,81 @@
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
+/*
+ * Semantic theme tokens — groundwork for light mode (F-series). Components today
+ * still reference Tailwind's zinc/clay scales directly; these custom properties
+ * define a SINGLE source of truth for the surface palette so future work can swap
+ * components over to var(--bg) / var(--panel) / … without touching this layer.
+ *
+ * The dark palette below is mapped 1:1 to the zinc/clay values currently in use,
+ * so adopting a token changes nothing visually. A [data-theme="light"] palette is
+ * provided for the eventual toggle; it is inert until a component opts in.
+ *
+ * Default (no data-theme attr) === dark, matching the app's current behavior.
+ */
+:root,
+:root[data-theme="dark"] {
+  /* Surfaces */
+  --bg: #09090b; /* zinc-950 — app background */
+  --panel: #18181b; /* zinc-900 — cards/composer */
+  --panel-soft: rgba(24, 24, 27, 0.3); /* zinc-900/30 — subtle fills */
+  --elevated: #27272a; /* zinc-800 — hover surfaces */
+
+  /* Borders / dividers */
+  --border: #27272a; /* zinc-800 */
+  --border-soft: rgba(39, 39, 42, 0.8); /* zinc-800/80 */
+
+  /* Text */
+  --text: #f4f4f5; /* zinc-100 */
+  --text-muted: #a1a1aa; /* zinc-400 */
+  --text-dim: #71717a; /* zinc-500 */
+  --text-faint: #52525b; /* zinc-600 */
+
+  /* Accent (clay) */
+  --accent: #d97757; /* clay-500 */
+  --accent-hover: #c25e3f; /* clay-600 */
+  --accent-fg: #ffffff; /* text on accent */
+  --accent-soft: rgba(217, 119, 87, 0.15); /* clay-500/15 tint */
+
+  /* Status */
+  --danger: #f87171; /* red-400 */
+  --warning: #fbbf24; /* amber-400 */
+  --success: #34d399; /* emerald-400 */
+
+  color-scheme: dark;
+}
+
+/*
+ * Light palette — inert until a component reads these tokens AND the toggle sets
+ * [data-theme="light"]. Tuned to keep the clay accent identity while flipping the
+ * neutral surfaces. Not wired to any UI yet (groundwork only).
+ */
+:root[data-theme="light"] {
+  --bg: #fafafa; /* zinc-50 */
+  --panel: #ffffff;
+  --panel-soft: rgba(244, 244, 245, 0.6); /* zinc-100/60 */
+  --elevated: #f4f4f5; /* zinc-100 */
+
+  --border: #e4e4e7; /* zinc-200 */
+  --border-soft: rgba(228, 228, 231, 0.9);
+
+  --text: #18181b; /* zinc-900 */
+  --text-muted: #52525b; /* zinc-600 */
+  --text-dim: #71717a; /* zinc-500 */
+  --text-faint: #a1a1aa; /* zinc-400 */
+
+  --accent: #d97757; /* clay-500 — identity stays */
+  --accent-hover: #c25e3f; /* clay-600 */
+  --accent-fg: #ffffff;
+  --accent-soft: rgba(217, 119, 87, 0.12);
+
+  --danger: #dc2626; /* red-600 */
+  --warning: #d97706; /* amber-600 */
+  --success: #059669; /* emerald-600 */
+
+  color-scheme: light;
+}
+
 html,
 body,
 #root {

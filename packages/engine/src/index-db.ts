@@ -24,6 +24,9 @@ import type { ProjectMetaPatch } from "./project-meta.js";
 import { TagStore, parseTags } from "./tags.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
+import { costUsd } from "./pricing.js";
+import { listAllSessions } from "./all-sessions.js";
+import type { ListAllSessionsOptions } from "./all-sessions.js";
 import type {
   ProjectMeta,
   ProjectSummary,
@@ -53,6 +56,7 @@ interface Row {
   mtimeMs: number;
   indexedBytes: number;
   hasSubagents: number;
+  model: string | null;
   customTitle: string | null;
   pinned: number;
   tags: string | null;
@@ -77,7 +81,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   sizeBytes INTEGER NOT NULL DEFAULT 0,
   mtimeMs INTEGER NOT NULL DEFAULT 0,
   indexedBytes INTEGER NOT NULL DEFAULT 0,
-  hasSubagents INTEGER NOT NULL DEFAULT 0
+  hasSubagents INTEGER NOT NULL DEFAULT 0,
+  model TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(projectId);
 CREATE INDEX IF NOT EXISTS idx_sessions_lastTs ON sessions(lastTs);
@@ -94,7 +99,7 @@ const SELECT_COLS = `
   s.sessionId, s.filePath, s.cwd, s.projectId, s.title, s.titleSource, s.gitBranch,
   s.firstTs, s.lastTs, s.messageCount, s.inputTokens, s.outputTokens,
   s.cacheReadTokens, s.cacheCreationTokens, s.sizeBytes, s.mtimeMs, s.indexedBytes,
-  s.hasSubagents, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags
+  s.hasSubagents, s.model, m.customTitle, COALESCE(m.pinned, 0) AS pinned, m.tags
 `;
 
 function n(v: unknown): number {
@@ -112,6 +117,16 @@ interface SearchText {
 
 /** Max characters of a tool_result body we mirror into the search store. */
 const MAX_TOOL_RESULT_TEXT = 2000;
+
+/** Pull a non-empty `message.model` string off an assistant transcript line, or null. */
+function messageModel(message: unknown): string | null {
+  const m =
+    message && typeof message === "object" && !Array.isArray(message)
+      ? (message as Record<string, unknown>)
+      : undefined;
+  const mdl = m?.model;
+  return typeof mdl === "string" && mdl.trim() ? mdl.trim() : null;
+}
 
 /** Read a string field off an arbitrary block object, trimmed and non-empty, or null. */
 function blockStr(b: Record<string, unknown>, key: string): string | null {
@@ -299,18 +314,18 @@ export class TranscriptIndex {
       INSERT INTO sessions (
         sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
         firstTs, lastTs, messageCount, inputTokens, outputTokens,
-        cacheReadTokens, cacheCreationTokens, sizeBytes, mtimeMs, indexedBytes, hasSubagents
+        cacheReadTokens, cacheCreationTokens, sizeBytes, mtimeMs, indexedBytes, hasSubagents, model
       ) VALUES (
         $sessionId, $filePath, $cwd, $projectId, $title, $titleSource, $gitBranch,
         $firstTs, $lastTs, $messageCount, $inputTokens, $outputTokens,
-        $cacheReadTokens, $cacheCreationTokens, $sizeBytes, $mtimeMs, $indexedBytes, $hasSubagents
+        $cacheReadTokens, $cacheCreationTokens, $sizeBytes, $mtimeMs, $indexedBytes, $hasSubagents, $model
       )
       ON CONFLICT(sessionId) DO UPDATE SET
         filePath=$filePath, cwd=$cwd, projectId=$projectId, title=$title, titleSource=$titleSource,
         gitBranch=$gitBranch, firstTs=$firstTs, lastTs=$lastTs, messageCount=$messageCount,
         inputTokens=$inputTokens, outputTokens=$outputTokens, cacheReadTokens=$cacheReadTokens,
         cacheCreationTokens=$cacheCreationTokens, sizeBytes=$sizeBytes, mtimeMs=$mtimeMs,
-        indexedBytes=$indexedBytes, hasSubagents=$hasSubagents
+        indexedBytes=$indexedBytes, hasSubagents=$hasSubagents, model=$model
     `);
     this.selectOne = this.db.prepare(
       `SELECT ${SELECT_COLS} FROM sessions s LEFT JOIN session_meta m USING (sessionId) WHERE s.sessionId = ?`,
@@ -392,6 +407,17 @@ export class TranscriptIndex {
     let gitBranch = incremental ? existing!.gitBranch : null;
     let firstTs = incremental ? existing!.firstTs : null;
     let lastTs = incremental ? existing!.lastTs : null;
+    // Pick the session's model from its assistant lines: the most-frequently-seen
+    // `message.model`, tie-broken by the last one seen (a session that switched
+    // models mid-stream reports the one it spent most of its turns on). On an
+    // incremental pass we only see the NEW bytes, so we can't recompute true history;
+    // `incumbentModel` (the already-stored choice) is therefore preferred on a tie so
+    // a single new differing line doesn't flip a session that ran mostly on another
+    // model — it only changes when the new lines strictly out-count the incumbent.
+    const modelCounts = new Map<string, number>();
+    const incumbentModel: string | null = incremental ? existing!.model : null;
+    let lastModel: string | null = incumbentModel;
+    if (incumbentModel) modelCounts.set(incumbentModel, 1);
     let aiTitle: string | null = null;
     let summary: string | null = null;
     let firstPrompt: string | null = null;
@@ -432,6 +458,11 @@ export class TranscriptIndex {
           usage.cacheReadTokens += u.cacheReadTokens;
           usage.cacheCreationTokens += u.cacheCreationTokens;
         }
+        const mdl = messageModel(raw.message);
+        if (mdl) {
+          modelCounts.set(mdl, (modelCounts.get(mdl) ?? 0) + 1);
+          lastModel = mdl;
+        }
       }
       if (type === "ai-title" && typeof raw.aiTitle === "string") aiTitle = raw.aiTitle;
       if (type === "summary" && typeof raw.summary === "string") summary = raw.summary;
@@ -470,6 +501,21 @@ export class TranscriptIndex {
       titleSource = "session-id";
     }
 
+    // Resolve the session's model: the most-frequent assistant model. Ties prefer
+    // the incumbent (the already-stored model, so an incremental pass doesn't flip on
+    // a single new line), then the last one seen. Falls through to the prior
+    // value/null when no assistant line carried a model.
+    let model: string | null = null;
+    let bestCount = -1;
+    const tiePriority = (id: string): number => (id === incumbentModel ? 2 : id === lastModel ? 1 : 0);
+    for (const [id, count] of modelCounts) {
+      if (count > bestCount || (count === bestCount && model !== null && tiePriority(id) > tiePriority(model))) {
+        bestCount = count;
+        model = id;
+      }
+    }
+    if (!model) model = lastModel;
+
     const projectId = cwd ? projectIdFromCwd(cwd) : null;
     const sessionDir = path.join(path.dirname(filePath), sessionId);
     const hasSubagents = existsSync(path.join(sessionDir, "subagents")) ? 1 : 0;
@@ -498,6 +544,7 @@ export class TranscriptIndex {
         mtimeMs,
         indexedBytes: st.size,
         hasSubagents,
+        model,
       });
       this.writeSearchText(sessionId, searchTexts, startByte === 0);
       this.db.exec("COMMIT");
@@ -558,6 +605,15 @@ export class TranscriptIndex {
     return this.db
       .prepare(`SELECT ${SELECT_COLS} FROM sessions s LEFT JOIN session_meta m USING (sessionId)`)
       .all() as unknown as Row[];
+  }
+
+  /**
+   * Cross-project session listing for a global "All Sessions" view. Reuses this
+   * index (one query, no transcript reads); see {@link listAllSessions} for the
+   * sort/filter/paging options. Returns SessionSummary[] across ALL projects.
+   */
+  listAllSessions(opts: ListAllSessionsOptions = {}): SessionSummary[] {
+    return listAllSessions<Row>(this.db, SELECT_COLS, rowToSummary, opts);
   }
 
   /**
@@ -632,6 +688,40 @@ export class TranscriptIndex {
 
   getSessionCount(): number {
     return n((this.db.prepare("SELECT COUNT(*) AS c FROM sessions").get() as { c: unknown }).c);
+  }
+
+  /**
+   * APPROXIMATE USD cost per project, computed PER SESSION (so each session's own
+   * model picks its pricing tier) and rolled up by projectId. Returns a map of
+   * projectId -> total USD; the caller sums it for the grand total. Sessions with a
+   * null projectId are bucketed under "unknown".
+   */
+  getCostByProject(): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        `SELECT projectId, model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens
+         FROM sessions`,
+      )
+      .all() as unknown as Array<{
+      projectId: string | null;
+      model: string | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+    }>;
+    const byProject = new Map<string, number>();
+    for (const r of rows) {
+      const cost = costUsd(r.model, {
+        inputTokens: n(r.inputTokens),
+        outputTokens: n(r.outputTokens),
+        cacheReadTokens: n(r.cacheReadTokens),
+        cacheCreationTokens: n(r.cacheCreationTokens),
+      });
+      const id = r.projectId ?? "unknown";
+      byProject.set(id, (byProject.get(id) ?? 0) + cost);
+    }
+    return byProject;
   }
 
   /**
@@ -717,6 +807,7 @@ function rowToSummary(row: Row): SessionSummary {
     sizeBytes: n(row.sizeBytes),
     mtimeMs: n(row.mtimeMs),
     hasSubagents: row.hasSubagents === 1,
+    model: row.model ?? null,
     pinned: n(row.pinned) === 1,
     tags: parseTags(row.tags),
     indexed: true,

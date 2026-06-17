@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   GitBranch,
   ArrowUp,
@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import type { GitLogEntry, GitStatus } from "../lib/types";
 import { cn } from "../lib/utils";
 import { relativeTime } from "../lib/format";
+import { CommitComposer } from "./CommitComposer";
 import { Spinner } from "./ui";
 
 /** A compact count chip with an icon — only rendered when n > 0. */
@@ -58,8 +59,10 @@ export function GitPanel({ cwd }: { cwd: string }) {
   // null = not fetched yet; "repo" / "no-repo" / "error" once we know.
   const [state, setState] = useState<"idle" | "repo" | "no-repo" | "error">("idle");
 
-  useEffect(() => {
-    if (!open) return;
+  // Fetch status + recent log for `cwd`. Returns a cancel fn so the effect can
+  // drop a stale in-flight load; the composer calls it (ignoring the return) to
+  // refresh after a commit.
+  const refresh = useCallback(() => {
     let cancelled = false;
     setLoading(true);
     Promise.all([api.gitStatus(cwd), api.gitLog(cwd, 10)])
@@ -80,7 +83,12 @@ export function GitPanel({ cwd }: { cwd: string }) {
     return () => {
       cancelled = true;
     };
-  }, [open, cwd]);
+  }, [cwd]);
+
+  useEffect(() => {
+    if (!open) return;
+    return refresh();
+  }, [open, refresh]);
 
   // A new project resets what we know so the next expand refetches fresh.
   useEffect(() => {
@@ -192,6 +200,12 @@ export function GitPanel({ cwd }: { cwd: string }) {
               ) : (
                 <div className="mt-1 text-[11px] text-zinc-600">No commits yet.</div>
               )}
+
+              {/* Stage + commit tracked changes. Only shown when the tree is
+                  dirty; refreshes status/log on a successful commit. */}
+              {dirty ? (
+                <CommitComposer cwd={cwd} status={status} onCommitted={refresh} />
+              ) : null}
             </>
           ) : (
             // idle + loading first paint

@@ -11,7 +11,8 @@ import { indexToolResults, pairMessage } from "../lib/transcript";
 import { useDraft } from "../hooks/useDraft";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { MessageView } from "./MessageView";
-import { PermissionCard, type PendingPermission } from "./PermissionCard";
+import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
+import { usePromptHistory } from "../hooks/usePromptHistory";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
 const MODELS = [
@@ -65,6 +66,8 @@ export function ChatPane({
   // survives tab switches and reloads. Scopes by the live sessionId once a turn
   // assigns one, falling back to the resume seed before the first prompt.
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
+  // Shell-style Up/Down recall of previously sent prompts, persisted per project.
+  const history = usePromptHistory(projectId);
   // Model can be controlled by the parent (command palette) or local. When the
   // parent passes a value we defer to it; otherwise we own it here.
   const [localModel, setLocalModel] = useState<string>(defaultModel ?? DEFAULT_MODEL);
@@ -181,10 +184,12 @@ export function ChatPane({
     return conn;
   }, [appendDelta, finalizeMessage]);
 
-  // Forward the user's Allow/Deny decision to the agent and dismiss the card.
-  // Never auto-decides: only fires from an explicit button press in PermissionCard.
-  const respondPermission = useCallback((id: string, decision: "allow" | "deny") => {
-    connRef.current?.send({ t: "permission-response", id, decision });
+  // Forward the user's Allow/Deny decision (with its scope) to the agent and
+  // dismiss the card. Never auto-decides: only fires from an explicit button
+  // press in PermissionCard. Scope is dormant on the per-turn driver but rides
+  // along in the payload so the persistent path can honor it later.
+  const respondPermission = useCallback((id: string, { decision, scope }: PermissionDecision) => {
+    connRef.current?.send({ t: "permission-response", id, decision, scope });
     setPendingPermission((cur) => (cur && cur.id === id ? null : cur));
   }, []);
 
@@ -233,9 +238,10 @@ export function ChatPane({
   const send = useCallback(() => {
     const prompt = draft.trim();
     if (!prompt || running) return;
+    history.add(prompt);
     clearDraft();
     runPrompt(prompt, true);
-  }, [draft, running, clearDraft, runPrompt]);
+  }, [draft, running, clearDraft, runPrompt, history]);
 
   // Resend the last user prompt (resuming the session) to get a fresh response.
   // Reuses the prompt already in the transcript, so it doesn't echo a duplicate
@@ -271,6 +277,29 @@ export function ChatPane({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
+      return;
+    }
+    // Up/Down recall previously sent prompts — but only when the caret can't move
+    // within the textarea (at the very start for Up, the very end for Down), so
+    // editing a multi-line draft is never hijacked. Skip while a turn is running.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !running) {
+      const el = e.currentTarget;
+      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
+      const atEnd =
+        el.selectionStart === el.value.length && el.selectionEnd === el.value.length;
+      if (e.key === "ArrowUp" && atStart) {
+        const recalled = history.recallPrev(draft);
+        if (recalled !== null) {
+          e.preventDefault();
+          setDraft(recalled);
+        }
+      } else if (e.key === "ArrowDown" && atEnd && history.navigating) {
+        const recalled = history.recallNext();
+        if (recalled !== null) {
+          e.preventDefault();
+          setDraft(recalled);
+        }
+      }
     }
   };
 
@@ -470,7 +499,11 @@ export function ChatPane({
         <div className="flex items-end gap-2 rounded-xl bg-zinc-900 p-2 ring-1 ring-zinc-800 focus-within:ring-clay-500/40">
           <textarea
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              // A manual edit abandons history navigation (we're back on a live line).
+              if (history.navigating) history.reset();
+              setDraft(e.target.value);
+            }}
             onKeyDown={onKeyDown}
             disabled={running}
             rows={1}
