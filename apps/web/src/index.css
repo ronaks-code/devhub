@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@import "highlight.js/styles/github-dark.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  /* Claude-native clay accent */
+  --color-clay-300: #efbfa9;
+  --color-clay-400: #e59a7c;
+  --color-clay-500: #d97757;
+  --color-clay-600: #c25e3f;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-zinc-700) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-zinc-800);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-zinc-700);
+}
+
+/* thinking / code blocks */
+.prose-code pre {
+  @apply overflow-x-auto rounded-lg bg-zinc-900 p-3 text-[12.5px] leading-relaxed;
+}
+
+/* highlight.js: let our own pre wrapper own the background/padding. */
+.md-body code.hljs,
+.md-body .hljs {
+  background: transparent;
+  padding: 0;
+}

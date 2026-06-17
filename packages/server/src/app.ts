@@ -1,0 +1,131 @@
+/**
+ * Fastify transport over the engine. This is the HTTP/SSE boundary — the browser
+ * talks to this; the engine itself stays framework-agnostic and in-process.
+ */
+import Fastify, { type FastifyInstance } from "fastify";
+import cors from "@fastify/cors";
+import websocket from "@fastify/websocket";
+import path from "node:path";
+import { Engine, watchTranscripts, paths } from "@claude-ui/engine";
+import type { EngineEvent } from "@claude-ui/engine/types";
+import { registerWs } from "./ws.js";
+
+export interface BuildOptions {
+  engine?: Engine;
+  token?: string;
+}
+
+export function buildApp(opts: BuildOptions = {}): {
+  app: FastifyInstance;
+  engine: Engine;
+} {
+  const engine = opts.engine ?? new Engine();
+  const token = (opts.token ?? process.env.CLAUDE_UI_TOKEN)?.trim();
+  const app = Fastify({ logger: false });
+
+  app.register(cors, { origin: true, credentials: true });
+  // WebSocket support must be registered before any ws routes are defined.
+  app.register(websocket);
+
+  // Auth seam: enforced only when a token is configured (local-only by default).
+  app.addHook("onRequest", async (req, reply) => {
+    if (!token) return;
+    // WebSocket upgrades can't carry an Authorization header reliably; the ws
+    // route guards itself, so skip the token check for the upgrade handshake.
+    if (req.url.startsWith("/api/ws")) return;
+    if (req.url.startsWith("/api/health")) return;
+    const headerOk = req.headers.authorization === `Bearer ${token}`;
+    const q = (req.query as Record<string, string> | undefined)?.token;
+    if (!headerOk && q !== token) {
+      reply.code(401).send({ error: "unauthorized" });
+    }
+  });
+
+  app.get("/api/health", async () => ({
+    ok: true,
+    ready: engine.ready,
+    sessionCount: engine.index.getSessionCount(),
+  }));
+
+  // Live-chat WebSocket. Registered inside a child plugin so it loads AFTER the
+  // websocket plugin above — otherwise the `{ websocket: true }` onRoute hook
+  // isn't applied yet and the handler is wrongly called with (request, reply).
+  app.register(async (instance) => {
+    registerWs(instance, engine);
+  });
+
+  app.get("/api/search", async (req) =>
+    engine.search(String((req.query as any).q ?? ""), {
+      limit: Number((req.query as any).limit) || 50,
+    }),
+  );
+
+  app.get("/api/running", async () => engine.getRunningSessions());
+
+  app.get("/api/stats", async () => engine.getStats());
+
+  app.get("/api/projects", async () => engine.getProjects());
+
+  app.get("/api/projects/:id/sessions", async (req) => {
+    const { id } = req.params as { id: string };
+    return engine.getProjectSessions(id);
+  });
+
+  app.get("/api/sessions/:id/messages", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const q = req.query as { tailBytes?: string };
+    const tailBytes = q.tailBytes ? Math.max(64 * 1024, Number(q.tailBytes)) : undefined;
+    const page = await engine.getSessionMessages(id, { tailBytes });
+    if (!page) return reply.code(404).send({ error: "not found" });
+    return page;
+  });
+
+  // Read a single subagent transcript (path must live under ~/.claude/projects).
+  app.get("/api/sessions/:id/subagent", async (req, reply) => {
+    const q = req.query as { path?: string };
+    const file = q.path ? path.resolve(q.path) : "";
+    const root = path.resolve(paths.projectsDir());
+    if (!file.startsWith(root + path.sep) || !file.endsWith(".jsonl")) {
+      return reply.code(400).send({ error: "invalid path" });
+    }
+    return engine.getSubagentMessages(file);
+  });
+
+  // Rename / pin (sidecar — never touches the transcript).
+  app.patch("/api/sessions/:id", async (req) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { customTitle?: string | null; pinned?: boolean };
+    if ("customTitle" in body) engine.index.setCustomTitle(id, body.customTitle ?? null);
+    if ("pinned" in body) engine.index.setPinned(id, body.pinned === true);
+    return engine.getSession(id) ?? { ok: true };
+  });
+
+  // SSE live updates (index progress + session add/change).
+  app.get("/api/events", (req, reply) => {
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    });
+    raw.write(": connected\n\n");
+    const send = (e: EngineEvent) => raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    const unsub = engine.on(send);
+    const hb = setInterval(() => raw.write(": ping\n\n"), 25000);
+    req.raw.on("close", () => {
+      clearInterval(hb);
+      unsub();
+    });
+  });
+
+  return { app, engine };
+}
+
+/** Wire up the engine lifecycle (watcher + background index) around an app. */
+export function startEngineLifecycle(engine: Engine): () => void {
+  const stopWatch = watchTranscripts(engine);
+  // First index runs in the background; SSE pushes progress. Incremental afterward.
+  void engine.indexAll();
+  return stopWatch;
+}

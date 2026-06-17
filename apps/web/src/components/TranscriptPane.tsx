@@ -1,0 +1,161 @@
+import { useEffect, useMemo, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  MessagesSquare,
+  GitBranch,
+  Coins,
+  MessageSquare,
+  HardDrive,
+  Users,
+  ArrowUp,
+  MessageSquarePlus,
+} from "lucide-react";
+import type { SessionMessagesPage } from "../lib/types";
+import { MessageView } from "./MessageView";
+import { Badge, EmptyState, Spinner } from "./ui";
+import { compactNumber, formatBytes, totalTokens } from "../lib/format";
+import { pairToolResults } from "../lib/transcript";
+
+export function TranscriptPane({
+  page,
+  loading,
+  onLoadMore,
+  onContinue,
+}: {
+  page: SessionMessagesPage | null;
+  loading: boolean;
+  onLoadMore: () => void;
+  /** Hand off to the Chat tab to resume this session (--resume). */
+  onContinue?: (sessionId: string, cwd: string) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const lastSession = useRef<string | undefined>(undefined);
+  // Pair tool_use ⇄ tool_result so each tool call renders as one card.
+  const messages = useMemo(
+    () => pairToolResults(page?.messages ?? []),
+    [page?.messages],
+  );
+
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 120,
+    overscan: 10,
+  });
+
+  // Jump to the latest message when a NEW session opens (not on load-more).
+  useEffect(() => {
+    if (!page || messages.length === 0) return;
+    if (lastSession.current === page.session.sessionId) return;
+    lastSession.current = page.session.sessionId;
+    const id = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end" }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [page, messages.length, virtualizer]);
+
+  if (!page) {
+    return (
+      <div className="flex-1 bg-zinc-950">
+        {loading ? (
+          <div className="flex h-full items-center justify-center">
+            <Spinner className="h-6 w-6" />
+          </div>
+        ) : (
+          <EmptyState
+            icon={<MessagesSquare className="h-12 w-12" />}
+            title="Select a session"
+            hint="Pick a project, then a chat to read its full transcript — rendered the way Claude Code shows it."
+          />
+        )}
+      </div>
+    );
+  }
+
+  const s = page.session;
+  return (
+    <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
+      <div className="border-b border-zinc-800/80 px-5 py-3">
+        <div className="flex items-center gap-2">
+          <h1 className="truncate text-[15px] font-semibold text-zinc-100">{s.title}</h1>
+          {loading && <Spinner className="h-3.5 w-3.5" />}
+          {onContinue && s.cwd ? (
+            <button
+              onClick={() => onContinue(s.sessionId, s.cwd!)}
+              className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-clay-500/15 px-2.5 py-1 text-[12px] font-medium text-clay-300 ring-1 ring-clay-500/30 transition hover:bg-clay-500/25 hover:text-clay-200"
+              title="Resume this session in the Chat tab"
+            >
+              <MessageSquarePlus className="h-3.5 w-3.5" />
+              Continue this chat
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          {s.cwd && (
+            <Badge title={s.cwd} className="max-w-[28rem]">
+              <span className="truncate">{s.cwd}</span>
+            </Badge>
+          )}
+          {s.gitBranch ? (
+            <Badge>
+              <GitBranch className="h-3 w-3" />
+              {s.gitBranch}
+            </Badge>
+          ) : null}
+          <Badge>
+            <MessageSquare className="h-3 w-3" />
+            {s.messageCount} msgs
+          </Badge>
+          <Badge title="input + output + cache tokens">
+            <Coins className="h-3 w-3" />
+            {compactNumber(totalTokens(s.usage))} tok
+          </Badge>
+          <Badge>
+            <HardDrive className="h-3 w-3" />
+            {formatBytes(s.sizeBytes)}
+          </Badge>
+          {page.subagents.length > 0 && (
+            <Badge title="subagent transcripts">
+              <Users className="h-3 w-3" />
+              {page.subagents.length} subagents
+            </Badge>
+          )}
+        </div>
+      </div>
+
+      {page.truncatedFromStart && (
+        <button
+          onClick={onLoadMore}
+          className="flex items-center justify-center gap-2 border-b border-zinc-800/80 bg-zinc-900/40 py-2 text-xs text-zinc-400 transition hover:bg-zinc-900 hover:text-clay-300"
+        >
+          <ArrowUp className="h-3.5 w-3.5" />
+          Showing recent messages — load older history
+        </button>
+      )}
+
+      <div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto">
+        <div
+          style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => (
+            <div
+              key={vi.key}
+              data-index={vi.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${vi.start}px)`,
+              }}
+              className="border-b border-zinc-900/70"
+            >
+              <MessageView m={messages[vi.index]!} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

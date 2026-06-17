@@ -1,0 +1,17 @@
+{
+  "name": "@claude-ui/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Tauri desktop shell for Claude UI (loads the web face; native window).",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.5.0"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+out/
+.turbo/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+.env.local
+coverage/
+# local app data (SQLite index/cache)
+.claude-ui-data/
+data/

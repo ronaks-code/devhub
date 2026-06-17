@@ -1,0 +1,34 @@
+{
+  "name": "@claude-ui/web",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 5174",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@claude-ui/engine": "workspace:*",
+    "@tanstack/react-virtual": "^3.11.2",
+    "clsx": "^2.1.1",
+    "highlight.js": "^11.10.0",
+    "lucide-react": "^0.469.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.1",
+    "remark-gfm": "^4.0.0",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
