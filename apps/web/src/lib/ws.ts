@@ -11,7 +11,13 @@ import type { PermissionScope } from "../components/PermissionCard";
  */
 export type OutgoingMsg =
   | ClientMsg
-  | { t: "permission-response"; id: string; decision: "allow" | "deny"; scope?: PermissionScope; message?: string };
+  | { t: "permission-response"; id: string; decision: "allow" | "deny"; scope?: PermissionScope; message?: string }
+  // Cancel any prompts the server has queued behind the running turn. Groundwork
+  // for the server-side queue: the engine `ClientMsg` union doesn't carry it yet,
+  // so we widen it at this boundary (same approach as permission-response's
+  // `scope`). A server that doesn't know it can ignore it; ChatPane also drops
+  // its local queue, so cancellation works against today's per-turn server too.
+  | { t: "clear-queue" };
 
 /** A pending tool-permission request from the agent (persistent-path only). */
 export interface PermissionRequestFrame {

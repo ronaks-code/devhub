@@ -12,6 +12,9 @@ import {
   ListTree,
   FileDiff,
   MessageSquarePlus,
+  AlertCircle,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
 import { MessageView } from "./MessageView";
@@ -19,6 +22,7 @@ import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { TranscriptOutline } from "./TranscriptOutline";
 import { FileChangeSummary } from "./FileChangeSummary";
+import { useErrorNav } from "../hooks/useErrorNav";
 import {
   TranscriptFilters,
   applyFilters,
@@ -101,6 +105,33 @@ export function TranscriptPane({
     (index: number) => virtualizer.scrollToIndex(index, { align: "start" }),
     [virtualizer],
   );
+
+  // Timer handle for the error-nav highlight, so a rapid next/prev replaces the
+  // prior fade instead of stacking timers.
+  const errorHighlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Scroll to + briefly highlight an error message (drives the same clay glow as
+  // a search jump). Stops following the live tail so the view rests on the error.
+  const highlightError = useCallback(
+    (index: number) => {
+      stick.unpin();
+      virtualizer.scrollToIndex(index, { align: "center" });
+      setJumpIndex(index);
+      if (errorHighlightTimer.current) clearTimeout(errorHighlightTimer.current);
+      errorHighlightTimer.current = setTimeout(() => setJumpIndex(null), 2200);
+    },
+    [stick, virtualizer],
+  );
+  useEffect(
+    () => () => {
+      if (errorHighlightTimer.current) clearTimeout(errorHighlightTimer.current);
+    },
+    [],
+  );
+
+  // Collect error messages in the (paired + filtered) transcript and drive
+  // next/prev navigation over them. Keyboard: Alt+E / Alt+Shift+E. Enabled only
+  // when a transcript is loaded.
+  const errorNav = useErrorNav(messages, highlightError, !!page);
 
   // Cmd/Ctrl-F opens the find bar (preventing the browser's native find), and
   // Escape closes it. Scoped to when a transcript is loaded.
@@ -223,13 +254,50 @@ export function TranscriptPane({
         <div className="flex items-center gap-2">
           <h1 className="truncate text-[15px] font-semibold text-zinc-100">{s.title}</h1>
           {loading && <Spinner className="h-3.5 w-3.5" />}
+
+          {/* Error navigator: jump to / step through tool errors in this
+              transcript. Hidden when the (filtered) transcript has none. */}
+          {errorNav.count > 0 ? (
+            <div
+              className="ml-auto inline-flex shrink-0 items-center rounded-lg bg-red-500/10 text-red-300 ring-1 ring-red-500/25"
+              title="Errors in this transcript — click to jump, ↑↓ to step (Alt+E / Alt+Shift+E)"
+            >
+              <button
+                onClick={errorNav.first}
+                className="inline-flex items-center gap-1.5 rounded-l-lg px-2.5 py-1 text-[12px] font-medium transition hover:bg-red-500/15"
+              >
+                <AlertCircle className="h-3.5 w-3.5" />
+                {errorNav.position > 0 ? `${errorNav.position}/${errorNav.count}` : errorNav.count}
+                <span className="text-red-300/70">error{errorNav.count === 1 ? "" : "s"}</span>
+              </button>
+              <button
+                onClick={errorNav.prev}
+                title="Previous error (Alt+Shift+E)"
+                aria-label="Previous error"
+                className="border-l border-red-500/20 px-1.5 py-1 transition hover:bg-red-500/15"
+              >
+                <ChevronUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={errorNav.next}
+                title="Next error (Alt+E)"
+                aria-label="Next error"
+                className="rounded-r-lg border-l border-red-500/20 px-1.5 py-1 transition hover:bg-red-500/15"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : null}
+
           <button
             onClick={() => {
               setChangesOpen((v) => !v);
               setOutlineOpen(false);
             }}
             className={cn(
-              "ml-auto inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              // No error nav present? Then this is the first right-aligned control.
+              errorNav.count === 0 && "ml-auto",
               changesOpen
                 ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
                 : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",

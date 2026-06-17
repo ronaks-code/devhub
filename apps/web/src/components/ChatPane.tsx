@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, MessageSquarePlus, Pencil, RotateCcw, Send, Square, Sparkles, Wifi } from "lucide-react";
+import { ArrowDown, ListPlus, MessageSquarePlus, Pencil, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
 import { formatUsd } from "../lib/format";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import type { TurnResult } from "@claude-ui/engine/driver";
@@ -31,6 +31,13 @@ const DEFAULT_PERMISSION: PermissionMode = "acceptEdits";
 interface ChatItem {
   key: number;
   message: NormalizedMessage;
+}
+
+/** A follow-up prompt queued while a turn runs, awaiting its own turn. */
+interface QueuedPrompt {
+  /** Stable id for React keys + targeted cancellation. */
+  id: number;
+  prompt: string;
 }
 
 export function ChatPane({
@@ -105,6 +112,10 @@ export function ChatPane({
   // Highlighted row in the slash palette; reset whenever the palette (re)opens or
   // the query changes. Steered by Arrow keys in the composer's keydown handler.
   const [slashIndex, setSlashIndex] = useState(0);
+  // Follow-up prompts composed WHILE a turn is running. The server accepts one
+  // turn at a time, so we hold these locally and dispatch the head as each turn
+  // ends — rendering them meanwhile as pending "queue" bubbles below the stream.
+  const [queued, setQueued] = useState<QueuedPrompt[]>([]);
 
   const connRef = useRef<ChatConn | null>(null);
   const keyRef = useRef(0);
@@ -120,6 +131,14 @@ export function ChatPane({
   // True between an unexpected drop and the subsequent reconnect, so the
   // reconnect handler knows to clear the (now-dead) in-flight turn state.
   const reconnectedRef = useRef(false);
+  // The queue, mirrored for synchronous reads inside socket handlers (turn-end
+  // fires outside React's render cycle and must see the current head).
+  const queueRef = useRef<QueuedPrompt[]>([]);
+  // Always points at the latest `runPrompt` so the turn-end handler dispatches a
+  // queued prompt with CURRENT sessionId/model/permission — not a stale closure.
+  const runPromptRef = useRef<((prompt: string, echo: boolean) => void) | null>(null);
+  // Monotonic id source for queued prompts (keys + cancellation targets).
+  const queueIdRef = useRef(0);
   // Auto-scroll only follows new content while the user is parked at the bottom;
   // if they scroll up to read history we stop and show a "jump to latest" pill.
   const stick = useStickToBottom(scrollRef);
@@ -148,6 +167,25 @@ export function ChatPane({
     liveActiveRef.current = false;
     setLiveActive(false);
     liveStreamRef.current.reset();
+  }, []);
+
+  // Mirror the queue into a ref for synchronous reads in socket handlers.
+  useEffect(() => {
+    queueRef.current = queued;
+  }, [queued]);
+
+  // Dispatch the head of the queue as its own turn. Called when a turn ends (or
+  // is cleared) so a follow-up the user composed mid-turn runs next. Echoes the
+  // prompt as a user bubble — the pending "queue" bubble for it disappears in the
+  // same commit, so it reads as the queued prompt simply starting. No-op when the
+  // queue is empty. Runs via runPromptRef to pick up the latest sessionId/model.
+  const dispatchNext = useCallback(() => {
+    const head = queueRef.current[0];
+    if (!head) return;
+    const rest = queueRef.current.slice(1);
+    queueRef.current = rest;
+    setQueued(rest);
+    runPromptRef.current?.(head.prompt, true);
   }, []);
 
   // The full assistant message arrived. When a turn was streaming, the finalized
@@ -208,17 +246,22 @@ export function ChatPane({
         setStatus(null);
         setPendingPermission(null);
         clearLive();
+        // A failed turn shouldn't auto-fire the queue (it might fail the same
+        // way, or the error needs the user's attention). The queued prompts stay
+        // pending so the user can retry or cancel them.
       },
       onTurnEnd: () => {
         setRunning(false);
         setStatus(null);
         setPendingPermission(null);
         clearLive();
+        // The turn finished cleanly — kick off the next queued follow-up, if any.
+        dispatchNext();
       },
     });
     connRef.current = conn;
     return conn;
-  }, [appendDelta, finalizeMessage, clearLive]);
+  }, [appendDelta, finalizeMessage, clearLive, dispatchNext]);
 
   // Forward the user's Allow/Deny decision (with its scope) to the agent and
   // dismiss the card. Never auto-decides: only fires from an explicit button
@@ -270,14 +313,41 @@ export function ChatPane({
     [push, ensureConn, cwd, sessionId, model, permissionMode, stick.pin, clearLive],
   );
 
+  // Keep the ref pointed at the latest runPrompt so a queued dispatch (fired from
+  // a socket handler on turn-end) uses the current sessionId/model/permission.
+  useEffect(() => {
+    runPromptRef.current = runPrompt;
+  }, [runPrompt]);
+
   const send = useCallback(() => {
     const prompt = draft.trim();
-    if (!prompt || running) return;
+    if (!prompt) return;
     history.add(prompt);
     clearDraft();
     setEditingFork(false);
+    // A turn is in flight: queue this follow-up instead of dropping it. It runs
+    // as its own turn when the current (and any earlier-queued) turn finishes.
+    if (running) {
+      setQueued((q) => [...q, { id: ++queueIdRef.current, prompt }]);
+      return;
+    }
     runPrompt(prompt, true);
   }, [draft, running, clearDraft, runPrompt, history]);
+
+  // Cancel a single queued follow-up by dropping it locally. The queue is held
+  // entirely client-side (today's per-turn server only ever sees one prompt at a
+  // time — the head is dispatched on turn-end), so removing it here is the whole
+  // cancellation. We deliberately do NOT send {t:"clear-queue"} to the current
+  // server: it rejects unknown frames with an `error` that would tear down the
+  // in-flight turn's UI. The OutgoingMsg type carries `clear-queue` as
+  // groundwork for a queue-aware server that owns the queue itself.
+  const cancelQueued = useCallback((id: number) => {
+    setQueued((q) => {
+      const next = q.filter((it) => it.id !== id);
+      queueRef.current = next;
+      return next;
+    });
+  }, []);
 
   // Resend the last user prompt (resuming the session) to get a fresh response.
   // Reuses the prompt already in the transcript, so it doesn't echo a duplicate
@@ -328,6 +398,8 @@ export function ChatPane({
     setErrorMsg(null);
     setPendingPermission(null);
     setEditingFork(false);
+    queueRef.current = [];
+    setQueued([]);
   }, [clearLive, stick.pin]);
 
   // The composer is in "slash mode" when, with a turn idle, the draft is a single
@@ -580,6 +652,17 @@ export function ChatPane({
                 <LiveBubble stream={liveStreamRef.current} onGrow={followLiveBottom} />
               </div>
             ) : null}
+            {/* Pending follow-ups composed mid-turn. Rendered as dimmed "queue"
+                bubbles below the stream; each dispatches as its own turn when the
+                turns ahead of it finish, or can be cancelled here. */}
+            {queued.map((q, i) => (
+              <QueuedBubble
+                key={q.id}
+                index={i}
+                prompt={q.prompt}
+                onCancel={() => cancelQueued(q.id)}
+              />
+            ))}
           </>
         )}
       </div>
@@ -614,6 +697,15 @@ export function ChatPane({
             <span className="flex items-center gap-1.5 text-clay-300">
               <Spinner className="h-3 w-3" />
               {status ?? "working"}
+            </span>
+          )}
+          {queued.length > 0 && (
+            <span
+              className="flex items-center gap-1 text-amber-400"
+              title="Follow-ups waiting to run after the current turn"
+            >
+              <ListPlus className="h-3 w-3" />
+              {queued.length} queued
             </span>
           )}
           {!running && lastResult && (
@@ -684,19 +776,35 @@ export function ChatPane({
               setDraft(e.target.value);
             }}
             onKeyDown={onKeyDown}
-            disabled={running}
             rows={1}
-            placeholder={running ? "Claude is working…" : `Message Claude in ${projectName}…`}
+            placeholder={
+              running
+                ? `Queue a follow-up for ${projectName}…`
+                : `Message Claude in ${projectName}…`
+            }
             className="max-h-40 min-h-[2.25rem] w-full resize-none bg-transparent px-2 py-1.5 text-[13.5px] leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none disabled:opacity-50"
           />
+          {/* While a turn runs the composer stays live: Send QUEUES the follow-up
+              (it runs as its own turn when the current one ends), and a separate
+              Stop interrupts the in-flight turn. */}
           {running ? (
-            <IconButton
-              onClick={stop}
-              title="Stop (interrupt)"
-              className="h-9 w-9 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white"
-            >
-              <Square className="h-4 w-4 fill-current" />
-            </IconButton>
+            <>
+              <IconButton
+                onClick={send}
+                disabled={!draft.trim()}
+                title="Queue this follow-up (Enter) — runs when the current turn ends"
+                className="h-9 w-9 bg-clay-500/80 text-white hover:bg-clay-600 hover:text-white disabled:bg-zinc-800 disabled:text-zinc-600"
+              >
+                <ListPlus className="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                onClick={stop}
+                title="Stop (interrupt)"
+                className="h-9 w-9 bg-zinc-800 text-zinc-200 hover:bg-zinc-700 hover:text-white"
+              >
+                <Square className="h-4 w-4 fill-current" />
+              </IconButton>
+            </>
           ) : (
             <IconButton
               onClick={send}
@@ -707,6 +815,48 @@ export function ChatPane({
               <Send className="h-4 w-4" />
             </IconButton>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One pending follow-up in the queue, rendered as a dimmed "queue" bubble below
+ * the live stream. Mirrors MessageView's "queue" role styling (amber accent +
+ * ListPlus) so a queued prompt reads as a first-class, not-yet-sent turn. Shows
+ * its position ("next" for the head) and a cancel affordance.
+ */
+function QueuedBubble({
+  index,
+  prompt,
+  onCancel,
+}: {
+  index: number;
+  prompt: string;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="group flex gap-3 border-b border-zinc-900/70 px-4 py-2.5 opacity-70">
+      <div className="mt-1 w-0.5 shrink-0 rounded-full bg-amber-800" />
+      <div className="min-w-0 flex-1">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="text-xs font-semibold text-amber-400">queued</span>
+          <ListPlus className="h-3 w-3 text-amber-500" />
+          <span className="text-[10px] text-zinc-600">
+            {index === 0 ? "next" : `#${index + 1} in queue`}
+          </span>
+          <button
+            onClick={onCancel}
+            className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] font-medium text-zinc-500 opacity-0 transition hover:bg-zinc-800 hover:text-zinc-200 group-hover:opacity-100"
+            title="Cancel this queued message"
+          >
+            <X className="h-3 w-3" />
+            Cancel
+          </button>
+        </div>
+        <div className="whitespace-pre-wrap break-words text-[13.5px] leading-relaxed text-zinc-300">
+          {prompt}
         </div>
       </div>
     </div>

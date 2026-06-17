@@ -167,6 +167,13 @@ export interface RunningSession {
    * in its current state. Null when the file doesn't report it.
    */
   statusUpdatedAt?: number | null;
+  /**
+   * True when this session is BLOCKED ON THE USER: it's `status: "waiting"` (e.g. a
+   * permission prompt) AND has sat there longer than the staleness threshold, so it
+   * won't make progress until the user acts. Lets the dashboard float "needs you"
+   * sessions to the top. Always false for dead/non-waiting sessions.
+   */
+  needsYou?: boolean;
 }
 
 /**
@@ -208,6 +215,20 @@ export interface Stats {
   activity: Array<{ date: string; sessions: number }>;
   /** Monthly spend budget status (for the dashboard's budget bar). */
   budget: BudgetStatus;
+  /**
+   * APPROXIMATE usage rolled up by model, cost descending. Each session is priced by
+   * its OWN model; sessions with a null/unknown model bucket under "unknown". Powers
+   * the dashboard's per-model spend breakdown. Display-only estimate.
+   */
+  byModel: Array<{
+    model: string;
+    /** Sum of all token buckets (input + output + cache read + cache write). */
+    tokens: number;
+    /** APPROXIMATE USD spend on this model. */
+    costUsd: number;
+    /** Number of sessions that ran on this model. */
+    sessions: number;
+  }>;
 }
 
 export interface SearchHit {

@@ -14,6 +14,8 @@ import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
 import { readSessionMessages, listSubagentFiles, normalizeLine, streamRawLines } from "./parser.js";
+import { listCheckpoints, restoreCheckpoint } from "./checkpoint.js";
+import type { Checkpoint, RestoreResult } from "./checkpoint.js";
 import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
@@ -209,9 +211,45 @@ export class Engine {
    * `status: "dead"`) so faces don't present a dead file as a live session.
    * Tolerant: missing dir => [], unparseable/internal entries skipped, sorted by
    * `updatedAt` (most recently active first).
+   *
+   * Each session also carries a `needsYou` flag — true when it's been `waiting`
+   * (e.g. on a permission prompt) longer than the staleness threshold, so it's
+   * blocked on the user. Pass `{ needsYouFirst: true }` to float those to the top,
+   * or `{ needsYouThresholdMs }` to tune how stale "stuck" means.
    */
-  async getRunningSessions(): Promise<RunningSession[]> {
-    return listRunningSessions();
+  async getRunningSessions(
+    opts: { dropDead?: boolean; needsYouThresholdMs?: number; needsYouFirst?: boolean } = {},
+  ): Promise<RunningSession[]> {
+    return listRunningSessions(opts);
+  }
+
+  /**
+   * Checkpoints for a session: the `file-history-snapshot` points in its transcript,
+   * each with a timestamp + the project files it backed up (with blob locations).
+   * Reads from `~/.claude/file-history/<sessionId>/` + the transcript; never writes.
+   * Returns [] when the session is unknown or has no transcript.
+   */
+  async listCheckpoints(sessionId: string): Promise<Checkpoint[]> {
+    const summary = this.index.getSessionSummary(sessionId);
+    if (!summary) return [];
+    return listCheckpoints(sessionId, summary.filePath, summary.cwd);
+  }
+
+  /**
+   * Restore the PROJECT files captured in one checkpoint to their backed-up bytes —
+   * the explicit checkpoint feature. Writes the user's project files (NOT a
+   * transcript), backing each up to `<file>.bak` first. Defaults to a DRY RUN
+   * (`opts.dryRun` true): pass `{ dryRun: false }` to actually write. Throws when the
+   * session or checkpoint id is unknown.
+   */
+  async restoreCheckpoint(
+    sessionId: string,
+    messageId: string,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<RestoreResult> {
+    const summary = this.index.getSessionSummary(sessionId);
+    if (!summary) throw new Error(`restoreCheckpoint: unknown session ${sessionId}`);
+    return restoreCheckpoint(sessionId, messageId, summary.filePath, summary.cwd, opts);
   }
 
   /**
@@ -265,6 +303,7 @@ export class Engine {
       topProjects,
       activity: this.buildActivity(),
       budget: this.getBudgetStatus(),
+      byModel: this.index.getUsageByModel(),
     };
   }
 
@@ -376,7 +415,25 @@ export { budgetStatus } from "./budget.js";
 export type { BudgetStatus } from "./budget.js";
 export { classifyCommand, classifyShell } from "./classify-command.js";
 export type { CommandSeverity, CommandClassification } from "./classify-command.js";
-export { listRunningSessions, isPidAlive } from "./running.js";
+export { listRunningSessions, isPidAlive, DEFAULT_NEEDS_YOU_MS } from "./running.js";
+export {
+  listCheckpoints,
+  restoreCheckpoint,
+  fileHistoryDir,
+} from "./checkpoint.js";
+export type {
+  Checkpoint,
+  CheckpointFile,
+  RestoreResult,
+  RestoredFile,
+} from "./checkpoint.js";
+export { resolveSettings } from "./config/resolve.js";
+export type {
+  ResolvedSettings,
+  ResolvedScope,
+  ResolvedKey,
+  SettingsScopeName,
+} from "./config/resolve.js";
 export { SettingsStore } from "./settings.js";
 export { watchTranscripts } from "./watcher.js";
 export { CliDriver, createDriver } from "./driver/cli.js";

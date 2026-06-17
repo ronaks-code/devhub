@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Activity, Coins, FolderGit2, LayoutDashboard, MessagesSquare, Radio } from "lucide-react";
+import { Activity, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio } from "lucide-react";
 import type { RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
 import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
+import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { Badge, EmptyState, Spinner } from "./ui";
 
 /**
@@ -194,6 +195,12 @@ export function DashboardPane() {
             label="Est. cost"
             value={formatUsd(estTotalCost)}
           />
+        </section>
+
+        {/* Per-model breakdown */}
+        <section>
+          <SectionTitle icon={<Cpu className="h-3.5 w-3.5" />}>By model</SectionTitle>
+          <ModelBreakdown models={stats.byModel} />
         </section>
 
         {/* Top projects */}

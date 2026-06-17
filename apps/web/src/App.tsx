@@ -29,6 +29,7 @@ import { DashboardPane } from "./components/DashboardPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
+import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { EmptyState, Spinner } from "./components/ui";
 import { cn } from "./lib/utils";
 
@@ -183,6 +184,7 @@ export default function App() {
   });
   const [searchOpen, setSearchOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   // Server-backed app settings (default model/permission, theme, budget…).
   // Loaded once on mount and updated when the Settings tab saves.
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -276,18 +278,28 @@ export default function App() {
     });
   }, [refreshProjects, refreshSessions, projectId]);
 
-  // Global hotkeys: ⌘K toggles search, ⌘⇧P toggles the command palette.
-  // Opening one closes the other so they never stack.
+  // Global hotkeys: ⌘K search, ⌘⇧P command palette, ⌘P project switcher.
+  // Opening any one closes the others so they never stack. The ⌘⇧P (shift)
+  // branch is checked before plain ⌘P so the command palette wins on shift.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && e.shiftKey && (e.key === "p" || e.key === "P")) {
+      const isP = e.key === "p" || e.key === "P";
+      if (mod && e.shiftKey && isP) {
         e.preventDefault();
         setSearchOpen(false);
+        setProjectSwitcherOpen(false);
         setCommandOpen((v) => !v);
+      } else if (mod && !e.shiftKey && isP) {
+        // Plain ⌘P — overrides the browser's print dialog for the switcher.
+        e.preventDefault();
+        setSearchOpen(false);
+        setCommandOpen(false);
+        setProjectSwitcherOpen((v) => !v);
       } else if (mod && !e.shiftKey && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
         setCommandOpen(false);
+        setProjectSwitcherOpen(false);
         setSearchOpen((v) => !v);
       }
     };
@@ -578,6 +590,20 @@ export default function App() {
       </div>
 
       <SearchPalette open={searchOpen} onClose={() => setSearchOpen(false)} onPick={onPickHit} />
+
+      <ProjectSwitcher
+        open={projectSwitcherOpen}
+        projects={projects}
+        selectedId={projectId}
+        onClose={() => setProjectSwitcherOpen(false)}
+        onPick={(id) => {
+          // Same intent as the palette's "Jump to project": fresh selection,
+          // drop any pending resume seed, land on Browse.
+          setChatSeed(null);
+          setProjectId(id);
+          setTab("browse");
+        }}
+      />
     </div>
   );
 }

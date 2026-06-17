@@ -25,6 +25,8 @@ import { runMigrations, hasColumn } from "../src/migrations.js";
 import { classifyCommand, classifyShell } from "../src/classify-command.js";
 import { dailyUsage } from "../src/rollups.js";
 import { budgetStatus } from "../src/budget.js";
+import { resolveSettings } from "../src/config/resolve.js";
+import { listCheckpoints, restoreCheckpoint, fileHistoryDir } from "../src/checkpoint.js";
 
 // node:sqlite is a newer builtin Vite/vitest's module graph won't resolve; require it
 // natively (same trick index-db.ts uses) so migration tests can open a raw DB.
@@ -2007,5 +2009,406 @@ describe("searchInSession (all matches within one session)", () => {
     const hits = engine.searchInSession("sessA", "kiwi");
     expect(hits.map((h) => h.seq)).toEqual([0, 2, 3]);
     engine.close();
+  });
+});
+
+describe("config.resolveSettings (scope diff)", () => {
+  // resolveSettings reads user settings under CLAUDE_CONFIG_DIR, and project/local
+  // under <projectCwd>/.claude. Enterprise managed-settings live at a fixed OS path
+  // (absent on the test box), so the enterprise scope reports present:false.
+  const withConfig = async <T>(
+    fn: (configDir: string, projectCwd: string) => Promise<T>,
+  ): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const projectCwd = path.join(root, "proj");
+    mkdirSync(path.join(projectCwd, ".claude"), { recursive: true });
+    try {
+      return await fn(root, projectCwd);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("reports per-scope raw values, the winner, and an override flag", async () => {
+    await withConfig(async (configDir, projectCwd) => {
+      // user sets model + theme; project overrides model; local overrides model again.
+      writeFileSync(
+        path.join(configDir, "settings.json"),
+        JSON.stringify({ model: "user-model", theme: "dark" }),
+      );
+      writeFileSync(
+        path.join(projectCwd, ".claude", "settings.json"),
+        JSON.stringify({ model: "project-model", extra: 1 }),
+      );
+      writeFileSync(
+        path.join(projectCwd, ".claude", "settings.local.json"),
+        JSON.stringify({ model: "local-model" }),
+      );
+
+      const resolved = await resolveSettings(projectCwd);
+
+      const model = resolved.keys.find((k) => k.key === "model")!;
+      // local has highest precedence among the present scopes (enterprise absent).
+      expect(model.winner).toBe("local");
+      expect(model.effectiveValue).toBe("local-model");
+      expect(model.overridden).toBe(true);
+      expect(model.perScope).toEqual({
+        user: "user-model",
+        project: "project-model",
+        local: "local-model",
+      });
+
+      // theme is set only by user -> user wins, not flagged as overridden.
+      const theme = resolved.keys.find((k) => k.key === "theme")!;
+      expect(theme.winner).toBe("user");
+      expect(theme.effectiveValue).toBe("dark");
+      expect(theme.overridden).toBe(false);
+
+      // extra is set only by project.
+      const extra = resolved.keys.find((k) => k.key === "extra")!;
+      expect(extra.winner).toBe("project");
+      expect(extra.effectiveValue).toBe(1);
+
+      // Keys are sorted; scopes considered are enterprise+user+project+local.
+      expect(resolved.keys.map((k) => k.key)).toEqual([...resolved.keys.map((k) => k.key)].sort());
+      const scopeNames = resolved.scopes.map((s) => s.scope);
+      expect(scopeNames).toContain("user");
+      expect(scopeNames).toContain("project");
+      expect(scopeNames).toContain("local");
+      // enterprise managed-settings file is absent on the test box.
+      expect(resolved.scopes.find((s) => s.scope === "enterprise")?.present).toBe(false);
+    });
+  });
+
+  it("omits project/local scopes when no projectCwd is given; tolerates missing files", async () => {
+    await withConfig(async (configDir) => {
+      writeFileSync(path.join(configDir, "settings.json"), JSON.stringify({ theme: "light" }));
+      const resolved = await resolveSettings();
+      const scopeNames = resolved.scopes.map((s) => s.scope);
+      expect(scopeNames).not.toContain("project");
+      expect(scopeNames).not.toContain("local");
+      const theme = resolved.keys.find((k) => k.key === "theme")!;
+      expect(theme.winner).toBe("user");
+      expect(theme.effectiveValue).toBe("light");
+    });
+  });
+});
+
+describe("Engine.getStats byModel", () => {
+  const today = new Date().toISOString().slice(0, 10);
+
+  it("breaks usage/cost/session-count down by model, cost descending", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const ts = `${today}T12:00:00.000Z`;
+    // Two opus sessions (1M input each => $5 each => $10 total, 2 sessions).
+    writeFileSync(
+      path.join(proj, "o1.jsonl"),
+      jl({ type: "user", cwd: "/home/me/a", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/a",
+          timestamp: ts,
+          message: { role: "assistant", model: "claude-opus-4-8", content: [{ type: "text", text: "x" }], usage: { input_tokens: 1_000_000, output_tokens: 0 } },
+        }),
+    );
+    writeFileSync(
+      path.join(proj, "o2.jsonl"),
+      jl({ type: "user", cwd: "/home/me/b", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/b",
+          timestamp: ts,
+          message: { role: "assistant", model: "claude-opus-4-8", content: [{ type: "text", text: "x" }], usage: { input_tokens: 1_000_000, output_tokens: 0 } },
+        }),
+    );
+    // One sonnet session (1M output => $15, 1 session) -> ranks ABOVE opus by cost.
+    writeFileSync(
+      path.join(proj, "s1.jsonl"),
+      jl({ type: "user", cwd: "/home/me/c", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/c",
+          timestamp: ts,
+          message: { role: "assistant", model: "claude-sonnet-4-6", content: [{ type: "text", text: "x" }], usage: { input_tokens: 0, output_tokens: 1_000_000 } },
+        }),
+    );
+
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(path.join(proj, "o1.jsonl"));
+    await engine.index.indexSession(path.join(proj, "o2.jsonl"));
+    await engine.index.indexSession(path.join(proj, "s1.jsonl"));
+
+    const stats = engine.getStats();
+    const byModel = stats.byModel;
+    // Sonnet ($15) ranks first by cost, then opus ($10 across 2 sessions).
+    expect(byModel.map((m) => m.model)).toEqual(["claude-sonnet-4-6", "claude-opus-4-8"]);
+
+    const sonnet = byModel.find((m) => m.model === "claude-sonnet-4-6")!;
+    expect(sonnet.sessions).toBe(1);
+    expect(sonnet.tokens).toBe(1_000_000);
+    expect(sonnet.costUsd).toBeCloseTo(15, 5);
+
+    const opus = byModel.find((m) => m.model === "claude-opus-4-8")!;
+    expect(opus.sessions).toBe(2);
+    expect(opus.tokens).toBe(2_000_000);
+    expect(opus.costUsd).toBeCloseTo(10, 5);
+
+    // byModel cost total equals the grand total.
+    const sum = byModel.reduce((a, m) => a + m.costUsd, 0);
+    expect(sum).toBeCloseTo(stats.totalCostUsd, 5);
+    engine.close();
+  });
+
+  it("buckets sessions with no model under \"unknown\"", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const ts = `${today}T12:00:00.000Z`;
+    writeFileSync(
+      path.join(proj, "u.jsonl"),
+      jl({ type: "user", cwd: "/home/me/u", timestamp: ts, message: { role: "user", content: "hi" } }) +
+        jl({
+          type: "assistant",
+          cwd: "/home/me/u",
+          timestamp: ts,
+          // no model field -> session.model stays null -> "unknown" bucket.
+          message: { role: "assistant", content: [{ type: "text", text: "x" }], usage: { input_tokens: 100, output_tokens: 50 } },
+        }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(path.join(proj, "u.jsonl"));
+    const byModel = engine.getStats().byModel;
+    expect(byModel).toHaveLength(1);
+    expect(byModel[0]!.model).toBe("unknown");
+    expect(byModel[0]!.sessions).toBe(1);
+    expect(byModel[0]!.tokens).toBe(150);
+    engine.close();
+  });
+});
+
+describe("running-session needs-you detection", () => {
+  const withConfigDir = async <T>(fn: (sessionsDir: string) => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const sessionsDir = path.join(root, "sessions");
+    mkdirSync(sessionsDir, { recursive: true });
+    try {
+      return await fn(sessionsDir);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  it("flags a stale waiting session as needsYou; a fresh one is not", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      // Waiting for 5 minutes -> needs you.
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: "stuck",
+          cwd: "/home/me/x",
+          status: "waiting",
+          waitingFor: "permission: Bash",
+          statusUpdatedAt: now - 5 * 60_000,
+          updatedAt: now,
+        }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.needsYou).toBe(true);
+    });
+
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      // Waiting only briefly -> not yet "needs you".
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({
+          pid: process.pid,
+          sessionId: "fresh",
+          cwd: "/home/me/y",
+          status: "waiting",
+          statusUpdatedAt: now - 1000,
+          updatedAt: now,
+        }),
+      );
+      const [s] = await listRunningSessions();
+      expect(s!.needsYou).toBe(false);
+    });
+  });
+
+  it("a busy session never needsYou; a dead one never needsYou", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "busy", cwd: "/home/me/x", status: "busy", statusUpdatedAt: now - 10 * 60_000 }),
+      );
+      const deadPid = 2 ** 30;
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "ghost", cwd: "/home/me/z", status: "waiting", statusUpdatedAt: now - 10 * 60_000 }),
+      );
+      const all = await listRunningSessions();
+      expect(all.find((s) => s.sessionId === "busy")!.needsYou).toBe(false);
+      // dead overrides status to "dead", so it can't be needsYou either.
+      expect(all.find((s) => s.sessionId === "ghost")!.needsYou).toBe(false);
+    });
+  });
+
+  it("needsYouFirst floats stuck sessions to the top despite lower updatedAt", async () => {
+    await withConfigDir(async (sessionsDir) => {
+      const now = Date.now();
+      // A more-recently-active (higher updatedAt) DEAD entry — still listed, just
+      // greyed out — and a stuck-waiting LIVE session with an OLDER updatedAt.
+      const deadPid = 2 ** 30;
+      writeFileSync(
+        path.join(sessionsDir, `${deadPid}.json`),
+        JSON.stringify({ pid: deadPid, sessionId: "recent", cwd: "/home/me/a", status: "busy", updatedAt: now }),
+      );
+      writeFileSync(
+        path.join(sessionsDir, `${process.pid}.json`),
+        JSON.stringify({ pid: process.pid, sessionId: "stuck", cwd: "/home/me/b", status: "waiting", statusUpdatedAt: now - 10 * 60_000, updatedAt: now - 60 * 60_000 }),
+      );
+
+      // Default sort (by updatedAt) puts the recent (dead) entry first.
+      const byRecency = await listRunningSessions();
+      expect(byRecency[0]!.sessionId).toBe("recent");
+
+      // needsYouFirst floats the stuck waiting session above it.
+      const sorted = await listRunningSessions({ needsYouFirst: true });
+      expect(sorted[0]!.sessionId).toBe("stuck");
+      expect(sorted[0]!.needsYou).toBe(true);
+    });
+  });
+});
+
+describe("checkpoint (file-history list + restore)", () => {
+  // Checkpoints live under CLAUDE_CONFIG_DIR/file-history/<sessionId>/. Point the
+  // config dir at a temp root so we never read real ~/.claude data.
+  const withConfigDir = async <T>(fn: (root: string) => Promise<T>): Promise<T> => {
+    const prev = process.env.CLAUDE_CONFIG_DIR;
+    const root = tmp();
+    process.env.CLAUDE_CONFIG_DIR = root;
+    try {
+      return await fn(root);
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = prev;
+    }
+  };
+
+  /** Write a transcript with one snapshot line backing up `relPath` to a blob. */
+  const seed = (root: string, sessionId: string, projectCwd: string, relPath: string, blobName: string, blobContent: string) => {
+    const histDir = fileHistoryDir(sessionId);
+    mkdirSync(histDir, { recursive: true });
+    writeFileSync(path.join(histDir, blobName), blobContent);
+    const transcript = path.join(root, `${sessionId}.jsonl`);
+    writeFileSync(
+      transcript,
+      jl({ type: "user", cwd: projectCwd, message: { role: "user", content: "edit it" } }) +
+        jl({
+          type: "file-history-snapshot",
+          messageId: "msg-1",
+          snapshot: {
+            messageId: "msg-1",
+            timestamp: "2026-06-10T00:00:00.000Z",
+            trackedFileBackups: {
+              [relPath]: { backupFileName: blobName, version: 1, backupTime: "2026-06-10T00:00:01.000Z" },
+            },
+          },
+          isSnapshotUpdate: false,
+        }),
+    );
+    return transcript;
+  };
+
+  it("lists checkpoints with timestamp + resolved file paths and blob locations", async () => {
+    await withConfigDir(async (root) => {
+      const projectCwd = path.join(root, "myproj");
+      mkdirSync(projectCwd, { recursive: true });
+      const transcript = seed(root, "sessA", projectCwd, "src/app.ts", "blob123@v1", "OLD BYTES");
+
+      const cps = await listCheckpoints("sessA", transcript, projectCwd);
+      expect(cps).toHaveLength(1);
+      expect(cps[0]!.messageId).toBe("msg-1");
+      expect(cps[0]!.timestamp).toBe("2026-06-10T00:00:00.000Z");
+      expect(cps[0]!.files).toHaveLength(1);
+      const f = cps[0]!.files[0]!;
+      expect(f.path).toBe("src/app.ts");
+      expect(f.absolutePath).toBe(path.resolve(projectCwd, "src/app.ts"));
+      expect(f.backupFileName).toBe("blob123@v1");
+      expect(f.backupPath).toBe(path.join(fileHistoryDir("sessA"), "blob123@v1"));
+      expect(f.version).toBe(1);
+    });
+  });
+
+  it("dryRun (default) reports would-restore and writes nothing", async () => {
+    await withConfigDir(async (root) => {
+      const projectCwd = path.join(root, "myproj");
+      mkdirSync(path.join(projectCwd, "src"), { recursive: true });
+      const target = path.join(projectCwd, "src", "app.ts");
+      writeFileSync(target, "CURRENT BYTES");
+      const transcript = seed(root, "sessB", projectCwd, "src/app.ts", "blob1@v1", "OLD BYTES");
+
+      const res = await restoreCheckpoint("sessB", "msg-1", transcript, projectCwd);
+      expect(res.dryRun).toBe(true);
+      expect(res.files[0]!.action).toBe("would-restore");
+      // file untouched
+      expect(statSync(target).isFile()).toBe(true);
+      const fs = await import("node:fs/promises");
+      expect(await fs.readFile(target, "utf8")).toBe("CURRENT BYTES");
+    });
+  });
+
+  it("dryRun:false restores the blob bytes and backs up the prior file", async () => {
+    await withConfigDir(async (root) => {
+      const projectCwd = path.join(root, "myproj");
+      mkdirSync(path.join(projectCwd, "src"), { recursive: true });
+      const target = path.join(projectCwd, "src", "app.ts");
+      writeFileSync(target, "CURRENT BYTES");
+      const transcript = seed(root, "sessC", projectCwd, "src/app.ts", "blob1@v1", "OLD BYTES");
+
+      const res = await restoreCheckpoint("sessC", "msg-1", transcript, projectCwd, { dryRun: false });
+      expect(res.dryRun).toBe(false);
+      expect(res.files[0]!.action).toBe("restored");
+      const fs = await import("node:fs/promises");
+      expect(await fs.readFile(target, "utf8")).toBe("OLD BYTES"); // restored
+      expect(await fs.readFile(`${target}.bak`, "utf8")).toBe("CURRENT BYTES"); // backed up
+    });
+  });
+
+  it("skips a missing backup blob instead of writing nothing silently", async () => {
+    await withConfigDir(async (root) => {
+      const projectCwd = path.join(root, "myproj");
+      mkdirSync(projectCwd, { recursive: true });
+      const transcript = seed(root, "sessD", projectCwd, "src/app.ts", "blobX@v1", "OLD");
+      // delete the blob so restore must skip it
+      const fs = await import("node:fs/promises");
+      await fs.rm(path.join(fileHistoryDir("sessD"), "blobX@v1"));
+
+      const res = await restoreCheckpoint("sessD", "msg-1", transcript, projectCwd, { dryRun: false });
+      expect(res.files[0]!.action).toBe("skipped");
+      expect(res.files[0]!.reason).toContain("missing");
+    });
+  });
+
+  it("throws for an unknown checkpoint id", async () => {
+    await withConfigDir(async (root) => {
+      const projectCwd = path.join(root, "myproj");
+      mkdirSync(projectCwd, { recursive: true });
+      const transcript = seed(root, "sessE", projectCwd, "src/app.ts", "blob1@v1", "OLD");
+      await expect(restoreCheckpoint("sessE", "no-such-msg", transcript, projectCwd)).rejects.toThrow(
+        /no checkpoint/,
+      );
+    });
   });
 });

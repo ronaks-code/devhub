@@ -16,9 +16,34 @@ import path from "node:path";
 import { liveSessionsDir } from "./paths.js";
 import type { RunningSession } from "./types.js";
 
+/**
+ * Default staleness threshold (ms) after which a `status: "waiting"` session is
+ * treated as "needs you": it's been blocked on a prompt long enough that it clearly
+ * isn't going to clear on its own. 60s balances "a momentary pause" against "stuck".
+ */
+export const DEFAULT_NEEDS_YOU_MS = 60_000;
+
 /** A cwd belongs to an internal/plugin store, not a real coding session. */
 function isInternalCwd(cwd: string): boolean {
   return cwd.includes("/.claude-mem/") || cwd.includes("claude-mem");
+}
+
+/**
+ * Is a session blocked on the user? True when it's alive, `status: "waiting"`, and
+ * its status last changed longer than `thresholdMs` ago (so it's been stuck, not
+ * just briefly paused). A waiting session with no `statusUpdatedAt` is treated as
+ * needing-you immediately (we can't prove it's recent, so surface it).
+ */
+function computeNeedsYou(
+  alive: boolean,
+  status: string,
+  statusUpdatedAt: number | null,
+  thresholdMs: number,
+  now: number,
+): boolean {
+  if (!alive || status !== "waiting") return false;
+  if (statusUpdatedAt === null) return true; // unknown age -> surface it
+  return now - statusUpdatedAt >= thresholdMs;
 }
 
 /**
@@ -56,9 +81,17 @@ export function isPidAlive(pid: number): boolean {
  * are omitted entirely. Sorted by `updatedAt` (most recently active first).
  */
 export async function listRunningSessions(
-  opts: { dropDead?: boolean } = {},
+  opts: {
+    dropDead?: boolean;
+    /** Staleness threshold (ms) for the `needsYou` flag; defaults to {@link DEFAULT_NEEDS_YOU_MS}. */
+    needsYouThresholdMs?: number;
+    /** When true, sort sessions that need the user FIRST (then by `updatedAt`). */
+    needsYouFirst?: boolean;
+  } = {},
 ): Promise<RunningSession[]> {
   const dir = liveSessionsDir();
+  const thresholdMs = opts.needsYouThresholdMs ?? DEFAULT_NEEDS_YOU_MS;
+  const now = Date.now();
   let names: string[];
   try {
     names = await readdir(dir);
@@ -86,11 +119,13 @@ export async function listRunningSessions(
     // A dead PID overrides whatever stale status the file claims; a live one keeps
     // the process-reported status (busy/idle/waiting/...).
     const fileStatus = typeof raw.status === "string" ? raw.status : "unknown";
+    const status = alive ? fileStatus : "dead";
+    const statusUpdatedAt = typeof raw.statusUpdatedAt === "number" ? raw.statusUpdatedAt : null;
     out.push({
       pid,
       sessionId: typeof raw.sessionId === "string" ? raw.sessionId : "",
       cwd,
-      status: alive ? fileStatus : "dead",
+      status,
       alive,
       model: typeof raw.model === "string" ? raw.model : null,
       startedAt: typeof raw.startedAt === "number" ? raw.startedAt : null,
@@ -100,9 +135,22 @@ export async function listRunningSessions(
       // What a waiting session is blocked on + when its status last changed, so the
       // dashboard can surface *why* a session is paused and how stale that is.
       waitingFor: typeof raw.waitingFor === "string" ? raw.waitingFor : null,
-      statusUpdatedAt: typeof raw.statusUpdatedAt === "number" ? raw.statusUpdatedAt : null,
+      statusUpdatedAt,
+      // Blocked-on-the-user detection: a waiting session stale past the threshold.
+      needsYou: computeNeedsYou(alive, status, statusUpdatedAt, thresholdMs, now),
     });
   }
-  out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  // Default order: most recently active first. With `needsYouFirst`, float the
+  // stuck/waiting-on-user sessions to the top (still tie-broken by recency).
+  if (opts.needsYouFirst) {
+    out.sort((a, b) => {
+      const an = a.needsYou ? 1 : 0;
+      const bn = b.needsYou ? 1 : 0;
+      if (an !== bn) return bn - an; // needs-you first
+      return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+    });
+  } else {
+    out.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  }
   return out;
 }

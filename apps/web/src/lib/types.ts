@@ -1,4 +1,4 @@
-import type { SearchHit } from "@claude-ui/engine/types";
+import type { SearchHit, Stats } from "@claude-ui/engine/types";
 
 export type {
   ProjectSummary,
@@ -15,6 +15,14 @@ export type {
   RunningSession,
   SearchHit,
 } from "@claude-ui/engine/types";
+
+/**
+ * One per-model row of the dashboard breakdown. Derived from (and structurally
+ * identical to) the engine `Stats.byModel` element — aliased here so the
+ * ModelBreakdown widget has a named type to consume without re-importing the
+ * engine's indexed access in every file.
+ */
+export type ModelStat = Stats["byModel"][number];
 
 /**
  * A search hit widened at the web boundary with the matching message's `seq`.

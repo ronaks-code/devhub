@@ -18,7 +18,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W6 Approve-and-remember, commit composer, role filters, theme tokens, prompt history, model facet, all-sessions ✅
 - [x] W7 Dangerous-command classifier, jump-to-match, per-day usage, edit-resend, git diff, bulk sessions, WS reconnect ✅
 - [x] W8 Hooks editor, what-changed panel, monthly budget, slash palette, live-bubble, Bash card ✅
-- [ ] W9 Settings scope diff, checkpoint/rewind, queue messages, error states
+- [x] W9 Settings scope diff, checkpoint/rewind, queue messages, error nav, model breakdown, word-diff, ⌘P switcher ✅
 - [ ] W10 Permission polish, MCP health, archive sessions, inline images
 - [ ] W11 PR creation, agents library, period selector, tool-running status
 - [ ] W12 CLAUDE.md editor, deny-with-feedback, calendar heatmap, @-symbol
@@ -37,6 +37,7 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [ ] W25 Final polish: reduced-motion, responsive, copy actions, deep links
 
 ## Wave log
+- **W9** ✅ (green: tc×4 + 109 tests + build + byModel + 2-prompt queue smoke RESULTS=2). engine: `config/resolve.ts` scope-diff, `checkpoint.ts` list/restore file-history (dryRun default), running needs-you detection, Stats.byModel. server: WS FIFO message queue (queued:N status, clear-queue, keepQueue interrupt, same-session resume). web: error-nav, ModelBreakdown, word-level diff, ⌘P ProjectSwitcher, queue UX. KNOWN: byModel top bucket "unknown" until a forced reindex backfills sessions.model.
 - **W8** ✅ (green: tc×4 + 97 tests + build + search/session + stats.budget + chat). engine: `budget.ts` monthly budget status, `searchInSession` (all matches), budget in Stats. server: `/api/search/session`, PATCH `/api/projects/:id` meta, hooks-write. web: LiveBubble (token deltas re-render ONLY the live bubble via useSyncExternalStore — big perf win), BashCard, SlashPalette, HooksEditor, FileChangeSummary. (server used an in-package structural cast for searchInSession during the parallel window; engine delivered it; runtime verified.)
 - **W7** ✅ (green: tc×4 + 90 tests + build + /api/rollups 200 + chat). engine: `classify-command.ts` severity tiers, `rollups.ts` per-day token/cost series, SearchHit.seq, prefix-rewrite reindex (headSig, migration v5). server: `/api/rollups` + tags in PATCH. web: jump-to-match, edit-and-resend (fork), GitDiffView (real git diffs), multi-select + bulk pin/tag, WS auto-reconnect w/ backoff.
 - **W6** ✅ (green: tc×4 + 76 tests + build + all-sessions/stats/chat smoke). engine: model facet (migration v4), `all-sessions.ts` cross-project list, git write ops (stage/commit/branch), cost in Stats. server: git commit/stage/branch + AI `suggest-message` (driver-drafted) + `/api/all-sessions`. web: permission scoping UI, CSS semantic theme tokens (light-mode groundwork), CommitComposer, TranscriptFilters, dashboard $, prompt-history recall. INTEGRATOR FIX: deleted a stale server `engine-augment.d.ts` shim → surfaced + fixed a real `createBranch` arity bug.

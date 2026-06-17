@@ -791,6 +791,48 @@ export class TranscriptIndex {
   }
 
   /**
+   * APPROXIMATE usage rolled up BY MODEL: per-model token total, USD cost, and the
+   * number of sessions that ran on that model. Cost is computed per session (each
+   * priced by its own model) so the model's own pricing tier applies. Sessions with
+   * a null/unknown model bucket under "unknown" (and use fallback pricing). Sorted by
+   * cost descending. Powers the dashboard's per-model spend breakdown.
+   */
+  getUsageByModel(): Array<{ model: string; tokens: number; costUsd: number; sessions: number }> {
+    const rows = this.db
+      .prepare(
+        `SELECT model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens
+         FROM sessions`,
+      )
+      .all() as unknown as Array<{
+      model: string | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+    }>;
+    const byModel = new Map<string, { tokens: number; costUsd: number; sessions: number }>();
+    for (const r of rows) {
+      const usage = {
+        inputTokens: n(r.inputTokens),
+        outputTokens: n(r.outputTokens),
+        cacheReadTokens: n(r.cacheReadTokens),
+        cacheCreationTokens: n(r.cacheCreationTokens),
+      };
+      const key = r.model ?? "unknown";
+      const tokens =
+        usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheCreationTokens;
+      const acc = byModel.get(key) ?? { tokens: 0, costUsd: 0, sessions: 0 };
+      acc.tokens += tokens;
+      acc.costUsd += costUsd(r.model, usage);
+      acc.sessions += 1;
+      byModel.set(key, acc);
+    }
+    return [...byModel.entries()]
+      .map(([model, v]) => ({ model, ...v }))
+      .sort((a, b) => b.costUsd - a.costUsd);
+  }
+
+  /**
    * Each session's last-activity timestamp (ISO `lastTs`), for activity bucketing.
    * Skips sessions that never recorded a timestamp.
    */
