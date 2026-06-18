@@ -52,6 +52,7 @@ import type { McpToggle } from "./config/mcp-toggle.js";
 import { computeAutoTags } from "./auto-tag.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
 import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
+import type { IntegrityReport, RepairOptions, RepairResult } from "./integrity.js";
 import type {
   ArchiveBundle,
   ExportArchiveOptions,
@@ -489,6 +490,30 @@ export class Engine {
   }
 
   /**
+   * Read-only INTEGRITY diagnostic over the index DB: a set of bounded queries that flag
+   * orphaned sidecar/search rows (parent session gone), sessions whose mirrored text is
+   * missing despite a present transcript, sessions whose on-disk transcript no longer
+   * exists (expected after Claude Code's ~30-day auto-delete), and a SQLite
+   * `PRAGMA integrity_check`. Mutates nothing; returns `{ ok, issues, counts, ... }`. The
+   * companion to {@link repairIntegrity}. See {@link checkIntegrity}.
+   */
+  checkIntegrity(): IntegrityReport {
+    return this.index.checkIntegrity();
+  }
+
+  /**
+   * SAFELY repair what {@link checkIntegrity} found, preferring RE-DERIVATION over
+   * destruction: delete clearly-orphaned sidecar/search rows whose parent session is gone
+   * (each delete gated on the parent being absent, so a live session can never be touched),
+   * and re-index any session whose mirror text is empty but whose transcript still exists.
+   * NEVER touches ~/.claude transcripts — only the index DB. Idempotent (a second run is a
+   * no-op). Returns `{ repaired, reindexed }`. See {@link repairIntegrity}.
+   */
+  repairIntegrity(opts: RepairOptions = {}): Promise<RepairResult> {
+    return this.index.repairIntegrity(opts);
+  }
+
+  /**
    * On-demand code-symbol search within ONE project tree: greps the project's source
    * files for declaration-like matches (function/class/const/def/type/interface/...)
    * whose name contains `q`, returning `[{ name, kind, file, line }]`. Lightweight —
@@ -879,6 +904,14 @@ export { forkTurn, forkCliArgs } from "./driver/fork.js";
 export type { ForkedTurn } from "./driver/fork.js";
 export { writeFtsRows, assignStableRowids, stableRowid } from "./fts-write.js";
 export type { FtsRow } from "./fts-write.js";
+export { checkIntegrity, repairIntegrity } from "./integrity.js";
+export type {
+  IntegrityReport,
+  IntegrityIssue,
+  IntegrityCounts,
+  RepairOptions,
+  RepairResult,
+} from "./integrity.js";
 export {
   exportArchive,
   exportArchiveChunks,

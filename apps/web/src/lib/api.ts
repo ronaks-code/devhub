@@ -534,6 +534,24 @@ export const api = {
   // NotImplementedError so the control degrades to a hidden/disabled state instead
   // of erroring — exactly like the worktree/rollups routes were wired.
   reindex: () => sendMaybe<ReindexResult>("/api/reindex", "POST"),
+  // Index-health check (GET /api/maintenance/integrity): a read-only audit of our
+  // OWN index DB — never the user's ~/.claude transcripts. Returns an
+  // IntegrityReport ({ ok, issues[] }) the IntegrityPanel renders. Until the
+  // engine/server lane ships the route, the *Maybe helper surfaces a
+  // NotImplementedError so the panel hides itself on older servers instead of
+  // erroring — exactly like the reindex/worktree routes were wired. The report is
+  // read tolerantly (see normalizeIntegrityReport) so field-spelling drift between
+  // landing orders still parses.
+  maintenanceIntegrity: () =>
+    getMaybe<unknown>("/api/maintenance/integrity").then(normalizeIntegrityReport),
+  // Repair index issues (POST /api/maintenance/repair). SAFE by contract: the
+  // server operates only on our index DB and prefers re-derivation (reindex) over
+  // destructive deletes — it never touches the user's transcripts. The server acks
+  // with the post-repair report (or a fresh integrity result), which the panel
+  // normalizes the same way before re-checking. *Maybe so an older server degrades
+  // to a hidden/disabled control rather than a hard error.
+  maintenanceRepair: () =>
+    sendMaybe<unknown>("/api/maintenance/repair", "POST").then(normalizeIntegrityReport),
   running: () => get<RunningSession[]>("/api/running"),
   // Read-only git status for a project cwd. The server returns null when the
   // directory is not a git repo (or git is unavailable); rejects unknown cwds.
@@ -828,6 +846,93 @@ export function asToolStatArray(res: ToolStatsResponse | null | undefined): Tool
 export interface ReindexResult {
   started?: boolean;
   alreadyRunning?: boolean;
+}
+
+/**
+ * One problem found by the index-health audit (GET /api/maintenance/integrity).
+ * The shape is intentionally TOLERANT so it survives either landing order and any
+ * field-spelling drift between this lane and the engine/server lane that fills it
+ * in: `severity` ranks how serious it is (error > warning > info), `message` is the
+ * human-readable line shown in the panel, and `kind`/`count` are optional context
+ * (e.g. "orphan-session" × 3). Anything unrecognized falls back to safe defaults in
+ * {@link normalizeIntegrityReport} so the panel always renders something coherent.
+ */
+export interface IntegrityIssue {
+  /** How serious — drives the row's color + the worst-of badge. */
+  severity: "error" | "warning" | "info";
+  /** Human-readable description of the problem. */
+  message: string;
+  /** Optional machine label for the issue class (e.g. "orphan-rows"). */
+  kind?: string;
+  /** Optional count of affected rows for this issue. */
+  count?: number;
+}
+
+/**
+ * The index-health report from GET /api/maintenance/integrity (and the ack from
+ * POST /api/maintenance/repair). `ok` is true when the index is healthy (no
+ * issues); `issues` lists what's wrong otherwise. `checkedAt` (when present) is the
+ * server's audit timestamp, shown as a "last checked" hint. Read defensively via
+ * {@link normalizeIntegrityReport}.
+ */
+export interface IntegrityReport {
+  ok: boolean;
+  issues: IntegrityIssue[];
+  /** Server audit timestamp (epoch ms or ISO), when reported. */
+  checkedAt?: number | string;
+}
+
+/**
+ * Normalize the tolerant /api/maintenance/integrity (and /repair) body into an
+ * {@link IntegrityReport}. The shape is read defensively so the panel survives
+ * either landing order and field-spelling drift: the canonical body is
+ * `{ ok, issues[] }`, but a bare `issues` array (or an `{ issues }`-only object) is
+ * lifted, each issue's `severity`/`message` is coerced (accepting `level`/`detail`
+ * spellings), and `ok` is derived from the absence of error/warning issues when the
+ * server doesn't state it. An empty/odd body becomes a healthy report so the panel
+ * shows the "ok" badge rather than throwing.
+ */
+function normalizeIntegrityReport(res: unknown): IntegrityReport {
+  // A bare array of issues, or the `{ ok, issues }` envelope.
+  const rawIssues: unknown[] = Array.isArray(res)
+    ? res
+    : res && typeof res === "object" && Array.isArray((res as { issues?: unknown }).issues)
+      ? ((res as { issues: unknown[] }).issues)
+      : [];
+
+  const issues: IntegrityIssue[] = rawIssues.map((raw) => {
+    const o = (raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {}) ?? {};
+    const sevRaw = o.severity ?? o.level;
+    const severity: IntegrityIssue["severity"] =
+      sevRaw === "error" || sevRaw === "warning" || sevRaw === "info" ? sevRaw : "warning";
+    const message =
+      typeof o.message === "string"
+        ? o.message
+        : typeof o.detail === "string"
+          ? o.detail
+          : typeof o.kind === "string"
+            ? o.kind
+            : "Unspecified index issue";
+    const kind = typeof o.kind === "string" ? o.kind : undefined;
+    const count = typeof o.count === "number" && Number.isFinite(o.count) ? o.count : undefined;
+    return { severity, message, ...(kind ? { kind } : {}), ...(count != null ? { count } : {}) };
+  });
+
+  const obj = res && typeof res === "object" && !Array.isArray(res)
+    ? (res as Record<string, unknown>)
+    : {};
+  // Trust an explicit `ok`; otherwise derive it from the absence of real problems
+  // (info-only issues don't make the index "not ok").
+  const ok =
+    typeof obj.ok === "boolean"
+      ? obj.ok
+      : !issues.some((i) => i.severity === "error" || i.severity === "warning");
+  const checkedAt =
+    typeof obj.checkedAt === "number" || typeof obj.checkedAt === "string"
+      ? (obj.checkedAt as number | string)
+      : undefined;
+
+  return { ok, issues, ...(checkedAt != null ? { checkedAt } : {}) };
 }
 
 export type { AppSettings };

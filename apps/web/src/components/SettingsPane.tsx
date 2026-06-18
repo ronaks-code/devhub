@@ -12,6 +12,7 @@ import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 import { PluginsView } from "./config/PluginsView";
 import { RebuildIndex } from "./config/RebuildIndex";
+import { IntegrityPanel } from "./config/IntegrityPanel";
 import { BudgetSettings } from "./BudgetSettings";
 
 /** Sub-tabs within the Settings view. */
@@ -297,6 +298,11 @@ export function SettingsPane({
             without the /api/reindex route, and reflects live progress over the
             existing index-progress/ready SSE. */}
         <RebuildIndex />
+
+        {/* Index-health audit + safe repair. Self-contained: hides itself on a
+            server without the /api/maintenance/* routes, and operates only on our
+            own index DB (re-derivation over deletes — never the transcripts). */}
+        <IntegrityPanel />
 
         <div className="mt-6 flex items-center gap-3">
           <button

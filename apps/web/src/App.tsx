@@ -49,6 +49,7 @@ import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
 import { SessionCompare } from "./components/SessionCompare";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
+import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
 import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
@@ -388,6 +389,10 @@ export default function App() {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   // Keyboard-shortcut cheat-sheet overlay (opened with "?").
   const [shortcutOpen, setShortcutOpen] = useState(false);
+  // First-run onboarding overlay. Only opens for a genuinely new user (flag unset
+  // AND an empty index), decided once after the initial load settles below. A
+  // returning user (flag set) never sees it; dismissing sets the flag for good.
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   // Side-by-side session comparison modal. Holds the left/base session id while
   // open (null = closed). Opened from the transcript header's "Compare" button.
   const [compareSessionId, setCompareSessionId] = useState<string | null>(null);
@@ -468,6 +473,32 @@ export default function App() {
     api.health().then((h) => setSessionCount(h.sessionCount)).catch(() => {});
     api.getSettings().then(setSettings).catch(() => {});
   }, [refreshProjects]);
+
+  // Decide whether to show first-run onboarding — exactly once, shortly after the
+  // initial load settles. We only welcome a genuinely NEW user: the "seen" flag is
+  // unset AND the index is empty (no projects and no indexed sessions). A returning
+  // user (flag set, or any history) is never interrupted. The short delay lets the
+  // health/projects fetches land so we don't flash the welcome before data arrives.
+  const onboardingDecidedRef = useRef(false);
+  useEffect(() => {
+    if (onboardingDecidedRef.current) return;
+    if (hasSeenOnboarding()) {
+      onboardingDecidedRef.current = true;
+      return;
+    }
+    const t = window.setTimeout(() => {
+      if (onboardingDecidedRef.current) return;
+      onboardingDecidedRef.current = true;
+      // Empty index = a fresh install with nothing discovered yet.
+      if (projects.length === 0 && sessionCount === 0) setOnboardingOpen(true);
+    }, 1200);
+    return () => window.clearTimeout(t);
+  }, [projects.length, sessionCount]);
+
+  const dismissOnboarding = useCallback(() => {
+    markOnboardingSeen();
+    setOnboardingOpen(false);
+  }, []);
 
   // sessions follow the selected project
   useEffect(() => {
@@ -1115,25 +1146,37 @@ export default function App() {
               />
             }
             transcript={
-              <div className="flex min-w-0 flex-1 flex-col">
-                {/* Rich project header atop the transcript area: branch, sessions,
-                    tokens + spend, last activity, favorite/archive toggles. */}
-                {project ? (
-                  <ProjectDetailHeader
-                    project={project}
-                    onToggleFavorite={toggleProjectFavorite}
-                    onToggleArchive={toggleProjectArchive}
+              // Wholly empty index (no projects discovered): replace the bare
+              // transcript area with a richer hint that distinguishes "still
+              // indexing" from "indexed but empty" and points at Rebuild index.
+              projects.length === 0 && !loadingSessions ? (
+                <div className="flex min-w-0 flex-1 flex-col bg-zinc-950">
+                  <EmptyIndexHint
+                    indexing={progress != null}
+                    onOpenSettings={() => setTab("settings")}
                   />
-                ) : null}
-                <TranscriptPane
-                  page={page}
-                  loading={loadingPage}
-                  onLoadMore={handleLoadMore}
-                  onContinue={handleContinue}
-                  onCompare={setCompareSessionId}
-                  jumpTarget={jumpTarget}
-                />
-              </div>
+                </div>
+              ) : (
+                <div className="flex min-w-0 flex-1 flex-col">
+                  {/* Rich project header atop the transcript area: branch, sessions,
+                      tokens + spend, last activity, favorite/archive toggles. */}
+                  {project ? (
+                    <ProjectDetailHeader
+                      project={project}
+                      onToggleFavorite={toggleProjectFavorite}
+                      onToggleArchive={toggleProjectArchive}
+                    />
+                  ) : null}
+                  <TranscriptPane
+                    page={page}
+                    loading={loadingPage}
+                    onLoadMore={handleLoadMore}
+                    onContinue={handleContinue}
+                    onCompare={setCompareSessionId}
+                    jumpTarget={jumpTarget}
+                  />
+                </div>
+              )
             }
           />
         ) : (
@@ -1199,6 +1242,10 @@ export default function App() {
       />
 
       <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
+
+      {/* First-run onboarding — only mounts for a brand-new, empty install (decided
+          once after load); a returning user never sees it. */}
+      <FirstRun open={onboardingOpen} onDismiss={dismissOnboarding} />
 
       {/* Side-by-side session comparison (read-only). Seeded with the open
           transcript's session as the left column; candidates are the active

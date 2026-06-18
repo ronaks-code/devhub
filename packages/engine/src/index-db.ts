@@ -59,6 +59,8 @@ import type {
   ImportArchiveOptions,
   ImportArchiveResult,
 } from "./portable.js";
+import { checkIntegrity, repairIntegrity } from "./integrity.js";
+import type { IntegrityReport, RepairOptions, RepairResult } from "./integrity.js";
 import type {
   ProjectMeta,
   ProjectSummary,
@@ -888,6 +890,28 @@ export class TranscriptIndex {
   /** Delete a saved view by id; returns true when a row was removed. */
   deleteView(id: number): boolean {
     return this.savedViews.delete(id);
+  }
+
+  /**
+   * Read-only integrity diagnostic over THIS index DB: a set of BOUNDED queries that
+   * detect orphaned sidecar/FTS rows (parent sessions row gone), sessions whose mirrored
+   * text is missing despite a present transcript, sessions whose on-disk transcript is
+   * gone, and a SQLite `PRAGMA integrity_check`. Mutates nothing; returns a structured
+   * report. See {@link checkIntegrity}.
+   */
+  checkIntegrity(): IntegrityReport {
+    return checkIntegrity(this.db);
+  }
+
+  /**
+   * SAFELY repair what the integrity check found, preferring RE-DERIVATION over
+   * destruction: delete clearly-orphaned sidecar/FTS rows whose parent session is gone
+   * (gated on the parent being absent, so a live session is never touched), and re-index
+   * sessions whose mirror text is empty but whose transcript still exists. NEVER touches
+   * ~/.claude transcripts; only this index DB. Idempotent. See {@link repairIntegrity}.
+   */
+  repairIntegrity(opts: RepairOptions = {}): Promise<RepairResult> {
+    return repairIntegrity(this, this.db, opts);
   }
 }
 

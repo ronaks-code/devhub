@@ -631,6 +631,109 @@ describe("budget endpoints", () => {
   });
 });
 
+describe("maintenance endpoints", () => {
+  beforeEach(async () => {
+    current = await makeApp();
+  });
+
+  it("GET /api/maintenance/integrity returns the engine's integrity report", async () => {
+    // Duck-typed capability: stub the (engine-lane, this-wave) method and confirm the
+    // route forwards its report verbatim (the read-only audit of our own index DB).
+    const report = {
+      ok: false,
+      issues: [{ kind: "orphan-row", table: "tool_calls", count: 2 }],
+    };
+    (current!.engine as unknown as Record<string, unknown>).checkIntegrity = () => report;
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/maintenance/integrity",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual(report);
+  });
+
+  it("GET /api/maintenance/integrity degrades to a minimal report when absent or throwing", async () => {
+    // Method missing (typeof guard) AND a half-landed throwing one: either way the
+    // route must synthesize a minimal healthy report flagged `unavailable`, never a 500.
+    (current!.engine as unknown as Record<string, unknown>).checkIntegrity = () => {
+      throw new Error("index.checkIntegrity is not a function");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/maintenance/integrity",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, issues: [], unavailable: true });
+  });
+
+  it("POST /api/maintenance/repair acks immediately and invokes engine.repairIntegrity, de-duping a concurrent call", async () => {
+    // Stub repairIntegrity so we can assert it was called and so the test never runs a
+    // real repair. It stays pending until we release it, modeling a slow background
+    // reindex-style pass — the route must NOT block on it.
+    let calls = 0;
+    let release!: () => void;
+    const pending = new Promise<void>((res) => {
+      release = res;
+    });
+    (current!.engine as unknown as Record<string, unknown>).repairIntegrity = () => {
+      calls += 1;
+      return pending;
+    };
+
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/maintenance/repair",
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ started: true });
+    // The background repair was kicked off; the response did not wait on it.
+    expect(calls).toBe(1);
+
+    // A second immediate POST while the first is still in-flight is de-duped: it is
+    // acked without starting a second concurrent repair (still just one call).
+    const res2 = await current!.app.inject({
+      method: "POST",
+      url: "/api/maintenance/repair",
+    });
+    expect(res2.statusCode).toBe(202);
+    expect(res2.json()).toEqual({ started: true, alreadyRunning: true });
+    expect(calls).toBe(1);
+
+    // Let the background pass settle so the in-flight flag clears (the module-level
+    // guard is shared across tests, so we must not leave it stuck on). The route's
+    // .finally() that clears it runs as a microtask chained after `pending`, so flush
+    // the microtask queue (a setImmediate tick) before asserting it repairs again.
+    release();
+    await pending;
+    await new Promise((r) => setImmediate(r));
+
+    // With the prior pass settled, a fresh POST starts a new repair again — proving
+    // the in-flight guard is per-run, not a permanent latch.
+    const res3 = await current!.app.inject({
+      method: "POST",
+      url: "/api/maintenance/repair",
+    });
+    expect(res3.statusCode).toBe(202);
+    expect(res3.json()).toEqual({ started: true });
+    expect(calls).toBe(2);
+
+    // Settle this run too so we don't leak the in-flight flag into later tests.
+    release();
+    await new Promise((r) => setImmediate(r));
+  });
+
+  it("POST /api/maintenance/repair acks unavailable when the engine method is absent (202, never 500)", async () => {
+    // Engine method not landed yet (typeof guard): ack without starting any work.
+    (current!.engine as unknown as Record<string, unknown>).repairIntegrity = undefined;
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/maintenance/repair",
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ started: true, unavailable: true });
+  });
+});
+
 describe("server token auth", () => {
   beforeEach(async () => {
     current = await makeApp({ token: "secret" });
