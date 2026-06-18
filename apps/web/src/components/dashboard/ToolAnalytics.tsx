@@ -134,9 +134,11 @@ export function ToolAnalytics() {
                 <span className="truncate font-medium text-zinc-200" title={r.tool}>
                   {r.tool}
                 </span>
-                {/* Error-rate chip — only when the server reported errors. Loud
-                    amber/red once it crosses the "high" threshold so failing tools
-                    jump out; a quiet zinc otherwise. */}
+                {/* Error-rate chip. Loud amber/red once it crosses the "high"
+                    threshold so failing tools jump out; a quiet zinc otherwise.
+                    When the server reported NO error signal (older un-reindexed
+                    data returns count only), show a muted "—" so a missing rate
+                    reads as "not yet available" rather than a real 0%. */}
                 {r.errorRate != null ? (
                   <span
                     className={cn(
@@ -152,16 +154,30 @@ export function ToolAnalytics() {
                     {high ? <AlertTriangle className="h-2.5 w-2.5" /> : null}
                     {(r.errorRate * 100).toFixed(r.errorRate < 0.1 ? 1 : 0)}% err
                   </span>
-                ) : null}
+                ) : (
+                  <span
+                    className="inline-flex shrink-0 items-center rounded-md bg-zinc-800/40 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-zinc-600"
+                    title="Error rate not yet available — rebuild the index (Settings) to backfill it"
+                  >
+                    — err
+                  </span>
+                )}
               </span>
               <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-zinc-500">
-                {/* Avg duration, when the server reports it. */}
-                {r.avgMs != null ? (
-                  <span className="flex items-baseline gap-1" title="average duration per invocation">
-                    <Clock className="h-2.5 w-2.5 self-center text-zinc-600" />
-                    {formatDuration(r.avgMs)}
-                  </span>
-                ) : null}
+                {/* Avg duration. Shows a muted "—" when the server didn't report
+                    one (older un-reindexed data is count-only) so it reads as "not
+                    yet available" rather than implying an instant tool. */}
+                <span
+                  className="flex items-baseline gap-1"
+                  title={
+                    r.avgMs != null
+                      ? "average duration per invocation"
+                      : "Average duration not yet available — rebuild the index (Settings) to backfill it"
+                  }
+                >
+                  <Clock className="h-2.5 w-2.5 self-center text-zinc-600" />
+                  {r.avgMs != null ? formatDuration(r.avgMs) : <span className="text-zinc-600">—</span>}
+                </span>
                 <span title="invocation count">{compactNumber(r.count)}</span>
               </span>
             </div>

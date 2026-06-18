@@ -109,8 +109,18 @@ export class Engine {
     this.emit({ kind: "config-changed", path: changedPath });
   }
 
-  /** Incrementally (re)index every session across every project. Safe to call repeatedly. */
-  async indexAll(): Promise<void> {
+  /**
+   * Incrementally (re)index every session across every project. Safe to call repeatedly.
+   *
+   * `opts.force` re-runs a FULL re-index of EVERY discovered session even when its file
+   * size+mtime are unchanged (the default incremental/skip-unchanged behavior is bypassed
+   * per file). This is the backfill path for the W28 `tool_calls` sidecar AND the
+   * currently-null `sessions.model` on pre-model-tracking rows. It still isolates per-file
+   * failures, still emits progress, and is guarded by the same single-flight `indexing`
+   * latch — so it's safe to kick off in the background. Without `force` the behavior is
+   * identical to before.
+   */
+  async indexAll(opts: { force?: boolean } = {}): Promise<void> {
     if (this.indexing) return;
     this.indexing = true;
     try {
@@ -133,7 +143,7 @@ export class Engine {
         // Isolate per-file failures: one corrupt/locked transcript logs a warning
         // and is skipped, instead of aborting the entire index pass.
         try {
-          await this.index.indexSession(f);
+          await this.index.indexSession(f, { force: opts.force });
         } catch (err) {
           console.warn(`[engine] skipping unindexable session ${f}:`, err);
         }
@@ -750,6 +760,7 @@ export { relatedSessions } from "./related.js";
 export type { RelatedSession, RelatedOptions } from "./related.js";
 export { toolStats } from "./tool-stats.js";
 export type { ToolStat, ToolStatsResult, ToolStatsSummary, ToolStatsOptions } from "./tool-stats.js";
+export type { ToolCall } from "./parse-session.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { dailyUsage } from "./rollups.js";

@@ -448,6 +448,55 @@ describe("server REST endpoints (no token)", () => {
     expect(res.json()).toEqual({ tools: [] });
   });
 
+  it("POST /api/reindex acks immediately and invokes engine.indexAll with force", async () => {
+    // Stub indexAll so we can assert it was called (with force when supported) and
+    // so the test never runs a real full reindex. It stays pending until we release
+    // it, modeling a slow background pass — the route must NOT block on it.
+    const calls: Array<{ force?: boolean }> = [];
+    let release!: () => void;
+    const pending = new Promise<void>((res) => {
+      release = res;
+    });
+    (current!.engine as unknown as Record<string, unknown>).indexAll = (opts?: {
+      force?: boolean;
+    }) => {
+      calls.push({ force: opts?.force });
+      return pending;
+    };
+
+    const res = await current!.app.inject({ method: "POST", url: "/api/reindex" });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toEqual({ started: true });
+    // The background pass was kicked off forced; the response did not wait on it.
+    expect(calls).toEqual([{ force: true }]);
+
+    // A second immediate POST while the first is still in-flight is de-duped: it is
+    // acked without starting a second concurrent run (still just one call).
+    const res2 = await current!.app.inject({ method: "POST", url: "/api/reindex" });
+    expect(res2.statusCode).toBe(202);
+    expect(res2.json()).toEqual({ started: true, alreadyRunning: true });
+    expect(calls.length).toBe(1);
+
+    // Let the background pass settle so the in-flight flag clears (the module-level
+    // guard is shared across tests, so we must not leave it stuck on). The route's
+    // .finally() that clears it runs as a microtask chained after `pending`, so flush
+    // the microtask queue (a setImmediate tick) before asserting it reindexes again.
+    release();
+    await pending;
+    await new Promise((r) => setImmediate(r));
+
+    // With the prior pass settled, a fresh POST starts a new (forced) run again —
+    // proving the in-flight guard is per-run, not a permanent latch.
+    const res3 = await current!.app.inject({ method: "POST", url: "/api/reindex" });
+    expect(res3.statusCode).toBe(202);
+    expect(res3.json()).toEqual({ started: true });
+    expect(calls).toEqual([{ force: true }, { force: true }]);
+
+    // Settle this run too so we don't leak the in-flight flag into later tests.
+    release();
+    await new Promise((r) => setImmediate(r));
+  });
+
   it("GET /api/health/diagnostics reports the expected fields (200)", async () => {
     const res = await current!.app.inject({
       method: "GET",

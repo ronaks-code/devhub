@@ -43,6 +43,7 @@ import {
 } from "./fts-schema.js";
 import type { FtsTokenizer } from "./fts-schema.js";
 import { writeFtsRows } from "./fts-write.js";
+import { writeToolCalls } from "./tool-calls-write.js";
 import { listAllSessions } from "./all-sessions.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import { AggregateCache } from "./aggregates.js";
@@ -147,6 +148,17 @@ CREATE TABLE IF NOT EXISTS permission_audit (
   ts INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_permission_audit_session ON permission_audit(sessionId);
+
+CREATE TABLE IF NOT EXISTS tool_calls (
+  sessionId TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  toolName TEXT NOT NULL,
+  isError INTEGER NOT NULL DEFAULT 0,
+  ts TEXT,
+  durationMs INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(toolName);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(sessionId);
 `;
 
 const SELECT_COLS = `
@@ -342,9 +354,18 @@ export class TranscriptIndex {
     return scanSession(filePath, startByte, seed);
   }
 
-  /** Index (or incrementally update) a single session file. */
+  /**
+   * Index (or incrementally update) a single session file.
+   *
+   * `opts.force` re-runs a FULL re-index even when the file's size+mtime are unchanged
+   * (the normal "skip unchanged" fast path is bypassed AND we re-scan from byte 0 rather
+   * than incrementally). This is what backfills the W28 `tool_calls` rows and the
+   * currently-null `sessions.model` for pre-model-tracking sessions. Without `force` the
+   * behavior is identical to before.
+   */
   async indexSession(
     filePath: string,
+    opts: { force?: boolean } = {},
   ): Promise<"added" | "updated" | "unchanged" | "error"> {
     let st;
     try {
@@ -356,7 +377,7 @@ export class TranscriptIndex {
     const mtimeMs = Math.floor(st.mtimeMs);
     const existing = this.getRow(sessionId);
 
-    if (existing && existing.sizeBytes === st.size && existing.mtimeMs === mtimeMs) {
+    if (!opts.force && existing && existing.sizeBytes === st.size && existing.mtimeMs === mtimeMs) {
       return "unchanged";
     }
 
@@ -375,8 +396,14 @@ export class TranscriptIndex {
       existing.headSig != null &&
       headSig != null &&
       existing.headSig === headSig;
+    // `force` always re-scans from byte 0 (a full re-index) so it deterministically
+    // rebuilds the session's tool_calls + re-resolves model, never trusting stale offsets.
     const incremental =
-      !!existing && existing.indexedBytes > 0 && st.size > existing.indexedBytes && headUnchanged;
+      !opts.force &&
+      !!existing &&
+      existing.indexedBytes > 0 &&
+      st.size > existing.indexedBytes &&
+      headUnchanged;
     const startByte = incremental ? existing!.indexedBytes : 0;
 
     // Seed the parse phase: on an incremental pass we carry the prior accumulators
@@ -489,6 +516,13 @@ export class TranscriptIndex {
         headSig,
       });
       this.writeSearchText(sessionId, searchTexts, startByte === 0);
+      // Persist this session's tool invocations into the `tool_calls` analytics sidecar,
+      // in lockstep with the search rows (same transaction, same full-vs-incremental
+      // discipline + stable rowids): a full pass replaces the session's calls, an
+      // incremental pass appends only the newly-scanned ones — so a re-index never
+      // duplicates and an append doesn't disturb prior calls. This is what gives
+      // toolStats real errorRate + avgMs for (re)indexed sessions.
+      this.writeToolCalls(sessionId, scan.toolCalls, startByte === 0);
       // Mirror subagent text whenever the session has subagents. Subagent files aren't
       // byte-offset tracked, so we always REPLACE the session's subagent rows (a full
       // refresh) — cheap relative to the main transcript, and keeps them in sync as
@@ -528,6 +562,17 @@ export class TranscriptIndex {
   private writeSearchText(sessionId: string, rows: SearchText[], full: boolean): void {
     const table = this.searchMode === "fts5" ? "messages_fts" : "messages_text";
     writeFtsRows(this.db, table, sessionId, rows, full);
+  }
+
+  /**
+   * Persist a session's tool invocations into the `tool_calls` analytics sidecar.
+   * `full` (startByte===0) replaces the session's calls; incremental appends only the
+   * new ones. Delegates to {@link writeToolCalls}, which maps each call to a STABLE
+   * rowid keyed by (sessionId, seq, ordinal) so a re-index is idempotent (no dup) and an
+   * append leaves prior calls untouched — the same discipline as the search-text write.
+   */
+  private writeToolCalls(sessionId: string, calls: ScanResult["toolCalls"], full: boolean): void {
+    writeToolCalls(this.db, sessionId, calls, full);
   }
 
   /**

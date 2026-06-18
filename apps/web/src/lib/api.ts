@@ -520,6 +520,17 @@ export const api = {
   // were wired. The widget reads each row tolerantly (field-spelling variants), so
   // an envelope OR a bare array, with `toolName` OR `tool`, all light it up.
   statsTools: () => getMaybe<ToolStatsResponse>("/api/stats/tools"),
+  // Force a full re-index (POST /api/reindex). An incremental index only touches
+  // files that changed on disk, so newly-added analytics columns (tool error
+  // rates/durations) and a null session model on older sessions never backfill;
+  // forcing re-reads every transcript so those gaps fill in. The server fires the
+  // pass in the BACKGROUND and acks immediately ({ started, alreadyRunning? } at
+  // 202) — actual progress streams over the existing /api/events SSE
+  // (index-progress / ready), which the app already consumes. Until the
+  // engine/server lane ships the route, the *Maybe helper surfaces a
+  // NotImplementedError so the control degrades to a hidden/disabled state instead
+  // of erroring — exactly like the worktree/rollups routes were wired.
+  reindex: () => sendMaybe<ReindexResult>("/api/reindex", "POST"),
   running: () => get<RunningSession[]>("/api/running"),
   // Read-only git status for a project cwd. The server returns null when the
   // directory is not a git repo (or git is unavailable); rejects unknown cwds.
@@ -777,6 +788,19 @@ export function asToolStatArray(res: ToolStatsResponse | null | undefined): Tool
     return (res as { tools: ToolStat[] }).tools;
   }
   return [];
+}
+
+/**
+ * Ack from POST /api/reindex. The server kicks the pass off in the background and
+ * returns immediately: `started` is true once a pass is running, and
+ * `alreadyRunning` is set when a reindex this server started was already in flight
+ * (so the second POST is a no-op rather than a second concurrent pass). The shape
+ * is read tolerantly — only `started`'s truthiness matters to the control, which
+ * then watches the existing index-progress/ready SSE for real progress.
+ */
+export interface ReindexResult {
+  started?: boolean;
+  alreadyRunning?: boolean;
 }
 
 export type { AppSettings };

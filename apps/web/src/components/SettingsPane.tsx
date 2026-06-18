@@ -11,6 +11,7 @@ import { AgentsLibrary } from "./config/AgentsLibrary";
 import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 import { PluginsView } from "./config/PluginsView";
+import { RebuildIndex } from "./config/RebuildIndex";
 
 /** Sub-tabs within the Settings view. */
 type SettingsSection =
@@ -289,6 +290,11 @@ export function SettingsPane({
             </Field>
           </div>
         </section>
+
+        {/* Forced full re-index control. Self-contained: hides itself on a server
+            without the /api/reindex route, and reflects live progress over the
+            existing index-progress/ready SSE. */}
+        <RebuildIndex />
 
         <div className="mt-6 flex items-center gap-3">
           <button

@@ -191,6 +191,31 @@ const MIGRATIONS: Migration[] = [
   // the migration runner's transaction, so search sees only the old or fully-rebuilt
   // table — never a half-migrated one. No transcript re-read needed.
   migrateFtsAddToolName,
+  // v13: per-tool-call analytics sidecar. The FTS mirror's column set is fixed at create
+  // time (FTS5 columns can't be ALTERed), so it can only persist sessionId/role/seq/
+  // toolName/text — enough for an invocation COUNT, but NOT the tool_result.is_error flag
+  // nor per-message timestamps. This is a REGULAR table (freely extensible) holding one
+  // row per assistant tool_use: its toolName, the result's is_error, the use's timestamp,
+  // and a use→result duration when both timestamps exist — so toolStats can report real
+  // errorRate + avgMs. DATA-PRESERVING + idempotent: pure CREATE ... IF NOT EXISTS, never
+  // touches transcripts or existing tables. A fresh DB also gets this from the base SCHEMA
+  // in index-db.ts; a legacy DB picks it up here. It is empty until a (re)index populates
+  // it — old un-reindexed sessions have no tool_calls rows yet (the server lane's reindex
+  // route, or indexAll({ force:true }), backfills them), and toolStats falls back to the
+  // FTS COUNT for any scope with no rows yet, so it never regresses. Indexes on (toolName)
+  // and (sessionId) keep the toolStats GROUP BY + per-session scoping bounded (no scan).
+  (db) => {
+    db.exec(`CREATE TABLE IF NOT EXISTS tool_calls (
+      sessionId TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      toolName TEXT NOT NULL,
+      isError INTEGER NOT NULL DEFAULT 0,
+      ts TEXT,
+      durationMs INTEGER
+    );`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(toolName)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(sessionId)`);
+  },
 ];
 
 /**
