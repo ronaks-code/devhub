@@ -35,6 +35,7 @@ import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { DashboardPane } from "./components/DashboardPane";
 import { LiveOpsBoard } from "./components/LiveOpsBoard";
+import { MultiSessionGrid } from "./components/MultiSessionGrid";
 import { InboxPane } from "./components/InboxPane";
 import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
@@ -379,6 +380,10 @@ export default function App() {
     return t && VALID_TABS.includes(t) ? t : "browse";
   });
   const [searchOpen, setSearchOpen] = useState(false);
+  // Ops tab view: the at-a-glance running-sessions "board", or the "grid" of
+  // compact live panels that watch/drive several sessions at once. Local to the
+  // tab; the board stays the default so the existing view is untouched.
+  const [opsMode, setOpsMode] = useState<"board" | "grid">("board");
   const [commandOpen, setCommandOpen] = useState(false);
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   // Keyboard-shortcut cheat-sheet overlay (opened with "?").
@@ -1051,7 +1056,40 @@ export default function App() {
         ) : tab === "dashboard" ? (
           <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
         ) : tab === "ops" ? (
-          <LiveOpsBoard onOpenSession={openSessionByCwd} />
+          <div className="flex min-w-0 flex-1 flex-col">
+            {/* Ops view toggle: the running-sessions board vs. the multi-session
+                grid (watch/drive several live sessions at once). A slim bar above
+                both views, so neither view needs to know about the other and the
+                existing board is untouched. */}
+            <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800/80 bg-zinc-950 px-6 py-2">
+              <div className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
+                {(["board", "grid"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => setOpsMode(m)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition",
+                      opsMode === m
+                        ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                        : "text-zinc-500 hover:text-zinc-300",
+                    )}
+                    title={
+                      m === "grid"
+                        ? "Watch and drive several live sessions at once"
+                        : "At-a-glance board of running sessions"
+                    }
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {opsMode === "grid" ? (
+              <MultiSessionGrid />
+            ) : (
+              <LiveOpsBoard onOpenSession={openSessionByCwd} />
+            )}
+          </div>
         ) : tab === "inbox" ? (
           <InboxPane onOpenSession={openSession} />
         ) : tab === "browse" ? (

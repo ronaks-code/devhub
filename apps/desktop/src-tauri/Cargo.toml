@@ -28,3 +28,6 @@ tauri-plugin-log = "2.0.0-rc"
 # Global hotkey to summon the window from anywhere (see src/shortcut.rs). 2.x
 # tracks the Tauri v2 series this app is on.
 tauri-plugin-global-shortcut = "2"
+# Native desktop notifications fired when a session finishes a turn (see
+# src/notify.rs). 2.x tracks the Tauri v2 series this app is on.
+tauri-plugin-notification = "2"

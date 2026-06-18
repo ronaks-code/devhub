@@ -32,6 +32,8 @@ import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
 import { relatedSessions } from "./related.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
+import { toolStats } from "./tool-stats.js";
+import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
 import {
   FTS_TABLE,
   createFtsTableSql,
@@ -739,6 +741,16 @@ export class TranscriptIndex {
    */
   relatedSessions(sessionId: string, opts: RelatedOptions = {}): RelatedSession[] {
     return relatedSessions(this.db, sessionId, opts);
+  }
+
+  /**
+   * Per-tool usage analytics over the indexed corpus (or one project/session when
+   * scoped): each tool's invocation count, ranked most-used first. Errors/durations
+   * degrade gracefully — neither is persisted in the index. One GROUP BY aggregate,
+   * no per-row/per-session scan. Delegates to {@link toolStats} with this index's DB.
+   */
+  toolStats(opts: ToolStatsOptions = {}): ToolStatsResult {
+    return toolStats(this.db, opts);
   }
 
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------

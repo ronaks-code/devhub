@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, CalendarDays, Clock, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp } from "lucide-react";
+import { Activity, CalendarDays, Clock, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp, Wrench } from "lucide-react";
 import type { DailyUsage, RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
@@ -14,6 +14,7 @@ import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { DirtyRepos } from "./dashboard/DirtyRepos";
+import { ToolAnalytics } from "./dashboard/ToolAnalytics";
 import { Badge, EmptyState, Spinner } from "./ui";
 import { DashboardSkeleton } from "./Skeleton";
 
@@ -419,6 +420,14 @@ function DashboardBody({
         <section>
           <SectionTitle icon={<Cpu className="h-3.5 w-3.5" />}>By model</SectionTitle>
           <ModelBreakdown models={stats.byModel} />
+        </section>
+
+        {/* Per-tool usage — invocation count, error rate (loud when high), and
+            avg duration per tool. Self-loads from /api/stats/tools and degrades
+            gracefully when the route isn't available on this server. */}
+        <section>
+          <SectionTitle icon={<Wrench className="h-3.5 w-3.5" />}>By tool</SectionTitle>
+          <ToolAnalytics />
         </section>
 
         {/* Top projects */}

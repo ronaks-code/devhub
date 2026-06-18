@@ -14,6 +14,7 @@
 //!   CLAUDE_UI_SERVER_PORT  port to probe for readiness    (default: 8787)
 //!   CLAUDE_UI_NO_SPAWN     if set ("1"/"true"), never spawn — assume external server
 
+mod notify;
 mod shortcut;
 mod tray;
 
@@ -233,6 +234,10 @@ pub fn run() {
         // src/shortcut.rs). Register the plugin on the builder; the chord ->
         // action wiring is attached in setup() once the app handle exists.
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // Native desktop notifications: fired when a running session finishes a turn
+        // (see src/notify.rs). The plugin is registered here; the busy->idle watcher
+        // is attached in setup() once the app handle + server host/port exist.
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -265,6 +270,14 @@ pub fn run() {
             // is already claimed by another app) shouldn't stop the window opening.
             if let Err(err) = shortcut::setup_shortcut(app.handle()) {
                 log::warn!("[claude-ui] failed to set up summon shortcut: {err}");
+            }
+
+            // Native notification when a session finishes a turn (busy -> idle). Polls
+            // the same /api/running endpoint as the tray badge. Best-effort, same as
+            // the tray/shortcut: a permission denial or watcher hiccup must not stop
+            // the window opening.
+            if let Err(err) = notify::setup_notify(app.handle(), host.clone(), port) {
+                log::warn!("[claude-ui] failed to set up finish notifications: {err}");
             }
 
             // Give the server a moment to come up. The webview talks to the API

@@ -43,6 +43,7 @@ import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
 import type { McpToggle } from "./config/mcp-toggle.js";
 import { computeAutoTags } from "./auto-tag.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
+import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
 import type {
   ArchiveBundle,
   ExportArchiveOptions,
@@ -458,6 +459,18 @@ export class Engine {
   }
 
   /**
+   * Per-tool usage analytics across the indexed corpus (or one project/session when
+   * scoped via `opts.projectId` / `opts.sessionId`): a ranked `[{ toolName, count, … }]`
+   * plus a corpus totals summary. Computed with a single GROUP BY aggregate over the
+   * indexed tool-invocation rows (no transcript reads, no per-row scan). Error counts
+   * and durations are not persisted in the index, so they degrade gracefully (errors 0,
+   * `avgMs` omitted). A tool-less corpus returns []. See {@link toolStats}.
+   */
+  toolStats(opts: ToolStatsOptions = {}): ToolStatsResult {
+    return this.index.toolStats(opts);
+  }
+
+  /**
    * On-demand code-symbol search within ONE project tree: greps the project's source
    * files for declaration-like matches (function/class/const/def/type/interface/...)
    * whose name contains `q`, returning `[{ name, kind, file, line }]`. Lightweight —
@@ -735,6 +748,8 @@ export { searchSymbols } from "./symbols.js";
 export type { SymbolHit, SymbolKind, SymbolSearchOptions } from "./symbols.js";
 export { relatedSessions } from "./related.js";
 export type { RelatedSession, RelatedOptions } from "./related.js";
+export { toolStats } from "./tool-stats.js";
+export type { ToolStat, ToolStatsResult, ToolStatsSummary, ToolStatsOptions } from "./tool-stats.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { dailyUsage } from "./rollups.js";

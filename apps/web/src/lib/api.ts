@@ -511,6 +511,15 @@ export const api = {
       notes,
     }),
   stats: () => get<Stats>("/api/stats"),
+  // Per-tool usage analytics (GET /api/stats/tools): invocation count, error
+  // rate, and (when the server computes it) average duration per tool. Backs the
+  // dashboard's ToolAnalytics widget. The server returns an ENVELOPE
+  // ({ tools: ToolStat[], summary }); a server that hasn't shipped the route 404s,
+  // so the *Maybe helper surfaces a NotImplementedError and the widget degrades to
+  // a graceful "not available yet" state — exactly like the rollups/worktree routes
+  // were wired. The widget reads each row tolerantly (field-spelling variants), so
+  // an envelope OR a bare array, with `toolName` OR `tool`, all light it up.
+  statsTools: () => getMaybe<ToolStatsResponse>("/api/stats/tools"),
   running: () => get<RunningSession[]>("/api/running"),
   // Read-only git status for a project cwd. The server returns null when the
   // directory is not a git repo (or git is unavailable); rejects unknown cwds.
@@ -716,6 +725,58 @@ export function assetUrl(path: string): string {
     `/api/assets?path=${encodeURIComponent(path)}` +
     (token ? `&token=${encodeURIComponent(token)}` : "")
   );
+}
+
+/**
+ * One tool's usage stats from GET /api/stats/tools — how many times a given tool
+ * (Bash, Edit, Read, an MCP tool, …) was invoked, how often it errored, and how
+ * long it took on average. Mirrors the engine/server lane's `ToolStat`
+ * (engine/src/tool-stats.ts): `toolName` + `count` are the canonical required
+ * fields, `errorCount`/`errorRate` carry failures (both 0 today — the index can't
+ * derive errors yet), and `avgMs` is omitted unless derivable.
+ *
+ * The shape is intentionally TOLERANT so it survives either landing order and any
+ * field-spelling drift: the widget also accepts `tool` for `toolName`, `errors`
+ * for `errorCount`, and `avgDurationMs` for `avgMs`. So whatever the lane ends up
+ * emitting still lights up the widget rather than silently rendering blanks.
+ */
+export interface ToolStat {
+  /** Canonical tool name (e.g. "Bash", "Edit", "mcp__foo__bar"). */
+  toolName?: string;
+  /** Alternate spelling some servers may use. */
+  tool?: string;
+  /** Total invocation count. */
+  count: number;
+  /** Failed invocation count, when the server reports it (canonical spelling). */
+  errorCount?: number;
+  /** Alternate spelling of errorCount. */
+  errors?: number;
+  /** Precomputed error rate in [0,1], when the server reports it directly. */
+  errorRate?: number;
+  /** Average wall-clock duration per invocation in ms, when reported. */
+  avgMs?: number;
+  /** Alternate spelling of avgMs some servers may use. */
+  avgDurationMs?: number;
+}
+
+/**
+ * The GET /api/stats/tools response. The server returns an ENVELOPE
+ * ({ tools, summary }), but we also tolerate a bare ToolStat[] (e.g. a different
+ * server build) — the widget normalizes both via {@link asToolStatArray}.
+ */
+export type ToolStatsResponse = { tools: ToolStat[]; summary?: unknown } | ToolStat[];
+
+/**
+ * Unwrap a {@link ToolStatsResponse} to the per-tool array regardless of whether
+ * the server sent the `{ tools }` envelope or a bare array. Returns [] for any
+ * unexpected body so the widget degrades to its empty state instead of throwing.
+ */
+export function asToolStatArray(res: ToolStatsResponse | null | undefined): ToolStat[] {
+  if (Array.isArray(res)) return res;
+  if (res && Array.isArray((res as { tools?: unknown }).tools)) {
+    return (res as { tools: ToolStat[] }).tools;
+  }
+  return [];
 }
 
 export type { AppSettings };

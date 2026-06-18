@@ -392,6 +392,62 @@ describe("server REST endpoints (no token)", () => {
     expect(res.json()).toEqual([]);
   });
 
+  it("GET /api/stats/tools returns an empty result when the engine method is absent", async () => {
+    // engine.toolStats has now landed (it's a prototype method on the real Engine), so
+    // to exercise the route's typeof-guard "absent" path we shadow it to undefined on
+    // this test's (fresh) engine instance. The route must degrade to a 200 empty result.
+    (current!.engine as unknown as Record<string, unknown>).toolStats = undefined;
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/stats/tools",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ tools: [] });
+  });
+
+  it("GET /api/stats/tools rejects a bad limit (400)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/stats/tools?limit=0",
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("GET /api/stats/tools forwards params to the engine method when present", async () => {
+    // Duck-typed capability: stub the (not-yet-landed) engine method and confirm the
+    // route calls it through with the validated params and returns its summary.
+    const calls: Array<{ projectId?: string; sessionId?: string; limit?: number }> = [];
+    (current!.engine as unknown as Record<string, unknown>).toolStats = (opts?: {
+      projectId?: string;
+      sessionId?: string;
+      limit?: number;
+    }) => {
+      calls.push({ projectId: opts?.projectId, sessionId: opts?.sessionId, limit: opts?.limit });
+      return { tools: [{ name: "Bash", count: 3 }] };
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/stats/tools?projectId=${ALPHA_ID}&sessionId=alpha-1&limit=5`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ tools: [{ name: "Bash", count: 3 }] });
+    expect(calls).toEqual([{ projectId: ALPHA_ID, sessionId: "alpha-1", limit: 5 }]);
+  });
+
+  it("GET /api/stats/tools degrades to an empty result when the engine method throws", async () => {
+    // Half-landed engine: the wrapper exists but its backing isn't ready yet (it
+    // throws). The route must swallow it and return { tools: [] } (200), never a 500.
+    (current!.engine as unknown as Record<string, unknown>).toolStats = () => {
+      throw new Error("index.toolStats is not a function");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/stats/tools",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ tools: [] });
+  });
+
   it("GET /api/health/diagnostics reports the expected fields (200)", async () => {
     const res = await current!.app.inject({
       method: "GET",
