@@ -40,6 +40,7 @@ import { registerReindexRoutes } from "./routes/reindex.js";
 import { registerBudgetRoutes } from "./routes/budget.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerPortableRoutes } from "./routes/portable.js";
+import { registerAutotagRoutes } from "./routes/autotag.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -183,6 +184,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerMaintenanceRoutes(app, engine);
 
   registerPortableRoutes(app, engine);
+
+  registerAutotagRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

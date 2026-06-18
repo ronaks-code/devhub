@@ -392,6 +392,102 @@ describe("server REST endpoints (no token)", () => {
     expect(res.json()).toEqual([]);
   });
 
+  it("GET /api/sessions/:id/autotag/suggest returns a { suggested } array", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/autotag/suggest",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { suggested: string[] };
+    // autoTagSession is a published W21 method; the seeded cwd has no marker files
+    // and rides a default branch, so for this hermetic fixture it suggests nothing —
+    // the contract under test is the SHAPE: always a { suggested } string array.
+    expect(Array.isArray(body.suggested)).toBe(true);
+  });
+
+  it("GET /api/sessions/:id/autotag/suggest forwards what the engine suggests", async () => {
+    // Stub the published suggest method so we can assert the route returns its output
+    // verbatim under the { suggested } envelope (preview — never persists).
+    const calls: string[] = [];
+    (current!.engine as unknown as Record<string, unknown>).autoTagSession = (id: string) => {
+      calls.push(id);
+      return ["node", "typescript"];
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/autotag/suggest",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ suggested: ["node", "typescript"] });
+    expect(calls).toEqual(["alpha-1"]);
+  });
+
+  it("GET /api/sessions/:id/autotag/suggest degrades to [] when the engine throws", async () => {
+    // A half-landed / throwing suggest method must degrade to { suggested: [] } (200),
+    // never a 500.
+    (current!.engine as unknown as Record<string, unknown>).autoTagSession = () => {
+      throw new Error("boom");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/autotag/suggest",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ suggested: [] });
+  });
+
+  it("POST /api/sessions/:id/autotag forwards to engine.applyAutoTags when present", async () => {
+    // Duck-typed capability: stub the (engine-lane, this-wave) applyAutoTags and confirm
+    // the route calls it through with the session id and returns its { applied, added }.
+    const calls: string[] = [];
+    (current!.engine as unknown as Record<string, unknown>).applyAutoTags = (id: string) => {
+      calls.push(id);
+      return { applied: ["node", "typescript"], added: ["typescript"] };
+    };
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/sessions/alpha-1/autotag",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ applied: ["node", "typescript"], added: ["typescript"] });
+    expect(calls).toEqual(["alpha-1"]);
+  });
+
+  it("POST /api/sessions/:id/autotag falls back to merge+persist when applyAutoTags is absent", async () => {
+    // Degraded path: the engine method hasn't landed, so the route reproduces the apply
+    // from the published autoTagSession + getTags + setTags methods — union the
+    // suggestions into the existing tags, persist, and report what was newly `added`.
+    (current!.engine as unknown as Record<string, unknown>).applyAutoTags = undefined;
+    current!.engine.setTags("alpha-1", ["keep"]); // pre-existing user tag
+    (current!.engine as unknown as Record<string, unknown>).autoTagSession = () => ["keep", "node"];
+
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/sessions/alpha-1/autotag",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { applied: string[]; added: string[] };
+    // "keep" already present (not re-added); "node" is the only newly added tag, and the
+    // persisted set is the union — proven by re-reading the engine's stored tags.
+    expect(body.added).toEqual(["node"]);
+    expect(body.applied.sort()).toEqual(["keep", "node"]);
+    expect(current!.engine.getTags("alpha-1").sort()).toEqual(["keep", "node"]);
+  });
+
+  it("POST /api/sessions/:id/autotag 503s when neither the engine method nor the published path can run", async () => {
+    // Capability guard: applyAutoTags absent AND the local fallback can't run (the
+    // published methods throw) — the route returns 503 (unavailable), never a 500.
+    (current!.engine as unknown as Record<string, unknown>).applyAutoTags = undefined;
+    (current!.engine as unknown as Record<string, unknown>).autoTagSession = () => {
+      throw new Error("index unavailable");
+    };
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/sessions/alpha-1/autotag",
+    });
+    expect(res.statusCode).toBe(503);
+  });
+
   it("GET /api/stats/tools returns an empty result when the engine method is absent", async () => {
     // engine.toolStats has now landed (it's a prototype method on the real Engine), so
     // to exercise the route's typeof-guard "absent" path we shadow it to undefined on
@@ -901,5 +997,19 @@ describe("server token auth", () => {
     const res = await current!.app.inject({ method: "GET", url: "/api/health" });
     expect(res.statusCode).toBe(200);
     expect(res.json().ok).toBe(true);
+  });
+
+  it("guards the autotag suggest endpoint behind the token (401 without it)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/autotag/suggest",
+    });
+    expect(res.statusCode).toBe(401);
+    const ok = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/autotag/suggest",
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(ok.statusCode).toBe(200);
   });
 });

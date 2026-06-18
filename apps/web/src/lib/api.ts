@@ -497,6 +497,30 @@ export const api = {
     send<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}`, "PATCH", {
       tags,
     }),
+  // Suggested auto-tags for a session (GET /api/sessions/:id/autotag/suggest): the
+  // language/framework + branch tags the engine derives from the session's project
+  // dir + git branch (engine `computeAutoTags`/`autoTagSession`). PURE suggestion —
+  // it never persists. The SessionTags affordance previews these as chips, then the
+  // user applies them via {@link autotagApply}. Until the engine/server lane ships
+  // the route, the *Maybe helper surfaces a NotImplementedError so the affordance
+  // hides itself on older servers instead of erroring — exactly like the
+  // reindex/integrity routes were wired. The body is read tolerantly
+  // (see normalizeTagList) so a bare array OR a `{ tags }` envelope both parse.
+  autotagSuggest: (sessionId: string) =>
+    getMaybe<unknown>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/autotag/suggest`,
+    ).then(normalizeTagList),
+  // Persist the auto-tag suggestion (POST /api/sessions/:id/autotag): the server
+  // UNIONS the computed tags onto the session's existing set (normalized: trim/lower/
+  // de-dupe), so applying is idempotent — re-applying adds nothing new. Returns the
+  // session's resulting tag list, read tolerantly the same way as the suggest call
+  // (a bare array, a `{ tags }` envelope, or a full SessionSummary all parse). *Maybe
+  // so an older server without the route degrades to a hidden control, not an error.
+  autotagApply: (sessionId: string) =>
+    sendMaybe<unknown>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/autotag`,
+      "POST",
+    ).then(normalizeTagList),
   // Toggle a session's archived flag via PATCH /api/sessions/:id { archived }.
   // Backs the InboxPane "archive" triage action. The PATCH forwards present keys,
   // so a server that doesn't persist `archived` still ACKs harmlessly.
@@ -933,6 +957,31 @@ function normalizeIntegrityReport(res: unknown): IntegrityReport {
       : undefined;
 
   return { ok, issues, ...(checkedAt != null ? { checkedAt } : {}) };
+}
+
+/**
+ * Coerce the tolerant autotag body (GET /autotag/suggest, POST /autotag) into a
+ * plain string[] of tags. The shape is read defensively so the SessionTags
+ * affordance survives either landing order and field-spelling drift: the server may
+ * send a bare `string[]`, a `{ tags: string[] }` envelope, or a full SessionSummary
+ * (whose `tags` we lift). Each entry is trimmed and non-strings/blanks are dropped;
+ * an odd body becomes [] so the affordance simply shows "nothing to add" instead of
+ * throwing. We don't lower-case here — the server already normalizes on write, and
+ * the suggest endpoint returns server-normalized tags.
+ */
+function normalizeTagList(res: unknown): string[] {
+  const raw: unknown[] = Array.isArray(res)
+    ? res
+    : res && typeof res === "object" && Array.isArray((res as { tags?: unknown }).tags)
+      ? ((res as { tags: unknown[] }).tags)
+      : [];
+  const out: string[] = [];
+  for (const t of raw) {
+    if (typeof t !== "string") continue;
+    const v = t.trim();
+    if (v) out.push(v);
+  }
+  return out;
 }
 
 export type { AppSettings };

@@ -115,3 +115,24 @@ export function computeAutoTags(opts: { cwd: string | null; gitBranch?: string |
   if (branch) tags.push(branch);
   return normalizeTags(tags);
 }
+
+/**
+ * Merge suggested auto-tags into a session's existing tags (set union), normalized once via
+ * {@link normalizeTags} so order/dupes/casing match the rest of the tag system. Pure — does NOT
+ * persist; the caller (e.g. `engine.applyAutoTags`) writes the result. Existing tags are kept
+ * first so user-assigned tags retain their insertion order, with newly-suggested ones appended.
+ *
+ * Returns both halves a caller needs:
+ *   - `applied`: the full resulting tag set (existing ∪ suggested),
+ *   - `added`:   only the tags that weren't already present (so a re-run is idempotent — `added`
+ *               comes back empty once every suggestion is already on the session).
+ */
+export function mergeAutoTags(
+  existing: readonly string[],
+  suggested: readonly string[],
+): { applied: string[]; added: string[] } {
+  const applied = normalizeTags([...existing, ...suggested]);
+  const have = new Set(normalizeTags([...existing]));
+  const added = applied.filter((t) => !have.has(t));
+  return { applied, added };
+}

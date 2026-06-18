@@ -63,7 +63,7 @@ import type { InterruptibleProcess } from "../src/driver/interrupt.js";
 import { scanSubagents, SUBAGENT_ROLE } from "../src/subagents.js";
 import { listPlugins } from "../src/config/index.js";
 import { setMcpEnabled, listMcpToggles } from "../src/config/mcp-toggle.js";
-import { computeAutoTags, branchTag } from "../src/auto-tag.js";
+import { computeAutoTags, branchTag, mergeAutoTags } from "../src/auto-tag.js";
 import {
   buildSandboxConfig,
   applySandbox,
@@ -6239,6 +6239,109 @@ describe("computeAutoTags (suggested tags from project + branch)", () => {
     // Unknown session -> [].
     expect(engine.autoTagSession("nope")).toEqual([]);
     engine.close();
+  });
+});
+
+describe("engine.applyAutoTags (apply suggested tags)", () => {
+  // Index one session whose cwd is a real project dir (so marker detection has files to read)
+  // on a non-default branch (so a branch: tag is suggested too). Returns the live Engine + ids.
+  const setup = async (dir: string, opts: { gitBranch?: string } = {}) => {
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const cwd = tmp();
+    writeFileSync(path.join(cwd, "package.json"), "{}");
+    writeFileSync(path.join(cwd, "tsconfig.json"), "{}");
+    const f = path.join(proj, "tagged.jsonl");
+    writeFileSync(
+      f,
+      jl({
+        type: "user",
+        cwd,
+        gitBranch: opts.gitBranch ?? "feat/login",
+        message: { role: "user", content: "hi" },
+      }),
+    );
+    const engine = new Engine(path.join(dir, "i.db"));
+    await engine.index.indexSession(f);
+    return { engine };
+  };
+
+  it("applies language/framework + branch tags and persists them", async () => {
+    const { engine } = await setup(tmp());
+    const res = engine.applyAutoTags("tagged");
+    // node + typescript markers + the non-default branch slug all suggested and added.
+    expect(res.added).toEqual(expect.arrayContaining(["node", "typescript", "branch:feat-login"]));
+    expect(res.applied).toEqual(res.added); // no prior tags -> applied === added
+    // Actually persisted (survives via getTags + the SessionSummary.tags field).
+    expect(engine.getTags("tagged")).toEqual(res.applied);
+    expect(engine.getSession("tagged")!.tags).toEqual(res.applied);
+    engine.close();
+  });
+
+  it("merges with — never drops — pre-existing user tags (union)", async () => {
+    const { engine } = await setup(tmp());
+    engine.setTags("tagged", ["Triage", "node"]); // includes a tag that also auto-suggests
+    const res = engine.applyAutoTags("tagged");
+    // User's triage kept; node not duplicated; typescript + branch newly added.
+    expect(res.applied).toEqual(expect.arrayContaining(["triage", "node", "typescript", "branch:feat-login"]));
+    expect(res.applied.filter((t) => t === "node")).toHaveLength(1);
+    expect(res.applied).toContain("triage"); // user tag survives
+    expect(res.added).not.toContain("node"); // already present -> not re-added
+    expect(res.added).not.toContain("triage");
+    expect(res.added).toEqual(expect.arrayContaining(["typescript", "branch:feat-login"]));
+    engine.close();
+  });
+
+  it("is idempotent: a second call adds nothing", async () => {
+    const { engine } = await setup(tmp());
+    const first = engine.applyAutoTags("tagged");
+    expect(first.added.length).toBeGreaterThan(0);
+    const second = engine.applyAutoTags("tagged");
+    expect(second.added).toEqual([]);
+    expect(second.applied).toEqual(first.applied); // full set unchanged
+    expect(engine.getTags("tagged")).toEqual(first.applied);
+    engine.close();
+  });
+
+  it("unknown session -> { applied: [], added: [] } and never throws (no write)", async () => {
+    const { engine } = await setup(tmp());
+    expect(() => engine.applyAutoTags("nope")).not.toThrow();
+    expect(engine.applyAutoTags("nope")).toEqual({ applied: [], added: [] });
+    expect(engine.getTags("nope")).toEqual([]);
+    engine.close();
+  });
+
+  it("persisted tags survive a re-open of the index", async () => {
+    const dir = tmp();
+    const { engine } = await setup(dir);
+    const res = engine.applyAutoTags("tagged");
+    engine.close();
+    // Re-open the same DB file: tags live in session_meta, so they come back intact.
+    const reopened = new Engine(path.join(dir, "i.db"));
+    expect(reopened.getTags("tagged")).toEqual(res.applied);
+    // And re-applying after re-open is still idempotent.
+    expect(reopened.applyAutoTags("tagged").added).toEqual([]);
+    reopened.close();
+  });
+
+  it("autoTagSession remains a pure preview (suggests without persisting)", async () => {
+    const { engine } = await setup(tmp());
+    const preview = engine.autoTagSession("tagged");
+    expect(preview).toEqual(expect.arrayContaining(["node", "typescript", "branch:feat-login"]));
+    expect(engine.getTags("tagged")).toEqual([]); // preview did NOT persist
+    // Applying then yields exactly the previewed set.
+    expect(engine.applyAutoTags("tagged").applied).toEqual(preview);
+    engine.close();
+  });
+
+  it("mergeAutoTags is a pure union: keeps existing order, appends new, dedupes/normalizes", () => {
+    const { applied, added } = mergeAutoTags(["Alpha", "node"], ["node", "TYPESCRIPT", "alpha"]);
+    expect(applied).toEqual(["alpha", "node", "typescript"]); // existing first, then new
+    expect(added).toEqual(["typescript"]); // only the genuinely-new tag
+    // Empty suggestions over existing tags -> nothing added.
+    expect(mergeAutoTags(["x"], [])).toEqual({ applied: ["x"], added: [] });
+    // Empty existing -> everything is added.
+    expect(mergeAutoTags([], ["a", "b"])).toEqual({ applied: ["a", "b"], added: ["a", "b"] });
   });
 });
 

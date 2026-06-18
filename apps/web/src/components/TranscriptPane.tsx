@@ -21,12 +21,14 @@ import {
   GitCompareArrows,
   Film,
   Bookmark,
+  Tag,
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
 import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { SessionNotes } from "./SessionNotes";
+import { SessionTags } from "./SessionTags";
 import { SessionTimeline } from "./SessionTimeline";
 import { BookmarksPanel, useTranscriptBookmarks } from "./TranscriptBookmarks";
 import { TranscriptOutline } from "./TranscriptOutline";
@@ -57,6 +59,8 @@ export function TranscriptPane({
   onContinue,
   onCompare,
   jumpTarget,
+  onToast,
+  onTagsApplied,
 }: {
   page: SessionMessagesPage | null;
   loading: boolean;
@@ -74,6 +78,16 @@ export function TranscriptPane({
    * jump. Null = no pending jump (normal "follow the tail" behavior).
    */
   jumpTarget?: { seq: number; nonce: number } | null;
+  /**
+   * Surface a transient toast through the app's ToastStack (e.g. "Added 2 tags"
+   * from the Suggest-tags affordance). Optional — the panel is usable without it.
+   */
+  onToast?: (toast: { title: string; body?: string; level?: "success" | "error" }) => void;
+  /**
+   * Notified with the resulting tag set after the Suggest-tags affordance applies
+   * tags, so the host can refresh its displayed session list. Optional.
+   */
+  onTagsApplied?: (sessionId: string, tags: string[]) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const lastSession = useRef<string | undefined>(undefined);
@@ -102,6 +116,10 @@ export function TranscriptPane({
   // Per-session markdown notes panel toggle (header affordance). The session's
   // saved notes come straight from SessionSummary.notes.
   const [notesOpen, setNotesOpen] = useState(false);
+  // Per-session tags panel toggle (header affordance). Shows the session's tags +
+  // a "Suggest tags" control; the suggestions/apply hit the autotag routes, and the
+  // panel hides itself on a server that doesn't have them.
+  const [tagsOpen, setTagsOpen] = useState(false);
 
   // The subagent files for this session, threaded to any Task cards in the
   // transcript so their "view subagent transcript" expander can load them.
@@ -612,6 +630,22 @@ export function TranscriptPane({
             <StickyNote className="h-3.5 w-3.5" />
             Notes
           </button>
+
+          {/* Per-session tags + "Suggest tags" affordance. */}
+          <button
+            onClick={() => setTagsOpen((v) => !v)}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              tagsOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={tagsOpen ? "Hide tags" : "Tags for this session (suggest + apply)"}
+            aria-pressed={tagsOpen}
+          >
+            <Tag className="h-3.5 w-3.5" />
+            Tags
+          </button>
           {/* Open a side-by-side comparison with another session (read-only). */}
           {onCompare ? (
             <button
@@ -688,6 +722,20 @@ export function TranscriptPane({
           sessionId={s.sessionId}
           initialNotes={s.notes}
           onClose={() => setNotesOpen(false)}
+        />
+      ) : null}
+
+      {/* Per-session tags + "Suggest tags" (toggled from the header). Suggestions
+          come from GET /api/sessions/:id/autotag/suggest; Apply persists via
+          POST /api/sessions/:id/autotag. Hides itself on a server without those. */}
+      {tagsOpen ? (
+        <SessionTags
+          key={s.sessionId}
+          sessionId={s.sessionId}
+          initialTags={s.tags}
+          onApplied={(tags) => onTagsApplied?.(s.sessionId, tags)}
+          onToast={onToast}
+          onClose={() => setTagsOpen(false)}
         />
       ) : null}
 

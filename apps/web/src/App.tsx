@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Archive,
   Command as CommandIcon,
   Cpu,
+  DatabaseZap,
   Folder,
   Gauge,
   Hexagon,
@@ -15,12 +17,19 @@ import {
   Radio,
   Search,
   Settings,
+  ShieldCheck,
   Sparkles,
   Sun,
   Trash2,
   Zap,
 } from "lucide-react";
-import { api, subscribeEvents, type AppSettings } from "./lib/api";
+import {
+  api,
+  exportArchiveUrl,
+  NotImplementedError,
+  subscribeEvents,
+  type AppSettings,
+} from "./lib/api";
 import type {
   ProjectSummary,
   SearchHitWithSeq,
@@ -937,6 +946,64 @@ export default function App() {
     setTab("chat");
   }, []);
 
+  // ── Command-palette ACTIONS that hit endpoints ───────────────────────────
+  // Each reuses an existing api.ts client fn and surfaces a toast on success /
+  // failure. The *Maybe-backed calls map an older server's missing route to a
+  // NotImplementedError, which we report as a quiet "not available" toast rather
+  // than letting it bubble — mirroring how the Settings controls degrade.
+
+  // Force a full re-index (POST /api/reindex). The 202 ack only means the pass
+  // STARTED; live progress streams over the existing SSE the header already shows.
+  const runReindex = useCallback(async () => {
+    try {
+      await api.reindex();
+      pushToast({ title: "Rebuilding index…", body: "Progress shows in the top bar.", level: "info" });
+    } catch (err) {
+      pushToast(
+        err instanceof NotImplementedError
+          ? { title: "Rebuild index unavailable", body: "This server doesn't support reindex yet.", level: "warning" }
+          : { title: "Couldn't start rebuild", body: err instanceof Error ? err.message : String(err), level: "error" },
+      );
+    }
+  }, [pushToast]);
+
+  // Read-only index-health audit (GET /api/maintenance/integrity). Reports the
+  // verdict as a toast; the full per-issue list lives in Settings → Index health.
+  const checkIndexHealth = useCallback(async () => {
+    try {
+      const r = await api.maintenanceIntegrity();
+      pushToast(
+        r.ok
+          ? { title: "Index healthy", body: "No issues found.", level: "success" }
+          : {
+              title: `${r.issues.length} index ${r.issues.length === 1 ? "issue" : "issues"} found`,
+              body: "Open Settings → Index health to review and repair.",
+              level: "warning",
+            },
+      );
+    } catch (err) {
+      pushToast(
+        err instanceof NotImplementedError
+          ? { title: "Index health unavailable", body: "This server doesn't support the health check yet.", level: "warning" }
+          : { title: "Couldn't check index", body: err instanceof Error ? err.message : String(err), level: "error" },
+      );
+    }
+  }, [pushToast]);
+
+  // Export the portable archive — a real file download. A plain anchor click
+  // streams it straight from the server (the big bundle never lives in memory),
+  // exactly like ArchiveTransfer's Download button. SSR-guarded.
+  const downloadArchive = useCallback(() => {
+    if (typeof document === "undefined") return;
+    const a = document.createElement("a");
+    a.href = exportArchiveUrl();
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    pushToast({ title: "Exporting archive…", body: "Your browser will download the .json file.", level: "info" });
+  }, [pushToast]);
+
   // Build the command palette actions from current app state. Memoized so the
   // list is stable between renders unless its inputs change.
   const commands = useMemo<Command[]>(() => {
@@ -1014,6 +1081,48 @@ export default function App() {
           ),
         run: cycleTheme,
       },
+      // ── Actions: run real app behavior straight from the palette ───────────
+      {
+        id: "toggle-perf",
+        title: `Toggle reduced motion (now: ${perf.preference})`,
+        group: "Actions",
+        keywords: "perf performance animation accessibility motion calm snappy",
+        icon: perf.reduced ? <Zap className="h-3.5 w-3.5" /> : <Gauge className="h-3.5 w-3.5" />,
+        run: perf.cyclePreference,
+      },
+      {
+        id: "open-shortcuts",
+        title: "Keyboard shortcuts",
+        group: "Actions",
+        hint: "?",
+        keywords: "help cheat sheet hotkeys bindings",
+        icon: <Keyboard className="h-3.5 w-3.5" />,
+        run: () => setShortcutOpen(true),
+      },
+      {
+        id: "rebuild-index",
+        title: "Rebuild index",
+        group: "Actions",
+        keywords: "reindex re-index refresh backfill analytics",
+        icon: <DatabaseZap className="h-3.5 w-3.5" />,
+        run: () => void runReindex(),
+      },
+      {
+        id: "check-index-health",
+        title: "Check index health",
+        group: "Actions",
+        keywords: "integrity audit repair maintenance",
+        icon: <ShieldCheck className="h-3.5 w-3.5" />,
+        run: () => void checkIndexHealth(),
+      },
+      {
+        id: "export-archive",
+        title: "Export archive",
+        group: "Actions",
+        keywords: "backup download portable transfer json",
+        icon: <Archive className="h-3.5 w-3.5" />,
+        run: downloadArchive,
+      },
     ];
 
     for (const m of CHAT_MODELS) {
@@ -1059,7 +1168,21 @@ export default function App() {
     }
 
     return list;
-  }, [projects, theme.preference, effectiveModel, cycleTheme, startNewChat, recents, openSession]);
+  }, [
+    projects,
+    theme.preference,
+    effectiveModel,
+    cycleTheme,
+    startNewChat,
+    recents,
+    openSession,
+    perf.preference,
+    perf.reduced,
+    perf.cyclePreference,
+    runReindex,
+    checkIndexHealth,
+    downloadArchive,
+  ]);
 
   return (
     <AuthGate>
@@ -1202,6 +1325,12 @@ export default function App() {
                     onContinue={handleContinue}
                     onCompare={setCompareSessionId}
                     jumpTarget={jumpTarget}
+                    onToast={pushToast}
+                    onTagsApplied={(_sid, _tags) => {
+                      // The autotag apply wrote to the index sidecar; refresh the
+                      // project's session list so the row chips reflect the new set.
+                      if (projectId) void refreshSessions(projectId);
+                    }}
                   />
                 </div>
               )

@@ -51,7 +51,7 @@ import { listPlugins } from "./config/index.js";
 import type { PluginInfo } from "./config/index.js";
 import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
 import type { McpToggle } from "./config/mcp-toggle.js";
-import { computeAutoTags } from "./auto-tag.js";
+import { computeAutoTags, mergeAutoTags } from "./auto-tag.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
 import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
 import type { IntegrityReport, RepairOptions, RepairResult } from "./integrity.js";
@@ -366,6 +366,27 @@ export class Engine {
     const summary = this.index.getSessionSummary(sessionId);
     if (!summary) return [];
     return computeAutoTags({ cwd: summary.cwd, gitBranch: summary.gitBranch });
+  }
+
+  /**
+   * APPLY the suggested auto-tags to a session: compute suggestions via {@link autoTagSession},
+   * merge them into the session's existing tags (set union, normalized/de-duped via the shared
+   * tag normalization in {@link mergeAutoTags}), and persist the result via {@link setTags}.
+   *
+   * Returns `{ applied, added }` — `applied` is the full resulting tag set, `added` only the newly
+   * added tags. Idempotent: a second call adds nothing (`added: []`) since the suggestions are
+   * already present. Existing user tags are preserved (union, never dropped). An unknown session
+   * is a no-op (`{ applied: [], added: [] }`) and never throws — pairs with the suggestions-only
+   * {@link autoTagSession} for a "preview before apply" UX.
+   */
+  applyAutoTags(sessionId: string): { applied: string[]; added: string[] } {
+    const suggested = this.autoTagSession(sessionId);
+    // Unknown session (or nothing to suggest with no prior tags) -> no-op, no write.
+    if (!this.index.getSessionSummary(sessionId)) return { applied: [], added: [] };
+    const existing = this.getTags(sessionId);
+    const { applied, added } = mergeAutoTags(existing, suggested);
+    if (added.length) this.setTags(sessionId, applied);
+    return { applied, added };
   }
 
   /**
@@ -1011,7 +1032,7 @@ export {
 } from "./fts-schema.js";
 export type { FtsTokenizer } from "./fts-schema.js";
 export { TagStore, parseTags, normalizeTags } from "./tags.js";
-export { computeAutoTags, branchTag } from "./auto-tag.js";
+export { computeAutoTags, branchTag, mergeAutoTags } from "./auto-tag.js";
 export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";
 export { AuditStore } from "./audit.js";
