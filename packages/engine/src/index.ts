@@ -931,6 +931,7 @@ export type {
 } from "./integrity.js";
 export {
   exportArchive,
+  exportArchiveForProject,
   exportArchiveChunks,
   importArchive,
   ArchiveVersionError,

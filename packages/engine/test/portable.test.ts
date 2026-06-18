@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { TranscriptIndex } from "../src/index-db.js";
 import {
   exportArchive,
+  exportArchiveForProject,
   exportArchiveChunks,
   importArchive,
   ArchiveVersionError,
@@ -13,6 +14,7 @@ import {
   type ArchiveBundle,
   type ArchiveChunk,
 } from "../src/portable.js";
+import { projectIdFromCwd } from "../src/paths.js";
 
 // node:sqlite is a newer builtin vitest's module graph won't resolve; require it
 // natively (the same trick index-db.ts uses) so we can open an index DB raw and count
@@ -34,14 +36,31 @@ const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
 
 const cwd = "/home/dev/portable-project";
 
-/** A two-message transcript: a user prompt + an assistant reply with a tool_use. */
-const writeTranscript = (file: string, term: string) => {
+/**
+ * A two-message transcript: a user prompt + an assistant reply with a tool_use. The
+ * `cwd` (which determines the derived projectId) and the line `timestamp` (which lands
+ * in lastTs, driving the `sinceTs` filter) are overridable for selective-export tests;
+ * both default to the original fixed values so existing callers are unchanged.
+ */
+const writeTranscript = (
+  file: string,
+  term: string,
+  opts: { cwd?: string; timestamp?: string } = {},
+) => {
+  const sessionCwd = opts.cwd ?? cwd;
+  const ts = opts.timestamp;
   writeFileSync(
     file,
-    jl({ type: "user", cwd, message: { role: "user", content: `index the ${term} notes` } }) +
+    jl({
+      type: "user",
+      cwd: sessionCwd,
+      ...(ts ? { timestamp: ts } : {}),
+      message: { role: "user", content: `index the ${term} notes` },
+    }) +
       jl({
         type: "assistant",
-        cwd,
+        cwd: sessionCwd,
+        ...(ts ? { timestamp: ts } : {}),
         message: {
           role: "assistant",
           model: "claude-opus-4-8",
@@ -285,5 +304,200 @@ describe("portable archive export/import (src/portable.ts)", () => {
     expect(counts(destPath).sessions).toBe(2);
 
     src.idx.close();
+  });
+});
+
+/**
+ * SELECTIVE export (packages/engine/src/portable.ts).
+ *
+ * exportArchive accepts an optional selection — projectId / sessionIds / sinceTs — to
+ * bundle only a subset. Assert: a projectId export carries only that project's sessions
+ * (+ only their meta/text/audit); a sessionIds export carries exactly the listed
+ * sessions; a sinceTs export carries only recent-enough sessions; a no-selection export
+ * is unchanged vs the full baseline; a selective bundle round-trips into a fresh index
+ * (importArchive UNCHANGED) and re-imports idempotently. Hermetic: temp DBs + temp dir.
+ */
+
+const cwdAlpha = "/home/dev/alpha-project";
+const cwdBeta = "/home/dev/beta-project";
+const projAlpha = projectIdFromCwd(cwdAlpha);
+const projBeta = projectIdFromCwd(cwdBeta);
+
+/**
+ * Build a SOURCE index spanning TWO projects (alpha: a1+a2, beta: b1) with distinct
+ * last-activity timestamps, plus per-session sidecar meta and audit rows on sessions in
+ * each project, and a global saved view. Returns the open index + its db path + dir.
+ */
+async function buildMultiProject() {
+  const dir = tmp();
+  const proj = path.join(dir, "-multi");
+  mkdirSync(proj);
+  const fA1 = path.join(proj, "a1.jsonl");
+  const fA2 = path.join(proj, "a2.jsonl");
+  const fB1 = path.join(proj, "b1.jsonl");
+  // alpha sessions are OLD, beta session is NEW — so a sinceTs floor between them keeps
+  // only beta.
+  writeTranscript(fA1, "apple", { cwd: cwdAlpha, timestamp: "2024-01-01T00:00:00.000Z" });
+  writeTranscript(fA2, "apricot", { cwd: cwdAlpha, timestamp: "2024-01-02T00:00:00.000Z" });
+  writeTranscript(fB1, "banana", { cwd: cwdBeta, timestamp: "2024-06-01T00:00:00.000Z" });
+  const dbPath = path.join(dir, "multi.db");
+
+  const idx = new TranscriptIndex(dbPath);
+  await idx.indexSession(fA1);
+  await idx.indexSession(fA2);
+  await idx.indexSession(fB1);
+
+  // Sidecar meta + an audit row spread across both projects, so we can prove a selective
+  // export carries only the included sessions' sidecar/audit.
+  idx.setTags("a1", ["alpha"]);
+  idx.setNotes("b1", "beta findings");
+  idx.audit.logDecision({ sessionId: "a1", toolName: "Bash", decision: "allow", scope: "once" });
+  idx.audit.logDecision({ sessionId: "b1", toolName: "Bash", decision: "deny", scope: "once" });
+  // A global saved view (not tied to any session) — included in every bundle.
+  idx.saveView({ name: "Fruit", query: "apple", facets: {} });
+
+  return { idx, dbPath, dir };
+}
+
+describe("selective archive export (src/portable.ts)", () => {
+  it("by projectId: bundle carries ONLY that project's sessions + their sidecar/audit", async () => {
+    const src = await buildMultiProject();
+    const bundle = src.idx.exportArchive({ timestamp: 1, projectId: projAlpha });
+
+    // Only alpha's two sessions travel — beta is excluded.
+    expect(bundle.sessions.map((s) => s.session.sessionId).sort()).toEqual(["a1", "a2"]);
+    for (const s of bundle.sessions) expect(s.session.projectId).toBe(projAlpha);
+
+    // Sidecar meta is scoped: a1's tags ride along, b1's notes do not.
+    const a1 = bundle.sessions.find((s) => s.session.sessionId === "a1")!;
+    expect(a1.meta?.tags).toBe(JSON.stringify(["alpha"]));
+    expect(bundle.sessions.some((s) => s.session.sessionId === "b1")).toBe(false);
+
+    // Audit is scoped to included sessions only — a1's allow, never b1's deny.
+    expect(bundle.audit.map((a) => a.sessionId).sort()).toEqual(["a1"]);
+    expect(bundle.audit.every((a) => a.sessionId === "a1")).toBe(true);
+
+    // Saved views are global — still included in full.
+    expect(bundle.savedViews).toHaveLength(1);
+    // The bundle SHAPE/version is unchanged — a selective bundle is just smaller.
+    expect(bundle.kind).toBe("claude-ui-archive");
+    expect(bundle.schemaVersion).toBe(ARCHIVE_SCHEMA_VERSION);
+
+    src.idx.close();
+  });
+
+  it("exportArchiveForProject is the projectId shorthand", async () => {
+    const src = await buildMultiProject();
+    const db = new DatabaseSync(src.dbPath);
+    try {
+      const viaHelper = exportArchiveForProject(db, projBeta, { timestamp: 9 });
+      const viaOpts = exportArchive(db, { timestamp: 9, projectId: projBeta });
+      expect(viaHelper).toEqual(viaOpts);
+      expect(viaHelper.sessions.map((s) => s.session.sessionId)).toEqual(["b1"]);
+    } finally {
+      db.close();
+    }
+    src.idx.close();
+  });
+
+  it("by sessionIds: bundle carries exactly the listed sessions (empty list = none)", async () => {
+    const src = await buildMultiProject();
+
+    const bundle = src.idx.exportArchive({ timestamp: 1, sessionIds: ["a2", "b1"] });
+    expect(bundle.sessions.map((s) => s.session.sessionId).sort()).toEqual(["a2", "b1"]);
+    // a1's audit row is excluded (a1 not selected); b1's deny travels.
+    expect(bundle.audit.map((a) => a.sessionId).sort()).toEqual(["b1"]);
+
+    // An empty id list selects no sessions (and so no scoped audit), but the envelope +
+    // global saved views still come through — a valid, near-empty bundle.
+    const none = src.idx.exportArchive({ timestamp: 1, sessionIds: [] });
+    expect(none.sessions).toHaveLength(0);
+    expect(none.audit).toHaveLength(0);
+    expect(none.savedViews).toHaveLength(1);
+
+    src.idx.close();
+  });
+
+  it("by sinceTs: bundle carries only sessions at/after the floor", async () => {
+    const src = await buildMultiProject();
+    // A floor between the (old) alpha sessions and the (new) beta session keeps only beta.
+    const floor = Date.parse("2024-03-01T00:00:00.000Z");
+    const bundle = src.idx.exportArchive({ timestamp: 1, sinceTs: floor });
+    expect(bundle.sessions.map((s) => s.session.sessionId)).toEqual(["b1"]);
+
+    // A floor before everything keeps all three.
+    const all = src.idx.exportArchive({ timestamp: 1, sinceTs: 0 });
+    expect(all.sessions.map((s) => s.session.sessionId).sort()).toEqual(["a1", "a2", "b1"]);
+
+    src.idx.close();
+  });
+
+  it("combines filters with AND (projectId + sinceTs)", async () => {
+    const src = await buildMultiProject();
+    // alpha project AND since a date after both alpha sessions -> nothing matches.
+    const empty = src.idx.exportArchive({
+      timestamp: 1,
+      projectId: projAlpha,
+      sinceTs: Date.parse("2024-03-01T00:00:00.000Z"),
+    });
+    expect(empty.sessions).toHaveLength(0);
+
+    // alpha project AND since a date between the two alpha sessions -> only a2.
+    const one = src.idx.exportArchive({
+      timestamp: 1,
+      projectId: projAlpha,
+      sinceTs: Date.parse("2024-01-01T12:00:00.000Z"),
+    });
+    expect(one.sessions.map((s) => s.session.sessionId)).toEqual(["a2"]);
+
+    src.idx.close();
+  });
+
+  it("no selection is UNCHANGED vs the full baseline (same session set + byte-identical)", async () => {
+    const src = await buildMultiProject();
+    const full = src.idx.exportArchive({ timestamp: 5 });
+    // Full corpus: all three sessions, both audit rows.
+    expect(full.sessions.map((s) => s.session.sessionId).sort()).toEqual(["a1", "a2", "b1"]);
+    expect(full.audit).toHaveLength(2);
+
+    // An "all-encompassing" selection (e.g. sinceTs:0) yields the SAME session set as the
+    // default full export, and the default path is byte-identical to passing no opts.
+    const fullAgain = src.idx.exportArchive({ timestamp: 5 });
+    expect(fullAgain).toEqual(full);
+
+    src.idx.close();
+  });
+
+  it("a selective bundle round-trips into a FRESH index (import UNCHANGED) + re-import idempotent", async () => {
+    const src = await buildMultiProject();
+    const bundle = src.idx.exportArchive({ timestamp: 1, projectId: projAlpha });
+
+    // Import the SELECTIVE bundle into a brand-new index — importArchive is unchanged; a
+    // selective bundle is just a smaller valid one.
+    const destPath = path.join(src.dir, "dest.db");
+    const dest = new TranscriptIndex(destPath);
+    const res = dest.importArchive(bundle);
+    expect(res.sessions).toBe(2); // only alpha's a1 + a2
+    expect(res.audit).toBe(1); // only a1's scoped audit row
+
+    // Exactly alpha's sessions were restored — beta's b1 is absent.
+    expect(dest.getSessionSummary("a1")).toBeDefined();
+    expect(dest.getSessionSummary("a2")).toBeDefined();
+    expect(dest.getSessionSummary("b1")).toBeUndefined();
+    expect(dest.getTags("a1")).toEqual(["alpha"]);
+    // Mirrored text round-trips and is searchable; beta's term is nowhere to be found.
+    expect(dest.search("apple").map((h) => h.sessionId)).toContain("a1");
+    expect(dest.search("banana")).toHaveLength(0);
+
+    const before = counts(destPath);
+    // Re-import the same selective bundle twice — counts must not grow (idempotent).
+    const r2 = dest.importArchive(bundle);
+    dest.importArchive(bundle);
+    expect(counts(destPath)).toEqual(before);
+    expect(r2.audit).toBe(0);
+    expect(r2.savedViews).toBe(0);
+
+    src.idx.close();
+    dest.close();
   });
 });

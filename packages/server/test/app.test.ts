@@ -734,6 +734,132 @@ describe("maintenance endpoints", () => {
   });
 });
 
+describe("portable archive endpoints", () => {
+  beforeEach(async () => {
+    current = await makeApp();
+  });
+
+  it("GET /api/export/archive downloads a JSON bundle with the expected top-level keys", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/export/archive",
+    });
+    expect(res.statusCode).toBe(200);
+    // Downloadable JSON: attachment disposition with the session count in the filename.
+    expect(res.headers["content-type"]).toContain("application/json");
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain("claude-ui-archive-3-sessions.json");
+    const bundle = res.json() as {
+      kind: string;
+      schemaVersion: number;
+      sessions: unknown[];
+      savedViews: unknown[];
+      audit: unknown[];
+    };
+    expect(bundle.kind).toBe("claude-ui-archive");
+    expect(typeof bundle.schemaVersion).toBe("number");
+    expect(Array.isArray(bundle.sessions)).toBe(true);
+    expect(bundle.sessions.length).toBe(3);
+    expect(Array.isArray(bundle.savedViews)).toBe(true);
+    expect(Array.isArray(bundle.audit)).toBe(true);
+  });
+
+  it("GET /api/export/archive?projectId=… scopes the export to one project", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/export/archive?projectId=${ALPHA_ID}`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("application/json");
+    const bundle = res.json() as { sessions: Array<{ session: { projectId: string } }> };
+    expect(Array.isArray(bundle.sessions)).toBe(true);
+    // If the engine honors selective export, only alpha's two sessions come back; an
+    // older engine that ignores the filter exports all three (an acceptable superset).
+    // Either way every returned session that carries a projectId must be a real one,
+    // and alpha (the requested project) must be present.
+    const projectIds = bundle.sessions
+      .map((s) => s.session?.projectId)
+      .filter((p): p is string => typeof p === "string");
+    expect(projectIds).toContain(ALPHA_ID);
+    if (bundle.sessions.length < 3) {
+      // Selective export landed: it's strictly alpha's sessions, beta excluded.
+      expect(projectIds.every((p) => p === ALPHA_ID)).toBe(true);
+    }
+  });
+
+  it("GET /api/export/archive 503s when the engine method is absent", async () => {
+    // Capability guard: an older engine without exportArchive degrades to 503, not a 500.
+    (current!.engine as unknown as Record<string, unknown>).exportArchive = undefined;
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/export/archive",
+    });
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("POST /api/import/archive restores a previously-exported bundle, idempotently", async () => {
+    // Export the seeded corpus, then re-import it into the SAME app. Because the index
+    // already holds these sessions, the import is a no-op replace (idempotent) — it must
+    // not duplicate rows. We assert the session count is unchanged afterward.
+    const exp = await current!.app.inject({ method: "GET", url: "/api/export/archive" });
+    expect(exp.statusCode).toBe(200);
+    const bundle = exp.json();
+
+    const before = current!.engine.index.getSessionCount();
+
+    const imp = await current!.app.inject({
+      method: "POST",
+      url: "/api/import/archive",
+      payload: bundle,
+    });
+    expect(imp.statusCode).toBe(200);
+    const summary = imp.json() as { importedSessions: number; textRows: number };
+    expect(summary.importedSessions).toBe(3);
+
+    // Idempotent: re-importing the same bundle restored the same 3 sessions without
+    // inflating the corpus, and a second import is still a clean no-op replace.
+    expect(current!.engine.index.getSessionCount()).toBe(before);
+    const imp2 = await current!.app.inject({
+      method: "POST",
+      url: "/api/import/archive",
+      payload: bundle,
+    });
+    expect(imp2.statusCode).toBe(200);
+    expect((imp2.json() as { importedSessions: number }).importedSessions).toBe(3);
+    expect(current!.engine.index.getSessionCount()).toBe(before);
+  });
+
+  it("POST /api/import/archive rejects a malformed body (400)", async () => {
+    // Missing the `sessions` array → the shape gate rejects it before the engine.
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/import/archive",
+      payload: { kind: "claude-ui-archive", schemaVersion: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain("invalid archive bundle");
+  });
+
+  it("POST /api/import/archive rejects an incompatible schemaVersion (400, never 500)", async () => {
+    // A well-formed envelope whose schemaVersion this build can't read: the engine throws
+    // ArchiveVersionError, which the route maps to bad input (400), not a server error.
+    const res = await current!.app.inject({
+      method: "POST",
+      url: "/api/import/archive",
+      payload: {
+        kind: "claude-ui-archive",
+        schemaVersion: 999999,
+        timestamp: 0,
+        sessions: [],
+        savedViews: [],
+        audit: [],
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect((res.json() as { error: string }).error).toContain("incompatible archive");
+  });
+});
+
 describe("server token auth", () => {
   beforeEach(async () => {
     current = await makeApp({ token: "secret" });

@@ -20,6 +20,17 @@
  * normal-sized indexes + tests); {@link exportArchiveChunks} yields it section-by-section
  * for a caller that wants to stream it to disk without holding it all at once.
  *
+ * SELECTIVE EXPORT. By default a bundle holds the WHOLE corpus, but the export options
+ * accept an optional selection — `projectId`, `sessionIds`, and/or `sinceTs` (any
+ * combination) — so a user can export/share just a subset (e.g. one project). When set,
+ * only the matching sessions travel (with only their sidecar meta + mirrored text), the
+ * audit log is scoped to those sessions, and saved views (which have no per-session key)
+ * are still included in full — they're global smart folders, useful to carry along, and
+ * import de-dupes them anyway. The selection is pushed into SQL (filter at the source),
+ * never an export-all-then-filter. The bundle SHAPE/schemaVersion is unchanged: a
+ * selective bundle is just a smaller valid bundle that {@link importArchive} reads
+ * identically to a full one. With no selection the output is byte-identical to before.
+ *
  * IMPORT. {@link importArchive} restores a bundle into THIS index, idempotently — it
  * reuses the W23 stable-rowid write path for the mirrored text (so re-importing the same
  * bundle never duplicates rows) and UPSERTs session/sidecar rows keyed by their natural
@@ -124,6 +135,24 @@ export interface ExportArchiveOptions {
    * passes it in so tests are deterministic; defaults to Date.now() when omitted.
    */
   timestamp?: number;
+  /**
+   * SELECTIVE export — limit the bundle to sessions in this project. Combines (AND) with
+   * the other selection fields. Omitted = no project filter (i.e. the full corpus unless
+   * another selection narrows it).
+   */
+  projectId?: string;
+  /**
+   * SELECTIVE export — limit the bundle to these exact session ids. Combines (AND) with
+   * the other selection fields. An empty array selects NO sessions; omitted = no id
+   * filter.
+   */
+  sessionIds?: string[];
+  /**
+   * SELECTIVE export — limit the bundle to sessions whose last activity (`lastTs`) is at
+   * or after this instant (epoch ms). Sessions with no usable timestamp are excluded.
+   * Combines (AND) with the other selection fields; omitted = no time floor.
+   */
+  sinceTs?: number;
 }
 
 /** Result of an {@link importArchive} run — what was written. */
@@ -231,37 +260,105 @@ interface TextRow {
 }
 
 /**
+ * A resolved export selection: which sessions to include. `null` means "everything"
+ * (the default), so the full-export path stays byte-identical. When non-null, `ids` is
+ * the EXACT set of sessionIds the selection resolved to (already filtered in SQL by
+ * project/id-list/since) — every downstream read keys off this set so the sidecar/text
+ * /audit slices match the sessions exactly.
+ */
+interface ResolvedSelection {
+  ids: Set<string>;
+}
+
+/** True when any selection field is present (so the export is selective, not full). */
+function hasSelection(opts: ExportArchiveOptions): boolean {
+  return (
+    typeof opts.projectId === "string" ||
+    Array.isArray(opts.sessionIds) ||
+    typeof opts.sinceTs === "number"
+  );
+}
+
+/**
+ * Resolve a selective export down to the concrete set of sessionIds it matches, by
+ * pushing every filter into SQL (project = ?, sessionId IN (...), lastTs >= instant) so
+ * we never read-all-then-filter. Returns `null` for a full export (no selection), which
+ * the readers treat as "no filter" to keep the default path byte-identical.
+ */
+function resolveSelection(db: SqliteDatabase, opts: ExportArchiveOptions): ResolvedSelection | null {
+  if (!hasSelection(opts)) return null;
+
+  const where: string[] = [];
+  const params: Array<string | number> = [];
+  if (typeof opts.projectId === "string") {
+    where.push("projectId = ?");
+    params.push(opts.projectId);
+  }
+  if (Array.isArray(opts.sessionIds)) {
+    if (opts.sessionIds.length === 0) return { ids: new Set() }; // empty list selects nothing
+    where.push(`sessionId IN (${opts.sessionIds.map(() => "?").join(", ")})`);
+    params.push(...opts.sessionIds);
+  }
+  if (typeof opts.sinceTs === "number") {
+    // lastTs is the raw ISO transcript timestamp; compare in epoch seconds (floor both
+    // sides to the second, symmetrically) so the threshold is timezone-safe. A row with
+    // no usable timestamp yields NULL and is excluded — sensible for a time floor.
+    where.push("CAST(strftime('%s', lastTs) AS INTEGER) >= ?");
+    params.push(Math.floor(opts.sinceTs / 1000));
+  }
+
+  const ids = new Set<string>();
+  for (const r of db
+    .prepare(`SELECT sessionId FROM sessions WHERE ${where.join(" AND ")}`)
+    .all(...params) as unknown as Array<{ sessionId: string }>) {
+    ids.add(r.sessionId);
+  }
+  return { ids };
+}
+
+/**
  * Read every indexed session (its `sessions` row + the matching `session_meta` sidecar
  * + the mirrored text rows) and assemble the per-session export records. Pure read — no
  * writes, no transcript I/O. Shared by {@link exportArchive} and the chunked streamer.
+ * When `sel` is non-null the read is scoped to exactly its `ids` (a SELECTIVE export);
+ * `null` reads the whole corpus (the default, byte-identical to before).
  */
-function readSessions(db: SqliteDatabase): ArchiveSession[] {
+function readSessions(db: SqliteDatabase, sel: ResolvedSelection | null): ArchiveSession[] {
+  // A selective export with an empty resolved set has nothing to read — bail before any
+  // query so the sidecar/text scans below stay bounded to real work.
+  if (sel && sel.ids.size === 0) return [];
+  const include = (id: string) => !sel || sel.ids.has(id);
+
   const table = textTable(db);
-  const sessionRows = db
-    .prepare(
-      `SELECT sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
+  const sessionRows = (
+    db
+      .prepare(
+        `SELECT sessionId, filePath, cwd, projectId, title, titleSource, gitBranch,
               firstTs, lastTs, messageCount, inputTokens, outputTokens,
               cacheReadTokens, cacheCreationTokens, sizeBytes, mtimeMs, indexedBytes,
               hasSubagents, model, headSig
        FROM sessions ORDER BY sessionId`,
-    )
-    .all() as unknown as SessionRow[];
+      )
+      .all() as unknown as SessionRow[]
+  ).filter((s) => include(s.sessionId));
 
   // Index the sidecar meta + mirrored text by sessionId in one scan each, so assembling
-  // the bundle is O(rows) rather than a per-session query.
+  // the bundle is O(rows) rather than a per-session query. For a selective export we
+  // still scan once but keep only rows whose session is included (the set is small).
   const metaBySession = new Map<string, MetaRow>();
   for (const m of db
     .prepare(
       "SELECT sessionId, customTitle, pinned, tags, archived, notes FROM session_meta",
     )
     .all() as unknown as MetaRow[]) {
-    metaBySession.set(m.sessionId, m);
+    if (include(m.sessionId)) metaBySession.set(m.sessionId, m);
   }
 
   const textBySession = new Map<string, ArchiveTextRow[]>();
   for (const t of db
     .prepare(`SELECT sessionId, role, seq, toolName, text FROM ${table} ORDER BY sessionId, seq`)
     .all() as unknown as TextRow[]) {
+    if (!include(t.sessionId)) continue;
     let arr = textBySession.get(t.sessionId);
     if (!arr) {
       arr = [];
@@ -332,8 +429,13 @@ function readSavedViews(db: SqliteDatabase): ArchiveSavedView[] {
   }));
 }
 
-/** Read the permission-decision audit log for the bundle. */
-function readAudit(db: SqliteDatabase): ArchiveAuditRow[] {
+/**
+ * Read the permission-decision audit log for the bundle. For a SELECTIVE export (`sel`
+ * non-null) we keep only rows whose `sessionId` is one of the included sessions — audit
+ * rows with a null/other sessionId are dropped, so a shared project bundle never leaks
+ * decisions from sessions it doesn't carry. `null` reads the whole log (the default).
+ */
+function readAudit(db: SqliteDatabase, sel: ResolvedSelection | null): ArchiveAuditRow[] {
   const rows = db
     .prepare(
       "SELECT sessionId, toolName, decision, scope, reason, ts FROM permission_audit ORDER BY ts, id",
@@ -346,14 +448,16 @@ function readAudit(db: SqliteDatabase): ArchiveAuditRow[] {
     reason: string | null;
     ts: number | bigint;
   }>;
-  return rows.map((r) => ({
-    sessionId: r.sessionId ?? null,
-    toolName: r.toolName ?? "tool",
-    decision: r.decision === "allow" ? "allow" : "deny",
-    scope: r.scope ?? null,
-    reason: r.reason ?? null,
-    ts: num(r.ts),
-  }));
+  return rows
+    .filter((r) => !sel || (r.sessionId != null && sel.ids.has(r.sessionId)))
+    .map((r) => ({
+      sessionId: r.sessionId ?? null,
+      toolName: r.toolName ?? "tool",
+      decision: r.decision === "allow" ? "allow" : "deny",
+      scope: r.scope ?? null,
+      reason: r.reason ?? null,
+      ts: num(r.ts),
+    }));
 }
 
 /**
@@ -362,16 +466,33 @@ function readAudit(db: SqliteDatabase): ArchiveAuditRow[] {
  * index prefer {@link exportArchiveChunks} to stream it without holding everything at
  * once. Read-only: no writes, no transcript I/O. The `timestamp` is the caller's
  * injected export time (defaults to Date.now()).
+ *
+ * Pass a SELECTION (`projectId` / `sessionIds` / `sinceTs`, any combination) to export
+ * only a subset; with none the result is byte-identical to a full export.
  */
 export function exportArchive(db: SqliteDatabase, opts: ExportArchiveOptions = {}): ArchiveBundle {
+  const sel = resolveSelection(db, opts);
   return {
     kind: "claude-ui-archive",
     schemaVersion: ARCHIVE_SCHEMA_VERSION,
     timestamp: typeof opts.timestamp === "number" ? opts.timestamp : Date.now(),
-    sessions: readSessions(db),
+    sessions: readSessions(db, sel),
     savedViews: readSavedViews(db),
-    audit: readAudit(db),
+    audit: readAudit(db, sel),
   };
+}
+
+/**
+ * Convenience wrapper for the most common SELECTIVE export: everything in one project.
+ * Equivalent to {@link exportArchive} with `{ projectId }`; merges any other options
+ * (e.g. a deterministic `timestamp`) so a caller can still inject them.
+ */
+export function exportArchiveForProject(
+  db: SqliteDatabase,
+  projectId: string,
+  opts: ExportArchiveOptions = {},
+): ArchiveBundle {
+  return exportArchive(db, { ...opts, projectId });
 }
 
 /** One streamed slice of a chunked export — assemble them in order into a full bundle. */
@@ -389,12 +510,14 @@ export type ArchiveChunk =
  * large index to disk without materializing the whole document in memory. Yields a
  * `header` chunk first (the versioned envelope, no sessions), then one `session` chunk
  * per indexed session, then the `savedViews` and `audit` chunks. Re-assembling the
- * chunks reproduces exactly what {@link exportArchive} returns. Read-only.
+ * chunks reproduces exactly what {@link exportArchive} returns. Read-only. Honors the
+ * same SELECTION options as {@link exportArchive}.
  */
 export function* exportArchiveChunks(
   db: SqliteDatabase,
   opts: ExportArchiveOptions = {},
 ): Generator<ArchiveChunk> {
+  const sel = resolveSelection(db, opts);
   yield {
     kind: "header",
     bundle: {
@@ -403,11 +526,11 @@ export function* exportArchiveChunks(
       timestamp: typeof opts.timestamp === "number" ? opts.timestamp : Date.now(),
     },
   };
-  for (const session of readSessions(db)) {
+  for (const session of readSessions(db, sel)) {
     yield { kind: "session", session };
   }
   yield { kind: "savedViews", savedViews: readSavedViews(db) };
-  yield { kind: "audit", audit: readAudit(db) };
+  yield { kind: "audit", audit: readAudit(db, sel) };
 }
 
 /** True when this build can read a bundle declaring `version`. */

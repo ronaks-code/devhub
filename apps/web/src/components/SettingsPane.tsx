@@ -13,6 +13,7 @@ import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 import { PluginsView } from "./config/PluginsView";
 import { RebuildIndex } from "./config/RebuildIndex";
 import { IntegrityPanel } from "./config/IntegrityPanel";
+import { ArchiveTransfer } from "./config/ArchiveTransfer";
 import { BudgetSettings } from "./BudgetSettings";
 
 /** Sub-tabs within the Settings view. */
@@ -303,6 +304,13 @@ export function SettingsPane({
             server without the /api/maintenance/* routes, and operates only on our
             own index DB (re-derivation over deletes — never the transcripts). */}
         <IntegrityPanel />
+
+        {/* Export/import the portable archive — a permanent, shareable backup of our
+            indexed history + organization that survives Claude Code's ~30-day
+            transcript auto-delete. Self-contained: probes the /api/export|import
+            routes and hides itself on an older server; import only writes our own
+            index DB and never touches ~/.claude. */}
+        <ArchiveTransfer />
 
         <div className="mt-6 flex items-center gap-3">
           <button

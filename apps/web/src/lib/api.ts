@@ -1020,6 +1020,154 @@ function toBudgetBody(config: BudgetConfig): Record<string, unknown> {
 }
 
 /**
+ * Raised when POST /api/import/archive rejects the uploaded bundle as bad or
+ * version-incompatible (HTTP 400). Distinct from {@link NotImplementedError} (the
+ * server doesn't have the route at all) so ArchiveTransfer can show a precise
+ * "this file isn't a valid / compatible archive" message instead of a generic
+ * failure. `detail` carries the server's reason line when it sent one.
+ */
+export class BadArchiveError extends Error {
+  readonly status = 400;
+  /** Server-supplied reason (e.g. "incompatible schemaVersion"), when present. */
+  readonly detail?: string;
+  constructor(detail?: string) {
+    super(detail ? `Invalid archive: ${detail}` : "Invalid or incompatible archive");
+    this.name = "BadArchiveError";
+    if (detail) this.detail = detail;
+  }
+}
+
+/**
+ * Result of POST /api/import/archive — how many of each kind of row the restore
+ * wrote into the local index. Mirrors the engine's `ImportArchiveResult`
+ * (packages/engine/src/portable.ts); read tolerantly so the toast still shows a
+ * sensible session count whatever spelling the server lands on. `sessions` is the
+ * canonical headline ("Imported N sessions"); the rest are extra detail.
+ */
+export interface ImportArchiveResult {
+  /** Sessions whose `sessions` row was inserted/updated. */
+  sessions: number;
+  /** Sessions whose sidecar `session_meta` row was written. */
+  meta?: number;
+  /** Mirrored message-text rows inserted (a re-import of the same bundle adds 0). */
+  textRows?: number;
+  /** Saved views / smart folders inserted. */
+  savedViews?: number;
+  /** Permission-audit rows inserted. */
+  audit?: number;
+}
+
+/**
+ * Build the URL for the portable-archive EXPORT download (GET /api/export/archive).
+ * With a `projectId` it scopes the bundle to that one project; without one it's the
+ * full archive. A `<a download>` / `window.open` can't carry an Authorization
+ * header, so a required token rides as a query param (the server accepts either),
+ * exactly like {@link assetUrl} / the SSE stream. No-op locally (no token).
+ *
+ * The archive is OUR durable index export (sidecar meta + mirrored text), never the
+ * raw ~/.claude transcripts — see packages/engine/src/portable.ts.
+ */
+export function exportArchiveUrl(projectId?: string): string {
+  const qs = new URLSearchParams();
+  if (projectId) qs.set("projectId", projectId);
+  const token = getToken();
+  if (token) qs.set("token", token);
+  const s = qs.toString();
+  return "/api/export/archive" + (s ? `?${s}` : "");
+}
+
+/**
+ * Probe whether the portable-archive routes exist on the running server. An older
+ * server that predates W25's export/import engine has no GET /api/export/archive, so
+ * ArchiveTransfer hides itself rather than offering buttons that 404. We send a
+ * HEAD (cheap — no body) and treat any non-404/501 as "available"; a network error
+ * is treated as unavailable so the control degrades quietly. Token rides in the
+ * header like the JSON calls.
+ */
+export async function archiveAvailable(): Promise<boolean> {
+  try {
+    const res = await fetch("/api/export/archive", {
+      method: "HEAD",
+      headers: withAuth({}),
+    });
+    if (res.status === 401) {
+      notifyUnauthorized();
+      return false;
+    }
+    return res.status !== 404 && res.status !== 501;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Restore a portable archive bundle into the local index (POST /api/import/archive).
+ * SAFE by contract: the server writes only our own index DB (sidecar meta + mirrored
+ * text) and NEVER touches ~/.claude transcripts; the import is idempotent
+ * (re-importing the same bundle doesn't duplicate rows). The web side only POSTs the
+ * parsed JSON — validation (schemaVersion) lives in the engine.
+ *
+ * Error mapping for the three outcomes the UI distinguishes:
+ *  - 404/501 → {@link NotImplementedError} (older server without the route).
+ *  - 400     → {@link BadArchiveError} (bad/incompatible bundle), carrying the
+ *              server's reason when it sent one.
+ *  - other   → a plain Error.
+ *
+ * The bundle can be large (100+ sessions, multi-MB text), so the caller hands us the
+ * already-parsed object and we serialize once here; we don't re-read it after.
+ */
+export async function importArchive(bundle: unknown): Promise<ImportArchiveResult> {
+  const url = "/api/import/archive";
+  const res = await fetch(url, {
+    method: "POST",
+    headers: withAuth({ "content-type": "application/json" }),
+    body: JSON.stringify(bundle),
+  });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new UnauthorizedError(url);
+  }
+  if (res.status === 404 || res.status === 501) throw new NotImplementedError(res.status, url);
+  if (res.status === 400) {
+    // Surface the server's reason line when it sent one (JSON `{error}`/`{message}`
+    // or a plain string), but never throw while reading the error body.
+    let detail: string | undefined;
+    try {
+      const body = (await res.json()) as unknown;
+      if (typeof body === "string") detail = body;
+      else if (body && typeof body === "object") {
+        const o = body as Record<string, unknown>;
+        if (typeof o.error === "string") detail = o.error;
+        else if (typeof o.message === "string") detail = o.message;
+      }
+    } catch {
+      /* body wasn't JSON — fall back to the generic message */
+    }
+    throw new BadArchiveError(detail);
+  }
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} for ${url}`);
+  return normalizeImportResult(await res.json());
+}
+
+/**
+ * Coerce the tolerant POST /api/import/archive body into an {@link ImportArchiveResult}.
+ * The server returns the engine's `ImportArchiveResult` ({ sessions, meta, ... });
+ * we read each count defensively (0 when missing/odd) so the result toast always has
+ * a coherent session number to show, whatever the lane ends up emitting.
+ */
+function normalizeImportResult(res: unknown): ImportArchiveResult {
+  const o = (res && typeof res === "object" ? (res as Record<string, unknown>) : {}) ?? {};
+  const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    sessions: n(o.sessions),
+    meta: n(o.meta),
+    textRows: n(o.textRows),
+    savedViews: n(o.savedViews),
+    audit: n(o.audit),
+  };
+}
+
+/**
  * Subscribe to server-sent engine events. Returns an unsubscribe fn. The callback
  * receives the engine union widened with the web-only `notify` event ({@link AppEvent}),
  * so toast handling type-checks without an engine edit; unknown kinds are simply ignored.
