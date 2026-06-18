@@ -266,9 +266,15 @@ export function checkIntegrity(db: SqliteDatabase): IntegrityReport {
   if (noText.count > 0) {
     issues.push({
       kind: "missing-mirror-text",
-      detail: `${noText.count} session(s) with messages have zero mirrored search rows`,
+      // WARNING, not error: zero mirrored rows is indistinguishable from a session that
+      // legitimately carries no searchable text (tool-only / attachment / hook / queue
+      // messages count toward messageCount but produce no FTS rows). It is ALSO how a
+      // genuinely interrupted index pass looks — so we surface it and Repair re-derives
+      // from the transcript, but a text-less session that stays empty after repair is
+      // normal and must not flip overall health to "not ok".
+      detail: `${noText.count} session(s) have no searchable text mirrored (often normal for tool-only/empty sessions; Repair re-derives any that do have text)`,
       count: noText.count,
-      severity: "error",
+      severity: "warning",
     });
   }
 
@@ -302,7 +308,10 @@ export function checkIntegrity(db: SqliteDatabase): IntegrityReport {
   };
 
   return {
-    ok: issues.length === 0,
+    // Healthy unless there's an ERROR-severity issue. Warnings (missing transcripts after
+    // auto-delete, text-less sessions) are surfaced for visibility but don't mean the index
+    // is broken — so a normal corpus reports ok:true with informational warnings.
+    ok: !issues.some((i) => i.severity === "error"),
     checkedAt,
     userVersion,
     sqliteIntegrity,

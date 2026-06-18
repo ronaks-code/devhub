@@ -136,10 +136,12 @@ describe("index integrity check + safe repair", () => {
     raw.close();
 
     const before = idx.checkIntegrity();
-    expect(before.ok).toBe(false);
     const missing = before.issues.find((i) => i.kind === "missing-mirror-text");
     expect(missing).toBeDefined();
     expect(missing!.count).toBe(1);
+    // missing-mirror-text is a WARNING (indistinguishable from a legitimately text-less
+    // session), so it's surfaced + repairable but doesn't flip overall health.
+    expect(missing!.severity).toBe("warning");
     // Search now misses it (the proof the empty mirror matters).
     expect(idx.search("durian").map((h) => h.sessionId)).not.toContain("sessEmpty");
 
