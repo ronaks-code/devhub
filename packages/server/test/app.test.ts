@@ -665,6 +665,117 @@ describe("server REST endpoints (no token)", () => {
     expect(body.index.indexedMessageCount).toBeGreaterThan(0);
     expect(body.index).toHaveProperty("dbSizeBytes");
   });
+
+  it("GET /api/projects/:id/overview returns the per-project deep-dive shape", async () => {
+    // engine.projectOverview is an engine-lane (this-wave) method that may not have
+    // landed; either way the route returns a well-formed overview. For the seeded
+    // alpha project (two opus sessions) the composed fallback rolls up the count,
+    // cost, per-model breakdown, and top tools from already-published engine methods.
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      projectId: string;
+      sessionCount: number;
+      totalCostUsd: number;
+      byModel: Array<{ model: string; sessions: number }>;
+      topTools: Array<{ toolName: string; count: number }>;
+    };
+    expect(body.projectId).toBe(ALPHA_ID);
+    expect(body.sessionCount).toBe(2);
+    // Cost is present (a non-negative estimate) and the model breakdown is an array
+    // that buckets alpha's two opus sessions under the single opus model. The route
+    // serves the engine's overview when present and a uniform composed mirror when
+    // not — both share these field names, so this holds along the lane's landing.
+    expect(typeof body.totalCostUsd).toBe("number");
+    expect(body.totalCostUsd).toBeGreaterThanOrEqual(0);
+    expect(Array.isArray(body.byModel)).toBe(true);
+    expect(body.byModel.map((m) => m.model)).toEqual(["claude-opus-4-8"]);
+    expect(body.byModel[0]!.sessions).toBe(2);
+    // topTools is always an array; the seeded sessions each invoke Bash, so when the
+    // engine's toolStats backs the ranking Bash surfaces here.
+    expect(Array.isArray(body.topTools)).toBe(true);
+    expect(body.topTools.some((t) => t.toolName === "Bash")).toBe(true);
+  });
+
+  it("GET /api/projects/:id/overview returns a well-formed empty overview for an unknown project (200, zeros)", async () => {
+    // An unknown id must NOT 404/500 — it composes to an all-zeros overview so the
+    // detail view can render an empty state without special-casing the error.
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/projects/deadbeef0000/overview",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      projectId: string;
+      sessionCount: number;
+      totalTokens: number;
+      totalCostUsd: number;
+      lastTs: string | null;
+      byModel: unknown[];
+      topTools: unknown[];
+    };
+    expect(body.projectId).toBe("deadbeef0000");
+    expect(body.sessionCount).toBe(0);
+    expect(body.totalTokens).toBe(0);
+    expect(body.totalCostUsd).toBe(0);
+    expect(body.lastTs).toBe(null);
+    expect(body.byModel).toEqual([]);
+    expect(body.topTools).toEqual([]);
+  });
+
+  it("GET /api/projects/:id/overview forwards to engine.projectOverview when present", async () => {
+    // Duck-typed capability: stub the (engine-lane, this-wave) method and confirm the
+    // route forwards its result verbatim, called through with the validated project id.
+    const calls: string[] = [];
+    (current!.engine as unknown as Record<string, unknown>).projectOverview = (id: string) => {
+      calls.push(id);
+      return { projectId: id, sessionCount: 7, byModel: [], topTools: [] };
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ projectId: ALPHA_ID, sessionCount: 7, byModel: [], topTools: [] });
+    expect(calls).toEqual([ALPHA_ID]);
+  });
+
+  it("GET /api/projects/:id/overview composes a sane overview when engine.projectOverview throws", async () => {
+    // Half-landed engine: the wrapper exists but its backing isn't ready (it throws).
+    // The route must fall back to composing from published methods, NOT surface a 500.
+    (current!.engine as unknown as Record<string, unknown>).projectOverview = () => {
+      throw new Error("index.projectOverview is not a function");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { projectId: string; sessionCount: number; byModel: unknown[] };
+    expect(body.projectId).toBe(ALPHA_ID);
+    // The composed fallback rolled up alpha's two real sessions, proving it ran.
+    expect(body.sessionCount).toBe(2);
+    expect(Array.isArray(body.byModel)).toBe(true);
+  });
+
+  it("GET /api/projects/:id/overview degrades topTools to [] when toolStats is absent (still 200)", async () => {
+    // The fallback's tool ranking leans on toolStats (an engine-lane method too).
+    // With both projectOverview and toolStats absent the overview still composes from
+    // getProjectSessions — only topTools degrades to []. Never a 500.
+    (current!.engine as unknown as Record<string, unknown>).projectOverview = undefined;
+    (current!.engine as unknown as Record<string, unknown>).toolStats = undefined;
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { sessionCount: number; topTools: unknown[] };
+    expect(body.sessionCount).toBe(2);
+    expect(body.topTools).toEqual([]);
+  });
 });
 
 describe("budget endpoints", () => {
@@ -1045,6 +1156,20 @@ describe("server token auth", () => {
     const ok = await current!.app.inject({
       method: "GET",
       url: "/api/sessions/alpha-1/autotag/suggest",
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it("guards the project overview endpoint behind the token (401 without it)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
+    });
+    expect(res.statusCode).toBe(401);
+    const ok = await current!.app.inject({
+      method: "GET",
+      url: `/api/projects/${ALPHA_ID}/overview`,
       headers: { authorization: "Bearer secret" },
     });
     expect(ok.statusCode).toBe(200);

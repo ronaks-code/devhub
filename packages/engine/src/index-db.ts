@@ -34,6 +34,8 @@ import { relatedSessions } from "./related.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
 import { toolStats } from "./tool-stats.js";
 import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
+import { projectOverview } from "./project-overview.js";
+import type { ProjectOverview } from "./project-overview.js";
 import {
   FTS_TABLE,
   createFtsTableSql,
@@ -798,6 +800,17 @@ export class TranscriptIndex {
    */
   toolStats(opts: ToolStatsOptions = {}): ToolStatsResult {
     return toolStats(this.db, opts);
+  }
+
+  /**
+   * A single BOUNDED per-project aggregate for a deep-dive view: headline totals plus a
+   * per-model split, top tools, a ~30-day daily-cost series, and the tag cloud — all from
+   * a few bounded queries (no per-session loop), reusing the existing rollup/toolStats/
+   * dailyUsage machinery. An unknown projectId yields a well-formed empty overview, never
+   * a throw. Delegates to {@link projectOverview} with this index's DB.
+   */
+  projectOverview(projectId: string): ProjectOverview {
+    return projectOverview(this.db, projectId);
   }
 
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------

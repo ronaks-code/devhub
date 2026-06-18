@@ -20,6 +20,7 @@ import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
 import { registerRollupsRoutes } from "./routes/rollups.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
+import { registerProjectOverviewRoutes } from "./routes/project-overview.js";
 import { registerAssetsRoutes } from "./routes/assets.js";
 import { registerPrRoutes } from "./routes/pr.js";
 import { registerSavedViewsRoutes } from "./routes/saved-views.js";
@@ -146,6 +147,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerSearchRoutes(app, engine);
 
   registerProjectsRoutes(app, engine);
+
+  registerProjectOverviewRoutes(app, engine);
 
   registerAssetsRoutes(app, engine);
 

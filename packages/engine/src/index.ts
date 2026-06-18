@@ -56,6 +56,7 @@ import type { McpToggle } from "./config/mcp-toggle.js";
 import { computeAutoTags, mergeAutoTags } from "./auto-tag.js";
 import type { RelatedOptions, RelatedSession } from "./related.js";
 import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
+import type { ProjectOverview } from "./project-overview.js";
 import type { IntegrityReport, RepairOptions, RepairResult } from "./integrity.js";
 import type {
   ArchiveBundle,
@@ -580,6 +581,18 @@ export class Engine {
   }
 
   /**
+   * A single BOUNDED per-project aggregate for a project deep-dive: headline totals
+   * (sessionCount/cost/tokens/firstTs/lastTs) plus a per-model split, top tools, a
+   * ~30-day daily-cost series, and the project's tag cloud — assembled from a few bounded
+   * queries (GROUP BY / reused rollup helpers), NOT a per-session scan. No transcript
+   * reads. An unknown projectId returns a well-formed empty overview, never a throw.
+   * See {@link projectOverview}.
+   */
+  projectOverview(projectId: string): ProjectOverview {
+    return this.index.projectOverview(projectId);
+  }
+
+  /**
    * Read-only INTEGRITY diagnostic over the index DB: a set of bounded queries that flag
    * orphaned sidecar/search rows (parent session gone), sessions whose mirrored text is
    * missing despite a present transcript, sessions whose on-disk transcript no longer
@@ -907,6 +920,14 @@ export { relatedSessions } from "./related.js";
 export type { RelatedSession, RelatedOptions } from "./related.js";
 export { toolStats } from "./tool-stats.js";
 export type { ToolStat, ToolStatsResult, ToolStatsSummary, ToolStatsOptions } from "./tool-stats.js";
+export { projectOverview } from "./project-overview.js";
+export type {
+  ProjectOverview,
+  ProjectModelUsage,
+  ProjectTopTool,
+  ProjectDailyCost,
+  ProjectTag,
+} from "./project-overview.js";
 export type { ToolCall } from "./parse-session.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";

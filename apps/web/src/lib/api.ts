@@ -1,5 +1,6 @@
 import type {
   AppEvent,
+  ProjectOverview,
   ProjectSummary,
   RunningSession,
   SessionMessagesPage,
@@ -479,6 +480,20 @@ export const api = {
   ) => send<{ ok: boolean }>(`/api/projects/${encodeURIComponent(id)}`, "PATCH", patch),
   sessions: (projectId: string) =>
     get<SessionSummary[]>(`/api/projects/${encodeURIComponent(projectId)}/sessions`),
+  // Per-project deep-dive (GET /api/projects/:id/overview): a single bounded
+  // roll-up — headline usage/cost + per-model split + a per-day series + per-tool
+  // usage + a tag tally — the engine computes from its existing project-scoped
+  // helpers (getStats({projectId}) / toolStats({projectId}) / dailyUsage), so the
+  // web side never scans per session. Backs the ProjectOverview view. Until the
+  // engine/server lane ships the route, the *Maybe helper surfaces a
+  // NotImplementedError so the "Overview" affordance hides itself on older servers
+  // instead of erroring — exactly like the rollups/budget/worktree routes were
+  // wired. The body is read defensively in ProjectOverview, so field-spelling drift
+  // between landing orders still renders.
+  projectOverview: (projectId: string) =>
+    getMaybe<ProjectOverview>(
+      `/api/projects/${encodeURIComponent(projectId)}/overview`,
+    ),
   // Cross-project session listing (GET /api/all-sessions). Sorts server-side by
   // recent | tokens | messages (NOT cost — cost isn't a stored column), with
   // optional facet narrowing + paging. Backs the dashboard's TopSpenders, which

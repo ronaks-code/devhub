@@ -12,6 +12,7 @@ import {
   X,
   Tag,
   CheckSquare,
+  LayoutDashboard,
 } from "lucide-react";
 import type { ProjectSummary, SessionSummary } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -32,6 +33,8 @@ export function SessionsPane({
   onTogglePin,
   onBulkPin,
   onBulkAddTag,
+  overviewActive = false,
+  onToggleOverview,
 }: {
   project: ProjectSummary | null;
   sessions: SessionSummary[];
@@ -45,6 +48,11 @@ export function SessionsPane({
   onBulkPin?: (ids: string[], pinned: boolean) => void | Promise<void>;
   /** Union a tag onto each given session (PATCH each with merged tags). */
   onBulkAddTag?: (ids: string[], tag: string) => void | Promise<void>;
+  /** True when the per-project Overview is showing in the transcript area. */
+  overviewActive?: boolean;
+  /** Toggle the per-project Overview. Self-hides the button when omitted (e.g. an
+   *  older server without the /overview endpoint). */
+  onToggleOverview?: () => void;
 }) {
   const [q, setQ] = useState("");
   // Tag filter selection (client-side AND): a session must carry every tag here.
@@ -214,9 +222,30 @@ export function SessionsPane({
   return (
     <div className="flex w-80 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950">
       <div className="px-4 pb-2 pt-3">
-        <h2 className="truncate text-sm font-semibold text-zinc-200">
-          {project ? project.name : "Sessions"}
-        </h2>
+        <div className="flex items-center gap-2">
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold text-zinc-200">
+            {project ? project.name : "Sessions"}
+          </h2>
+          {/* Per-project Overview toggle — flips the transcript area to a read-only
+              project deep-dive. Self-hides when the host wired no handler (e.g. an
+              older server without the /overview endpoint). */}
+          {project && onToggleOverview ? (
+            <button
+              onClick={onToggleOverview}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10.5px] font-medium ring-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+                overviewActive
+                  ? "bg-clay-500/15 text-clay-300 ring-clay-500/30"
+                  : "bg-zinc-900/60 text-zinc-500 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-300",
+              )}
+              title={overviewActive ? "Hide the project overview" : "Show a project overview"}
+              aria-pressed={overviewActive}
+            >
+              <LayoutDashboard className="h-3 w-3" />
+              Overview
+            </button>
+          ) : null}
+        </div>
         {project && (
           <div className="truncate text-[11px] text-zinc-600" title={project.cwd} dir="rtl">
             {project.cwd}

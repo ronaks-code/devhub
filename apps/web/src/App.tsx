@@ -78,6 +78,11 @@ const SettingsPane = lazy(() =>
 const MultiSessionGrid = lazy(() =>
   import("./components/MultiSessionGrid").then((m) => ({ default: m.MultiSessionGrid })),
 );
+// The per-project Overview deep-dive — only shown when toggled on in Browse, so it
+// loads its own chunk on first open (and pulls the dashboard ModelBreakdown with it):
+const ProjectOverview = lazy(() =>
+  import("./components/ProjectOverview").then((m) => ({ default: m.ProjectOverview })),
+);
 // Modal-only views — never in the initial paint, so loaded on first open:
 const SessionCompare = lazy(() =>
   import("./components/SessionCompare").then((m) => ({ default: m.SessionCompare })),
@@ -442,6 +447,13 @@ export default function App() {
   // Side-by-side session comparison modal. Holds the left/base session id while
   // open (null = closed). Opened from the transcript header's "Compare" button.
   const [compareSessionId, setCompareSessionId] = useState<string | null>(null);
+  // Browse: whether the per-project Overview deep-dive is showing in the transcript
+  // area (instead of the transcript / "select a session" hint). Additive — the
+  // project→sessions→transcript flow is untouched when this is off.
+  const [showOverview, setShowOverview] = useState(false);
+  // Set once the /api/projects/:id/overview route 404s (older server), so we hide
+  // the Overview affordance entirely rather than offer a button that can't work.
+  const [overviewUnavailable, setOverviewUnavailable] = useState(false);
   // Reduced-motion / perf mode: respects prefers-reduced-motion and a persisted
   // manual toggle, and sets data-reduce-motion on <html> for index.css to key off.
   const perf = useReducedMotion();
@@ -781,6 +793,8 @@ export default function App() {
   const onSelectSession = (id: string) => {
     setTailBytes(undefined);
     setSessionId(id);
+    // Opening a session's transcript supersedes the project summary.
+    setShowOverview(false);
   };
 
   // Picking a search hit jumps to the Browse viewer at that project + session,
@@ -953,6 +967,13 @@ export default function App() {
     setChatSeed(null);
     setProjectId(id);
     setTab("browse");
+  }, []);
+
+  // The ProjectOverview reports back when its endpoint 404s (older server); hide
+  // the affordance and fall back to the transcript so the button never dead-ends.
+  const markOverviewUnavailable = useCallback(() => {
+    setOverviewUnavailable(true);
+    setShowOverview(false);
   }, []);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
@@ -1328,6 +1349,21 @@ export default function App() {
                 onTogglePin={handlePin}
                 onBulkPin={handleBulkPin}
                 onBulkAddTag={handleBulkAddTag}
+                overviewActive={showOverview}
+                // Hide the toggle once we know the route is unavailable (older server).
+                onToggleOverview={
+                  overviewUnavailable
+                    ? undefined
+                    : () =>
+                        setShowOverview((v) => {
+                          const next = !v;
+                          // On narrow screens the overview lives in the transcript
+                          // slot, so reveal that pane when turning it on (the
+                          // transcript crumb is otherwise gated on a session).
+                          if (next) shell.setStage("transcript");
+                          return next;
+                        })
+                }
               />
             }
             transcript={
@@ -1341,6 +1377,21 @@ export default function App() {
                     onOpenSettings={() => setTab("settings")}
                   />
                 </div>
+              ) : showOverview && project ? (
+                // Per-project Overview deep-dive — replaces the transcript area while
+                // toggled on. Additive: the project→sessions→transcript flow is intact
+                // (selecting a session, below, flips this off). Lazy-loaded so its
+                // chunk (incl. the dashboard ModelBreakdown) stays out of the initial
+                // paint. A 404 here marks the route unavailable + hides the toggle.
+                <Suspense fallback={<PaneFallback />}>
+                  <ProjectOverview
+                    key={project.id}
+                    projectId={project.id}
+                    fallbackName={project.name}
+                    fallbackCwd={project.cwd}
+                    onUnavailable={markOverviewUnavailable}
+                  />
+                </Suspense>
               ) : (
                 <div className="flex min-w-0 flex-1 flex-col">
                   {/* Rich project header atop the transcript area: branch, sessions,

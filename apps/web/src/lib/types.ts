@@ -1,4 +1,4 @@
-import type { EngineEvent, SearchHit, Stats } from "@claude-ui/engine/types";
+import type { EngineEvent, SearchHit, Stats, TokenUsage } from "@claude-ui/engine/types";
 
 export type {
   ProjectSummary,
@@ -67,6 +67,81 @@ export interface NotifyEvent {
  * type-checks without an engine edit.
  */
 export type AppEvent = EngineEvent | NotifyEvent;
+
+/**
+ * One per-model row of a project overview — the per-project equivalent of the
+ * dashboard `Stats.byModel` element, so the {@link ModelStat}/ModelBreakdown widget
+ * consumes it unchanged. APPROXIMATE cost (display estimate). Mirrors what the
+ * engine's `getStats({ projectId }).byModel` already produces.
+ */
+export interface ProjectOverviewModel {
+  model: string;
+  tokens: number;
+  /** APPROXIMATE USD spend on this model in the project (display estimate). */
+  costUsd: number;
+  sessions: number;
+}
+
+/**
+ * One tool's per-project usage in a project overview — the per-project equivalent
+ * of the dashboard {@link ToolStat} (GET /api/stats/tools, scoped here to one
+ * project). The shape is intentionally TOLERANT (read defensively) so it survives
+ * either landing order / field-spelling drift with the engine/server lane that
+ * fills it in: `toolName`/`tool` for the name, `errorCount`/`errors` for failures,
+ * a precomputed `errorRate`, and `avgMs`/`avgDurationMs` for the average duration.
+ */
+export interface ProjectOverviewTool {
+  /** Canonical tool name (e.g. "Bash", "Edit", "mcp__foo__bar"). */
+  toolName?: string;
+  /** Alternate spelling some servers may use. */
+  tool?: string;
+  count: number;
+  /** Failed invocation count (canonical spelling), when reported. */
+  errorCount?: number;
+  /** Alternate spelling of errorCount. */
+  errors?: number;
+  /** Precomputed error rate in [0,1], when the server reports it directly. */
+  errorRate?: number;
+  /** Average wall-clock duration per invocation in ms, when reported. */
+  avgMs?: number;
+  /** Alternate spelling of avgMs. */
+  avgDurationMs?: number;
+}
+
+/**
+ * A per-project deep-dive, from GET /api/projects/:id/overview. A single bounded
+ * roll-up the engine computes from its existing helpers (project meta + a
+ * GROUP BY-backed stats/toolStats/dailyUsage scoped to the project), so the web
+ * side never scans per-session. Every field beyond `project` is read DEFENSIVELY
+ * (see ProjectOverview.tsx) so whatever the engine/server lane lands still renders:
+ * the route is wired ahead of that lane via the `*Maybe` helper, exactly like the
+ * rollups/budget/worktree routes were — a server without it 404s into a
+ * NotImplementedError and the Overview affordance hides itself.
+ */
+export interface ProjectOverview {
+  /** Identity + headline metadata (mirrors the ProjectSummary row for this id). */
+  project: {
+    id: string;
+    cwd: string;
+    name: string;
+    sessionCount: number;
+    lastActivity: string | null;
+  };
+  /** Aggregate token usage across the project's sessions. */
+  totalUsage: TokenUsage;
+  /** APPROXIMATE total spend in USD (display estimate); omitted on older servers. */
+  totalCostUsd?: number;
+  /** Earliest session activity (ISO), when the server reports a date range. */
+  firstActivity?: string | null;
+  /** Per-model token & cost breakdown, cost descending (drives ModelBreakdown). */
+  byModel: ProjectOverviewModel[];
+  /** Per-day token/cost/session series (oldest→newest), backing the mini chart. */
+  daily: DailyUsage[];
+  /** Per-tool usage (count + error rate), busiest first. */
+  topTools: ProjectOverviewTool[];
+  /** Tags applied across the project's sessions, with how many carry each. */
+  tags: Array<{ tag: string; count: number }>;
+}
 
 // Read-only git result shapes used by the GitPanel. Defined here (rather than
 // imported from the engine root, which bundles Node-only code) to keep the web
