@@ -41,6 +41,8 @@ import { registerBudgetRoutes } from "./routes/budget.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerPortableRoutes } from "./routes/portable.js";
 import { registerAutotagRoutes } from "./routes/autotag.js";
+import { registerWebhooksRoutes } from "./routes/webhooks.js";
+import { fireWebhooks } from "./webhook-fire.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -186,6 +188,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerPortableRoutes(app, engine);
 
   registerAutotagRoutes(app, engine);
+
+  registerWebhooksRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",
@@ -353,11 +357,27 @@ export function startEngineLifecycle(engine: Engine): () => void {
   // WeakMap above). Registered here, after the transcript watcher.
   const notifications = startNotificationsWatcher(engine);
   notificationsByEngine.set(engine, notifications);
+  // ALSO fan the same finished/stalled transitions out to any configured webhooks.
+  // The network boundary lives in webhook-fire.ts; firing is best-effort and never
+  // throws, so a webhook delivery can't disturb the notifications bus. We map the
+  // watcher's internal event name onto the public webhook event name and pass the
+  // session context as the payload `data` (the engine's pure payload builder, when
+  // it lands, decides the final wire shape).
+  const unsubWebhooks = notifications.on((e: NotifyEvent) => {
+    const event = e.event === "finished" ? "session.finished" : "session.stalled";
+    void fireWebhooks(engine, event, {
+      sessionId: e.sessionId,
+      cwd: e.cwd,
+      title: e.title,
+      ts: e.ts,
+    });
+  });
   // Watch ~/.claude config files; config-changed events flow over /api/events SSE.
   const stopConfig = startConfigWatcher(engine);
   // First index runs in the background; SSE pushes progress. Incremental afterward.
   void engine.indexAll();
   return () => {
+    unsubWebhooks();
     notifications.stop();
     notificationsByEngine.delete(engine);
     stopConfig();

@@ -362,6 +362,20 @@ export interface AppSettings {
   lastTab?: string;
   /** Soft monthly spend budget in USD, or null when unset. */
   monthlyBudgetUsd?: number | null;
+  /**
+   * Outbound webhook subscriptions (POSTed by the server lane on engine events).
+   * Stored as a JSON array under the `webhooks` settings key; defaults to []. The
+   * shape mirrors {@link WebhookConfig} in webhooks.ts; declared here as the loose
+   * structural type so AppSettings stays Node-free and the webhooks module owns the
+   * validation/accessors.
+   */
+  webhooks?: Array<{
+    id: string;
+    url: string;
+    events: string[];
+    enabled: boolean;
+    label?: string;
+  }>;
 }
 
 /** Baseline settings applied under any value the user hasn't explicitly set. */
@@ -370,6 +384,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   density: "comfortable",
   lastProjectId: null,
   monthlyBudgetUsd: null,
+  webhooks: [],
 };
 
 /**

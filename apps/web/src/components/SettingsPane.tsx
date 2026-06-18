@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Blocks, Bot, Check, FileText, Loader2, PiggyBank, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
+import { Blocks, Bot, Check, FileText, Loader2, PiggyBank, Save, Send, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
@@ -11,6 +11,7 @@ import { AgentsLibrary } from "./config/AgentsLibrary";
 import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 import { PluginsView } from "./config/PluginsView";
+import { WebhooksManager } from "./config/WebhooksManager";
 import { RebuildIndex } from "./config/RebuildIndex";
 import { IntegrityPanel } from "./config/IntegrityPanel";
 import { ArchiveTransfer } from "./config/ArchiveTransfer";
@@ -23,6 +24,7 @@ type SettingsSection =
   | "memory"
   | "mcp"
   | "hooks"
+  | "webhooks"
   | "permissions"
   | "agents"
   | "skills"
@@ -342,6 +344,7 @@ export function SettingsPane({
     { id: "memory", label: "Memory", icon: <FileText className="h-3.5 w-3.5" /> },
     { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
     { id: "hooks", label: "Hooks", icon: <Webhook className="h-3.5 w-3.5" /> },
+    { id: "webhooks", label: "Webhooks", icon: <Send className="h-3.5 w-3.5" /> },
     { id: "permissions", label: "Permissions", icon: <Shield className="h-3.5 w-3.5" /> },
     { id: "agents", label: "Agents", icon: <Bot className="h-3.5 w-3.5" /> },
     { id: "skills", label: "Skills", icon: <Sparkles className="h-3.5 w-3.5" /> },
@@ -364,6 +367,8 @@ export function SettingsPane({
               ? "Manage the Model Context Protocol servers Claude Code can use."
               : section === "hooks"
                 ? "Commands Claude Code runs on lifecycle events, edited as JSON."
+                : section === "webhooks"
+                ? "POST a payload to Slack, Discord, or your own tools when sessions finish/stall or budgets hit."
                 : section === "permissions"
                   ? "Allow / ask / deny rules that decide which tool calls run automatically."
                   : section === "agents"
@@ -406,6 +411,8 @@ export function SettingsPane({
           <McpManager projectCwd={projectCwd} />
         ) : section === "hooks" ? (
           <HooksEditor projectCwd={projectCwd} />
+        ) : section === "webhooks" ? (
+          <WebhooksManager />
         ) : section === "permissions" ? (
           <PermissionsEditor projectCwd={projectCwd} />
         ) : section === "agents" ? (

@@ -422,6 +422,41 @@ const config = {
     }),
 };
 
+/**
+ * Outbound-webhook CRUD + test, backed by /api/webhooks. Mirrors the {@link config}
+ * helper's shape (a small object of HTTP wirings). All requests go through the
+ * *Maybe helpers so a server that hasn't shipped the routes surfaces a
+ * {@link NotImplementedError} — the manager probes via {@link webhooks.list} on mount
+ * and hides itself on that error, exactly like the reindex/worktree routes degrade.
+ *
+ * The web side never fires the outbound HTTP itself: it only persists the config
+ * and asks the server to deliver. The server validates the URL is http(s), uses a
+ * short timeout, won't follow into file:/// or other schemes, doesn't retry-storm,
+ * and limits the response body — none of which the browser could enforce anyway.
+ */
+const webhooks = {
+  /** All configured webhooks. 404/501 → NotImplementedError (older server). */
+  list: () => getMaybe<Webhook[]>("/api/webhooks"),
+  /** Create one webhook. The server assigns the `id` and echoes the stored row. */
+  create: (input: WebhookInput) => sendMaybe<Webhook>("/api/webhooks", "POST", input),
+  /** Update an existing webhook by id (full replace of the editable fields). */
+  update: (id: string, input: WebhookInput) =>
+    sendMaybe<Webhook>(`/api/webhooks/${encodeURIComponent(id)}`, "PUT", input),
+  /** Remove a webhook by id. */
+  remove: (id: string) =>
+    sendMaybe<{ ok: boolean }>(`/api/webhooks/${encodeURIComponent(id)}`, "DELETE"),
+  /**
+   * Fire a one-off test delivery to a webhook's URL (POST /api/webhooks/:id/test).
+   * The server performs the same safe delivery as a real event and returns the
+   * outcome, read tolerantly via {@link normalizeWebhookTest} so a `{ ok, status }`
+   * envelope or any field-spelling drift still yields a coherent result line.
+   */
+  test: (id: string) =>
+    sendMaybe<unknown>(`/api/webhooks/${encodeURIComponent(id)}/test`, "POST").then(
+      normalizeWebhookTest,
+    ),
+};
+
 export const api = {
   health: () => get<Health>("/api/health"),
   // Projects. ProjectSummary carries the per-project chat defaults
@@ -745,7 +780,109 @@ export const api = {
     sendMaybe<AttachmentResult>("/api/attachments", "POST", input),
   // MCP-server config management (list/upsert/remove across scopes).
   config,
+  // Outbound webhooks: when a session finishes/stalls or a budget threshold hits,
+  // the server POSTs a small JSON payload to each enabled webhook's URL (Slack /
+  // Discord / any automation endpoint). The web side only wires the CRUD + test
+  // calls — delivery (with its safe http(s)-only, short-timeout, no-redirect
+  // firing) lives server-side. Every call uses the *Maybe helpers so an older
+  // server WITHOUT the routes 404s into a NotImplementedError; WebhooksManager
+  // catches that and hides the whole section instead of erroring.
+  webhooks,
 };
+
+/**
+ * The event kinds a webhook can subscribe to. A session finishing or stalling, a
+ * budget warning / overage, or a turn erroring. Kept in lockstep with the
+ * engine/server lane that emits them; the manager renders these as a multi-select.
+ */
+export const WEBHOOK_EVENT_KINDS = [
+  "session.finished",
+  "session.stalled",
+  "budget.warn",
+  "budget.over",
+  "turn.error",
+] as const;
+export type WebhookEventKind = (typeof WEBHOOK_EVENT_KINDS)[number];
+
+/**
+ * A configured outbound webhook as stored/echoed by the server (GET /api/webhooks,
+ * and the POST/PUT replies). `id` is server-assigned; `url` is the http(s) endpoint
+ * the server POSTs to; `events` is the subscribed kinds; `label` is an optional
+ * human name; `enabled` gates delivery. Read where consumed — the server owns the
+ * canonical shape, we only round-trip it.
+ */
+export interface Webhook {
+  /** Server-assigned id (the :id in the per-webhook routes). */
+  id: string;
+  /** Destination URL the server POSTs to. Always http(s) (validated both sides). */
+  url: string;
+  /** Subscribed event kinds; an empty list means "all" is left to the server. */
+  events: WebhookEventKind[];
+  /** Optional human-friendly name shown in the list. */
+  label?: string;
+  /** When false, the server skips delivery for this webhook. */
+  enabled: boolean;
+}
+
+/**
+ * The editable fields sent on create (POST) / update (PUT). The server assigns the
+ * `id`, so it's omitted here. Matches the create/update body the server expects.
+ */
+export interface WebhookInput {
+  url: string;
+  events: WebhookEventKind[];
+  label?: string;
+  enabled: boolean;
+}
+
+/**
+ * The outcome of a test delivery (POST /api/webhooks/:id/test). `delivered` is the
+ * headline (did the POST reach the URL with a 2xx?), `status` is the HTTP status the
+ * endpoint returned (when there was one), and `error` is the failure reason (timeout,
+ * DNS, non-2xx, blocked scheme) when it didn't deliver. Read tolerantly via
+ * {@link normalizeWebhookTest}.
+ */
+export interface WebhookTestResult {
+  /** True when the server reached the URL and got a 2xx back. */
+  delivered: boolean;
+  /** HTTP status the endpoint returned, when the request completed. */
+  status?: number;
+  /** Failure reason when `delivered` is false. */
+  error?: string;
+}
+
+/**
+ * Coerce the tolerant POST /api/webhooks/:id/test body into a {@link WebhookTestResult}.
+ * Read defensively so the result line survives field-spelling drift between this lane
+ * and the engine/server lane: `delivered` is trusted when boolean, else derived from
+ * `ok`, else from a 2xx `status`; `status` accepts `status`/`statusCode`/`code`; and
+ * `error` accepts `error`/`message`/`reason`. An odd body becomes a not-delivered
+ * result so the manager shows a clear failure instead of throwing.
+ */
+function normalizeWebhookTest(res: unknown): WebhookTestResult {
+  const o = (res && typeof res === "object" ? (res as Record<string, unknown>) : {}) ?? {};
+  const status =
+    num(o.status) ?? num(o.statusCode) ?? num(o.code) ?? undefined;
+  const delivered =
+    typeof o.delivered === "boolean"
+      ? o.delivered
+      : typeof o.ok === "boolean"
+        ? o.ok
+        : status != null && status >= 200 && status < 300;
+  const error =
+    typeof o.error === "string"
+      ? o.error
+      : typeof o.message === "string"
+        ? o.message
+        : typeof o.reason === "string"
+          ? o.reason
+          : undefined;
+  return {
+    delivered,
+    ...(status != null ? { status } : {}),
+    ...(error ? { error } : {}),
+  };
+}
 
 /**
  * One file match from GET /api/files. `path` is the project-relative path the

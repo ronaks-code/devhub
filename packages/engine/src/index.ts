@@ -28,6 +28,8 @@ import { GitService } from "./git.js";
 import type { SettingsStore } from "./settings.js";
 import type { ProjectMetaPatch } from "./project-meta.js";
 import type { SavedView, SaveViewInput } from "./saved-views.js";
+import { WebhookConfigStore } from "./webhooks.js";
+import type { WebhookConfig } from "./webhooks.js";
 import type { AuditDecisionInput, AuditEntry } from "./audit.js";
 import { getSessionCommits } from "./session-commits.js";
 import type { SessionCommit } from "./session-commits.js";
@@ -81,6 +83,8 @@ export class Engine {
   readonly index: TranscriptIndex;
   /** User preferences (shares the index's DB connection). */
   readonly settings: SettingsStore;
+  /** Outbound webhook subscriptions, persisted via {@link settings}. */
+  readonly webhooks: WebhookConfigStore;
   private emitter = new EventEmitter();
   private indexing = false;
   ready = false;
@@ -88,6 +92,7 @@ export class Engine {
   constructor(dbPath?: string) {
     this.index = new TranscriptIndex(dbPath);
     this.settings = this.index.settings;
+    this.webhooks = new WebhookConfigStore(this.settings);
     this.emitter.setMaxListeners(0);
   }
 
@@ -485,6 +490,35 @@ export class Engine {
   /** Delete a saved view by id; returns true when a row was removed. */
   deleteView(id: number): boolean {
     return this.index.deleteView(id);
+  }
+
+  /**
+   * Outbound webhook subscriptions (POSTed by the server on engine events). The
+   * engine owns the durable list + the pure payload/matcher helpers; it performs NO
+   * network I/O — the server lane does the firing (timeout/abort/scheme guards).
+   * Returns the stored list (default []).
+   */
+  getWebhooks(): WebhookConfig[] {
+    return this.webhooks.list();
+  }
+
+  /**
+   * Replace the whole webhook list. VALIDATES every entry (http/https url, known event
+   * kinds) and de-dupes ids before persisting via the settings store; throws (without
+   * writing) on the first invalid entry. Returns the normalized, stored list.
+   */
+  setWebhooks(list: unknown): WebhookConfig[] {
+    return this.webhooks.set(list);
+  }
+
+  /** Insert or replace one webhook (matched by id). Validates it; returns the new full list. */
+  upsertWebhook(wh: unknown): WebhookConfig[] {
+    return this.webhooks.upsert(wh);
+  }
+
+  /** Remove one webhook by id; returns the new full list (unchanged when absent). */
+  deleteWebhook(id: string): WebhookConfig[] {
+    return this.webhooks.delete(id);
   }
 
   /**
@@ -1053,6 +1087,16 @@ export { TagStore, parseTags, normalizeTags } from "./tags.js";
 export { computeAutoTags, branchTag, mergeAutoTags } from "./auto-tag.js";
 export { SavedViewStore } from "./saved-views.js";
 export type { SavedView, SaveViewInput } from "./saved-views.js";
+export {
+  WebhookConfigStore,
+  WEBHOOK_EVENTS,
+  isHttpUrl,
+  normalizeWebhook,
+  normalizeWebhooks,
+  buildWebhookPayload,
+  webhooksForEvent,
+} from "./webhooks.js";
+export type { WebhookConfig, WebhookEvent, WebhookPayload } from "./webhooks.js";
 export { AuditStore } from "./audit.js";
 export type { AuditDecision, AuditDecisionInput, AuditEntry } from "./audit.js";
 export { redactSecrets, redactDeep } from "./redact.js";
