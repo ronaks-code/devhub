@@ -247,7 +247,44 @@ describe("server REST endpoints (no token)", () => {
   it("GET /api/config/plugins returns an empty listing on a fresh config dir", async () => {
     const res = await current!.app.inject({ method: "GET", url: "/api/config/plugins" });
     expect(res.statusCode).toBe(200);
+    // Empty-but-correct shape (no plugins seeded): both keys present, both empty.
     expect(res.json()).toEqual({ plugins: [], marketplaces: [] });
+  });
+
+  it("GET /api/config/plugins delegates to the engine, mapping the enabled flag", async () => {
+    // Seed an installed_plugins.json under the hermetic config dir (CLAUDE_CONFIG_DIR
+    // points at `root`), the file the engine's listPlugins reads. The route should
+    // surface the engine's flattened PluginInfo per install record — crucially the
+    // resolved `enabled` flag — without the server re-reading the file itself.
+    mkdirSync(path.join(current!.root, "plugins"), { recursive: true });
+    writeFileSync(
+      path.join(current!.root, "plugins", "installed_plugins.json"),
+      JSON.stringify({
+        plugins: {
+          "frontend-design@claude-plugins-official": [
+            { scope: "user", version: "1.2.0", installPath: "/x" },
+          ],
+        },
+      }),
+    );
+
+    const res = await current!.app.inject({ method: "GET", url: "/api/config/plugins" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      plugins: Array<{ name: string; version: string | null; marketplace: string | null; enabled: boolean; scope: string | null }>;
+      marketplaces: unknown[];
+    };
+    expect(body.plugins).toEqual([
+      {
+        name: "frontend-design",
+        version: "1.2.0",
+        marketplace: "claude-plugins-official",
+        enabled: true,
+        scope: "user",
+      },
+    ]);
+    // The engine has no marketplace view, so this half is always empty (see route).
+    expect(body.marketplaces).toEqual([]);
   });
 
   it("GET /api/sessions/:id/export?format=json downloads the normalized session", async () => {

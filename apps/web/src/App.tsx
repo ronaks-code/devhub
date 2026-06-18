@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
   Command as CommandIcon,
@@ -42,11 +42,8 @@ import { SessionsPane } from "./components/SessionsPane";
 import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
-import { DashboardPane } from "./components/DashboardPane";
 import { LiveOpsBoard } from "./components/LiveOpsBoard";
-import { MultiSessionGrid } from "./components/MultiSessionGrid";
 import { InboxPane } from "./components/InboxPane";
-import { SettingsPane } from "./components/SettingsPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -54,18 +51,49 @@ import { ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SessionCostBadge } from "./components/SessionCostBadge";
-import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
-import { SessionCompare } from "./components/SessionCompare";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
+import { DashboardSkeleton } from "./components/Skeleton";
 import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
 import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
 import { useTheme, type ThemePreference } from "./hooks/useTheme";
 import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { cn } from "./lib/utils";
+
+// Heavier, non-initial surfaces are code-split: each loads its own chunk the
+// first time the user opens it, so the initial Browse load stays lean. The Browse
+// view (the default tab) keeps its imports static so it renders without a fetch.
+// Tab views — Dashboard (charts/heatmaps) and Settings (config panels):
+const DashboardPane = lazy(() =>
+  import("./components/DashboardPane").then((m) => ({ default: m.DashboardPane })),
+);
+const SettingsPane = lazy(() =>
+  import("./components/SettingsPane").then((m) => ({ default: m.SettingsPane })),
+);
+// The Ops "grid" sub-view (watch/drive several live sessions) — only the board is
+// the Ops default, so the grid loads when first switched to:
+const MultiSessionGrid = lazy(() =>
+  import("./components/MultiSessionGrid").then((m) => ({ default: m.MultiSessionGrid })),
+);
+// Modal-only views — never in the initial paint, so loaded on first open:
+const SessionCompare = lazy(() =>
+  import("./components/SessionCompare").then((m) => ({ default: m.SessionCompare })),
+);
+const ShortcutOverlay = lazy(() =>
+  import("./components/ShortcutOverlay").then((m) => ({ default: m.ShortcutOverlay })),
+);
+
+/** Centered spinner fallback for a lazy view whose chunk is still loading. */
+function PaneFallback() {
+  return (
+    <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+      <Spinner className="h-5 w-5" />
+    </div>
+  );
+}
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
@@ -1228,9 +1256,13 @@ export default function App() {
           order. `outline-none` so that programmatic focus doesn't draw a ring. */}
       <div id="main-content" role="main" tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
         {tab === "settings" ? (
-          <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
+          <Suspense fallback={<PaneFallback />}>
+            <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
+          </Suspense>
         ) : tab === "dashboard" ? (
-          <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
+          <Suspense fallback={<DashboardSkeleton />}>
+            <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
+          </Suspense>
         ) : tab === "ops" ? (
           <div className="flex min-w-0 flex-1 flex-col">
             {/* Ops view toggle: the running-sessions board vs. the multi-session
@@ -1267,7 +1299,9 @@ export default function App() {
               </div>
             </div>
             {opsMode === "grid" ? (
-              <MultiSessionGrid />
+              <Suspense fallback={<PaneFallback />}>
+                <MultiSessionGrid />
+              </Suspense>
             ) : (
               <LiveOpsBoard onOpenSession={openSessionByCwd} />
             )}
@@ -1398,7 +1432,13 @@ export default function App() {
         }}
       />
 
-      <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
+      {/* Mounted only while open so its code-split chunk loads on first use; it
+          renders null when closed anyway, so behavior (Esc/focus-trap) is intact. */}
+      {shortcutOpen ? (
+        <Suspense fallback={null}>
+          <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
+        </Suspense>
+      ) : null}
 
       {/* First-run onboarding — only mounts for a brand-new, empty install (decided
           once after load); a returning user never sees it. */}
@@ -1408,11 +1448,13 @@ export default function App() {
           transcript's session as the left column; candidates are the active
           project's loaded sessions. Only mounts once that base session is loaded. */}
       {compareSessionId && page && page.session.sessionId === compareSessionId ? (
-        <SessionCompare
-          baseSession={page.session}
-          sessions={sessions}
-          onClose={() => setCompareSessionId(null)}
-        />
+        <Suspense fallback={null}>
+          <SessionCompare
+            baseSession={page.session}
+            sessions={sessions}
+            onClose={() => setCompareSessionId(null)}
+          />
+        </Suspense>
       ) : null}
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

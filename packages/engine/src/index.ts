@@ -429,6 +429,24 @@ export class Engine {
   }
 
   /**
+   * Best-effort audit hook the server's WS turn loop calls when a turn ends with
+   * tool-permission denials: records each as an implicit "deny" decision (scope
+   * "result") in the `permission_audit` table via {@link logTurnDenials}. Argument
+   * order mirrors the WS call site (sessionId first, which may be null). A no-op for
+   * an empty/absent `denials` list, and never throws — a failure to log must never
+   * fail the turn that produced the denials.
+   */
+  auditPermissionDenials(sessionId: string | null, denials: PermissionDenial[]): void {
+    if (!denials || denials.length === 0) return;
+    try {
+      this.logTurnDenials(denials, { sessionId });
+    } catch {
+      // Audit logging is best-effort: swallow any write failure so it can't break
+      // the turn. The denials are already surfaced to the user via the result frame.
+    }
+  }
+
+  /**
    * Recent permission-decision audit entries, newest first. `{ sessionId }` scopes
    * to one session; `{ limit }` caps the row count (default 100).
    */

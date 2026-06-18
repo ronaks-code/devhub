@@ -4330,6 +4330,35 @@ describe("permission audit log", () => {
     expect(list.every((e) => e.decision === "deny")).toBe(true);
     engine.close();
   });
+
+  it("auditPermissionDenials appends deny rows readable via listAudit (sessionId-first)", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    // sessionId-first arg order mirrors the server's WS turn-loop call site.
+    engine.auditPermissionDenials("turn-s", [
+      { toolName: "Bash", toolInput: { command: "rm -rf /" } },
+      { toolName: "WebFetch" },
+    ]);
+    const list = engine.listAudit({ sessionId: "turn-s" });
+    expect(list.length).toBe(2);
+    expect(list.map((e) => e.toolName).sort()).toEqual(["Bash", "WebFetch"]);
+    // Recorded as implicit "deny" decisions with the turn-result scope.
+    expect(list.every((e) => e.decision === "deny" && e.scope === "result")).toBe(true);
+    engine.close();
+  });
+
+  it("auditPermissionDenials no-ops on empty denials and tolerates a null sessionId", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    // Empty / absent lists write nothing — the table stays untouched.
+    engine.auditPermissionDenials("s", []);
+    expect(engine.listAudit().length).toBe(0);
+    // A null sessionId (turn produced no resumable id) still records the denial.
+    engine.auditPermissionDenials(null, [{ toolName: "Edit" }]);
+    const all = engine.listAudit();
+    expect(all.length).toBe(1);
+    expect(all[0]!.sessionId).toBeNull();
+    expect(all[0]!.toolName).toBe("Edit");
+    engine.close();
+  });
 });
 
 describe("session notes", () => {
@@ -4410,6 +4439,24 @@ describe("session notes", () => {
     engine.setNotes("sN", "");
     expect(engine.getNotes("sN")).toBeNull();
     engine.close();
+  });
+
+  it("notes overwrite idempotently and survive a re-open of the index", () => {
+    const dir = tmp();
+    const engine = new Engine(path.join(dir, "i.db"));
+    engine.setNotes("sN", "first draft");
+    // Idempotent overwrite: a later set replaces the prior value outright.
+    engine.setNotes("sN", "second draft");
+    expect(engine.getNotes("sN")).toBe("second draft");
+    engine.close();
+
+    // Stored in the shared index.db (session_meta), so it survives a reopen.
+    const reopened = new Engine(path.join(dir, "i.db"));
+    expect(reopened.getNotes("sN")).toBe("second draft");
+    // And it surfaces on the SessionSummary.notes read path after reopen too.
+    reopened.setNotes("sN", "after reopen");
+    expect(reopened.getNotes("sN")).toBe("after reopen");
+    reopened.close();
   });
 });
 
