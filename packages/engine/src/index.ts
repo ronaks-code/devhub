@@ -10,6 +10,14 @@ import type { SearchFacets } from "./search.js";
 import type { ListAllSessionsOptions } from "./all-sessions.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 import { budgetStatus, type BudgetStatus } from "./budget.js";
+import {
+  budgetGuardStatus,
+  guardTurn,
+  type BudgetGuardStatus,
+  type BudgetGuardOptions,
+  type GuardTurnOptions,
+  type TurnGuardDecision,
+} from "./budget-guard.js";
 import { listRunningSessions } from "./running.js";
 import { scanAllSessionFiles, isInternalFolder } from "./discovery.js";
 import { hasArchive, archiveSession, readArchived } from "./archive.js";
@@ -526,6 +534,30 @@ export class Engine {
   }
 
   /**
+   * Period-aware budget guard snapshot: remaining headroom, a linear month-to-date
+   * spend PROJECTION to the period end, and an ok/warn/over `state` graded against the
+   * configured cap (`settings.monthlyBudgetUsd`). Spend reuses the SAME bounded per-day
+   * rollup ({@link dailyUsage}) the dashboard uses — no transcript re-scan, no new
+   * schema. A null cap yields `state: "ok"` but still computes the projection. This is
+   * the data behind a face's pre-turn budget warning; see {@link guardTurn} for the gate.
+   */
+  budgetStatus(opts: BudgetGuardOptions = {}): BudgetGuardStatus {
+    return budgetGuardStatus(this.settings.get("monthlyBudgetUsd"), this.index.dailyUsage(), opts);
+  }
+
+  /**
+   * Cheap, ADVISORY pre-turn budget check: `{ allow, reason?, status }`. `allow` is
+   * false ONLY when the (estimate-inclusive) period spend is already over the cap AND
+   * enforcement is on (the default) — otherwise true, with `reason` carrying any warn/
+   * over advisory for the caller to surface. Reuses the bounded rollup via
+   * {@link budgetStatus}; never spawns/cancels a turn, so the CLI driver is unchanged
+   * unless a caller opts in by consulting this decision.
+   */
+  guardTurn(opts: GuardTurnOptions = {}): TurnGuardDecision {
+    return guardTurn(this.settings.get("monthlyBudgetUsd"), this.index.dailyUsage(), opts);
+  }
+
+  /**
    * Currently-running claude processes, read from ~/.claude/sessions/<pid>.json.
    * Delegates to the `running` module, which reads the ephemeral files AND probes
    * each PID for liveness — stale/zombie entries are flagged (`alive: false`,
@@ -767,6 +799,14 @@ export { dailyUsage } from "./rollups.js";
 export type { DailyUsage, DailyUsageOptions } from "./rollups.js";
 export { budgetStatus } from "./budget.js";
 export type { BudgetStatus } from "./budget.js";
+export { budgetGuardStatus, guardTurn, DEFAULT_WARN_FRACTION } from "./budget-guard.js";
+export type {
+  BudgetGuardStatus,
+  BudgetGuardOptions,
+  BudgetState,
+  GuardTurnOptions,
+  TurnGuardDecision,
+} from "./budget-guard.js";
 export { classifyCommand, classifyShell } from "./classify-command.js";
 export type { CommandSeverity, CommandClassification } from "./classify-command.js";
 export {

@@ -534,6 +534,103 @@ describe("server REST endpoints (no token)", () => {
   });
 });
 
+describe("budget endpoints", () => {
+  beforeEach(async () => {
+    current = await makeApp();
+  });
+
+  it("GET /api/budget returns a status + config shape via engine.budgetStatus", async () => {
+    // Duck-typed capability: stub the (engine-lane, this-wave) method and confirm the
+    // route forwards its computed status under `status`, with the persisted `config`.
+    (current!.engine as unknown as Record<string, unknown>).budgetStatus = () => ({
+      monthlyBudgetUsd: 100,
+      monthToDateUsd: 42,
+      pct: 0.42,
+      alert: "none",
+    });
+    const res = await current!.app.inject({ method: "GET", url: "/api/budget" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      status: { monthlyBudgetUsd: number | null; monthToDateUsd: number; pct: number; alert: string };
+      config: { capUsd: number | null; warnFraction: number; enforce: boolean };
+    };
+    expect(body.status).toEqual({
+      monthlyBudgetUsd: 100,
+      monthToDateUsd: 42,
+      pct: 0.42,
+      alert: "none",
+    });
+    // Fresh config dir: no cap set, default warn threshold, enforce off.
+    expect(body.config).toEqual({ capUsd: null, warnFraction: 0.8, enforce: false });
+  });
+
+  it("GET /api/budget degrades to a null-cap status when no status method is present", async () => {
+    // Both probes absent (typeof guard) AND a half-landed throwing method: either way
+    // the route must synthesize a null-cap status (200), never a 500.
+    (current!.engine as unknown as Record<string, unknown>).budgetStatus = undefined;
+    (current!.engine as unknown as Record<string, unknown>).getBudgetStatus = () => {
+      throw new Error("index.dailyUsage is not a function");
+    };
+    const res = await current!.app.inject({ method: "GET", url: "/api/budget" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { status: { monthlyBudgetUsd: number | null; alert: string } };
+    expect(body.status.monthlyBudgetUsd).toBe(null);
+    expect(body.status.alert).toBe("none");
+  });
+
+  it("PUT /api/budget rejects a negative cap (400)", async () => {
+    const res = await current!.app.inject({
+      method: "PUT",
+      url: "/api/budget",
+      payload: { capUsd: -5 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("PUT /api/budget rejects a warnFraction outside 0..1 (400)", async () => {
+    const res = await current!.app.inject({
+      method: "PUT",
+      url: "/api/budget",
+      payload: { capUsd: 100, warnFraction: 1.5 },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("PUT /api/budget persists the config and it round-trips on a later GET", async () => {
+    const put = await current!.app.inject({
+      method: "PUT",
+      url: "/api/budget",
+      payload: { capUsd: 250, warnFraction: 0.5, enforce: true },
+    });
+    expect(put.statusCode).toBe(200);
+    expect((put.json() as { config: unknown }).config).toEqual({
+      capUsd: 250,
+      warnFraction: 0.5,
+      enforce: true,
+    });
+    // It persisted through the real settings store: the cap surfaces on /api/settings,
+    // and the whole config round-trips on a fresh GET /api/budget.
+    const settings = await current!.app.inject({ method: "GET", url: "/api/settings" });
+    expect((settings.json() as { monthlyBudgetUsd: number | null }).monthlyBudgetUsd).toBe(250);
+    const get = await current!.app.inject({ method: "GET", url: "/api/budget" });
+    expect((get.json() as { config: unknown }).config).toEqual({
+      capUsd: 250,
+      warnFraction: 0.5,
+      enforce: true,
+    });
+  });
+
+  it("PUT /api/budget accepts a null cap to clear the budget", async () => {
+    const res = await current!.app.inject({
+      method: "PUT",
+      url: "/api/budget",
+      payload: { capUsd: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { config: { capUsd: number | null } }).config.capUsd).toBe(null);
+  });
+});
+
 describe("server token auth", () => {
   beforeEach(async () => {
     current = await makeApp({ token: "secret" });

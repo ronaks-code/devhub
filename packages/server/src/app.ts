@@ -37,6 +37,7 @@ import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerReindexRoutes } from "./routes/reindex.js";
+import { registerBudgetRoutes } from "./routes/budget.js";
 import {
   startNotificationsWatcher,
   type NotificationsWatcher,
@@ -174,6 +175,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerHealthRoutes(app, engine);
 
   registerReindexRoutes(app, engine);
+
+  registerBudgetRoutes(app, engine);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

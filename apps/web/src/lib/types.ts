@@ -344,3 +344,55 @@ export interface Worktree {
   /** True when this worktree is bare/locked/prunable (advisory display only). */
   locked?: boolean;
 }
+
+/**
+ * Where the current calendar month's APPROXIMATE spend sits relative to the user's
+ * soft monthly budget. Mirrors the engine's `BudgetStatus` (types.ts); defined
+ * locally so the web bundle stays free of Node-only engine code, and read
+ * tolerantly so a slightly different server build still lights up the UI.
+ * Kept in lockstep with packages/engine/src/types.ts.
+ */
+export interface BudgetStatus {
+  /** The configured soft budget in USD, or null when the user hasn't set one. */
+  monthlyBudgetUsd: number | null;
+  /** APPROXIMATE USD spent so far this calendar month (UTC). */
+  monthToDateUsd: number;
+  /** Fraction of the budget consumed; 0 when no (or a non-positive) budget is set. */
+  pct: number;
+  /** "none" while under the warn threshold, "warn" past it, "over" at >=100%. */
+  alert: "none" | "warn" | "over";
+  /**
+   * APPROXIMATE projected end-of-period spend, if the server extrapolates it from
+   * the elapsed-days run rate. Optional: the budget bar falls back to projecting
+   * client-side from `monthToDateUsd` when the server omits it.
+   */
+  projectedUsd?: number;
+}
+
+/**
+ * The user-editable budget configuration. The web side only sends the fields the
+ * BudgetSettings form owns; the server validates + persists them (via the same
+ * safe-write the settings route uses). All optional so a partial PUT round-trips.
+ */
+export interface BudgetConfig {
+  /** Soft monthly cap in USD, or null for "no cap". */
+  monthlyBudgetUsd?: number | null;
+  /** Percentage of the cap (0–100) at which to start warning. */
+  warnThresholdPct?: number | null;
+  /** When true, the server may enforce the cap (e.g. block new spend) rather than just warn. */
+  enforce?: boolean;
+}
+
+/**
+ * Response from GET/PUT /api/budget — the live {@link BudgetStatus} plus the
+ * editable {@link BudgetConfig}. The shape is intentionally TOLERANT: an older
+ * server that returns a bare `BudgetStatus` (no `config` envelope) is normalized
+ * client-side, and unknown extras are ignored. Until the engine/server lane ships
+ * the route, the api `*Maybe` helpers surface a NotImplementedError so the budget
+ * UI degrades to a graceful "not available yet" state instead of erroring —
+ * exactly like the worktree/rollups routes were wired.
+ */
+export interface BudgetState {
+  status: BudgetStatus;
+  config: BudgetConfig;
+}

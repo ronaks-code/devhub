@@ -31,6 +31,9 @@ import type {
   PermissionsResult,
   PermissionsWriteResult,
   RuleAction,
+  BudgetState,
+  BudgetStatus,
+  BudgetConfig,
 } from "./types";
 
 /**
@@ -641,6 +644,30 @@ export const api = {
   // PUT merges a partial update server-side and returns the full merged settings.
   putSettings: (patch: Partial<AppSettings>) =>
     send<AppSettings>("/api/settings", "PUT", patch),
+  // Monthly spend budget status + config (GET /api/budget): the live BudgetStatus
+  // (month-to-date, projected, alert level) plus the editable BudgetConfig (cap,
+  // warn threshold, enforce). Backs BudgetSettings and the CostForecast widget.
+  // The server computes status from the per-day cost series; the web side only
+  // wires the call. Until the engine/server lane ships the route, the *Maybe
+  // helper surfaces a NotImplementedError so the budget UI degrades to a graceful
+  // "not available yet" state instead of erroring — exactly like the
+  // worktree/rollups routes were wired. The response is normalized so a server
+  // that returns a bare BudgetStatus (no `config` envelope) still parses.
+  getBudget: () => getMaybe<unknown>("/api/budget").then(normalizeBudgetState),
+  // PUT a partial budget config (cap / warn threshold / enforce). The server
+  // validates + persists via its safe-write (like the settings route) and returns
+  // the refreshed status+config, so the form updates from the response without a
+  // separate re-fetch.
+  //
+  // The server's PUT body is STRICT (`additionalProperties:false`,
+  // `required:["capUsd"]`) and speaks its OWN vocabulary: `capUsd` (number|null),
+  // `warnFraction` (a 0..1 FRACTION, not a 0–100 percent), and `enforce`. Our UI
+  // works in {@link BudgetConfig} terms (monthlyBudgetUsd + warnThresholdPct), so
+  // we translate here — capUsd is always sent (it's required; null clears the
+  // cap), and the percent is converted to a clamped fraction. The reply is
+  // normalized back into a BudgetState the UI understands.
+  putBudget: (config: BudgetConfig) =>
+    sendMaybe<unknown>("/api/budget", "PUT", toBudgetBody(config)).then(normalizeBudgetState),
   // The merged allow/ask/deny permission rules across the settings.json layers
   // (+ the contributing source paths). A known project `cwd` adds that project's
   // layers; without one it's the global layer only. Backs the PermissionsEditor.
@@ -804,6 +831,88 @@ export interface ReindexResult {
 }
 
 export type { AppSettings };
+export type { BudgetState, BudgetStatus, BudgetConfig };
+
+/**
+ * Coerce a finite number out of an unknown field, or null when it isn't one.
+ * Used to read the tolerant budget payload without trusting field types.
+ */
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
+ * Normalize the GET/PUT /api/budget body into a {@link BudgetState}. The shape is
+ * read defensively so the budget UI survives field/spelling drift and either
+ * landing order: the server's canonical body is `{ status, config }`, but a bare
+ * `BudgetStatus` (an older build, or a status-only response) is lifted into the
+ * envelope, and the `config` is back-filled from the status when absent. Missing
+ * fields fall back to safe defaults (no cap, 80% warn threshold, enforce off) so
+ * the form always has something coherent to render.
+ */
+function normalizeBudgetState(res: unknown): BudgetState {
+  const obj = (res && typeof res === "object" ? (res as Record<string, unknown>) : {}) ?? {};
+  // Accept either `{ status, config }` or a bare BudgetStatus at the top level.
+  const rawStatus =
+    obj.status && typeof obj.status === "object"
+      ? (obj.status as Record<string, unknown>)
+      : obj;
+  const rawConfig =
+    obj.config && typeof obj.config === "object" ? (obj.config as Record<string, unknown>) : {};
+
+  // The cap field spells differently across surfaces: the server's config uses
+  // `capUsd`, the status uses `monthlyBudgetUsd`. Read whichever is present.
+  const cap =
+    num(rawConfig.capUsd) ??
+    num(rawConfig.monthlyBudgetUsd) ??
+    num(rawStatus.monthlyBudgetUsd);
+  const mtd = num(rawStatus.monthToDateUsd) ?? 0;
+  const pct = num(rawStatus.pct) ?? (cap && cap > 0 ? mtd / cap : 0);
+  const alertRaw = rawStatus.alert;
+  const alert: BudgetStatus["alert"] =
+    alertRaw === "warn" || alertRaw === "over" || alertRaw === "none" ? alertRaw : "none";
+  const projected = num(rawStatus.projectedUsd);
+
+  // Warn threshold: the server persists a 0..1 FRACTION (`warnFraction`); the UI
+  // works in 0–100 percent. Convert when we got a fraction, else accept a percent.
+  const warnFraction = num(rawConfig.warnFraction);
+  const warnThresholdPct =
+    warnFraction != null ? warnFraction * 100 : (num(rawConfig.warnThresholdPct) ?? 80);
+
+  const status: BudgetStatus = {
+    monthlyBudgetUsd: cap,
+    monthToDateUsd: mtd,
+    pct,
+    alert,
+    ...(projected != null ? { projectedUsd: projected } : {}),
+  };
+
+  const config: BudgetConfig = {
+    monthlyBudgetUsd: cap,
+    warnThresholdPct,
+    enforce: rawConfig.enforce === true,
+  };
+
+  return { status, config };
+}
+
+/**
+ * Translate the UI's {@link BudgetConfig} (cap in USD + warn threshold as a 0–100
+ * PERCENT) into the server's strict PUT body (`capUsd` + `warnFraction` as a 0..1
+ * FRACTION + `enforce`). `capUsd` is always present (the schema requires it; null
+ * clears the cap); the fraction is clamped to [0,1]. Only `enforce`/`warnFraction`
+ * are conditionally added so a partial config never sends an `undefined`.
+ */
+function toBudgetBody(config: BudgetConfig): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    capUsd: config.monthlyBudgetUsd ?? null,
+  };
+  if (config.warnThresholdPct != null && Number.isFinite(config.warnThresholdPct)) {
+    body.warnFraction = Math.min(1, Math.max(0, config.warnThresholdPct / 100));
+  }
+  if (config.enforce !== undefined) body.enforce = config.enforce;
+  return body;
+}
 
 /**
  * Subscribe to server-sent engine events. Returns an unsubscribe fn. The callback

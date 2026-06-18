@@ -12,6 +12,7 @@ import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap
 import { ActivityChart } from "./dashboard/ActivityChart";
 import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
+import { CostForecast } from "./dashboard/CostForecast";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { DirtyRepos } from "./dashboard/DirtyRepos";
 import { ToolAnalytics } from "./dashboard/ToolAnalytics";
@@ -473,6 +474,14 @@ function DashboardBody({
         <section>
           <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Uncommitted changes</SectionTitle>
           <DirtyRepos onOpenProject={onOpenProject} />
+        </section>
+
+        {/* Cost forecast — month-to-date + projected spend, cap line, and an
+            anomaly callout for unusually expensive sessions. Self-loads its
+            budget status and degrades gracefully on a server without /api/budget. */}
+        <section>
+          <SectionTitle icon={<TrendingUp className="h-3.5 w-3.5" />}>Cost forecast</SectionTitle>
+          <CostForecast onOpenSession={onOpenSession} />
         </section>
 
         {/* Top spenders — most expensive sessions (est. cost, click to open) */}

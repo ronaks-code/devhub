@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Blocks, Bot, Check, FileText, Loader2, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
+import { Blocks, Bot, Check, FileText, Loader2, PiggyBank, Save, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
 import { cn } from "../lib/utils";
@@ -12,10 +12,12 @@ import { SkillsManager } from "./config/SkillsManager";
 import { ClaudeMdEditor } from "./config/ClaudeMdEditor";
 import { PluginsView } from "./config/PluginsView";
 import { RebuildIndex } from "./config/RebuildIndex";
+import { BudgetSettings } from "./BudgetSettings";
 
 /** Sub-tabs within the Settings view. */
 type SettingsSection =
   | "preferences"
+  | "budget"
   | "memory"
   | "mcp"
   | "hooks"
@@ -322,6 +324,7 @@ export function SettingsPane({
 
   const TABS: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
     { id: "preferences", label: "Preferences", icon: <SlidersHorizontal className="h-3.5 w-3.5" /> },
+    { id: "budget", label: "Budget", icon: <PiggyBank className="h-3.5 w-3.5" /> },
     { id: "memory", label: "Memory", icon: <FileText className="h-3.5 w-3.5" /> },
     { id: "mcp", label: "MCP servers", icon: <Server className="h-3.5 w-3.5" /> },
     { id: "hooks", label: "Hooks", icon: <Webhook className="h-3.5 w-3.5" /> },
@@ -341,7 +344,9 @@ export function SettingsPane({
         <header className="mb-5">
           <h1 className="text-lg font-semibold text-zinc-100">Settings</h1>
           <p className="mt-1 text-[12.5px] text-zinc-500">
-            {section === "mcp"
+            {section === "budget"
+              ? "Set a monthly spend cap, when to warn, and whether to enforce it."
+              : section === "mcp"
               ? "Manage the Model Context Protocol servers Claude Code can use."
               : section === "hooks"
                 ? "Commands Claude Code runs on lifecycle events, edited as JSON."
@@ -379,6 +384,8 @@ export function SettingsPane({
 
         {section === "preferences" ? (
           preferencesBody
+        ) : section === "budget" ? (
+          <BudgetSettings />
         ) : section === "memory" ? (
           <ClaudeMdEditor projectCwd={projectCwd} />
         ) : section === "mcp" ? (
