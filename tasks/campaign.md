@@ -36,7 +36,15 @@ swarms — plan, build, verify, commit autonomously. Effort/cost not a constrain
 - [x] W24 Tests: driver parser, server REST integration, golden transcript fixtures, web pairing, FTS special-char, discovery/orphan, reindex idempotency + CI workflow ✅
 - [x] W25 Final polish: responsive collapsible shell, reduced-motion/perf mode, copy-message, deep-link routing, shortcut overlay, single-session export (md/json), diagnostics route, portable archive export/import ✅
 
-## 🏁 CAMPAIGN COMPLETE — 25/25 waves, ~200 features (2026-06-17)
+## ▶️ PHASE 2 (extension) — Ronak: "keep improving" (2026-06-17)
+The top-200 / 25-wave plan is shipped (below). Per directive, continuing with a fresh curated batch focused on DEPTH over breadth — compare/replay sessions, theming, related-sessions, HTML export, multi-session live ops, real semantic search, budgets, reliability. Same rhythm: disjoint-ownership lanes → gate → commit on `campaign/auto-improve` → next.
+- [x] W26 Power browsing: session compare, turn-by-turn replay, transcript bookmarks, light theme switcher, related-sessions, standalone HTML export ✅
+- [ ] W27 (next) Multi-session live ops + analytics depth
+
+### Phase 2 wave log
+- **W26** ✅ (green: turbo tc 5/5 + tests engine 398/server 33/web 32 = **463** + build + tui + chat + light-theme visual audit). web: `useTheme`+`ThemeSwitcher` + index.css `[data-theme=light]` zinc-scale flip (WCAG AA verified: base 19:1…faint 4.83:1), `SessionCompare` (2-column read-only diff), `SessionTimeline` (replay scrubber slices list to playhead), `TranscriptBookmarks` (per-session localStorage + `[`/`]` step). engine: `related.ts` `relatedSessions` (term-overlap IDF + same-project + tags + tools + temporal). server: `routes/export-html.ts` (self-contained HTML download, escaped) + `routes/related.ts` (capability-guarded, []-degrades). **Integrator perf fix:** `relatedSessions` was **66s** on the 2MB session — `sourceTerms` ran a full-table `LIKE '%term%'` df scan per distinct term (thousands). Fixed: bound df candidates to top-64-by-TF, switch df+overlap to FTS5 `MATCH` (indexed), batch per-candidate tool lookups into one query → **1.0s** on that same session (65×), 6 related tests still green.
+
+## 🏁 PHASE 1 COMPLETE — 25/25 waves, ~200 features (2026-06-17)
 All 25 waves committed on `campaign/auto-improve`, each behind a green gate. Final state: **451 tests** (engine 392 + server 27 + web 32) + GitHub Actions CI; turbo typecheck 5/5; web build clean; tui smoke green; desktop `cargo check` green. Final comprehensive self-audit PASS (deep-link routing, shortcut overlay, responsive mobile collapse, no page errors/white-screen). Self-audits passed at W4/W8/W16/W21/W22 + final. One known-benign artifact: engine index-worker logs a `parse-session.js` not-found under vitest then falls back to sync indexing (test asserts identical result). Tech-debt parked (non-blocking): server's local `listPlugins` duplicates engine's; some server runtime duck-typing could become first-class engine APIs; a forced reindex would backfill pre-W6 `sessions.model`.
 
 ## Wave log

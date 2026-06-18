@@ -30,6 +30,8 @@ import { registerAttachmentsRoutes } from "./routes/attachments.js";
 import { registerHookTestRoutes } from "./routes/hook-test.js";
 import { registerExportUsageRoutes } from "./routes/export-usage.js";
 import { registerExportSessionRoutes } from "./routes/export-session.js";
+import { registerExportHtmlRoutes } from "./routes/export-html.js";
+import { registerRelatedRoutes } from "./routes/related.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -156,6 +158,10 @@ export function buildApp(opts: BuildOptions = {}): {
   registerExportUsageRoutes(app, engine);
 
   registerExportSessionRoutes(app, engine);
+
+  registerExportHtmlRoutes(app, engine);
+
+  registerRelatedRoutes(app, engine);
 
   registerOpenExternalRoutes(app, engine);
 

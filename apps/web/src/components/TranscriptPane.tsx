@@ -18,12 +18,17 @@ import {
   ChevronDown,
   BookOpen,
   StickyNote,
+  GitCompareArrows,
+  Film,
+  Bookmark,
 } from "lucide-react";
 import type { SessionMessagesPage } from "../lib/types";
 import { MessageView } from "./MessageView";
 import { GitPanel } from "./GitPanel";
 import { FindBar } from "./FindBar";
 import { SessionNotes } from "./SessionNotes";
+import { SessionTimeline } from "./SessionTimeline";
+import { BookmarksPanel, useTranscriptBookmarks } from "./TranscriptBookmarks";
 import { TranscriptOutline } from "./TranscriptOutline";
 import { TranscriptMinimap } from "./TranscriptMinimap";
 import { SubagentProvider } from "./tools/TaskCard";
@@ -50,6 +55,7 @@ export function TranscriptPane({
   loading,
   onLoadMore,
   onContinue,
+  onCompare,
   jumpTarget,
 }: {
   page: SessionMessagesPage | null;
@@ -57,6 +63,11 @@ export function TranscriptPane({
   onLoadMore: () => void;
   /** Hand off to the Chat tab to resume this session (--resume). */
   onContinue?: (sessionId: string, cwd: string) => void;
+  /**
+   * Open the side-by-side comparison modal seeded with THIS session as the left
+   * column. When set, a "Compare" affordance shows in the header. Read-only.
+   */
+  onCompare?: (sessionId: string) => void;
   /**
    * A search-pick request to scroll to + briefly highlight one message by its
    * `seq`. The `nonce` changes per pick so re-picking the same hit re-fires the
@@ -80,7 +91,11 @@ export function TranscriptPane({
   // filters so the virtualizer, find bar, outline, and minimap all index the
   // same visible list. When off, `apply` returns the input unchanged.
   const reading = useReadingMode();
-  const messages = useMemo(
+  // The full visible list after pairing + chip filters + reading mode. Replay
+  // mode (below) slices THIS into the rendered `messages`; everything else
+  // (virtualizer, find, outline, minimap, error nav) indexes the rendered slice
+  // so positions stay in sync, while the timeline scrubber spans the full list.
+  const fullMessages = useMemo(
     () => reading.apply(applyFilters(paired, filters)),
     [paired, filters, reading],
   );
@@ -106,9 +121,33 @@ export function TranscriptPane({
   // Collapsible "what changed" side-rail: files touched by edits with +/- counts.
   // Mutually exclusive with the outline so two rails never crowd the viewer.
   const [changesOpen, setChangesOpen] = useState(false);
+  // In-transcript bookmarks: per-session marks (persisted in localStorage) with a
+  // jump-list rail and [ / ] keyboard stepping. The rail is mutually exclusive
+  // with the outline/changes rails so only one side panel shows at a time.
+  const [bookmarksOpen, setBookmarksOpen] = useState(false);
+  const bookmarks = useTranscriptBookmarks(page?.session.sessionId ?? null);
+  // The bookmark the [ / ] stepper last landed on, briefly highlighted in the rail.
+  const [activeBookmark, setActiveBookmark] = useState<string | null>(null);
   // Thin minimap/overview scrollbar beside the transcript (message density +
   // role color ticks, click-to-scroll). On by default; toggleable from the header.
   const [minimapOpen, setMinimapOpen] = useState(true);
+  // Replay/timeline mode: a turn-by-turn scrubber that progressively reveals the
+  // transcript. Off by default (full view). `revealCount` is a 1-based count of
+  // messages shown; `replayPlaying` drives the auto-advance. The rendered list is
+  // sliced to `revealCount` only while this mode is on, so the normal full view is
+  // preserved untouched when it's off.
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [revealCount, setRevealCount] = useState(0);
+  const [replayPlaying, setReplayPlaying] = useState(false);
+  // The rendered list: the full visible set, sliced to the replay playhead while
+  // timeline mode is on (and clamped, so a shrinking filter never overshoots).
+  const messages = useMemo(
+    () =>
+      timelineOpen
+        ? fullMessages.slice(0, Math.max(0, Math.min(revealCount, fullMessages.length)))
+        : fullMessages,
+    [fullMessages, timelineOpen, revealCount],
+  );
   const onFindQueryChange = useCallback((q: string) => setFindQuery(q), []);
   const onActiveMatchChange = useCallback((i: number | null) => setActiveMatch(i), []);
 
@@ -131,6 +170,38 @@ export function TranscriptPane({
   // Follow the tail only while the user is parked at the bottom; if they scrolled
   // up to read history, stop and show a "jump to latest" pill instead.
   const stick = useStickToBottom(parentRef);
+
+  // Toggle replay/timeline mode. Opening it seeds the playhead at the END (full
+  // transcript shown) so nothing blanks out — the user scrubs back to replay —
+  // and stops following the live tail so the scrubber owns the scroll. Closing it
+  // halts playback and restores the normal full view.
+  const toggleTimeline = useCallback(() => {
+    setTimelineOpen((open) => {
+      const next = !open;
+      if (next) {
+        stick.unpin();
+        setRevealCount(fullMessages.length);
+      } else {
+        setReplayPlaying(false);
+      }
+      return next;
+    });
+  }, [fullMessages.length, stick]);
+
+  // Keep the playhead seeded at the end as the full list grows WHILE replay mode
+  // is open but the user hasn't scrubbed yet (revealCount tracks the end). This
+  // lets a live session keep showing everything until the user takes the scrubber.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (!timelineOpen) {
+      seededRef.current = false;
+      return;
+    }
+    if (!seededRef.current) {
+      seededRef.current = true;
+      setRevealCount(fullMessages.length);
+    }
+  }, [timelineOpen, fullMessages.length]);
 
   // Scroll the virtualizer to a given message (used by the outline rail).
   const jumpToIndex = useCallback(
@@ -211,6 +282,73 @@ export function TranscriptPane({
     setActiveMatch(null);
   }, []);
 
+  // Bookmark jump: scroll the viewer to a marked message (by its index in the
+  // rendered list), stop following the live tail, and briefly clay-flash it —
+  // reusing the same `jumpIndex` highlight as search/error nav. Also records the
+  // active bookmark so the rail can highlight the current step.
+  const jumpToBookmark = useCallback(
+    (index: number, uuid: string | null) => {
+      stick.unpin();
+      setActiveBookmark(uuid);
+      setJumpIndex(index);
+      virtualizer.scrollToIndex(index, { align: "center" });
+      if (errorHighlightTimer.current) clearTimeout(errorHighlightTimer.current);
+      errorHighlightTimer.current = setTimeout(() => setJumpIndex(null), 2200);
+    },
+    [stick, virtualizer],
+  );
+
+  // Forget the active-bookmark highlight when the session changes (its uuid no
+  // longer refers to anything in the newly-loaded transcript).
+  useEffect(() => {
+    setActiveBookmark(null);
+  }, [page?.session.sessionId]);
+
+  // The rendered-list indices of bookmarked messages, in transcript order — the
+  // sequence the [ / ] stepper walks.
+  const bookmarkIndices = useMemo(() => {
+    const out: { index: number; uuid: string }[] = [];
+    messages.forEach((m, index) => {
+      if (m.uuid && bookmarks.set.has(m.uuid)) out.push({ index, uuid: m.uuid });
+    });
+    return out;
+  }, [messages, bookmarks.set]);
+
+  // Keyboard: "]" jumps to the next bookmark, "[" to the previous (wrapping).
+  // Skipped while typing in a field so the literal bracket still types. No mod
+  // key required; the brackets are otherwise unbound in the transcript.
+  useEffect(() => {
+    if (bookmarkIndices.length === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "[" && e.key !== "]") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
+        return;
+      }
+      e.preventDefault();
+      // Find where we are relative to the marks: the index of the active mark, or
+      // the nearest one to the current playhead, defaulting to the first/last.
+      const curPos = activeBookmark
+        ? bookmarkIndices.findIndex((b) => b.uuid === activeBookmark)
+        : -1;
+      const n = bookmarkIndices.length;
+      const nextPos =
+        e.key === "]"
+          ? curPos < 0
+            ? 0
+            : (curPos + 1) % n
+          : curPos < 0
+            ? n - 1
+            : (curPos - 1 + n) % n;
+      const target = bookmarkIndices[nextPos]!;
+      jumpToBookmark(target.index, target.uuid);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [bookmarkIndices, activeBookmark, jumpToBookmark]);
+
   // Scroll the virtualizer to the active match's message whenever it changes.
   useEffect(() => {
     if (activeMatch == null) return;
@@ -269,13 +407,25 @@ export function TranscriptPane({
 
   // Follow live growth (same session gains messages) only while pinned. The new
   // session jump above owns the first paint; this handles subsequent updates.
+  // Suspended during replay so the scrubber, not the live tail, owns the scroll.
   useEffect(() => {
+    if (timelineOpen) return;
     if (messages.length === 0) return;
     if (lastSession.current !== page?.session.sessionId) return;
     return stick.followToIndex(() =>
       virtualizer.scrollToIndex(messages.length - 1, { align: "end" }),
     );
-  }, [messages.length, page?.session.sessionId, virtualizer, stick.followToIndex]);
+  }, [messages.length, page?.session.sessionId, virtualizer, stick.followToIndex, timelineOpen]);
+
+  // During replay, keep the freshly-revealed message in view so the scrubber +
+  // play read like a progressive reveal. Aligns the playhead message to the end.
+  useEffect(() => {
+    if (!timelineOpen || messages.length === 0) return;
+    const raf = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end" }),
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [timelineOpen, messages.length, virtualizer]);
 
   if (!page) {
     return (
@@ -344,15 +494,35 @@ export function TranscriptPane({
             </div>
           ) : null}
 
+          {/* Bookmarks rail toggle — shows a count badge once any mark exists.
+              Mutually exclusive with the outline/changes rails. */}
+          <button
+            onClick={() => {
+              setBookmarksOpen((v) => !v);
+              setOutlineOpen(false);
+              setChangesOpen(false);
+            }}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              errorNav.count === 0 && "ml-auto",
+              bookmarksOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={bookmarksOpen ? "Hide bookmarks" : "Bookmarks (jump between marked messages)"}
+            aria-pressed={bookmarksOpen}
+          >
+            <Bookmark className="h-3.5 w-3.5" />
+            {bookmarks.ids.length > 0 ? bookmarks.ids.length : "Marks"}
+          </button>
           <button
             onClick={() => {
               setChangesOpen((v) => !v);
               setOutlineOpen(false);
+              setBookmarksOpen(false);
             }}
             className={cn(
               "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
-              // No error nav present? Then this is the first right-aligned control.
-              errorNav.count === 0 && "ml-auto",
               changesOpen
                 ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
                 : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
@@ -366,6 +536,7 @@ export function TranscriptPane({
             onClick={() => {
               setOutlineOpen((v) => !v);
               setChangesOpen(false);
+              setBookmarksOpen(false);
             }}
             className={cn(
               "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
@@ -409,6 +580,23 @@ export function TranscriptPane({
             Read
           </button>
 
+          {/* Replay mode: a turn-by-turn scrubber that progressively reveals the
+              transcript. Toggling it on shows the timeline bar below the header. */}
+          <button
+            onClick={toggleTimeline}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium ring-1 transition",
+              timelineOpen
+                ? "bg-clay-500/15 text-clay-300 ring-clay-500/30 hover:bg-clay-500/25"
+                : "bg-zinc-900 text-zinc-400 ring-zinc-800 hover:bg-zinc-800 hover:text-zinc-200",
+            )}
+            title={timelineOpen ? "Exit replay" : "Replay this session turn by turn"}
+            aria-pressed={timelineOpen}
+          >
+            <Film className="h-3.5 w-3.5" />
+            Replay
+          </button>
+
           {/* Per-session markdown notes. */}
           <button
             onClick={() => setNotesOpen((v) => !v)}
@@ -424,6 +612,17 @@ export function TranscriptPane({
             <StickyNote className="h-3.5 w-3.5" />
             Notes
           </button>
+          {/* Open a side-by-side comparison with another session (read-only). */}
+          {onCompare ? (
+            <button
+              onClick={() => onCompare(s.sessionId)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] font-medium text-zinc-400 ring-1 ring-zinc-800 transition hover:bg-zinc-800 hover:text-zinc-200"
+              title="Compare this session with another"
+            >
+              <GitCompareArrows className="h-3.5 w-3.5" />
+              Compare
+            </button>
+          ) : null}
           {onContinue && s.cwd ? (
             <button
               onClick={() => onContinue(s.sessionId, s.cwd!)}
@@ -467,6 +666,19 @@ export function TranscriptPane({
           )}
         </div>
       </div>
+
+      {/* Replay scrubber (toggled from the header). Spans the FULL visible list so
+          every turn is reachable; the host slices `messages` to its playhead. */}
+      {timelineOpen && fullMessages.length > 0 ? (
+        <SessionTimeline
+          messages={fullMessages}
+          value={revealCount}
+          onChange={setRevealCount}
+          playing={replayPlaying}
+          onPlayingChange={setReplayPlaying}
+          onClose={toggleTimeline}
+        />
+      ) : null}
 
       {/* Per-session markdown notes editor (toggled from the header). Loaded from
           the session's `notes`, saved via PATCH /api/sessions/:id { notes }. */}
@@ -543,6 +755,12 @@ export function TranscriptPane({
                   highlight={findOpen ? findQuery : ""}
                   prevTimestamp={messages[vi.index - 1]?.timestamp ?? null}
                   onCopyLink={copyPermalink}
+                  bookmarked={
+                    messages[vi.index]!.uuid
+                      ? bookmarks.set.has(messages[vi.index]!.uuid!)
+                      : false
+                  }
+                  onToggleBookmark={(uuid) => bookmarks.toggle(uuid)}
                 />
               </div>
             ))}
@@ -587,10 +805,24 @@ export function TranscriptPane({
         />
       ) : null}
 
+      {/* Bookmarks rail: the session's marked messages with click-to-jump (and
+          the same clay highlight the [ / ] stepper uses). */}
+      {bookmarksOpen ? (
+        <BookmarksPanel
+          messages={messages}
+          bookmarkedSet={bookmarks.set}
+          activeUuid={activeBookmark}
+          onJump={(i) => jumpToBookmark(i, messages[i]?.uuid ?? null)}
+          onRemove={bookmarks.remove}
+          onClear={bookmarks.clear}
+          onClose={() => setBookmarksOpen(false)}
+        />
+      ) : null}
+
       {/* Thin overview minimap. Click a tick to jump; tracks the active find
-          match. Hidden while an outline/changes rail is open (they'd crowd the
-          viewer) and toggleable from the header. */}
-      {minimapOpen && !outlineOpen && !changesOpen ? (
+          match. Hidden while an outline/changes/bookmarks rail is open (they'd
+          crowd the viewer) and toggleable from the header. */}
+      {minimapOpen && !outlineOpen && !changesOpen && !bookmarksOpen ? (
         <TranscriptMinimap
           messages={messages}
           activeIndex={findOpen ? activeMatch : jumpIndex}

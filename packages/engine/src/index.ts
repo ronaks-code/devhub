@@ -42,6 +42,7 @@ import type { PluginInfo } from "./config/index.js";
 import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
 import type { McpToggle } from "./config/mcp-toggle.js";
 import { computeAutoTags } from "./auto-tag.js";
+import type { RelatedOptions, RelatedSession } from "./related.js";
 import type {
   ArchiveBundle,
   ExportArchiveOptions,
@@ -446,6 +447,17 @@ export class Engine {
   }
 
   /**
+   * The OTHER sessions most related to a given one — a cheap, deterministic "related
+   * work" rank built only from signals already in the index (shared significant terms
+   * from the mirrored text, same project, shared tags/tools, temporal proximity). No
+   * embeddings or transcript reads. The source session is always excluded; an unknown
+   * id returns []. Each hit carries a score + a short reason. See {@link relatedSessions}.
+   */
+  relatedSessions(sessionId: string, opts: RelatedOptions = {}): RelatedSession[] {
+    return this.index.relatedSessions(sessionId, opts);
+  }
+
+  /**
    * On-demand code-symbol search within ONE project tree: greps the project's source
    * files for declaration-like matches (function/class/const/def/type/interface/...)
    * whose name contains `q`, returning `[{ name, kind, file, line }]`. Lightweight —
@@ -721,6 +733,8 @@ export { parseSearchQuery, mergeFacets } from "./query-parser.js";
 export type { ParsedQuery } from "./query-parser.js";
 export { searchSymbols } from "./symbols.js";
 export type { SymbolHit, SymbolKind, SymbolSearchOptions } from "./symbols.js";
+export { relatedSessions } from "./related.js";
+export type { RelatedSession, RelatedOptions } from "./related.js";
 export { listAllSessions } from "./all-sessions.js";
 export type { ListAllSessionsOptions } from "./all-sessions.js";
 export { dailyUsage } from "./rollups.js";

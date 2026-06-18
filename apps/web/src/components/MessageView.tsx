@@ -4,6 +4,7 @@ import type { ContentBlock, NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
 import { messageAnchorProps } from "../hooks/useMessagePermalink";
 import { CopyMessage } from "./CopyMessage";
+import { BookmarkToggle } from "./TranscriptBookmarks";
 import { Markdown } from "./Markdown";
 import { TurnMeta } from "./TurnMeta";
 import { ToolCard } from "./ToolCard";
@@ -203,6 +204,8 @@ export const MessageView = memo(function MessageView({
   prevTimestamp,
   onEdit,
   onCopyLink,
+  bookmarked,
+  onToggleBookmark,
 }: {
   m: NormalizedMessage;
   /** Show a blinking cursor at the end (live-streaming assistant bubble). */
@@ -234,6 +237,14 @@ export const MessageView = memo(function MessageView({
    * Backed by useMessagePermalink in the host.
    */
   onCopyLink?: (uuid: string | null, seq: number) => Promise<boolean>;
+  /**
+   * Whether this message is bookmarked. When `onToggleBookmark` is also set, a
+   * bookmark affordance shows on hover (solid + clay while marked). Backed by
+   * useTranscriptBookmarks in the host. Only offered for messages with a uuid.
+   */
+  bookmarked?: boolean;
+  /** Toggle this message's bookmark (host persists per-session in localStorage). */
+  onToggleBookmark?: (uuid: string | null, seq: number) => void;
 }) {
   const meta = ROLE_META[m.role] ?? ROLE_META.meta!;
   const dim = m.role === "system" || m.role === "attachment" || m.role === "meta" || m.role === "queue";
@@ -283,10 +294,19 @@ export const MessageView = memo(function MessageView({
             showDuration={m.role === "assistant"}
           />
           {/* Right-aligned hover affordances: edit-and-resend (user/live only),
-              copy-as-markdown, and the message permalink "copy link". */}
-          {(onEdit && m.role === "user" && editText) || onCopyLink || hasCopyable ? (
+              copy-as-markdown, bookmark, and the message permalink "copy link". */}
+          {(onEdit && m.role === "user" && editText) ||
+          onCopyLink ||
+          hasCopyable ||
+          (onToggleBookmark && m.uuid) ? (
             <div className="ml-auto flex items-center gap-1">
               {hasCopyable ? <CopyMessage message={m} /> : null}
+              {onToggleBookmark && m.uuid ? (
+                <BookmarkToggle
+                  bookmarked={!!bookmarked}
+                  onToggle={() => onToggleBookmark(m.uuid, m.seq)}
+                />
+              ) : null}
               {onEdit && m.role === "user" && editText ? (
                 <button
                   onClick={() => onEdit(editText)}

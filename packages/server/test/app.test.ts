@@ -310,6 +310,88 @@ describe("server REST endpoints (no token)", () => {
     expect((res.json() as { error: string }).error).toContain("pdf");
   });
 
+  it("GET /api/sessions/:id/export.html downloads a self-contained HTML transcript", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/export.html",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    // Downloadable: filename derived from the session id.
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.headers["content-disposition"]).toContain("alpha-1");
+    // Self-contained: a real document with inline CSS and no external assets.
+    expect(res.body).toContain("<!doctype html>");
+    expect(res.body).toContain("<style>");
+    expect(res.body).not.toContain("<link");
+    expect(res.body).not.toContain("<script");
+    // The seeded text + tool call should both surface in the rendered transcript.
+    expect(res.body).toContain("deploy the widget");
+    expect(res.body).toContain("Tool call: <code>Bash</code>");
+  });
+
+  it("GET /api/sessions/:id/export.html 404s for an unknown session", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/nope/export.html",
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: "session not found" });
+  });
+
+  it("GET /api/sessions/:id/related returns a JSON array", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/related",
+    });
+    expect(res.statusCode).toBe(200);
+    // Until the engine's relatedSessions method lands, this degrades to []; once it
+    // lands it returns ranked items. Either way it MUST be an array, never a 500.
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  it("GET /api/sessions/:id/related rejects a bad limit (400)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/related?limit=0",
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("GET /api/sessions/:id/related forwards to the engine method when present", async () => {
+    // Duck-typed capability: stub the (not-yet-landed) engine method and confirm the
+    // route calls it through with the validated limit and returns its ranked list.
+    const calls: Array<{ id: string; limit?: number }> = [];
+    (current!.engine as unknown as Record<string, unknown>).relatedSessions = (
+      id: string,
+      opts?: { limit?: number },
+    ) => {
+      calls.push({ id, limit: opts?.limit });
+      return [{ sessionId: "alpha-2", score: 0.9 }];
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/related?limit=5",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([{ sessionId: "alpha-2", score: 0.9 }]);
+    expect(calls).toEqual([{ id: "alpha-1", limit: 5 }]);
+  });
+
+  it("GET /api/sessions/:id/related degrades to [] when the engine method throws", async () => {
+    // Half-landed engine: the wrapper exists but its backing isn't ready yet (it
+    // throws). The route must swallow it and return [] (200), never a 500.
+    (current!.engine as unknown as Record<string, unknown>).relatedSessions = () => {
+      throw new Error("index.relatedSessions is not a function");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/related",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+  });
+
   it("GET /api/health/diagnostics reports the expected fields (200)", async () => {
     const res = await current!.app.inject({
       method: "GET",

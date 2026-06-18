@@ -46,10 +46,13 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SessionCostBadge } from "./components/SessionCostBadge";
 import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
+import { SessionCompare } from "./components/SessionCompare";
+import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { EmptyState, Spinner } from "./components/ui";
 import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
 import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
+import { useTheme, type ThemePreference } from "./hooks/useTheme";
 import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { cn } from "./lib/utils";
 
@@ -211,6 +214,9 @@ function TopBar({
   perfPreference,
   perfReduced,
   onCyclePerf,
+  themePreference,
+  theme,
+  onCycleTheme,
   progress,
   sessionCount,
   projectCount,
@@ -228,6 +234,9 @@ function TopBar({
   perfPreference: PerfPreference;
   perfReduced: boolean;
   onCyclePerf: () => void;
+  themePreference: ThemePreference;
+  theme: "dark" | "light";
+  onCycleTheme: () => void;
   progress: { done: number; total: number } | null;
   sessionCount: number;
   projectCount: number;
@@ -297,6 +306,13 @@ function TopBar({
         >
           {perfReduced ? <Zap className="h-4 w-4" /> : <Gauge className="h-4 w-4" />}
         </button>
+        {/* Theme toggle: cycles dark → light → system (system follows the OS),
+            persisted in localStorage and applied via data-theme on <html>. */}
+        <ThemeSwitcher
+          preference={themePreference}
+          theme={theme}
+          onCycle={onCycleTheme}
+        />
         {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
         <button
           onClick={onOpenShortcuts}
@@ -367,9 +383,17 @@ export default function App() {
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   // Keyboard-shortcut cheat-sheet overlay (opened with "?").
   const [shortcutOpen, setShortcutOpen] = useState(false);
+  // Side-by-side session comparison modal. Holds the left/base session id while
+  // open (null = closed). Opened from the transcript header's "Compare" button.
+  const [compareSessionId, setCompareSessionId] = useState<string | null>(null);
   // Reduced-motion / perf mode: respects prefers-reduced-motion and a persisted
   // manual toggle, and sets data-reduce-motion on <html> for index.css to key off.
   const perf = useReducedMotion();
+  // Light/dark/system theming: persisted in localStorage and applied via
+  // data-theme on <html> (the index.css token palettes key off it). This is the
+  // instant, client-side source of truth for the rendered palette; we ALSO mirror
+  // the choice into the server-backed settings.theme below so it round-trips.
+  const theme = useTheme();
   // Server-backed app settings (default model/permission, theme, budget…).
   // Loaded once on mount and updated when the Settings tab saves.
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -596,19 +620,20 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Reflect the chosen theme onto the document root. Theming is "store only for
-  // now" — we just toggle the `dark` class so the setting has a visible effect
-  // and the rest can build on it later. "system" follows the OS preference.
+  // Adopt the server-backed theme into the client `useTheme` hook ONCE, after
+  // settings first load — so a preference saved on another device (or in the
+  // Settings tab) is honored on launch. The hook then owns the live rendering
+  // (data-theme + the `.dark` class) from there; the header/palette toggles drive
+  // it directly. Guarded so it runs a single time and never fights the hook.
+  const adoptedServerThemeRef = useRef(false);
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    const theme = settings?.theme ?? "system";
-    const prefersDark =
-      typeof window !== "undefined" && window.matchMedia
-        ? window.matchMedia("(prefers-color-scheme: dark)").matches
-        : true;
-    const isDark = theme === "dark" || (theme === "system" && prefersDark);
-    document.documentElement.classList.toggle("dark", isDark);
-  }, [settings?.theme]);
+    if (adoptedServerThemeRef.current) return;
+    const t = settings?.theme;
+    if (!t) return;
+    adoptedServerThemeRef.current = true;
+    // Only override the local default when the server has a different stored value.
+    if (t !== theme.preference) theme.setPreference(t);
+  }, [settings?.theme, theme]);
 
   // Persist a settings patch to the server and update local state on success.
   const saveSettings = useCallback((patch: Partial<AppSettings>) => {
@@ -661,12 +686,15 @@ export default function App() {
     [refreshProjects],
   );
 
+  // Cycle dark → light → system. Drives the client `useTheme` hook (instant,
+  // localStorage) AND mirrors the choice into the server-backed settings so it
+  // round-trips. Shared by the header ThemeSwitcher and the command palette.
   const cycleTheme = useCallback(() => {
-    const order: AppSettings["theme"][] = ["dark", "light", "system"];
-    const current = settings?.theme ?? "system";
-    const next = order[(order.indexOf(current) + 1) % order.length];
+    const order: ThemePreference[] = ["dark", "light", "system"];
+    const next = order[(order.indexOf(theme.preference) + 1) % order.length]!;
+    theme.setPreference(next);
     saveSettings({ theme: next });
-  }, [settings?.theme, saveSettings]);
+  }, [theme, saveSettings]);
 
   const onSelectSession = (id: string) => {
     setTailBytes(undefined);
@@ -930,11 +958,11 @@ export default function App() {
       },
       {
         id: "toggle-theme",
-        title: `Toggle theme (now: ${settings?.theme ?? "system"})`,
+        title: `Toggle theme (now: ${theme.preference})`,
         group: "Theme",
         keywords: "dark light system appearance",
         icon:
-          (settings?.theme ?? "system") === "light" ? (
+          theme.preference === "light" ? (
             <Sun className="h-3.5 w-3.5" />
           ) : (
             <Moon className="h-3.5 w-3.5" />
@@ -986,7 +1014,7 @@ export default function App() {
     }
 
     return list;
-  }, [projects, settings?.theme, effectiveModel, cycleTheme, startNewChat, recents, openSession]);
+  }, [projects, theme.preference, effectiveModel, cycleTheme, startNewChat, recents, openSession]);
 
   return (
     <AuthGate>
@@ -1004,6 +1032,9 @@ export default function App() {
         perfPreference={perf.preference}
         perfReduced={perf.reduced}
         onCyclePerf={perf.cyclePreference}
+        themePreference={theme.preference}
+        theme={theme.theme}
+        onCycleTheme={cycleTheme}
         progress={progress}
         sessionCount={sessionCount}
         projectCount={projects.length}
@@ -1061,6 +1092,7 @@ export default function App() {
                   loading={loadingPage}
                   onLoadMore={handleLoadMore}
                   onContinue={handleContinue}
+                  onCompare={setCompareSessionId}
                   jumpTarget={jumpTarget}
                 />
               </div>
@@ -1129,6 +1161,17 @@ export default function App() {
       />
 
       <ShortcutOverlay open={shortcutOpen} onClose={() => setShortcutOpen(false)} />
+
+      {/* Side-by-side session comparison (read-only). Seeded with the open
+          transcript's session as the left column; candidates are the active
+          project's loaded sessions. Only mounts once that base session is loaded. */}
+      {compareSessionId && page && page.session.sessionId === compareSessionId ? (
+        <SessionCompare
+          baseSession={page.session}
+          sessions={sessions}
+          onClose={() => setCompareSessionId(null)}
+        />
+      ) : null}
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
       </div>

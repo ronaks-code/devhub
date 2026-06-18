@@ -30,6 +30,8 @@ import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { AuditStore } from "./audit.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
+import { relatedSessions } from "./related.js";
+import type { RelatedOptions, RelatedSession } from "./related.js";
 import {
   FTS_TABLE,
   createFtsTableSql,
@@ -726,6 +728,17 @@ export class TranscriptIndex {
    */
   searchInSession(sessionId: string, query: string, opts: { limit?: number } = {}): SearchHit[] {
     return this.searcher.searchInSession(sessionId, query, opts);
+  }
+
+  /**
+   * The OTHER sessions most related to a given one, ranked by cheap deterministic
+   * signals already in this index (shared significant terms from the mirrored text,
+   * same project, shared tags/tools, temporal proximity). No embeddings/transcript
+   * reads. Source session excluded; unknown id -> []. Delegates to {@link relatedSessions},
+   * handing it this index's live DB connection. See that module for the scoring.
+   */
+  relatedSessions(sessionId: string, opts: RelatedOptions = {}): RelatedSession[] {
+    return relatedSessions(this.db, sessionId, opts);
   }
 
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------

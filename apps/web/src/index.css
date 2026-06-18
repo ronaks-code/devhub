@@ -95,8 +95,39 @@ body,
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  /* Base surface + text drive off the semantic tokens so the whole app flips
+     with [data-theme]. The dark token values equal the old zinc-950/zinc-100
+     literals, so the default (dark) look is byte-identical to before. */
+  @apply antialiased;
+  background-color: var(--bg);
+  color: var(--text);
   font-feature-settings: "cv11", "ss01";
+}
+
+/*
+ * Light theme: most components still reference Tailwind's zinc/clay scales
+ * directly (the token migration is gradual). To make the LIGHT palette legible
+ * without rewriting every component this wave, we flip the zinc scale's meaning
+ * under [data-theme="light"] — the dark-surface zincs (950/900/800) become light
+ * surfaces and the light-text zincs (100/200/300) become dark text. This keeps
+ * every `bg-zinc-950` / `text-zinc-200` / `ring-zinc-800` reading correctly in
+ * light mode with no per-component edits, while the clay accent is unchanged.
+ *
+ * Scoped to color-bearing utilities only (bg/text/border/ring/fill/stroke +
+ * their /opacity variants resolve through these custom props in Tailwind v4),
+ * so layout is untouched. New components SHOULD prefer var(--bg)/--panel/--text.
+ */
+:root[data-theme="light"] {
+  --color-zinc-950: #fafafa;
+  --color-zinc-900: #ffffff;
+  --color-zinc-800: #e4e4e7;
+  --color-zinc-700: #d4d4d8;
+  --color-zinc-600: #71717a;
+  --color-zinc-500: #52525b;
+  --color-zinc-400: #3f3f46;
+  --color-zinc-300: #27272a;
+  --color-zinc-200: #18181b;
+  --color-zinc-100: #09090b;
 }
 
 * {
