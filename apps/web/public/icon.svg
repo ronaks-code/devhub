@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude UI">
+  <!--
+    App icon: the same clay hexagon used as the in-app logo (lucide "Hexagon"),
+    drawn full-bleed on a dark clay-tinted plate so it doubles as a MASKABLE icon
+    (the hexagon sits well inside the 40% safe zone, so a circular/rounded mask
+    never clips it). Colors mirror the clay theme: plate ≈ zinc-950, accent =
+    clay-500 (#d97757). One scalable SVG covers every manifest size.
+  -->
+  <rect width="512" height="512" rx="96" fill="#09090b" />
+  <g transform="translate(256 256)">
+    <!-- Hexagon, centered, ~300px across. Flat-top hex matching the logo glyph. -->
+    <polygon
+      points="0,-150 129.9,-75 129.9,75 0,150 -129.9,75 -129.9,-75"
+      fill="#d97757" fill-opacity="0.2"
+      stroke="#d97757" stroke-width="22"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

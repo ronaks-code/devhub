@@ -57,6 +57,7 @@ import type { GitLogEntry } from "../src/git.js";
 import { startConfigWatcher, configWatchPaths } from "../src/config/watcher.js";
 import type { EngineEvent } from "../src/types.js";
 import { parseRateLimit, parseResetAt, classifySubtype, classifyText } from "../src/rate-limit.js";
+import { computeRetry, DEFAULT_MAX_DELAY_MS } from "../src/retry-policy.js";
 import { gracefulInterrupt } from "../src/driver/interrupt.js";
 import type { InterruptibleProcess } from "../src/driver/interrupt.js";
 import { scanSubagents, SUBAGENT_ROLE } from "../src/subagents.js";
@@ -5531,6 +5532,140 @@ describe("parseRateLimit (rate-limit / budget / overload detection)", () => {
     const engine = new Engine(path.join(tmp(), "i.db"));
     expect(engine.parseRateLimit("overloaded_error").reason).toBe("overloaded");
     expect(engine.parseRateLimit("nothing here")).toEqual({ limited: false });
+    engine.close();
+  });
+});
+
+describe("computeRetry (rate-limit-aware turn retry policy)", () => {
+  // A minimal TurnResult builder; only the fields parseRateLimit reads matter.
+  const result = (over: Partial<TurnResult>): TurnResult => ({
+    sessionId: "s",
+    subtype: "success",
+    isError: false,
+    costUsd: 0,
+    denials: [],
+    ...over,
+  });
+  const NOW = Date.parse("2026-06-16T12:00:00.000Z");
+
+  it("a transient rate_limit below the cap retries with a backoff delay", () => {
+    const d = computeRetry(result({ isError: true, resultText: "API error 429: rate_limit_exceeded" }), 0, {
+      now: NOW,
+    });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.reason).toBe("rate_limit");
+    expect(d.attempt).toBe(0);
+    // No resetAt in the text -> capped exponential backoff: base 2s * 2^0 + jitter.
+    expect(d.delayMs).toBeGreaterThanOrEqual(2_000);
+    expect(d.delayMs).toBeLessThan(4_000);
+  });
+
+  it("an overloaded (529) error is transient and retries", () => {
+    const d = computeRetry(result({ isError: true, resultText: "overloaded_error: server busy (529)" }), 0, {
+      now: NOW,
+    });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.reason).toBe("overloaded");
+  });
+
+  it("prefers a parsed resetAt over backoff for the delay", () => {
+    // retry-after: 90s -> the delay should be exactly that wait (not the 2s backoff).
+    const d = computeRetry(result({ isError: true, resultText: "rate_limit_exceeded; retry-after: 90" }), 0, {
+      now: NOW,
+    });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.delayMs).toBe(90_000);
+  });
+
+  it("max_budget never retries (raising the cap is the only fix), but reports the reason", () => {
+    const d = computeRetry(result({ subtype: "error_max_budget_usd", isError: true }), 0, { now: NOW });
+    expect(d.shouldRetry).toBe(false);
+    expect(d.delayMs).toBe(0);
+    expect(d.reason).toBe("max_budget");
+  });
+
+  it("a clean success never retries", () => {
+    const d = computeRetry(result({ subtype: "success", isError: false }), 0, { now: NOW });
+    expect(d.shouldRetry).toBe(false);
+    expect(d.delayMs).toBe(0);
+    expect(d.reason).toBeUndefined();
+  });
+
+  it("a user-interrupt / aborted turn (null) never retries", () => {
+    const d = computeRetry(null, 0, { now: NOW });
+    expect(d.shouldRetry).toBe(false);
+    expect(d.delayMs).toBe(0);
+  });
+
+  it("an unrecognized error (no throttle signal) never retries", () => {
+    const d = computeRetry(result({ subtype: "error", isError: true, resultText: "tool failed: ENOENT" }), 0, {
+      now: NOW,
+    });
+    expect(d.shouldRetry).toBe(false);
+  });
+
+  it("backoff grows with the attempt number", () => {
+    const text = "rate_limit_exceeded"; // no resetAt -> pure backoff
+    const d0 = computeRetry(text, 0, { now: NOW });
+    const d1 = computeRetry(text, 1, { now: NOW });
+    const d2 = computeRetry(text, 2, { now: NOW });
+    expect(d0.delayMs).toBeLessThan(d1.delayMs);
+    expect(d1.delayMs).toBeLessThan(d2.delayMs);
+  });
+
+  it("backoff is deterministic (same attempt -> same delay, no Math.random)", () => {
+    const text = "overloaded_error";
+    expect(computeRetry(text, 2, { now: NOW }).delayMs).toBe(computeRetry(text, 2, { now: NOW }).delayMs);
+  });
+
+  it("backoff clamps to maxDelayMs at high attempts", () => {
+    // A large attempt with a tiny cap saturates at the cap rather than exploding.
+    const d = computeRetry("rate_limit_exceeded", 3, { now: NOW, maxAttempts: 50, maxDelayMs: 5_000 });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.delayMs).toBe(5_000);
+    // And the default cap (10 min) bounds an otherwise huge backoff.
+    const d2 = computeRetry("rate_limit_exceeded", 30, { now: NOW, maxAttempts: 50 });
+    expect(d2.delayMs).toBe(DEFAULT_MAX_DELAY_MS);
+  });
+
+  it("a far-future resetAt is clamped to maxDelayMs", () => {
+    const text = "rate_limit_exceeded; resets at 2030-01-01T00:00:00Z";
+    const d = computeRetry(text, 0, { now: NOW });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.delayMs).toBe(DEFAULT_MAX_DELAY_MS);
+  });
+
+  it("a resetAt already in the past -> retry now (zero delay)", () => {
+    const text = "rate_limit_exceeded; resets at 2020-01-01T00:00:00Z";
+    const d = computeRetry(text, 0, { now: NOW });
+    expect(d.shouldRetry).toBe(true);
+    expect(d.delayMs).toBe(0);
+  });
+
+  it("stops retrying once maxAttempts is reached", () => {
+    const text = "rate_limit_exceeded";
+    // Default cap 5: attempt 3 is the last that retries; attempt 4 (the 5th try) stops.
+    expect(computeRetry(text, 3, { now: NOW }).shouldRetry).toBe(true);
+    expect(computeRetry(text, 4, { now: NOW }).shouldRetry).toBe(false);
+    expect(computeRetry(text, 4, { now: NOW }).delayMs).toBe(0);
+    // A custom cap of 2: only attempt 0 retries.
+    expect(computeRetry(text, 0, { now: NOW, maxAttempts: 2 }).shouldRetry).toBe(true);
+    expect(computeRetry(text, 1, { now: NOW, maxAttempts: 2 }).shouldRetry).toBe(false);
+  });
+
+  it("a negative/non-finite attempt is normalized to 0", () => {
+    const d = computeRetry("rate_limit_exceeded", -3, { now: NOW });
+    expect(d.attempt).toBe(0);
+    expect(d.shouldRetry).toBe(true);
+  });
+
+  it("Engine.computeRetry delegates to the same logic", () => {
+    const engine = new Engine(path.join(tmp(), "i.db"));
+    expect(engine.computeRetry("overloaded_error", 0, { now: NOW }).shouldRetry).toBe(true);
+    expect(engine.computeRetry(result({ subtype: "error_max_budget_usd", isError: true }), 0).shouldRetry).toBe(
+      false,
+    );
+    expect(engine.computeRetry("all good", 0).shouldRetry).toBe(false);
     engine.close();
   });
 });

@@ -32,6 +32,7 @@ import type {
   RunningTurn,
   ServerMsg,
   TurnHandlers,
+  TurnResult,
 } from "@claude-ui/engine/driver";
 import { LiveTurnRegistry } from "./live-turns.js";
 
@@ -104,6 +105,72 @@ function resolveDenialAudit(engine: Engine): DenialAuditFn | undefined {
 }
 
 /**
+ * Best-effort shape of the engine's rate-limit retry policy. The engine lane adds
+ * `engine.computeRetry(resultOrError, attempt, opts)` THIS wave; we look it up at
+ * runtime and call it only if present (per the campaign's duck-type rule). When the
+ * symbol is absent we behave exactly as today (a rate-limited turn just ends).
+ *
+ * We don't depend on the engine's exact return TYPE (a sibling lane owns it), so we
+ * read the decision through a small set of tolerated field spellings: a truthy
+ * retry flag (`retry` | `retryable` | `shouldRetry`) and a non-negative delay
+ * (`delayMs` | `delay`). Anything else — falsy, throwing, or unparseable — is read as
+ * "do not retry", so a malformed policy can never start an unwanted re-run.
+ *
+ * NOTE (missing engine symbols): once `computeRetry(resultOrError, attempt, opts?)`
+ * is exported with a typed `RetryDecision` ({ retry; delayMs; maxAttempts? }), replace
+ * this duck-typed lookup + `readRetryDecision` with a typed call.
+ */
+type ComputeRetryFn = (
+  resultOrError: TurnResult | string | null | undefined,
+  attempt: number,
+  opts?: unknown,
+) => unknown;
+export function resolveComputeRetry(engine: Engine): ComputeRetryFn | undefined {
+  const candidate = (engine as unknown as Record<string, unknown>).computeRetry;
+  return typeof candidate === "function"
+    ? (candidate.bind(engine) as ComputeRetryFn)
+    : undefined;
+}
+
+/** A normalized retry decision distilled from whatever `computeRetry` returned. */
+export interface RetryDecision {
+  retry: boolean;
+  /** Clamped to a non-negative integer of milliseconds. */
+  delayMs: number;
+}
+
+/**
+ * Hard safety net on auto-retries per turn, independent of the engine policy's own
+ * `maxAttempts`. The policy is authoritative (it stops by returning a non-retry
+ * decision), but this caps us even if a misbehaving policy keeps saying "retry", so
+ * we can never loop unboundedly. Large enough not to clip a sane policy.
+ */
+const MAX_AUTO_RETRIES = 8;
+
+/**
+ * Upper bound on a single retry delay (10 min) so a bogus/huge `delayMs` from the
+ * policy can't park a turn effectively forever. Defensive clamp only.
+ */
+const MAX_RETRY_DELAY_MS = 10 * 60_000;
+
+/**
+ * Distill the engine policy's opaque return value into a {@link RetryDecision}.
+ * Tolerant by design: only a truthy retry flag AND a finite, non-negative delay
+ * yield `retry: true`; everything else (null, a plain boolean, a missing/NaN delay)
+ * reads as "do not retry" so we never schedule a re-run on a shape we don't trust.
+ */
+export function readRetryDecision(raw: unknown): RetryDecision {
+  if (raw == null || typeof raw !== "object") return { retry: false, delayMs: 0 };
+  const d = raw as Record<string, unknown>;
+  const flag = d.retry ?? d.retryable ?? d.shouldRetry;
+  if (flag !== true) return { retry: false, delayMs: 0 };
+  const rawDelay = d.delayMs ?? d.delay;
+  const delay = typeof rawDelay === "number" ? rawDelay : NaN;
+  if (!Number.isFinite(delay) || delay < 0) return { retry: false, delayMs: 0 };
+  return { retry: true, delayMs: Math.min(Math.floor(delay), MAX_RETRY_DELAY_MS) };
+}
+
+/**
  * Upper bound on pending prompts so a misbehaving (or malicious) client can't
  * grow the queue without limit. Prompts beyond this are rejected with an error;
  * the active turn and existing queue are untouched.
@@ -153,6 +220,9 @@ function parseClientMsg(raw: unknown): IncomingMsg | null {
 export function registerWs(app: FastifyInstance, engine: Engine, token?: string): void {
   // Resolved once: a best-effort denial-audit helper, if the engine exposes one.
   const auditDenials = resolveDenialAudit(engine);
+  // Resolved once: the rate-limit retry policy, if the engine exposes one. Absent =>
+  // no auto-retry (behaves exactly as today: a rate-limited turn just ends).
+  const computeRetry = resolveComputeRetry(engine);
 
   // One registry shared by every connection on this plugin: it holds turns whose
   // socket closed but that we keep alive for a reattach (browser reload). Cleaned
@@ -198,6 +268,23 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
      * even if the client's queued frames carried no (or a stale) sessionId.
      */
     let resumeSessionId: string | undefined;
+    /**
+     * A scheduled auto-retry, or null when none is pending. When a turn ends with a
+     * rate-limit/overload signal the engine's policy deems retryable, we park the SAME
+     * prompt here behind a {@link MAX_RETRY_DELAY_MS}-clamped timer instead of ending
+     * the turn. A user interrupt / clear-queue / socket close cancels it (see
+     * {@link cancelPendingRetry}) so we never re-run after the user has moved on and
+     * never leak the timer. `.unref()`'d so a lone pending retry can't keep the
+     * process alive on shutdown.
+     */
+    let pendingRetry: ReturnType<typeof setTimeout> | null = null;
+    /** Drop any scheduled retry timer. Idempotent; safe to call when none is pending. */
+    const cancelPendingRetry = () => {
+      if (pendingRetry) {
+        clearTimeout(pendingRetry);
+        pendingRetry = null;
+      }
+    };
 
     const send = (msg: OutgoingMsg) => {
       if (socket.readyState === socket.OPEN) {
@@ -227,11 +314,23 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
      * Start driving `msg` as the active turn. Prefers the live `resumeSessionId`
      * (so the conversation stays one thread) and falls back to whatever the
      * client supplied. On completion, emits turn-end and pulls the next prompt.
+     *
+     * `attempt` is the auto-retry counter (0 for a fresh, user-sent turn). When a
+     * turn ends with a rate-limit/overload signal the engine's `computeRetry` policy
+     * deems retryable, we re-invoke `startTurn(msg, attempt + 1)` after the computed
+     * delay — the SAME prompt, same cwd/sessionId/model/permissionMode — so the user
+     * doesn't have to re-send. A normal/budget completion never retries (unchanged),
+     * and an absent policy never retries (unchanged).
      */
-    const startTurn = (msg: PromptMsg) => {
+    const startTurn = (msg: PromptMsg, attempt = 0) => {
       // Denials reported by the turn's result, kept so we can audit them (best
       // effort) once the turn ends.
       let denials: PermissionDenial[] = [];
+      // The terminal result/error of THIS turn, captured so `done.finally` can ask the
+      // retry policy whether to re-run. A `result` frame wins over an `onError` string
+      // when both arrive (the structured result carries the authoritative subtype).
+      let lastResult: TurnResult | undefined;
+      let lastError: string | undefined;
 
       // `onThinkingDelta` isn't on `TurnHandlers` yet; cast through the local
       // widening so the field type-checks. Ignored by an engine that never fires it.
@@ -251,9 +350,13 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
         onStatus: ({ kind }) => deliver({ t: "status", kind }),
         onResult: (result) => {
           denials = result.denials;
+          lastResult = result;
           deliver({ t: "result", result });
         },
-        onError: (message) => deliver({ t: "error", message }),
+        onError: (message) => {
+          lastError = message;
+          deliver({ t: "error", message });
+        },
       };
 
       const turn = createDriver().runTurn(
@@ -277,6 +380,48 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
             // ignore — auditing is non-essential
           }
         }
+
+        // AUTO-RETRY (opt-in via the engine policy; no-op when the policy is absent).
+        // Only while ATTACHED: a detached, socketless turn has no client to show the
+        // status to and the registry owns its finalization, so we never retry it. If
+        // the policy says this rate-limit/overload result is retryable, re-run the SAME
+        // prompt after the computed delay instead of ending the turn — the user doesn't
+        // re-send. A normal/budget completion yields a non-retry decision (unchanged).
+        if (computeRetry && !detached && attempt < MAX_AUTO_RETRIES) {
+          let decision: RetryDecision = { retry: false, delayMs: 0 };
+          try {
+            // Pass the structured result when we have one (its subtype is
+            // authoritative), else the raw error string; `attempt` lets the policy
+            // enforce its own maxAttempts and back-off curve.
+            decision = readRetryDecision(
+              computeRetry(lastResult ?? lastError, attempt, {}),
+            );
+          } catch {
+            // A throwing/half-landed policy must never wedge a turn: treat as no-retry.
+            decision = { retry: false, delayMs: 0 };
+          }
+          if (decision.retry) {
+            const nextAttempt = attempt + 1;
+            // Mirror the `queued:N` status convention so a client can show a banner.
+            send({ t: "status", kind: `retrying:${nextAttempt}:${decision.delayMs}` });
+            // Park the SAME prompt behind the delay WITHOUT emitting turn-end: the turn
+            // hasn't truly finished from the user's view. The old turn object is done, so
+            // null `activeTurn`; `pendingRetry` now signals "in flight" so an incoming
+            // prompt still queues, drainQueue still waits, and an interrupt/clear-queue/
+            // close can cancel us. `.unref()` so a lone pending retry can't keep the
+            // process alive. We deliberately keep `activeTurnSessionId` so the resumed
+            // turn continues the same thread.
+            activeTurn = null;
+            const timer = setTimeout(() => {
+              pendingRetry = null;
+              startTurn(msg, nextAttempt);
+            }, decision.delayMs);
+            timer.unref?.();
+            pendingRetry = timer;
+            return;
+          }
+        }
+
         deliver({ t: "turn-end" });
         const endedSessionId = activeTurnSessionId;
         activeTurn = null;
@@ -294,7 +439,9 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
 
     /** Run the next queued prompt, if any, and update the pending count. */
     const drainQueue = () => {
-      if (activeTurn) return; // a turn is already running; it will drain on end
+      // A running turn OR a scheduled auto-retry is still in flight; either will drain
+      // the queue when it truly ends (turn-end / the retry firing then ending).
+      if (activeTurn || pendingRetry) return;
       const next = queue.shift();
       if (!next) return;
       emitQueued();
@@ -317,7 +464,9 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
       }
 
       if (msg.t === "prompt") {
-        if (activeTurn) {
+        // A pending auto-retry counts as in-flight: the turn hasn't truly ended, so a
+        // new prompt queues behind it rather than starting concurrently.
+        if (activeTurn || pendingRetry) {
           // Busy: enqueue instead of rejecting, but never grow without bound.
           if (queue.length >= MAX_QUEUE) {
             send({ t: "error", message: "queue full" });
@@ -336,6 +485,15 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
           queue.length = 0;
           emitQueued();
         }
+        // Cancel any scheduled auto-retry: the user is bailing out, so we must not
+        // re-run the parked prompt. If a retry was pending there is no live child to
+        // interrupt, but we still drain the (possibly kept) queue as a turn-end would.
+        if (pendingRetry) {
+          cancelPendingRetry();
+          deliver({ t: "turn-end" });
+          activeTurnSessionId = undefined;
+          drainQueue();
+        }
         activeTurn?.interrupt();
       } else if (msg.t === "clear-queue") {
         // Drop pending prompts; leave the active turn running.
@@ -349,7 +507,7 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
         // already driving a turn has nothing to reattach. The registry replays the
         // buffered events to us and, if the turn is still running, streams the rest
         // live; if it already finished we just get the buffered result + replay-done.
-        if (activeTurn) {
+        if (activeTurn || pendingRetry) {
           send({ t: "error", message: "busy" });
           return;
         }
@@ -389,6 +547,11 @@ export function registerWs(app: FastifyInstance, engine: Engine, token?: string)
       // No more turns can be driven on a dead socket; drop the queue too so
       // drainQueue (were it somehow reached) has nothing to start.
       queue.length = 0;
+      // Cancel any scheduled auto-retry — the socket is gone, so re-running the parked
+      // prompt would stream into a dead connection. The turn already produced its
+      // terminal result (we never emit turn-end while a retry is pending), so there is
+      // no live child to keep alive or detach; just drop the timer so it can't leak.
+      cancelPendingRetry();
 
       if (detached && activeTurn && activeTurnSessionId) {
         // Already routing the active turn through the registry (this was a reattached

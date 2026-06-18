@@ -45,6 +45,8 @@ import { searchSymbols } from "./symbols.js";
 import type { SymbolHit, SymbolSearchOptions } from "./symbols.js";
 import { parseRateLimit } from "./rate-limit.js";
 import type { RateLimitInfo } from "./rate-limit.js";
+import { computeRetry } from "./retry-policy.js";
+import type { RetryDecision, RetryOptions } from "./retry-policy.js";
 import { listPlugins } from "./config/index.js";
 import type { PluginInfo } from "./config/index.js";
 import { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
@@ -282,6 +284,21 @@ export class Engine {
    */
   parseRateLimit(resultOrError: TurnResult | string | null | undefined, now?: number): RateLimitInfo {
     return parseRateLimit(resultOrError, now);
+  }
+
+  /**
+   * Decide whether a finished turn should be retried (and after how long) when the
+   * CLI/API throttled it. Retries only on a transient `rate_limit` / `overloaded`
+   * signal, never on `max_budget` or a clean/aborted turn, and is bounded by
+   * `opts.maxAttempts`. Pure delegation to {@link computeRetry}; exposed here so a face
+   * can drive an opt-in retry loop off the engine instance without a separate import.
+   */
+  computeRetry(
+    resultOrError: TurnResult | string | null | undefined,
+    attempt: number,
+    opts?: RetryOptions,
+  ): RetryDecision {
+    return computeRetry(resultOrError, attempt, opts);
   }
 
   /**
@@ -943,6 +960,13 @@ export {
   classifyText,
 } from "./rate-limit.js";
 export type { RateLimitInfo, RateLimitReason } from "./rate-limit.js";
+export {
+  computeRetry,
+  DEFAULT_MAX_ATTEMPTS,
+  DEFAULT_BASE_DELAY_MS,
+  DEFAULT_MAX_DELAY_MS,
+} from "./retry-policy.js";
+export type { RetryDecision, RetryOptions } from "./retry-policy.js";
 export {
   scanSubagents,
   scanSubagentFile,

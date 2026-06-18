@@ -139,6 +139,67 @@ export function statusMeta(subtype: string | null | undefined): StatusMeta | nul
 }
 
 /**
+ * A parsed `retrying:<attempt>:<delayMs>` status frame — the server emits this
+ * (additively) when a rate-limited/overloaded turn auto-retries before giving up,
+ * so the UI can show a calm "retrying in Ns (attempt k)…" hint instead of failing.
+ *
+ * Plain words: when the API says "slow down" (a 429/529), the server waits a bit
+ * and tries the same turn again. This carries WHICH retry we're on and HOW LONG
+ * we'll wait, so the chip can count it down for the user.
+ */
+export interface RetryStatus {
+  /** 1-based attempt number this retry represents. */
+  attempt: number;
+  /** Backoff delay before this retry fires, in milliseconds (0 if unknown). */
+  delayMs: number;
+}
+
+/**
+ * Parse a `retrying:<attempt>:<delayMs>` status `kind` string into a
+ * {@link RetryStatus}, or null if it isn't a retry frame (so an older server that
+ * never sends one — or any other status — simply no-ops). Tolerant of a missing
+ * delay segment (`retrying:2`) and of non-numeric junk, defaulting those to 0.
+ */
+export function parseRetryStatus(kind: string | null | undefined): RetryStatus | null {
+  if (!kind) return null;
+  const parts = kind.split(":");
+  if (parts[0] !== "retrying") return null;
+  const attempt = Number(parts[1]);
+  const delayMs = Number(parts[2]);
+  return {
+    attempt: Number.isFinite(attempt) && attempt > 0 ? attempt : 1,
+    delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : 0,
+  };
+}
+
+/**
+ * Calm inline indicator for a rate-limited turn that's auto-retrying. Reuses the
+ * warn-tone chip styling (and the rate-limit Hourglass icon) so it reads as a
+ * transient "hang on" rather than a failure. Purely presentational: ChatPane
+ * decides WHEN a retry is in flight and clears it when the turn resumes/ends.
+ */
+export function RetryingLabel({ retry, className }: { retry: RetryStatus; className?: string }) {
+  // Round the delay to whole seconds for a human read ("in 5s"); omit it when the
+  // server didn't send one so we never show a bare "in 0s".
+  const secs = retry.delayMs > 0 ? Math.max(1, Math.round(retry.delayMs / 1000)) : null;
+  const label =
+    `Rate limited — retrying${secs != null ? ` in ${secs}s` : ""} (attempt ${retry.attempt})…`;
+  return (
+    <span
+      title="The API rate limit was hit — the turn is automatically retrying."
+      className={cn(
+        "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1",
+        TONE_CLASS.warn,
+        className,
+      )}
+    >
+      <Hourglass className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
+/**
  * A compact status chip rendered from a subtype. Falls back to the raw subtype text
  * (neutral tone, no icon) for an unknown subtype unless `hideUnknown` is set, in
  * which case it renders nothing — so it can replace a raw `{subtype}` print without

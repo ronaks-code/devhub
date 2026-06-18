@@ -255,13 +255,19 @@ function TopBar({
         <span className="text-sm font-semibold tracking-tight text-zinc-100">Claude UI</span>
       </div>
 
-      <div className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
+      <div
+        role="tablist"
+        aria-label="Primary views"
+        className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
+      >
         {(["browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
           <button
             key={t}
+            role="tab"
+            aria-selected={tab === t}
             onClick={() => onTab(t)}
             className={cn(
-              "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition",
+              "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
               tab === t
                 ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
                 : "text-zinc-500 hover:text-zinc-300",
@@ -274,7 +280,7 @@ function TopBar({
 
       <button
         onClick={onOpenSearch}
-        className="ml-2 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300"
+        className="ml-2 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
         title="Search sessions (⌘K)"
       >
         <Search className="h-3.5 w-3.5" />
@@ -284,8 +290,9 @@ function TopBar({
 
       <button
         onClick={onOpenCommands}
-        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300"
+        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
         title="Command palette (⌘⇧P)"
+        aria-label="Command palette (⌘⇧P)"
       >
         <CommandIcon className="h-3.5 w-3.5" />
         <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
@@ -297,7 +304,7 @@ function TopBar({
         <button
           onClick={onCyclePerf}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-md p-1 transition",
+            "inline-flex items-center gap-1.5 rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
             perfReduced
               ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
               : "text-zinc-500 hover:text-zinc-300",
@@ -318,7 +325,7 @@ function TopBar({
         {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
         <button
           onClick={onOpenShortcuts}
-          className="rounded-md p-1 text-zinc-500 transition hover:text-zinc-300"
+          className="rounded-md p-1 text-zinc-500 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
         >
@@ -346,8 +353,10 @@ function TopBar({
         <LogoutButton />
         <button
           onClick={() => onTab("settings")}
+          role="tab"
+          aria-selected={tab === "settings"}
           className={cn(
-            "rounded-md p-1 transition",
+            "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
             tab === "settings"
               ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
               : "text-zinc-500 hover:text-zinc-300",
@@ -1055,6 +1064,16 @@ export default function App() {
   return (
     <AuthGate>
       <div className="flex h-full flex-col">
+      {/* Skip link: the first focusable element, hidden until focused (Tab from a
+          fresh load) so a keyboard/screen-reader user can jump straight past the
+          top bar into the main content instead of tabbing through every header
+          control. Visually offscreen until focused, then a clay pill, top-left. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-[80] focus:rounded-md focus:bg-clay-500 focus:px-3 focus:py-1.5 focus:text-[12px] focus:font-medium focus:text-white focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-clay-500/50"
+      >
+        Skip to main content
+      </a>
       <TopBar
         tab={tab}
         onTab={(t) => {
@@ -1081,7 +1100,10 @@ export default function App() {
         projectName={project?.name}
       />
       <ErrorBoundary>
-      <div className="flex min-h-0 flex-1">
+      {/* Main landmark + skip-link target. `tabIndex={-1}` lets the skip link move
+          focus here (it's not natively focusable) without adding it to the Tab
+          order. `outline-none` so that programmatic focus doesn't draw a ring. */}
+      <div id="main-content" role="main" tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
         {tab === "settings" ? (
           <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
         ) : tab === "dashboard" ? (
@@ -1093,13 +1115,19 @@ export default function App() {
                 both views, so neither view needs to know about the other and the
                 existing board is untouched. */}
             <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800/80 bg-zinc-950 px-6 py-2">
-              <div className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
+              <div
+                role="tablist"
+                aria-label="Ops view"
+                className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
+              >
                 {(["board", "grid"] as const).map((m) => (
                   <button
                     key={m}
+                    role="tab"
+                    aria-selected={opsMode === m}
                     onClick={() => setOpsMode(m)}
                     className={cn(
-                      "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition",
+                      "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
                       opsMode === m
                         ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
                         : "text-zinc-500 hover:text-zinc-300",

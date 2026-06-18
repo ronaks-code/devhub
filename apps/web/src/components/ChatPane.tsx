@@ -13,6 +13,7 @@ import { useApprovalKeyboard } from "../hooks/useApprovalKeyboard";
 import { MessageView } from "./MessageView";
 import { CwdProvider } from "./OpenInEditor";
 import { StoppedBadge, isStoppedSubtype, stoppedReason } from "./StoppedBadge";
+import { RetryingLabel, parseRetryStatus, type RetryStatus } from "./StatusLabel";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { SlashPalette, filterCommands } from "./SlashPalette";
 import { MentionPicker, detectMention } from "./MentionPicker";
@@ -147,6 +148,12 @@ export function ChatPane({
   // (and reset at the start/end of each turn). Dormant on a server that doesn't
   // emit token statuses, so the meter simply never appears there.
   const [tokenStatus, setTokenStatus] = useState<TokenStatusData | null>(null);
+  // A rate-limit auto-retry in flight, parsed from a `{kind:"retrying:<n>:<ms>"}`
+  // status frame. Drives a calm inline "retrying in Ns (attempt k)…" indicator.
+  // Null until/unless the server sends one (older servers never do), and cleared
+  // the moment the turn resumes (any other status), finishes, errors, or drops —
+  // so it never lingers past the retry it describes.
+  const [retry, setRetry] = useState<RetryStatus | null>(null);
   // The snippet-library overlay (prompt templates). Opened via the composer
   // button or by typing a bare "/" with no slash-command matches.
   const [snippetsOpen, setSnippetsOpen] = useState(false);
@@ -310,6 +317,18 @@ export function ChatPane({
           if (parsed) setTokenStatus(parsed);
           return;
         }
+        // A `retrying:<attempt>:<delayMs>` status means a rate-limited/overloaded
+        // turn is auto-retrying. Surface a calm inline indicator instead of letting
+        // the raw kind string land in the status label. Older servers never emit
+        // this, so the indicator simply never appears there.
+        const r = parseRetryStatus(kind);
+        if (r) {
+          setRetry(r);
+          return;
+        }
+        // Any OTHER status means the turn has resumed past a retry — clear the
+        // retry indicator so it never outlives the wait it described.
+        setRetry(null);
         setStatus(kind);
       },
       onResult: (result) => {
@@ -340,6 +359,7 @@ export function ChatPane({
           clearApprovalsRef.current();
           setPendingPermission(null);
           setTokenStatus(null);
+          setRetry(null);
           clearLive();
         }
       },
@@ -351,6 +371,7 @@ export function ChatPane({
         clearApprovalsRef.current();
         setPendingPermission(null);
         setTokenStatus(null);
+        setRetry(null);
         clearLive();
         // A failed turn shouldn't auto-fire the queue (it might fail the same
         // way, or the error needs the user's attention). The queued prompts stay
@@ -362,6 +383,7 @@ export function ChatPane({
         clearApprovalsRef.current();
         setPendingPermission(null);
         setTokenStatus(null);
+        setRetry(null);
         clearLive();
         // The turn finished cleanly — kick off the next queued follow-up, if any.
         dispatchNext();
@@ -491,6 +513,7 @@ export function ChatPane({
       clearApprovalsRef.current();
       setPendingPermission(null);
       setTokenStatus(null);
+      setRetry(null);
       setStatus("starting");
       setRunning(true);
       clearLive();
@@ -1113,6 +1136,10 @@ export function ChatPane({
               `tokens` status. Only appears once a snapshot has arrived (so it's a
               no-op on servers that don't emit token statuses). */}
           {running && tokenStatus && <TokenMeter data={tokenStatus} model={model} />}
+          {/* Rate-limit auto-retry indicator — only while a turn is running and the
+              server has reported a `retrying:*` status. Calm, warn-toned, and
+              cleared the instant the turn resumes/ends (see onStatus/onTurnEnd). */}
+          {running && retry && <RetryingLabel retry={retry} />}
           {queued.length > 0 && (
             <span
               className="flex items-center gap-1 text-amber-400"
