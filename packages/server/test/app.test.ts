@@ -581,6 +581,99 @@ describe("server REST endpoints (no token)", () => {
     expect(res.json()).toEqual({ tools: [] });
   });
 
+  it("GET /api/sessions/:id/files returns an empty files array for a session with no edits (200)", async () => {
+    // The seeded sessions only run Bash (no Edit/Write/NotebookEdit), so the engine's
+    // rollup finds nothing to report — an empty list + zeroed summary, never a 500.
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { files: unknown[]; summary: { fileCount: number } };
+    expect(body.files).toEqual([]);
+    expect(body.summary.fileCount).toBe(0);
+  });
+
+  it("GET /api/sessions/:id/files returns an empty result for an unknown session (200, never 500)", async () => {
+    // Unknown id: the engine's rollup (and the composed fallback) yield an empty list
+    // rather than a 404/500. The contract under test is "empty + 200, never 500".
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/nope/files",
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { files: unknown[] }).files).toEqual([]);
+  });
+
+  it("GET /api/sessions/:id/files accepts a non-empty id and never 500s", async () => {
+    // The schema requires a non-empty :id. A single space is a valid non-empty string
+    // per the schema; it resolves to an unknown session → 200 empty. The contract under
+    // test is that a well-formed (but unmatched) id never surfaces a 500.
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/%20/files",
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("GET /api/sessions/:id/files forwards to engine.sessionFileChanges when present", async () => {
+    // Duck-typed capability: stub the engine method and confirm the route forwards its
+    // result verbatim, called through with the validated session id.
+    const calls: string[] = [];
+    (current!.engine as unknown as Record<string, unknown>).sessionFileChanges = (id: string) => {
+      calls.push(id);
+      return {
+        files: [{ filePath: "x.ts", absPath: "/home/me/alpha/x.ts", edits: 2, writes: 0, tools: ["Edit"] }],
+        summary: { fileCount: 1, editCount: 2, writeCount: 0 },
+      };
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      files: [{ filePath: "x.ts", absPath: "/home/me/alpha/x.ts", edits: 2, writes: 0, tools: ["Edit"] }],
+      summary: { fileCount: 1, editCount: 2, writeCount: 0 },
+    });
+    expect(calls).toEqual(["alpha-1"]);
+  });
+
+  it("GET /api/sessions/:id/files composes the SAME shape when engine.sessionFileChanges is absent", async () => {
+    // Degraded path: the engine method hasn't landed (typeof guard). The route must
+    // compose the rollup itself from getSessionMessages + aggregateFileChanges, NOT
+    // surface a 500. alpha-1 has no edits, so the composed result is an empty list with
+    // a zeroed summary — the SAME shape the engine method returns.
+    (current!.engine as unknown as Record<string, unknown>).sessionFileChanges = undefined;
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      files: [],
+      summary: { fileCount: 0, editCount: 0, writeCount: 0 },
+    });
+  });
+
+  it("GET /api/sessions/:id/files composes from the transcript when engine.sessionFileChanges throws", async () => {
+    // Half-landed engine: the wrapper exists but its backing isn't ready (it throws).
+    // The route must fall back to composing from getSessionMessages, NOT surface a 500.
+    // alpha-1 has no edits, so the composed fallback is an empty list + zeroed summary.
+    (current!.engine as unknown as Record<string, unknown>).sessionFileChanges = () => {
+      throw new Error("index.sessionFileChanges is not a function");
+    };
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      files: [],
+      summary: { fileCount: 0, editCount: 0, writeCount: 0 },
+    });
+  });
+
   it("POST /api/reindex acks immediately and invokes engine.indexAll with force", async () => {
     // Stub indexAll so we can assert it was called (with force when supported) and
     // so the test never runs a real full reindex. It stays pending until we release
@@ -1104,6 +1197,88 @@ describe("portable archive endpoints", () => {
   });
 });
 
+describe("session file-change summary (seeded edits)", () => {
+  // A dedicated hermetic config dir holding ONE session that runs the file-mutating
+  // tools (Edit / Write / MultiEdit / NotebookEdit), so the composed fallback has
+  // real file_path inputs to roll up. Kept separate from the shared makeApp fixture
+  // (which only seeds Bash) so the assertions stay precise.
+  let local: { app: FastifyInstance; engine: Engine; root: string } | undefined;
+  let prevDir: string | undefined;
+
+  beforeEach(async () => {
+    prevDir = process.env.CLAUDE_CONFIG_DIR;
+    const root = mkdtempSync(path.join(os.tmpdir(), "cui-files-test-"));
+    process.env.CLAUDE_CONFIG_DIR = root;
+    const projectsDir = path.join(root, "projects", "-proj");
+    mkdirSync(projectsDir, { recursive: true });
+
+    const cwd = "/home/me/edits";
+    writeFileSync(
+      path.join(projectsDir, "edits-1.jsonl"),
+      jl({ type: "user", cwd, timestamp: "2026-06-03T08:00:00.000Z", message: { role: "user", content: "fix the bug" } }) +
+        jl({
+          type: "assistant",
+          cwd,
+          timestamp: "2026-06-03T08:00:01.000Z",
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-8",
+            content: [
+              { type: "text", text: "editing" },
+              // Two edits to the same file → count 2, kind "edit".
+              { type: "tool_use", id: "t1", name: "Edit", input: { file_path: "/home/me/edits/app.ts", old_string: "a", new_string: "b" } },
+              { type: "tool_use", id: "t2", name: "Edit", input: { file_path: "/home/me/edits/app.ts", old_string: "b", new_string: "c" } },
+              // A Write to a different file → kind "write".
+              { type: "tool_use", id: "t3", name: "Write", input: { file_path: "/home/me/edits/README.md", content: "hi" } },
+              // A non-mutating tool is ignored (Bash carries no file_path).
+              { type: "tool_use", id: "t4", name: "Bash", input: { command: "ls" } },
+            ],
+            usage: { input_tokens: 100, output_tokens: 10 },
+          },
+        }),
+    );
+
+    const engine = new Engine(path.join(root, "index.db"));
+    await engine.indexAll();
+    const { app } = buildApp({ engine });
+    await app.ready();
+    local = { app, engine, root };
+  });
+
+  afterEach(async () => {
+    if (local) {
+      await local.app.close();
+      local.engine.close();
+      local = undefined;
+    }
+    if (prevDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prevDir;
+  });
+
+  it("rolls up Edit/Write tool calls into a per-file summary, most-touched first", async () => {
+    const res = await local!.app.inject({
+      method: "GET",
+      url: "/api/sessions/edits-1/files",
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      files: Array<{ filePath: string; absPath: string; edits: number; writes: number; tools: string[] }>;
+      summary: { fileCount: number; editCount: number; writeCount: number };
+    };
+    // app.ts edited twice (2 edits, most activity → sorts first); README.md written once.
+    // The Bash call carries no file_path, so it's dropped. Paths are relativized against
+    // the session cwd (/home/me/edits) for display, with the absolute path kept on absPath.
+    expect(body.files).toEqual([
+      { filePath: "app.ts", absPath: "/home/me/edits/app.ts", edits: 2, writes: 0, tools: ["Edit"] },
+      { filePath: "README.md", absPath: "/home/me/edits/README.md", edits: 0, writes: 1, tools: ["Write"] },
+    ]);
+    // The edited file's absolute path must show up in the rollup.
+    expect(body.files.some((f) => f.absPath === "/home/me/edits/app.ts")).toBe(true);
+    // Headline summary totals across all files.
+    expect(body.summary).toEqual({ fileCount: 2, editCount: 2, writeCount: 1 });
+  });
+});
+
 describe("server token auth", () => {
   beforeEach(async () => {
     current = await makeApp({ token: "secret" });
@@ -1170,6 +1345,20 @@ describe("server token auth", () => {
     const ok = await current!.app.inject({
       method: "GET",
       url: `/api/projects/${ALPHA_ID}/overview`,
+      headers: { authorization: "Bearer secret" },
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it("guards the session files endpoint behind the token (401 without it)", async () => {
+    const res = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
+    });
+    expect(res.statusCode).toBe(401);
+    const ok = await current!.app.inject({
+      method: "GET",
+      url: "/api/sessions/alpha-1/files",
       headers: { authorization: "Bearer secret" },
     });
     expect(ok.statusCode).toBe(200);

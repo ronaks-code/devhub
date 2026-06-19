@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, FileDiff, Loader2, Terminal, Wrench, X } from "lucide-react";
+import { Check, Loader2, Terminal, Wrench, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import { DiffView, parseEditInput } from "./DiffView";
-import { OpenInEditor } from "./OpenInEditor";
 import { ResultBody } from "./ResultBody";
 import { TodoWriteCard } from "./tools/TodoWriteCard";
 import { BashCard } from "./tools/BashCard";
@@ -10,6 +8,7 @@ import { ReadCard } from "./tools/ReadCard";
 import { TaskCard } from "./tools/TaskCard";
 import { GrepCard } from "./tools/GrepCard";
 import { WebCard } from "./tools/WebCard";
+import { EditDiffCard } from "./tools/EditDiffCard";
 import type { PairedToolUse, ToolResultBlock } from "../lib/transcript";
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -64,8 +63,11 @@ function RunningChip() {
  * show the {@link RunningChip}; once the result lands, show the ok/error chip.
  * In history rendering (`live` falsy) an unresolved tool simply shows nothing —
  * matching the previous behavior exactly so historical transcripts are unchanged.
+ *
+ * Exported so the per-tool cards (e.g. {@link EditDiffCard}) reuse the exact same
+ * status chip rather than re-deriving it.
  */
-function ToolStatus({ result, live }: { result?: ToolResultBlock; live: boolean }) {
+export function ToolStatus({ result, live }: { result?: ToolResultBlock; live: boolean }) {
   if (result) return <StatusChip isError={result.isError ?? false} />;
   if (live) return <RunningChip />;
   return null;
@@ -115,39 +117,17 @@ export function ToolCard({ block, live = false }: { block: PairedToolUse; live?:
     return <WebCard block={block} fallback={() => <GenericToolCard block={block} live={live} />} />;
   }
 
-  const result = block.result;
-  const isError = result?.isError ?? false;
-  const edit = EDIT_TOOLS.has(name) ? parseEditInput(name, block.input) : null;
-
-  if (edit) {
+  // Edit/Write/MultiEdit/NotebookEdit get a dedicated DIFF card: the proposed
+  // change rendered with the shared red/green DiffView, the file path as a
+  // prominent header, and a +/- badge. Falls back to the generic card when the
+  // input shape is unexpected/partial (streaming), so it never throws.
+  if (EDIT_TOOLS.has(name)) {
     return (
-      <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60" open>
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
-          <FileDiff className="h-3.5 w-3.5 text-clay-400" />
-          <span className="text-clay-400">{name}</span>
-          {edit.filePath ? (
-            <span className="truncate font-mono text-[11px] text-zinc-400" title={edit.filePath}>
-              {edit.filePath}
-            </span>
-          ) : null}
-          {/* Open the edited file in the user's editor (needs an ambient project
-              cwd; renders nothing without one). */}
-          {edit.filePath ? <OpenInEditor file={edit.filePath} /> : null}
-          <ToolStatus result={result} live={live} />
-        </summary>
-        <div className="border-t border-zinc-800 px-3 py-2">
-          <DiffView edit={edit} collapseContext />
-        </div>
-        {result && (isError || (result.content ?? "").length > 0) ? (
-          <details className="border-t border-zinc-800/60">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[11px] text-zinc-500">
-              <Terminal className="h-3 w-3" />
-              {isError ? "error" : "result"}
-            </summary>
-            <ResultBody result={result} />
-          </details>
-        ) : null}
-      </details>
+      <EditDiffCard
+        block={block}
+        live={live}
+        fallback={() => <GenericToolCard block={block} live={live} />}
+      />
     );
   }
 

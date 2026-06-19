@@ -108,9 +108,17 @@ export interface ClaudeMdDoc {
 
 // ---- Path helpers ----------------------------------------------------------
 
-/** `~/.claude.json` — the big config file holding mcpServers + per-project blocks. */
+/**
+ * `~/.claude.json` — the big config file holding mcpServers + per-project blocks.
+ * Honors CLAUDE_CONFIG_DIR (parallel to paths.claudeConfigDir): a custom config dir
+ * keeps its own `.claude.json`, which also keeps config resolution hermetic under tests.
+ * The default (no override) is unchanged: the real `~/.claude.json`.
+ */
 function claudeJsonPath(): string {
-  return path.join(os.homedir(), ".claude.json");
+  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return override
+    ? path.join(override, ".claude.json")
+    : path.join(os.homedir(), ".claude.json");
 }
 
 /** Project-scoped `.claude` dir for a given working directory. */

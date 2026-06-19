@@ -33,6 +33,8 @@ import type { WebhookConfig } from "./webhooks.js";
 import type { AuditDecisionInput, AuditEntry } from "./audit.js";
 import { getSessionCommits } from "./session-commits.js";
 import type { SessionCommit } from "./session-commits.js";
+import { aggregateFileChanges } from "./file-changes.js";
+import type { SessionFileChanges } from "./file-changes.js";
 import type { PermissionDenial } from "./driver/types.js";
 import { listMcpServers } from "./config/index.js";
 import { testMcpServer } from "./config/mcp-test.js";
@@ -469,6 +471,22 @@ export class Engine {
     const summary = this.index.getSessionSummary(sessionId);
     if (!summary) return [];
     return getSessionCommits(summary, (cwd) => this.git(cwd));
+  }
+
+  /**
+   * The project files a session EDITED or WROTE: one display-friendly row per file
+   * ({@link FileChange}) plus a headline summary, derived from the session's
+   * Edit/MultiEdit/Write/NotebookEdit tool_use blocks. Reuses the SAME bounded
+   * message-loading path as {@link getSessionMessages} (a single transcript read of THIS
+   * session — never a corpus scan), then folds it with the pure {@link aggregateFileChanges}.
+   * Paths are relativized against the session cwd for display (with the absolute path kept).
+   * Best-effort — an unknown session, or one with no file edits, returns an empty result;
+   * tolerant of partial/odd tool inputs. See {@link aggregateFileChanges}.
+   */
+  async sessionFileChanges(sessionId: string): Promise<SessionFileChanges> {
+    const page = await this.getSessionMessages(sessionId);
+    if (!page) return { files: [], summary: { fileCount: 0, editCount: 0, writeCount: 0 } };
+    return aggregateFileChanges(page.messages, page.session.cwd);
   }
 
   /**
@@ -1123,6 +1141,8 @@ export type { AuditDecision, AuditDecisionInput, AuditEntry } from "./audit.js";
 export { redactSecrets, redactDeep } from "./redact.js";
 export { getSessionCommits, selectCommitsInWindow } from "./session-commits.js";
 export type { SessionCommit } from "./session-commits.js";
+export { aggregateFileChanges } from "./file-changes.js";
+export type { FileChange, FileChangesSummary, SessionFileChanges } from "./file-changes.js";
 export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
 export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
 export * as config from "./config/index.js";

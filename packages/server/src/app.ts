@@ -34,6 +34,7 @@ import { registerExportSessionRoutes } from "./routes/export-session.js";
 import { registerExportHtmlRoutes } from "./routes/export-html.js";
 import { registerRelatedRoutes } from "./routes/related.js";
 import { registerToolStatsRoutes } from "./routes/tool-stats.js";
+import { registerFileChangesRoutes } from "./routes/file-changes.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
 import { registerHealthRoutes } from "./routes/health.js";
@@ -175,6 +176,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerRelatedRoutes(app, engine);
 
   registerToolStatsRoutes(app, engine);
+
+  registerFileChangesRoutes(app, engine);
 
   registerOpenExternalRoutes(app, engine);
 
