@@ -27,8 +27,8 @@
  *   • `config.readSettings(cwd)` — the merged allowlist, to drop already-allowed rules.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, SearchHit } from "@claude-ui/engine";
-import { config } from "@claude-ui/engine";
+import type { Engine, SearchHit } from "@devhub/engine";
+import { config } from "@devhub/engine";
 
 /**
  * The session-scoped search method we rely on. `Engine.searchInSession` exists at

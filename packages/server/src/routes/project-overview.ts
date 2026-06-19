@@ -23,7 +23,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, SessionSummary } from "@claude-ui/engine";
+import type { Engine, SessionSummary } from "@devhub/engine";
 
 /**
  * The deep-dive method we expect the engine to expose. We keep the return type

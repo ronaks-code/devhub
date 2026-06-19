@@ -30,7 +30,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * The forced-reindex shape we expect `Engine.indexAll` to grow this wave. Kept as

@@ -20,8 +20,8 @@
  * `MAX_PROMPT_BYTES` so a giant session can't blow the model's context budget.
  */
 import type { FastifyInstance } from "fastify";
-import { createDriver, type Engine } from "@claude-ui/engine";
-import type { NormalizedMessage } from "@claude-ui/engine/types";
+import { createDriver, type Engine } from "@devhub/engine";
+import type { NormalizedMessage } from "@devhub/engine/types";
 
 const summarySchema = {
   type: "object",

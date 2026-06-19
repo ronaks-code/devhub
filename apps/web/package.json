@@ -1,5 +1,5 @@
 {
-  "name": "@claude-ui/web",
+  "name": "@devhub/web",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@claude-ui/engine": "workspace:*",
+    "@devhub/engine": "workspace:*",
     "@tanstack/react-virtual": "^3.11.2",
     "clsx": "^2.1.1",
     "highlight.js": "^11.10.0",

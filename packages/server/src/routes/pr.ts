@@ -20,7 +20,7 @@
  * branch name / title / body can't be interpreted as shell syntax.
  */
 import type { FastifyInstance } from "fastify";
-import { createDriver, type Engine } from "@claude-ui/engine";
+import { createDriver, type Engine } from "@devhub/engine";
 import { execFile } from "node:child_process";
 
 /** Body for the PR endpoint: a `cwd` plus an optional `base` branch. */

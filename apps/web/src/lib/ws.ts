@@ -1,5 +1,5 @@
-import type { ClientMsg, ServerMsg, TurnResult, SessionInit } from "@claude-ui/engine/driver";
-import type { NormalizedMessage } from "@claude-ui/engine/types";
+import type { ClientMsg, ServerMsg, TurnResult, SessionInit } from "@devhub/engine/driver";
+import type { NormalizedMessage } from "@devhub/engine/types";
 import type { PermissionScope } from "../components/PermissionCard";
 import { getToken } from "./api";
 

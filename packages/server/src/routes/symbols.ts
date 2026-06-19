@@ -24,7 +24,7 @@
  * further changes.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * The symbol-search method we expect the engine to expose. Declared locally (not

@@ -7,8 +7,10 @@ import type {
   SessionSummary,
   Stats,
   NormalizedMessage,
+  CodexSession,
+  CodexStats,
 } from "./types";
-import type { AppSettings } from "@claude-ui/engine/types";
+import type { AppSettings } from "@devhub/engine/types";
 // Git result shapes. Mirrored locally (not imported from the engine root, which
 // pulls in Node-only code) so the web bundle stays free of server deps. Kept in
 // lockstep with packages/engine/src/git.ts.
@@ -456,6 +458,11 @@ const webhooks = {
     sendMaybe<unknown>(`/api/webhooks/${encodeURIComponent(id)}/test`, "POST").then(
       normalizeWebhookTest,
     ),
+};
+
+export const codexApi = {
+  sessions: () => getMaybe<CodexSession[]>("/api/codex/sessions"),
+  stats: () => getMaybe<CodexStats>("/api/codex/stats"),
 };
 
 export const api = {

@@ -37,7 +37,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * Per-route body limit for the import upload (bytes). A full export can be sizeable

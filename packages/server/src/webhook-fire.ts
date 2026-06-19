@@ -39,7 +39,7 @@
  * until the engine can tell it what to fire.
  * ────────────────────────────────────────────────────────────────────────────
  */
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /** Per-request network timeout. Short — a webhook target should answer promptly. */
 export const FIRE_TIMEOUT_MS = 5_000;

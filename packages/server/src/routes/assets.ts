@@ -28,7 +28,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import { type Engine, paths } from "@claude-ui/engine";
+import { type Engine, paths } from "@devhub/engine";
 import path from "node:path";
 import { createReadStream } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";

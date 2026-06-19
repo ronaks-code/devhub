@@ -1,11 +1,11 @@
 /**
  * Ink (terminal) face. Proves the "one brain, many faces" design: it imports the
- * SAME @claude-ui/engine directly — no HTTP server — and reuses its index/parser.
+ * SAME @devhub/engine directly — no HTTP server — and reuses its index/parser.
  */
 import React, { useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
-import { Engine } from "@claude-ui/engine";
-import type { ProjectSummary, SearchHit, SessionSummary } from "@claude-ui/engine/types";
+import { Engine } from "@devhub/engine";
+import type { ProjectSummary, SearchHit, SessionSummary } from "@devhub/engine/types";
 import { Chat } from "./screens/Chat.js";
 import { Search } from "./screens/Search.js";
 import { Dashboard } from "./screens/Dashboard.js";

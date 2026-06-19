@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, Check, FileText, Image as ImageIcon, ListPlus, Loader2, MessageSquarePlus, Pencil, Pin, RotateCcw, Send, Square, Sparkles, Wifi, X } from "lucide-react";
-import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
-import type { TurnResult } from "@claude-ui/engine/driver";
+import { PERMISSION_MODES, type PermissionMode } from "@devhub/engine/driver";
+import type { TurnResult } from "@devhub/engine/driver";
 import type { NormalizedMessage } from "../lib/types";
 import { openChat, parseTokenStatus, type ChatConn, type TokenStatusData } from "../lib/ws";
 import { cn } from "../lib/utils";

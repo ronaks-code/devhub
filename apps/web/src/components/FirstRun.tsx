@@ -161,14 +161,13 @@ export function FirstRun({ open, onDismiss }: { open: boolean; onDismiss: () => 
         <div className="flex items-center gap-2.5 border-b border-zinc-800 px-6 py-4">
           <Hexagon className="h-5 w-5 fill-clay-500/20 text-clay-500" />
           <h2 id="first-run-title" className="text-[15px] font-semibold text-zinc-100">
-            Welcome to Claude UI
+            Welcome to DevHub
           </h2>
         </div>
 
         <div className="overflow-y-auto px-6 py-5">
           <p className="text-[12.5px] leading-relaxed text-zinc-400">
-            Your control center for Claude Code across every project. Three things to
-            know:
+            Your personal dev hub — browse Claude &amp; Codex sessions, start new chats, track usage across all your AI tools.
           </p>
 
           <div className="mt-4 flex flex-col gap-3">

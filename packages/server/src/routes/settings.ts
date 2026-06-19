@@ -5,14 +5,14 @@
  * just the HTTP boundary, so it stays thin and framework-agnostic underneath.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import type { AppSettings } from "@claude-ui/engine/types";
+import type { Engine } from "@devhub/engine";
+import type { AppSettings } from "@devhub/engine/types";
 
 /**
  * Fastify body schema for a settings update. `additionalProperties: false`
  * rejects unknown keys so a typo never silently lands in the store; every field
  * is optional because a partial update only writes the keys the client sends.
- * Kept in sync with AppSettings in @claude-ui/engine/types.
+ * Kept in sync with AppSettings in @devhub/engine/types.
  */
 const settingsBodySchema = {
   type: "object",

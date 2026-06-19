@@ -91,7 +91,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       >
         <div className="mb-4 flex items-center gap-2.5">
           <Hexagon className="h-5 w-5 fill-clay-500/20 text-clay-500" />
-          <span className="text-base font-semibold tracking-tight text-zinc-100">Claude UI</span>
+          <span className="text-base font-semibold tracking-tight text-zinc-100">DevHub</span>
         </div>
         <h1 className="text-[15px] font-semibold text-zinc-100">Access token required</h1>
         <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-500">

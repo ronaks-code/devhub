@@ -19,8 +19,8 @@
 import { readFile, writeFile, copyFile, rename, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import { config, paths } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
+import { config, paths } from "@devhub/engine";
 
 /** The three rule buckets (deny wins, then ask, then allow). */
 type RuleAction = "allow" | "ask" | "deny";

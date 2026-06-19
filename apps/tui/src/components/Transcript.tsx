@@ -18,7 +18,7 @@
  */
 import React from "react";
 import { Box, Text } from "ink";
-import type { ContentBlock, NormalizedMessage } from "@claude-ui/engine/types";
+import type { ContentBlock, NormalizedMessage } from "@devhub/engine/types";
 
 /** Edit-shaped tools whose input we render as a colorized diff. */
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);

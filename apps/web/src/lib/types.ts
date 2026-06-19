@@ -1,4 +1,4 @@
-import type { EngineEvent, SearchHit, Stats, TokenUsage } from "@claude-ui/engine/types";
+import type { EngineEvent, SearchHit, Stats, TokenUsage } from "@devhub/engine/types";
 
 export type {
   ProjectSummary,
@@ -14,7 +14,7 @@ export type {
   Stats,
   RunningSession,
   SearchHit,
-} from "@claude-ui/engine/types";
+} from "@devhub/engine/types";
 
 /**
  * One per-model row of the dashboard breakdown. Derived from (and structurally
@@ -470,4 +470,23 @@ export interface BudgetConfig {
 export interface BudgetState {
   status: BudgetStatus;
   config: BudgetConfig;
+}
+
+export interface CodexSession {
+  id: string
+  filename: string
+  startedAt: string
+  cwd: string | null
+  model: string | null
+  provider: string | null
+  cliVersion: string | null
+  userMessageCount: number
+  turnCount: number
+}
+
+export interface CodexStats {
+  totalSessions: number
+  last30Days: number
+  last7Days: number
+  topCwds: Array<{ cwd: string; count: number }>
 }

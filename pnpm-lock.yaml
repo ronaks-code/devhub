@@ -36,7 +36,7 @@ importers:
 
   apps/tui:
     dependencies:
-      '@claude-ui/engine':
+      '@devhub/engine':
         specifier: workspace:*
         version: link:../../packages/engine
       ink:
@@ -61,7 +61,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@claude-ui/engine':
+      '@devhub/engine':
         specifier: workspace:*
         version: link:../../packages/engine
       '@tanstack/react-virtual':
@@ -147,7 +147,7 @@ importers:
 
   packages/server:
     dependencies:
-      '@claude-ui/engine':
+      '@devhub/engine':
         specifier: workspace:*
         version: link:../engine
       '@fastify/cors':

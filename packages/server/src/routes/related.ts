@@ -18,7 +18,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * The related-sessions method we expect the engine to expose. We keep the return

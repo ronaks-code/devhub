@@ -6,8 +6,8 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import path from "node:path";
-import { Engine, watchTranscripts, startConfigWatcher, paths } from "@claude-ui/engine";
-import type { EngineEvent } from "@claude-ui/engine/types";
+import { Engine, watchTranscripts, startConfigWatcher, paths } from "@devhub/engine";
+import type { EngineEvent } from "@devhub/engine/types";
 import { registerWs } from "./ws.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
@@ -44,6 +44,7 @@ import { registerMaintenanceRoutes } from "./routes/maintenance.js";
 import { registerPortableRoutes } from "./routes/portable.js";
 import { registerAutotagRoutes } from "./routes/autotag.js";
 import { registerWebhooksRoutes } from "./routes/webhooks.js";
+import { registerCodexRoutes } from "./routes/codex.js";
 import { fireWebhooks } from "./webhook-fire.js";
 import {
   startNotificationsWatcher,
@@ -196,6 +197,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerAutotagRoutes(app, engine);
 
   registerWebhooksRoutes(app, engine);
+
+  registerCodexRoutes(app);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

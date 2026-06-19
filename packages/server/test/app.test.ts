@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import { Engine, paths } from "@claude-ui/engine";
+import { Engine, paths } from "@devhub/engine";
 import { buildApp } from "../src/app.js";
 
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";

@@ -25,8 +25,8 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import { config } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
+import { config } from "@devhub/engine";
 
 /** Hook events we'll synthesize a payload for. Mirrors Claude Code's hook events. */
 const HOOK_EVENTS = [

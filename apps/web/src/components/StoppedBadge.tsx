@@ -49,7 +49,7 @@ export function StoppedBadge({
 }
 
 /**
- * Whether a {@link import("@claude-ui/engine/driver").TurnResult} `subtype` means
+ * Whether a {@link import("@devhub/engine/driver").TurnResult} `subtype` means
  * the turn was stopped rather than completing cleanly. Claude Code uses "success"
  * for a clean finish and an `error_*` family for everything else; a plain "error"
  * (socket-level) also counts. Anything else is treated as a normal completion.

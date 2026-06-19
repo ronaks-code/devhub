@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RadioTower, RefreshCw, Send, Square, Wifi, X } from "lucide-react";
-import type { PermissionMode } from "@claude-ui/engine/driver";
+import type { PermissionMode } from "@devhub/engine/driver";
 import type { RunningSession } from "../lib/types";
 import { api } from "../lib/api";
 import { openChat, type ChatConn } from "../lib/ws";

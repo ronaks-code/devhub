@@ -22,12 +22,12 @@
  * export (a leading marker) so the export never silently looks complete when it isn't.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 import type {
   ContentBlock,
   NormalizedMessage,
   SessionMessagesPage,
-} from "@claude-ui/engine/types";
+} from "@devhub/engine/types";
 
 /**
  * Tail size (bytes) read off the transcript before normalizing. Mirrors the cap the

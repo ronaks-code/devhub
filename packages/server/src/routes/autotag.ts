@@ -32,7 +32,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * The apply method we PROBE on the engine, added by the engine lane this wave. It

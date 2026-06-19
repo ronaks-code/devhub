@@ -11,7 +11,7 @@
  * are only ever permitted inside a project we already know about.
  */
 import type { FastifyInstance } from "fastify";
-import { createDriver, type Engine } from "@claude-ui/engine";
+import { createDriver, type Engine } from "@devhub/engine";
 
 /** Querystring requiring only a `cwd` (status / branches). */
 const cwdSchema = {

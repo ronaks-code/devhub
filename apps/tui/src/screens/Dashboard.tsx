@@ -1,7 +1,7 @@
 /**
  * Dashboard screen for the terminal face. Proves the "one brain, many faces"
  * design once more: it reads everything IN-PROCESS from the SAME
- * `@claude-ui/engine` — no HTTP server.
+ * `@devhub/engine` — no HTTP server.
  *
  * Two panels:
  *   - Running sessions: live `claude` processes (engine.getRunningSessions),
@@ -19,8 +19,8 @@
  */
 import React, { useCallback, useEffect, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { Engine } from "@claude-ui/engine";
-import type { RunningSession, Stats } from "@claude-ui/engine/types";
+import type { Engine } from "@devhub/engine";
+import type { RunningSession, Stats } from "@devhub/engine/types";
 
 const VISIBLE_RUNNING = 8; // running-sessions window height
 const TOP_PROJECTS = 5; // how many top projects to list

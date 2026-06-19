@@ -1,5 +1,5 @@
 {
-  "name": "claude-ui",
+  "name": "devhub",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -8,10 +8,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "dev": "turbo run dev --filter=@claude-ui/server --filter=@claude-ui/web",
-    "build": "turbo run build --filter=@claude-ui/engine --filter=@claude-ui/server --filter=@claude-ui/web",
-    "tui": "pnpm --filter @claude-ui/tui start",
-    "desktop": "pnpm --filter @claude-ui/desktop dev",
+    "dev": "turbo run dev --filter=@devhub/server --filter=@devhub/web",
+    "build": "turbo run build --filter=@devhub/engine --filter=@devhub/server --filter=@devhub/web",
+    "tui": "pnpm --filter @devhub/tui start",
+    "desktop": "pnpm --filter @devhub/desktop dev",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "lint": "turbo run lint",

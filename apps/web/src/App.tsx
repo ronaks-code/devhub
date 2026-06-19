@@ -8,6 +8,7 @@ import {
   Gauge,
   Hexagon,
   History,
+  Home,
   Inbox,
   Keyboard,
   LayoutDashboard,
@@ -36,7 +37,7 @@ import type {
   SessionMessagesPage,
   SessionSummary,
 } from "./lib/types";
-import type { PermissionMode } from "@claude-ui/engine/driver";
+import type { PermissionMode } from "@devhub/engine/driver";
 import { ProjectsPane } from "./components/ProjectsPane";
 import { SessionsPane } from "./components/SessionsPane";
 import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
@@ -83,6 +84,10 @@ const MultiSessionGrid = lazy(() =>
 const ProjectOverview = lazy(() =>
   import("./components/ProjectOverview").then((m) => ({ default: m.ProjectOverview })),
 );
+// Home tab — unified dashboard for Claude + Codex activity:
+const HomePane = lazy(() =>
+  import("./components/HomePane").then((m) => ({ default: m.HomePane })),
+);
 // Modal-only views — never in the initial paint, so loaded on first open:
 const SessionCompare = lazy(() =>
   import("./components/SessionCompare").then((m) => ({ default: m.SessionCompare })),
@@ -109,7 +114,7 @@ const CHAT_MODELS = [
   "claude-fable-5",
 ] as const;
 
-type Tab = "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -144,7 +149,7 @@ function writeUiState(state: PersistedUiState): void {
   }
 }
 
-const VALID_TABS: readonly Tab[] = ["browse", "chat", "ops", "inbox", "dashboard", "settings"];
+const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings"];
 
 /**
  * A small "Recent" jump-back dropdown in the header: the last sessions the user
@@ -294,7 +299,7 @@ function TopBar({
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-950 px-4">
       <div className="flex items-center gap-2">
         <Hexagon className="h-4 w-4 fill-clay-500/20 text-clay-500" />
-        <span className="text-sm font-semibold tracking-tight text-zinc-100">Claude UI</span>
+        <span className="text-sm font-semibold tracking-tight text-zinc-100">DevHub</span>
       </div>
 
       <div
@@ -302,7 +307,7 @@ function TopBar({
         aria-label="Primary views"
         className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
       >
-        {(["browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
+        {(["home", "browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
           <button
             key={t}
             role="tab"
@@ -429,7 +434,7 @@ export default function App() {
   const [sessionCount, setSessionCount] = useState(0);
   const [tab, setTab] = useState<Tab>(() => {
     const t = readUiState().tab;
-    return t && VALID_TABS.includes(t) ? t : "browse";
+    return t && VALID_TABS.includes(t) ? t : "home";
   });
   const [searchOpen, setSearchOpen] = useState(false);
   // Ops tab view: the at-a-glance running-sessions "board", or the "grid" of
@@ -1058,6 +1063,13 @@ export default function App() {
   const commands = useMemo<Command[]>(() => {
     const list: Command[] = [
       {
+        id: "tab-home",
+        title: "Go to Home",
+        group: "Navigate",
+        icon: <Home className="h-3.5 w-3.5" />,
+        run: () => setTab("home"),
+      },
+      {
         id: "tab-browse",
         title: "Go to Browse",
         group: "Navigate",
@@ -1276,7 +1288,11 @@ export default function App() {
           focus here (it's not natively focusable) without adding it to the Tab
           order. `outline-none` so that programmatic focus doesn't draw a ring. */}
       <div id="main-content" role="main" tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
-        {tab === "settings" ? (
+        {tab === "home" ? (
+          <Suspense fallback={<PaneFallback />}>
+            <HomePane onNewChat={startNewChat} />
+          </Suspense>
+        ) : tab === "settings" ? (
           <Suspense fallback={<PaneFallback />}>
             <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
           </Suspense>

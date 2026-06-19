@@ -16,7 +16,7 @@
  * it returns 501 instead of crashing.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /**
  * The slice of the engine this route needs. Declared locally (not imported) so

@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../../web/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "pnpm --filter @claude-ui/web dev",
-    "beforeBuildCommand": "pnpm --filter @claude-ui/web build"
+    "beforeDevCommand": "pnpm --filter @devhub/web dev",
+    "beforeBuildCommand": "pnpm --filter @devhub/web build"
   },
   "app": {
     "windows": [

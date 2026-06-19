@@ -3,7 +3,7 @@
  * MCP / hooks / agents / skills / commands / CLAUDE.md UIs (this wave + later) have
  * one place to read from and write to.
  *
- * READS (all go through `@claude-ui/engine` `config`, so the global/project layering
+ * READS (all go through `@devhub/engine` `config`, so the global/project layering
  * lives in exactly one place):
  *   GET /api/config/mcp       ?cwd=|?projectId=   → global + per-project MCP servers
  *   GET /api/config/agents    ?cwd=|?projectId=   → global + per-project agents
@@ -31,8 +31,8 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import { config, paths } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
+import { config, paths } from "@devhub/engine";
 
 // ---- Shared helpers --------------------------------------------------------
 

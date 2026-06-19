@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { readRetryDecision, resolveComputeRetry } from "../src/ws.js";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /** Build a fake Engine carrying just the field(s) the lookup probes. */
 const fakeEngine = (props: Record<string, unknown>) => props as unknown as Engine;

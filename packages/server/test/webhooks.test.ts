@@ -18,7 +18,7 @@ import path from "node:path";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { FastifyInstance } from "fastify";
-import { Engine } from "@claude-ui/engine";
+import { Engine } from "@devhub/engine";
 import { buildApp } from "../src/app.js";
 import { fireWebhooks, postWebhook } from "../src/webhook-fire.js";
 

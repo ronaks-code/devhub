@@ -16,8 +16,8 @@
  */
 import React, { useCallback, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { Engine } from "@claude-ui/engine";
-import type { SearchHit } from "@claude-ui/engine/types";
+import type { Engine } from "@devhub/engine";
+import type { SearchHit } from "@devhub/engine/types";
 
 const VISIBLE = 12; // results window height
 const RESULT_LIMIT = 50; // cap on hits we ask the engine for

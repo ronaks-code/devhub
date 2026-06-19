@@ -21,7 +21,7 @@ const stop = startEngineLifecycle(engine);
 app
   .listen({ port: PORT, host: HOST })
   .then(() => {
-    console.log(`[claude-ui] server on http://${HOST}:${PORT}`);
+    console.log(`[devhub] server on http://${HOST}:${PORT}`);
   })
   .catch((err) => {
     console.error(err);

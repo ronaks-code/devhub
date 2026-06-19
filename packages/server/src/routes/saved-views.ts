@@ -13,7 +13,7 @@
  * already understands.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, SearchFacets } from "@claude-ui/engine";
+import type { Engine, SearchFacets } from "@devhub/engine";
 
 /**
  * Body for create: a non-empty `name`, a `query` (may be empty for a facet-only

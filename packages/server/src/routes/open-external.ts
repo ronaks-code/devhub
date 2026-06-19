@@ -26,7 +26,7 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 type OpenTarget = "editor" | "finder" | "terminal";
 const TARGETS: OpenTarget[] = ["editor", "finder", "terminal"];

@@ -25,8 +25,8 @@
  *     image previews).
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import { paths } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
+import { paths } from "@devhub/engine";
 import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";

@@ -1,5 +1,5 @@
 {
-  "name": "@claude-ui/server",
+  "name": "@devhub/server",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "build": "tsc"
   },
   "dependencies": {
-    "@claude-ui/engine": "workspace:*",
+    "@devhub/engine": "workspace:*",
     "@fastify/cors": "^10.0.2",
     "@fastify/websocket": "^11.0.2",
     "fastify": "^5.2.1"

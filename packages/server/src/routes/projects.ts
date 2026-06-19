@@ -20,7 +20,7 @@
  *     no-op that returns the current metadata.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, ProjectMetaPatch } from "@claude-ui/engine";
+import type { Engine, ProjectMetaPatch } from "@devhub/engine";
 
 const patchBodySchema = {
   type: "object",

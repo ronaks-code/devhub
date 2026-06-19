@@ -23,7 +23,7 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
-import { paths, type Engine } from "@claude-ui/engine";
+import { paths, type Engine } from "@devhub/engine";
 
 /** Short cap on the `claude --version` probe so a hung CLI can't stall the response. */
 const VERSION_TIMEOUT_MS = 3000;

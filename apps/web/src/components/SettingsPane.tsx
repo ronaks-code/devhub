@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Blocks, Bot, Check, FileText, Loader2, PiggyBank, Save, Send, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
-import { PERMISSION_MODES, type PermissionMode } from "@claude-ui/engine/driver";
+import { PERMISSION_MODES, type PermissionMode } from "@devhub/engine/driver";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";

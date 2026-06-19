@@ -24,7 +24,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import { aggregateFileChanges, type Engine, type SessionFileChanges } from "@claude-ui/engine";
+import { aggregateFileChanges, type Engine, type SessionFileChanges } from "@devhub/engine";
 
 /**
  * The per-session file-change method we expect the engine to expose. We keep the

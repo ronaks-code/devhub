@@ -20,7 +20,7 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, SearchHit } from "@claude-ui/engine";
+import type { Engine, SearchHit } from "@devhub/engine";
 
 /**
  * The session-scoped search method we expect the engine to expose. Mirrors the

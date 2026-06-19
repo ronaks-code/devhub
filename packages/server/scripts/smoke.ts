@@ -1,6 +1,6 @@
 /* In-process HTTP smoke test (no network) against the pre-seeded smoke DB. */
 import { buildApp } from "../src/app.js";
-import { Engine } from "@claude-ui/engine";
+import { Engine } from "@devhub/engine";
 
 const engine = new Engine("/tmp/claude-ui-smoke.db");
 const { app } = buildApp({ engine });

@@ -17,8 +17,8 @@
  * other value is a 400 so a typo doesn't silently return the wrong shape.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, SessionSummary } from "@claude-ui/engine";
-import { costUsd } from "@claude-ui/engine";
+import type { Engine, SessionSummary } from "@devhub/engine";
+import { costUsd } from "@devhub/engine";
 
 type GroupBy = "session" | "day" | "project";
 const GROUP_BY: GroupBy[] = ["session", "day", "project"];

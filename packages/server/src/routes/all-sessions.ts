@@ -8,7 +8,7 @@
  * all-sessions browser view.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, ListAllSessionsOptions } from "@claude-ui/engine";
+import type { Engine, ListAllSessionsOptions } from "@devhub/engine";
 
 /**
  * Sort keys the engine understands. Derived from the engine's own option type so

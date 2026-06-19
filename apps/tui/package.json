@@ -1,5 +1,5 @@
 {
-  "name": "@claude-ui/tui",
+  "name": "@devhub/tui",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claude-ui/engine": "workspace:*",
+    "@devhub/engine": "workspace:*",
     "ink": "^5.1.0",
     "react": "^18.3.1"
   },

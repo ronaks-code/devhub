@@ -12,13 +12,13 @@
  */
 import React, { useCallback, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
-import { createDriver } from "@claude-ui/engine";
+import { createDriver } from "@devhub/engine";
 import type {
   AgentDriver,
   RunningTurn,
   TurnResult,
-} from "@claude-ui/engine/driver";
-import type { NormalizedMessage, ProjectSummary } from "@claude-ui/engine/types";
+} from "@devhub/engine/driver";
+import type { NormalizedMessage, ProjectSummary } from "@devhub/engine/types";
 
 const DEFAULT_MODEL = "claude-haiku-4-5";
 const VISIBLE = 14; // transcript window height

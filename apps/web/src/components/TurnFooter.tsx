@@ -1,5 +1,5 @@
 import { ArrowDownToLine, ArrowUpFromLine, Clock, Coins, Cpu, Database } from "lucide-react";
-import type { TurnResult } from "@claude-ui/engine/driver";
+import type { TurnResult } from "@devhub/engine/driver";
 import { compactNumber, formatUsd } from "../lib/format";
 import { costUsd as estimateCost } from "../lib/pricing";
 import { cn } from "../lib/utils";

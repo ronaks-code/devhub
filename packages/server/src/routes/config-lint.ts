@@ -37,8 +37,8 @@ import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
-import type { Engine, SettingsScopeName } from "@claude-ui/engine";
-import { resolveSettings } from "@claude-ui/engine";
+import type { Engine, SettingsScopeName } from "@devhub/engine";
+import { resolveSettings } from "@devhub/engine";
 
 /** Severity of one lint finding. */
 type LintLevel = "error" | "warning" | "info";

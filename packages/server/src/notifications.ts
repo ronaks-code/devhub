@@ -25,8 +25,8 @@
  *  - Dead/zombie entries (`alive: false`) are ignored for "working" tracking, but a
  *    previously-working session that has gone dead counts as "finished".
  */
-import type { Engine } from "@claude-ui/engine";
-import type { RunningSession } from "@claude-ui/engine/types";
+import type { Engine } from "@devhub/engine";
+import type { RunningSession } from "@devhub/engine/types";
 import { EventEmitter } from "node:events";
 
 /**

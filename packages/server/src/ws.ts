@@ -23,8 +23,8 @@
  * route overload (it's a `ws` WebSocket), so we let it be inferred here.
  */
 import type { FastifyInstance } from "fastify";
-import { createDriver, type Engine } from "@claude-ui/engine";
-import { PERMISSION_MODES } from "@claude-ui/engine/driver";
+import { createDriver, type Engine } from "@devhub/engine";
+import { PERMISSION_MODES } from "@devhub/engine/driver";
 import type {
   ClientMsg,
   PermissionDenial,
@@ -33,7 +33,7 @@ import type {
   ServerMsg,
   TurnHandlers,
   TurnResult,
-} from "@claude-ui/engine/driver";
+} from "@devhub/engine/driver";
 import { LiveTurnRegistry } from "./live-turns.js";
 
 type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
@@ -47,7 +47,7 @@ type PromptMsg = Extract<ClientMsg, { t: "prompt" }>;
  * unharmed; this one honors them.
  *
  * NOTE (missing engine symbols): if these become first-class, add to
- * `@claude-ui/engine/driver` `ClientMsg`: an optional `keepQueue?: boolean` on
+ * `@devhub/engine/driver` `ClientMsg`: an optional `keepQueue?: boolean` on
  * the `interrupt` variant, a `{ t: "clear-queue" }` variant, and a
  * `{ t: "attach"; sessionId: string }` variant (reattach to a detached turn).
  * Until then they live here.
@@ -69,7 +69,7 @@ type IncomingMsg =
  * Clients that don't understand `thinking-delta` simply ignore it.
  *
  * NOTE (missing engine symbols): if this becomes first-class, add a
- * `{ t: "thinking-delta"; text: string }` variant to `@claude-ui/engine/driver`
+ * `{ t: "thinking-delta"; text: string }` variant to `@devhub/engine/driver`
  * `ServerMsg` (and an `onThinkingDelta?: (text: string) => void` on
  * `TurnHandlers`, see below), then drop this widening.
  */

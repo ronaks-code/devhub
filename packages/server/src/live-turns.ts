@@ -29,8 +29,8 @@
  * This is purely additive: a turn that is never detached behaves exactly as before
  * (ws.ts still drives it directly). Nothing here touches transcripts or config.
  */
-import type { RunningTurn } from "@claude-ui/engine/driver";
-import type { ServerMsg } from "@claude-ui/engine/driver";
+import type { RunningTurn } from "@devhub/engine/driver";
+import type { ServerMsg } from "@devhub/engine/driver";
 
 /**
  * The frames the server emits. Mirrors the `OutgoingMsg` widening in ws.ts (the
@@ -39,7 +39,7 @@ import type { ServerMsg } from "@claude-ui/engine/driver";
  * `thinking-delta` ignore it.
  *
  * NOTE (missing engine symbols): once `{ t: "thinking-delta"; text: string }` lands
- * on `@claude-ui/engine/driver` `ServerMsg`, this widening (and the twin in ws.ts)
+ * on `@devhub/engine/driver` `ServerMsg`, this widening (and the twin in ws.ts)
  * can drop the extra arm.
  */
 export type OutgoingMsg = ServerMsg | { t: "thinking-delta"; text: string };
@@ -50,7 +50,7 @@ export type OutgoingMsg = ServerMsg | { t: "thinking-delta"; text: string };
  * doesn't recognize them simply ignores them (they are inert status-like markers).
  *
  * NOTE (missing engine symbols): if these graduate to first-class protocol frames,
- * add the three variants to `@claude-ui/engine/driver` `ServerMsg`.
+ * add the three variants to `@devhub/engine/driver` `ServerMsg`.
  */
 export type ReplayMsg =
   | { t: "replay-start"; sessionId: string; count: number; truncated: boolean }

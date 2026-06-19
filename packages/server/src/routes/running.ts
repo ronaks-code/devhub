@@ -18,7 +18,7 @@
  * `<pid>.json`), never SIGKILL — stopping a Claude session, not force-killing it.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 
 /** Body for the stop: a positive integer `pid` and a required `confirm` flag. */
 const stopSchema = {

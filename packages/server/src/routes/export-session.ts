@@ -23,12 +23,12 @@
  * export never silently looks complete when it isn't.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
+import type { Engine } from "@devhub/engine";
 import type {
   ContentBlock,
   NormalizedMessage,
   SessionMessagesPage,
-} from "@claude-ui/engine/types";
+} from "@devhub/engine/types";
 
 type ExportFormat = "md" | "json";
 const FORMATS: ExportFormat[] = ["md", "json"];

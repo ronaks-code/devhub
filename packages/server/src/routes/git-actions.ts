@@ -22,7 +22,7 @@
  * (see the GitSyncOps NOTE below) via the same runtime-lookup pattern as discard.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine, GitService, GitStatus, GitWriteResult } from "@claude-ui/engine";
+import type { Engine, GitService, GitStatus, GitWriteResult } from "@devhub/engine";
 
 /** Body for unstage: a `cwd` plus the paths to remove from the index. */
 const unstageSchema = {

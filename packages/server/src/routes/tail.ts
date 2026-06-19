@@ -26,8 +26,8 @@
  * (no arbitrary path), and we only ever READ the transcript tail — never write.
  */
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@claude-ui/engine";
-import type { EngineEvent, NormalizedMessage } from "@claude-ui/engine/types";
+import type { Engine } from "@devhub/engine";
+import type { EngineEvent, NormalizedMessage } from "@devhub/engine/types";
 
 /**
  * Tail window (bytes) read off the transcript per frame. Matches the floor
