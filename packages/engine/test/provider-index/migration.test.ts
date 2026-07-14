@@ -420,6 +420,7 @@ function insertTaskWithCwdRedacted(
   db: TestDatabase,
   nativeTaskId: string,
   cwdRedacted: number | string | null,
+  cwd: string | null = "/tmp/project",
 ): void {
   db.prepare(`INSERT INTO provider_task_cache (
     provider, home_fingerprint, native_task_id,
@@ -433,7 +434,7 @@ function insertTaskWithCwdRedacted(
       HOME_FINGERPRINT,
       nativeTaskId,
       "Schema task",
-      "/tmp/project",
+      cwd,
       cwdRedacted,
       "provider-model",
       "idle",
@@ -778,6 +779,32 @@ describe("provider index v14 migration", () => {
     db.close();
   });
 
+  it("rejects user_version 14 with a missing unique index without healing or leaking values", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db, "openai", HOME_FINGERPRINT, "/tmp/keep-v14-index-sentinel");
+    const sentinel = db.prepare(`SELECT provider, home_fingerprint, canonical_home, registered_at
+      FROM provider_homes`).all();
+    db.exec("DROP INDEX idx_provider_event_cache_task_ordinal");
+
+    let failureMessage: string | null = null;
+    try {
+      runMigrations(db);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      failureMessage = error.message;
+    }
+
+    expect(failureMessage).toBe("provider index schema validation failed");
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(db.prepare(`SELECT provider, home_fingerprint, canonical_home, registered_at
+      FROM provider_homes`).all()).toEqual(sentinel);
+    expect(db.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'index' AND name = 'idx_provider_event_cache_task_ordinal'`).all())
+      .toEqual([]);
+    db.close();
+  });
+
   it("rejects user_version 14 with a lax provider table without mutating its row", () => {
     const db = openDatabase();
     db.exec("CREATE TABLE provider_homes (sentinel TEXT NOT NULL)");
@@ -983,19 +1010,50 @@ describe("provider index v14 migration", () => {
     db.close();
   });
 
-  it("accepts cwd_redacted 0 and 1 as strict integers", () => {
+  it("rejects a non-null cwd when cwd_redacted is 1", () => {
     const db = openDatabase();
     migrateV13(db);
     registerHome(db);
 
-    insertTaskWithCwdRedacted(db, "task-visible", 0);
-    insertTaskWithCwdRedacted(db, "task-redacted", 1);
+    expect(() => insertTaskWithCwdRedacted(
+      db,
+      "task-redacted-with-cwd",
+      1,
+      "/tmp/project",
+    )).toThrow();
+    db.close();
+  });
 
-    expect(db.prepare(`SELECT native_task_id, cwd_redacted,
+  it("accepts every valid cwd and cwd_redacted combination", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+
+    insertTaskWithCwdRedacted(db, "task-redacted", 1, null);
+    insertTaskWithCwdRedacted(db, "task-visible-without-cwd", 0, null);
+    insertTaskWithCwdRedacted(db, "task-visible-with-cwd", 0, "/tmp/project");
+
+    expect(db.prepare(`SELECT native_task_id, cwd, cwd_redacted,
       typeof(cwd_redacted) AS storage_type
       FROM provider_task_cache ORDER BY native_task_id`).all()).toEqual([
-      { native_task_id: "task-redacted", cwd_redacted: 1, storage_type: "integer" },
-      { native_task_id: "task-visible", cwd_redacted: 0, storage_type: "integer" },
+      {
+        native_task_id: "task-redacted",
+        cwd: null,
+        cwd_redacted: 1,
+        storage_type: "integer",
+      },
+      {
+        native_task_id: "task-visible-with-cwd",
+        cwd: "/tmp/project",
+        cwd_redacted: 0,
+        storage_type: "integer",
+      },
+      {
+        native_task_id: "task-visible-without-cwd",
+        cwd: null,
+        cwd_redacted: 0,
+        storage_type: "integer",
+      },
     ]);
     db.close();
   });

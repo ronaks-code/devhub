@@ -53,3 +53,4 @@
 - A schema-version invariant must pin the required migration at its historical index while allowing later migration steps; equality with the current migration count makes the next additive version unloadable.
 - When a database already claims the exact version that introduced a critical schema, validate that schema before skipping the migration loop. Validate inside the introducing migration for older databases, but do not apply the old exact-shape validator to unknown newer versions.
 - Keep schema goldens independent from the generated DDL, including explicit index table, column order, direction, and partial predicate, so a shared source cannot make implementation and tests drift together.
+- For claimed-version tamper coverage, start from a valid schema with sentinel data, remove one critical object, and prove validation emits only its constant error while preserving the version, data, and missing-object state instead of silently healing it.

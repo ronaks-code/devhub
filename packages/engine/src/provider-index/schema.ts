@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS provider_task_cache (
   PRIMARY KEY (provider, home_fingerprint, native_task_id, cache_generation),
   FOREIGN KEY (provider, home_fingerprint)
     REFERENCES provider_homes (provider, home_fingerprint)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CHECK (cwd_redacted = 0 OR cwd IS NULL)
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS provider_turn_cache (
