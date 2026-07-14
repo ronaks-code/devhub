@@ -67,3 +67,14 @@
 - Distinguish a fixed malformed-value bound from configured aggregate capacity: an oversized single persisted value is `INVALID_INPUT`, while configured turn/event-count exhaustion is `CAPACITY`.
 - Runtime barrel checks cannot detect leaked TypeScript-only carriers. Pair selective exports with a compiler fixture whose `@ts-expect-error` assertions fail if raw-home or backend preparation symbols reappear.
 - JSON-RPC numeric IDs are signed safe integers. Do not reuse nonnegative counters for request/approval identity validation; prove negative safe-integer round trips independently.
+
+## 2026-07-13 - Snapshot hostile event graphs once before any semantic read
+
+- A shallow ownership snapshot does not close a nested accessor/proxy or time-of-check/time-of-use gap. Reject Node proxies before reflective traps, recursively copy only bounded own data descriptors, reject cycles/exotics/sparse arrays/symbols, and feed the same frozen snapshot to ownership, projection, item-key, and replay-key logic.
+- Projection safety and persistence validity are separate boundaries. A write must pass the exact normalized persisted-event union used by the read decoder; otherwise a writer can create a row its own reader later classifies as corrupt.
+- Raw provider-home exclusion applies to every persisted summary, revision, and turn scalar, not only task/event locators. Fail closed on an exact home occurrence and keep cwd as the sole component-aware redaction exception.
+
+## 2026-07-13 - Match SQLite text semantics without aggregate allocation
+
+- SQLite `length(TEXT)` counts Unicode code points, while JavaScript `string.length` counts UTF-16 code units. Validate surrogate pairing and count with an early-exit scan before any UTF-8 allocation; use final ASCII/base64 length only where the persisted representation is guaranteed ASCII.
+- Snapshot fingerprints can preserve an exact canonical fixed-array contract without constructing one aggregate JSON string. Stream delimiters and canonical scalar encodings into the hash, including `event_json` as an outer quoted/escaped JSON string, and keep a bounded aggregate-reference golden to prove byte equivalence.

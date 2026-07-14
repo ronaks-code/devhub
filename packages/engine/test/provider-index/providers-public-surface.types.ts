@@ -39,6 +39,12 @@ import type { NormalizedProviderIndexStoreConfig } from "../../src/providers/ind
 import type { ProviderEventCacheRow } from "../../src/providers/index.js";
 // @ts-expect-error backend prepared persistence shape is not public provider API
 import type { PreparedProviderTaskSnapshot } from "../../src/providers/index.js";
+// @ts-expect-error backend prepared summary shape is not public provider API
+import type { PreparedProviderTaskSummary } from "../../src/providers/index.js";
+// @ts-expect-error backend prepared turn shape is not public provider API
+import type { PreparedProviderTurn } from "../../src/providers/index.js";
+// @ts-expect-error backend prepared event shape is not public provider API
+import type { PreparedProviderEvent } from "../../src/providers/index.js";
 // @ts-expect-error backend config preparation is not public provider API
 import { normalizeProviderIndexStoreOptions } from "../../src/providers/index.js";
 // @ts-expect-error backend clock callback execution is not public provider API
@@ -60,7 +66,10 @@ type BackendOnly =
   | ProviderIndexRegisteredHome
   | NormalizedProviderIndexStoreConfig
   | ProviderEventCacheRow
-  | PreparedProviderTaskSnapshot;
+  | PreparedProviderTaskSnapshot
+  | PreparedProviderTaskSummary
+  | PreparedProviderTurn
+  | PreparedProviderEvent;
 declare const backendOnly: BackendOnly;
 void backendOnly;
 void normalizeProviderIndexStoreOptions;

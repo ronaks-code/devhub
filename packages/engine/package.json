@@ -11,7 +11,7 @@
     "./providers": "./src/providers/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --project test/provider-index/tsconfig.public-surface.json",
     "test": "vitest run",
     "build": "tsc"
   },

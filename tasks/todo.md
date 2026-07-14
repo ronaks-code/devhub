@@ -270,3 +270,19 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - [x] Preserve negative safe-integer JSON-RPC request and approval IDs through project, canonical persistence, and strict decode round trips.
 - [x] Reject a final canonical persisted-event envelope above `8_388_608` characters before any SQL boundary, while accepting the exact limit. This is `INVALID_INPUT` because the fixed per-value schema/input constraint is violated; `CAPACITY` remains reserved in this slice for configurable aggregate turn/event-count limits.
 - [x] Bound every emitted native turn/item cache key to `1_024` characters after UTF-8/base64url expansion, expose only the fixed caller-specific errors, and cover accepted/rejected multibyte boundaries both directly and through snapshot preparation.
+
+### Security-review repairs
+
+- [x] Fail closed when the registered canonical home appears in any persisted summary, revision, or turn scalar; retain only the component-aware cwd redaction exception and prove accepted prepared output is path-free.
+- [x] Deep-snapshot each raw provider event exactly once through bounded data descriptors, reject proxies/accessors/symbols/exotics/sparse arrays/cycles/unbounded graphs before projection, and reuse that immutable snapshot for ownership, projection, item identity, and replay identity.
+- [x] Validate every write projection through the same exact `IndexedProviderEvent` union decoder used on reads, including write rejection for NUL text and oversized plan/activity/status/diagnostic fields.
+- [x] Match SQLite `length()` with an early-exit Unicode-code-point counter at persisted text boundaries, while retaining canonical UTF-8 and NUL rejection; cover ASCII, combining-mark, and astral boundaries.
+- [x] Stream the exact frozen fixed-array snapshot preimage into SHA-256 without materializing the aggregate canonical JSON, preserving the established canonical-reference and raw-home/literal-marker goldens.
+- [x] Add all prepared summary/turn/event carriers to the negative TypeScript surface fixture and run that fixture from the normal engine `typecheck` script; an induced backend-type export fails with TS2578.
+
+### Security-repair review
+
+- TDD RED was exact and isolated: focused codec tests reported `5 failed / 56 passed`, covering raw-home scalars, SQLite astral length, write/read asymmetry, hostile nested descriptors, and pre-allocation bounds.
+- Fresh final gate: identity plus codec tests `157/157` in `14.06s` (`12.82s` test execution); normal engine typecheck ran both the source compiler and the dedicated negative surface fixture; `git diff --check` passed.
+- A temporary induced export of `PreparedProviderTaskSummary` made normal engine typecheck fail with TS2578 (`Unused '@ts-expect-error' directive`), proving the fixture is live; the export was removed before the final green gate.
+- The repair remains pure codec/types/test/documentation work: no SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned file was touched.

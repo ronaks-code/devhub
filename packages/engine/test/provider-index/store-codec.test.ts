@@ -418,6 +418,17 @@ describe("provider index store configuration", () => {
       expectStoreError(() => createProviderIndexOwnerToken(config), "TOKEN_FAILURE");
     },
   );
+
+  it("applies SQLite character bounds to astral owner tokens", () => {
+    const accepted = normalizeProviderIndexStoreOptions({
+      tokenFactory: () => "🪐".repeat(512),
+    });
+    expect(createProviderIndexOwnerToken(accepted)).toBe("🪐".repeat(512));
+    const rejected = normalizeProviderIndexStoreOptions({
+      tokenFactory: () => "🪐".repeat(513),
+    });
+    expectStoreError(() => createProviderIndexOwnerToken(rejected), "TOKEN_FAILURE");
+  });
 });
 
 describe("provider task snapshot preparation", () => {
@@ -707,6 +718,61 @@ describe("provider task snapshot preparation", () => {
     );
   });
 
+  it("rejects the registered home in every persisted summary, revision, and turn scalar", () => {
+    const homeValue = (label: string): string => `${label}:${HOME}`;
+    const summaryCases: readonly NativeTaskSummary[] = [
+      nativeSummary({ title: homeValue("title") }),
+      nativeSummary({ model: homeValue("model") }),
+      nativeSummary({ status: homeValue("status") }),
+      nativeSummary({ revision: revision({ status: homeValue("revision-status") }) }),
+      nativeSummary({ revision: revision({ lastTurnId: homeValue("last-turn") }) }),
+      nativeSummary({ revision: revision({ lastTurnStatus: homeValue("last-turn-status") }) }),
+      nativeSummary({ revision: revision({ lastItemId: homeValue("last-item") }) }),
+      nativeSummary({ revision: revision({ fingerprint: homeValue("fingerprint") }) }),
+    ];
+    for (const summary of summaryCases) {
+      expectStoreError(
+        () => prepareProviderTaskSummary(registrationFor(), key, summary),
+        "INVALID_INPUT",
+        HOME,
+      );
+    }
+
+    for (const task of [
+      nativeTask({
+        turns: [{
+          id: homeValue("turn-id"),
+          status: "complete",
+          startedAt: null,
+          completedAt: null,
+          events: [],
+        }],
+      }),
+      nativeTask({
+        turns: [{
+          id: "turn-home-free",
+          status: homeValue("turn-status"),
+          startedAt: null,
+          completedAt: null,
+          events: [],
+        }],
+      }),
+    ]) {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, task),
+        "INVALID_INPUT",
+        HOME,
+      );
+    }
+  });
+
+  it("never serializes the registered home from accepted prepared scalar output", () => {
+    const preparedSummary = prepareProviderTaskSummary(registrationFor(), key, nativeSummary());
+    const preparedSnapshot = prepareProviderTaskSnapshot(registrationFor(), key, nativeTask());
+    expect(JSON.stringify(preparedSummary)).not.toContain(HOME);
+    expect(JSON.stringify(preparedSnapshot)).not.toContain(HOME);
+  });
+
   it("enforces configured turn and per-task event capacity", () => {
     const oneTurn = normalizeProviderIndexStoreOptions({ maxTurnsPerGeneration: 1 });
     const twoEvents = normalizeProviderIndexStoreOptions({ maxEventsPerTask: 2 });
@@ -754,6 +820,317 @@ describe("provider task snapshot preparation", () => {
         key,
         taskWithText("x".repeat(maxEventJsonChars - emptyEventJsonLength + 1)),
       ),
+      "INVALID_INPUT",
+    );
+
+    const combiningAtLimit = "\u0301".repeat(maxEventJsonChars - emptyEventJsonLength);
+    const combining = prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      taskWithText(combiningAtLimit),
+    );
+    expect(Array.from(combining.turns[0]!.events[0]!.eventJson))
+      .toHaveLength(maxEventJsonChars);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        taskWithText(`${combiningAtLimit}\u0301`),
+      ),
+      "INVALID_INPUT",
+    );
+  });
+
+  it("uses SQLite Unicode-code-point length for astral persisted event JSON", () => {
+    const maxEventJsonChars = 8_388_608;
+    const eventWithText = (text: string): ProviderEvent => eventFor({
+      type: "message",
+      role: "assistant",
+      text,
+      turnId: "turn-astral",
+      itemId: null,
+    });
+    const emptyEventJson = canonicalProviderIndexJson(
+      providersIndex.projectIndexedProviderEvent(eventWithText("")),
+    );
+    const envelopeSqliteChars = Array.from(emptyEventJson).length;
+    const astralText = "🪐".repeat(maxEventJsonChars - envelopeSqliteChars);
+    const task = nativeTask({
+      turns: [{
+        id: "turn-astral",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventWithText(astralText)],
+      }],
+    });
+
+    const prepared = prepareProviderTaskSnapshot(registrationFor(), key, task);
+    const turn = prepared.turns[0]!;
+    const cached = turn.events[0]!;
+    const eventJson = cached.eventJson;
+    expect(eventJson.length).toBeGreaterThan(maxEventJsonChars);
+    expect(Array.from(eventJson)).toHaveLength(maxEventJsonChars);
+    const decoded = decodeCachedProviderEvent(rowFor(cached), prepared.locator, turn.nativeTurnKey);
+    expect(decoded.type).toBe("message");
+    if (decoded.type !== "message") throw new Error("expected message event");
+    expect(decoded.text.length).toBeGreaterThan(Array.from(decoded.text).length);
+  });
+
+  it("rejects write-side event values that the strict decoder cannot accept", () => {
+    const invalidEvents: readonly ProviderEvent[] = [
+      eventFor({
+        type: "message",
+        role: "assistant",
+        text: "contains\u0000nul",
+        turnId: "turn-invalid",
+        itemId: null,
+      }),
+      eventFor({
+        type: "message",
+        role: "assistant",
+        text: "\ud800",
+        turnId: "turn-invalid",
+        itemId: null,
+      }),
+      eventFor({
+        type: "plan",
+        turnId: "turn-invalid",
+        itemId: null,
+        stepIndex: 0,
+        text: "plan",
+        status: "p".repeat(513),
+      }),
+      eventFor({
+        type: "activity",
+        turnId: "turn-invalid",
+        itemId: null,
+        activity: "a".repeat(513),
+        status: "complete",
+        message: null,
+      }),
+      eventFor({
+        type: "activity",
+        turnId: "turn-invalid",
+        itemId: null,
+        activity: "command",
+        status: "s".repeat(513),
+        message: null,
+      }),
+      eventFor({
+        type: "status",
+        scope: "turn",
+        status: "s".repeat(513),
+        nativeId: "turn-invalid",
+      }),
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "diagnostic",
+        level: "warning",
+        code: "DIAGNOSTIC",
+        message: "d".repeat(513),
+        method: null,
+        shapeKeys: [],
+      },
+    ];
+    for (const invalidEvent of invalidEvents) {
+      const task = nativeTask({
+        turns: [{
+          id: "turn-invalid",
+          status: "complete",
+          startedAt: null,
+          completedAt: null,
+          events: [invalidEvent],
+        }],
+      });
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, task),
+        "INVALID_INPUT",
+      );
+    }
+  });
+
+  it("snapshots nested event data descriptors without invoking getters or proxy gets", () => {
+    const identity = createProviderRequestIdentity({
+      key,
+      generation: 1,
+      turnId: "turn-safe-graph",
+      requestId: "request-safe-graph",
+      itemId: null,
+      approvalId: null,
+    });
+    let getterCalls = 0;
+    const accessorIdentity = Object.defineProperty({ ...identity }, "requestId", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "request-accessor";
+      },
+    });
+    const proxyIdentity = new Proxy({ ...identity }, {
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-get");
+      },
+      getPrototypeOf() {
+        throw new Error("must-never-leak-nested-proxy-prototype");
+      },
+    });
+    const symbolIdentity = { ...identity, [Symbol("hidden")]: true };
+    const sparseShapeKeys = Array(1);
+    const accessorShapeKeys = Object.defineProperty([], "0", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        return "shape";
+      },
+    });
+    Object.defineProperty(accessorShapeKeys, "length", { value: 1 });
+    const hostileEvents: readonly ProviderEvent[] = [
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "request",
+        request: { kind: "permission", identity: accessorIdentity as never },
+      },
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "request",
+        request: { kind: "permission", identity: proxyIdentity as never },
+      },
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "request",
+        request: { kind: "permission", identity: symbolIdentity as never },
+      },
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "diagnostic",
+        level: "warning",
+        code: "SPARSE",
+        message: "sparse",
+        method: null,
+        shapeKeys: sparseShapeKeys as never,
+      },
+      {
+        provider: "openai",
+        key,
+        occurredAt: OCCURRED_AT,
+        type: "diagnostic",
+        level: "warning",
+        code: "ACCESSOR",
+        message: "accessor",
+        method: null,
+        shapeKeys: accessorShapeKeys as never,
+      },
+    ];
+    for (const event of hostileEvents) {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+          turns: [{
+            id: "turn-safe-graph",
+            status: "complete",
+            startedAt: null,
+            completedAt: null,
+            events: [event],
+          }],
+        })),
+        "INVALID_INPUT",
+        "must-never-leak",
+      );
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects over-depth and aggregate-oversized raw event graphs before cloning", () => {
+    let getterCalls = 0;
+    let nested: Record<string, unknown> = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "must-never-leak-deep-getter";
+      },
+    });
+    for (let index = 0; index < 64; index += 1) nested = { nested };
+    const tooDeep = {
+      ...eventFor({
+        type: "message",
+        role: "assistant",
+        text: "depth",
+        turnId: "turn-depth",
+        itemId: null,
+      }),
+      untrusted: nested,
+    } as ProviderEvent;
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+        turns: [{
+          id: "turn-depth",
+          status: "complete",
+          startedAt: null,
+          completedAt: null,
+          events: [tooDeep],
+        }],
+      })),
+      "INVALID_INPUT",
+      "must-never-leak",
+    );
+    expect(getterCalls).toBe(0);
+
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    for (const untrusted of [cycle, new Date(0)]) {
+      const event = {
+        ...eventFor({
+          type: "message",
+          role: "assistant",
+          text: "unbounded",
+          turnId: "turn-unbounded",
+          itemId: null,
+        }),
+        untrusted,
+      } as ProviderEvent;
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+          turns: [{
+            id: "turn-unbounded",
+            status: "complete",
+            startedAt: null,
+            completedAt: null,
+            events: [event],
+          }],
+        })),
+        "INVALID_INPUT",
+      );
+    }
+
+    const oversized = eventFor({
+      type: "message",
+      role: "assistant",
+      text: "x".repeat(8_388_609),
+      turnId: "turn-oversized",
+      itemId: null,
+    });
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+        turns: [{
+          id: "turn-oversized",
+          status: "complete",
+          startedAt: null,
+          completedAt: null,
+          events: [oversized],
+        }],
+      })),
       "INVALID_INPUT",
     );
   });

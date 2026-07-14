@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { types as utilTypes } from "node:util";
 import { normalizeProviderNativeId } from "../providers/native-id.js";
 import type { ProviderEvent } from "../providers/events.js";
 import type {
@@ -50,6 +51,13 @@ const MAX_TIMESTAMP_CHARS = 64;
 const MAX_FINGERPRINT_CHARS = 1_024;
 const MAX_PATH_CHARS = 16_384;
 const MAX_EVENT_JSON_CHARS = 8_388_608;
+const MAX_EVENT_GRAPH_DEPTH = 16;
+const MAX_EVENT_GRAPH_NODES = 128;
+const MAX_EVENT_GRAPH_KEYS = 256;
+const MAX_EVENT_GRAPH_ARRAY_ITEMS = 64;
+const MAX_EVENT_GRAPH_KEY_CHARS = 512;
+const MAX_EVENT_GRAPH_STRING_CHARS = MAX_EVENT_JSON_CHARS;
+const MAX_EVENT_GRAPH_AGGREGATE_STRING_CHARS = MAX_EVENT_JSON_CHARS + 131_072;
 const LOWER_HEX_64 = /^[0-9a-f]{64}$/u;
 
 const OPTION_KEYS = Object.freeze([
@@ -125,14 +133,30 @@ function hasExactUtf8(value: string): boolean {
   return Buffer.from(value, "utf8").toString("utf8") === value;
 }
 
-function boundedText(value: unknown, maximum: number, minimum = 1): string {
-  if (typeof value !== "string" || value.length < minimum || value.length > maximum ||
-    value.includes("\u0000") || !hasExactUtf8(value)) throw new TypeError();
-  return value;
+function sqliteTextLengthAtMost(value: string, maximum: number): number | null {
+  let count = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) return null;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return null;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return null;
+    }
+    count += 1;
+    if (count > maximum) return null;
+  }
+  return count;
 }
 
-function optionalText(value: unknown, maximum: number): string | null {
-  return value === null ? null : boundedText(value, maximum);
+function boundedText(value: unknown, maximum: number, minimum = 1): string {
+  if (typeof value !== "string") throw new TypeError();
+  const length = sqliteTextLengthAtMost(value, maximum);
+  if (length === null || length < minimum || value.includes("\u0000") ||
+    !hasExactUtf8(value)) throw new TypeError();
+  return value;
 }
 
 function safeInteger(value: unknown): number {
@@ -200,7 +224,8 @@ function canonicalizeDeepestExistingPath(value: unknown): string {
     try {
       const existing = realpathSync(candidate);
       const resolved = path.join(existing, ...suffix);
-      if (resolved.length > MAX_PATH_CHARS || !hasExactUtf8(resolved)) throw new TypeError();
+      if (sqliteTextLengthAtMost(resolved, MAX_PATH_CHARS) === null ||
+        !hasExactUtf8(resolved)) throw new TypeError();
       return resolved;
     } catch (error) {
       const code = error !== null && typeof error === "object" && "code" in error
@@ -213,6 +238,31 @@ function canonicalizeDeepestExistingPath(value: unknown): string {
       candidate = parent;
     }
   }
+}
+
+function homeFreeText(
+  value: unknown,
+  canonicalHome: string,
+  maximum: number,
+  minimum = 1,
+): string {
+  const text = boundedText(value, maximum, minimum);
+  if (text.includes(canonicalHome)) throw new TypeError();
+  return text;
+}
+
+function optionalHomeFreeText(
+  value: unknown,
+  canonicalHome: string,
+  maximum: number,
+): string | null {
+  return value === null ? null : homeFreeText(value, canonicalHome, maximum);
+}
+
+function homeFreeNativeId(value: unknown, canonicalHome: string, label: string): string {
+  const id = canonicalNativeId(value, label);
+  if (id.includes(canonicalHome)) throw new TypeError();
+  return id;
 }
 
 function persistedCwd(
@@ -228,7 +278,7 @@ function persistedCwd(
   return Object.freeze({ cwd: contained ? null : cwd, cwdRedacted: contained });
 }
 
-function normalizedRevision(value: unknown): Readonly<NativeRevision> | null {
+function normalizedRevision(value: unknown, canonicalHome: string): Readonly<NativeRevision> | null {
   if (value === undefined) return null;
   const snapshot = exactOwnData(value, [
     "updatedAt",
@@ -240,15 +290,19 @@ function normalizedRevision(value: unknown): Readonly<NativeRevision> | null {
   ]);
   return Object.freeze({
     updatedAt: optionalSafeInteger(snapshot.updatedAt),
-    status: boundedText(snapshot.status, MAX_SHORT_TEXT_CHARS),
+    status: homeFreeText(snapshot.status, canonicalHome, MAX_SHORT_TEXT_CHARS),
     lastTurnId: snapshot.lastTurnId === null
       ? null
-      : canonicalNativeId(snapshot.lastTurnId, "revision last turn id"),
-    lastTurnStatus: optionalText(snapshot.lastTurnStatus, MAX_SHORT_TEXT_CHARS),
+      : homeFreeNativeId(snapshot.lastTurnId, canonicalHome, "revision last turn id"),
+    lastTurnStatus: optionalHomeFreeText(
+      snapshot.lastTurnStatus,
+      canonicalHome,
+      MAX_SHORT_TEXT_CHARS,
+    ),
     lastItemId: snapshot.lastItemId === null
       ? null
-      : canonicalNativeId(snapshot.lastItemId, "revision last item id"),
-    fingerprint: boundedText(snapshot.fingerprint, MAX_FINGERPRINT_CHARS),
+      : homeFreeNativeId(snapshot.lastItemId, canonicalHome, "revision last item id"),
+    fingerprint: homeFreeText(snapshot.fingerprint, canonicalHome, MAX_FINGERPRINT_CHARS),
   });
 }
 
@@ -293,14 +347,14 @@ function normalizedSummary(
   const cwd = persistedCwd(raw.cwd, registration.canonicalHome);
   const archived = raw.archived;
   if (archived !== null && typeof archived !== "boolean") throw new TypeError();
-  const revision = normalizedRevision(raw.revision);
+  const revision = normalizedRevision(raw.revision, registration.canonicalHome);
   const prepared = Object.freeze({
     locator: methodLocator,
-    title: boundedText(raw.title, MAX_TITLE_CHARS, 0),
+    title: homeFreeText(raw.title, registration.canonicalHome, MAX_TITLE_CHARS, 0),
     cwd: cwd.cwd,
     cwdRedacted: cwd.cwdRedacted,
-    model: optionalText(raw.model, MAX_SHORT_TEXT_CHARS),
-    status: boundedText(raw.status, MAX_SHORT_TEXT_CHARS),
+    model: optionalHomeFreeText(raw.model, registration.canonicalHome, MAX_SHORT_TEXT_CHARS),
+    status: homeFreeText(raw.status, registration.canonicalHome, MAX_SHORT_TEXT_CHARS),
     createdAt: canonicalTimestamp(raw.createdAt),
     updatedAt: canonicalTimestamp(raw.updatedAt),
     archived,
@@ -313,6 +367,112 @@ function normalizedSummary(
     summary: prepared,
     turns: includeTurns ? denseDataArray(raw.turns) : null,
   });
+}
+
+interface EventGraphBudget {
+  nodes: number;
+  keys: number;
+  stringChars: number;
+}
+
+function accountEventGraphString(
+  value: string,
+  budget: EventGraphBudget,
+  perValueMaximum: number,
+): void {
+  const remaining = MAX_EVENT_GRAPH_AGGREGATE_STRING_CHARS - budget.stringChars;
+  if (remaining < 0) throw new TypeError();
+  const length = sqliteTextLengthAtMost(value, Math.min(perValueMaximum, remaining));
+  if (length === null || !hasExactUtf8(value)) throw new TypeError();
+  budget.stringChars += length;
+}
+
+function snapshotEventGraph(
+  value: unknown,
+  depth: number,
+  budget: EventGraphBudget,
+  ancestors: WeakSet<object>,
+): unknown {
+  if (depth > MAX_EVENT_GRAPH_DEPTH) throw new TypeError();
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    accountEventGraphString(value, budget, MAX_EVENT_GRAPH_STRING_CHARS);
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError();
+    return value;
+  }
+  if (typeof value !== "object" || utilTypes.isProxy(value)) throw new TypeError();
+  budget.nodes += 1;
+  if (budget.nodes > MAX_EVENT_GRAPH_NODES || ancestors.has(value)) throw new TypeError();
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
+      const keys = Reflect.ownKeys(value);
+      if (keys.some((key) => typeof key !== "string")) throw new TypeError();
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_EVENT_GRAPH_ARRAY_ITEMS ||
+        keys.length !== lengthDescriptor.value + 1 || !keys.includes("length")) {
+        throw new TypeError();
+      }
+      budget.keys += keys.length;
+      if (budget.keys > MAX_EVENT_GRAPH_KEYS) throw new TypeError();
+      const result: unknown[] = [];
+      for (let index = 0; index < lengthDescriptor.value; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+        result.push(snapshotEventGraph(descriptor.value, depth + 1, budget, ancestors));
+      }
+      return Object.freeze(result);
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string") || keys.length > 32) {
+      throw new TypeError();
+    }
+    budget.keys += keys.length;
+    if (budget.keys > MAX_EVENT_GRAPH_KEYS) throw new TypeError();
+    const result = Object.create(prototype) as Record<string, unknown>;
+    for (const key of keys as string[]) {
+      accountEventGraphString(key, budget, MAX_EVENT_GRAPH_KEY_CHARS);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+      Object.defineProperty(result, key, {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: snapshotEventGraph(descriptor.value, depth + 1, budget, ancestors),
+      });
+    }
+    return Object.freeze(result);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function snapshotProviderEvent(value: unknown): Readonly<ProviderEvent> {
+  const budget: EventGraphBudget = { nodes: 0, keys: 0, stringChars: 0 };
+  const snapshot = snapshotEventGraph(value, 0, budget, new WeakSet<object>());
+  if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new TypeError();
+  }
+  return snapshot as Readonly<ProviderEvent>;
+}
+
+function assertRawDiagnosticBounds(event: Readonly<ProviderEvent>): void {
+  if (event.type !== "diagnostic") return;
+  boundedText(event.code, 128);
+  boundedText(event.message, MAX_SHORT_TEXT_CHARS);
+  if (event.method !== null) boundedText(event.method, 256);
+  const keys = denseDataArray(event.shapeKeys);
+  if (keys.length > 32) throw new TypeError();
+  for (const key of keys) boundedText(key, 64, 0);
 }
 
 function assertRawEventOwnership(eventValue: unknown, expectedLocator: ProviderTaskLocator): void {
@@ -347,17 +507,19 @@ function preparedEvent(
   nativeTurnKey: string,
   ordinal: number,
 ): Readonly<PreparedProviderEvent> {
-  assertRawEventOwnership(eventValue, locator);
-  const event = projectIndexedProviderEvent(eventValue as ProviderEvent);
+  const rawEvent = snapshotProviderEvent(eventValue);
+  assertRawEventOwnership(rawEvent, locator);
+  assertRawDiagnosticBounds(rawEvent);
+  const event = normalizedIndexedEvent(projectIndexedProviderEvent(rawEvent), locator);
   if (event.provider !== locator.provider || !sameLocator(event.locator, locator)) {
     throw new TypeError();
   }
   const eventTurnId = indexedProviderEventTurnId(event);
   if (eventTurnId !== null && eventTurnId !== containingTurnId) throw new TypeError();
-  const nativeItemKey = cachedEventItemId(eventValue as ProviderEvent, ordinal);
-  const replayKey = providerEventReplayKey(eventValue as ProviderEvent, ordinal);
+  const nativeItemKey = cachedEventItemId(rawEvent, ordinal);
+  const replayKey = providerEventReplayKey(rawEvent, ordinal);
   const eventJson = canonicalProviderIndexJson(event);
-  if (eventJson.length > MAX_EVENT_JSON_CHARS) {
+  if (sqliteTextLengthAtMost(eventJson, MAX_EVENT_JSON_CHARS) === null) {
     throw new ProviderIndexStoreError("INVALID_INPUT");
   }
   const eventFingerprint = sha256(
@@ -374,22 +536,57 @@ function preparedEvent(
   });
 }
 
-function revisionPayload(revision: Readonly<NativeRevision> | null): readonly unknown[] | null {
-  return revision === null ? null : Object.freeze([
-    revision.updatedAt,
-    revision.status,
-    revision.lastTurnId,
-    revision.lastTurnStatus,
-    revision.lastItemId,
-    revision.fingerprint,
-  ]);
+type SnapshotHash = ReturnType<typeof createHash>;
+
+function updateCanonicalJsonString(hash: SnapshotHash, value: string): void {
+  if (!hasExactUtf8(value)) throw new TypeError();
+  hash.update('"', "utf8");
+  let segmentStart = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    let escaped: string | null = null;
+    switch (codeUnit) {
+      case 0x08: escaped = "\\b"; break;
+      case 0x09: escaped = "\\t"; break;
+      case 0x0a: escaped = "\\n"; break;
+      case 0x0c: escaped = "\\f"; break;
+      case 0x0d: escaped = "\\r"; break;
+      case 0x22: escaped = '\\"'; break;
+      case 0x5c: escaped = "\\\\"; break;
+      default:
+        if (codeUnit < 0x20) escaped = `\\u${codeUnit.toString(16).padStart(4, "0")}`;
+        break;
+    }
+    if (escaped === null) continue;
+    if (segmentStart < index) hash.update(value.slice(segmentStart, index), "utf8");
+    hash.update(escaped, "utf8");
+    segmentStart = index + 1;
+  }
+  if (segmentStart < value.length) hash.update(value.slice(segmentStart), "utf8");
+  hash.update('"', "utf8");
+}
+
+function updateCanonicalJsonScalar(hash: SnapshotHash, value: unknown): void {
+  if (typeof value === "string") {
+    updateCanonicalJsonString(hash, value);
+    return;
+  }
+  hash.update(canonicalProviderIndexJson(value), "utf8");
+}
+
+function updateComma(hash: SnapshotHash, index: number): void {
+  if (index > 0) hash.update(",", "utf8");
 }
 
 function providerTaskSnapshotFingerprintUnsafe(
   summary: PreparedProviderTaskSummary,
   turns: readonly PreparedProviderTurn[],
 ): string {
-  const summaryPayload = Object.freeze([
+  const hash = createHash("sha256");
+  hash.update("devhub-provider-snapshot:v1\u0000[1,", "utf8");
+  updateCanonicalJsonString(hash, serializeTaskLocator(summary.locator));
+  hash.update(",[", "utf8");
+  const summaryValues: readonly unknown[] = [
     summary.title,
     summary.cwd,
     summary.cwdRedacted,
@@ -399,29 +596,68 @@ function providerTaskSnapshotFingerprintUnsafe(
     summary.updatedAt,
     summary.archived,
     summary.source,
-    revisionPayload(summary.revision),
-  ]);
-  const turnPayload = Object.freeze(turns.map((turn) => Object.freeze([
-    turn.nativeTurnKey,
-    turn.status,
-    turn.startedAt,
-    turn.completedAt,
-    turn.ordinal,
-    Object.freeze(turn.events.map((event) => Object.freeze([
-      event.ordinal,
-      event.nativeItemKey,
-      event.replayKey,
-      event.eventFingerprint,
-      event.eventJson,
-    ]))),
-  ])));
-  const payload = Object.freeze([
-    1,
-    serializeTaskLocator(summary.locator),
-    summaryPayload,
-    turnPayload,
-  ]);
-  return sha256(`devhub-provider-snapshot:v1\u0000${canonicalProviderIndexJson(payload)}`);
+  ];
+  for (let index = 0; index < summaryValues.length; index += 1) {
+    updateComma(hash, index);
+    updateCanonicalJsonScalar(hash, summaryValues[index]);
+  }
+  hash.update(",", "utf8");
+  if (summary.revision === null) {
+    hash.update("null", "utf8");
+  } else {
+    hash.update("[", "utf8");
+    const revisionValues: readonly unknown[] = [
+      summary.revision.updatedAt,
+      summary.revision.status,
+      summary.revision.lastTurnId,
+      summary.revision.lastTurnStatus,
+      summary.revision.lastItemId,
+      summary.revision.fingerprint,
+    ];
+    for (let index = 0; index < revisionValues.length; index += 1) {
+      updateComma(hash, index);
+      updateCanonicalJsonScalar(hash, revisionValues[index]);
+    }
+    hash.update("]", "utf8");
+  }
+  hash.update("],[", "utf8");
+  for (let turnIndex = 0; turnIndex < turns.length; turnIndex += 1) {
+    updateComma(hash, turnIndex);
+    const turn = turns[turnIndex]!;
+    hash.update("[", "utf8");
+    const turnValues: readonly unknown[] = [
+      turn.nativeTurnKey,
+      turn.status,
+      turn.startedAt,
+      turn.completedAt,
+      turn.ordinal,
+    ];
+    for (let index = 0; index < turnValues.length; index += 1) {
+      updateComma(hash, index);
+      updateCanonicalJsonScalar(hash, turnValues[index]);
+    }
+    hash.update(",[", "utf8");
+    for (let eventIndex = 0; eventIndex < turn.events.length; eventIndex += 1) {
+      updateComma(hash, eventIndex);
+      const event = turn.events[eventIndex]!;
+      hash.update("[", "utf8");
+      const eventValues: readonly unknown[] = [
+        event.ordinal,
+        event.nativeItemKey,
+        event.replayKey,
+        event.eventFingerprint,
+        event.eventJson,
+      ];
+      for (let index = 0; index < eventValues.length; index += 1) {
+        updateComma(hash, index);
+        updateCanonicalJsonScalar(hash, eventValues[index]);
+      }
+      hash.update("]", "utf8");
+    }
+    hash.update("]]", "utf8");
+  }
+  hash.update("]]", "utf8");
+  return hash.digest("hex");
 }
 
 export function providerTaskSnapshotFingerprint(
@@ -559,7 +795,8 @@ export function createProviderIndexOwnerToken(
 ): string {
   try {
     const value = config.tokenFactory();
-    if (typeof value !== "string" || value.length === 0 || value.length > 512 ||
+    if (typeof value !== "string" || sqliteTextLengthAtMost(value, 512) === null ||
+      value.length === 0 ||
       value !== value.trim() || /[\u0000-\u001f\u007f]/u.test(value) ||
       Buffer.from(value, "utf8").toString("utf8") !== value) {
       throw new TypeError();
@@ -608,7 +845,11 @@ export function prepareProviderTaskSnapshot(
         "completedAt",
         "events",
       ]);
-      const id = canonicalNativeId(rawTurn.id, "native turn id");
+      const id = homeFreeNativeId(
+        rawTurn.id,
+        normalized.registration.canonicalHome,
+        "native turn id",
+      );
       const nativeTurnKey = cachedTurnKey(id);
       const rawEvents = denseDataArray(rawTurn.events);
       if (eventOrdinal + rawEvents.length > config.maxEventsPerTask) {
@@ -622,7 +863,11 @@ export function prepareProviderTaskSnapshot(
       turns.push(Object.freeze({
         nativeTurnKey,
         id,
-        status: boundedText(rawTurn.status, MAX_SHORT_TEXT_CHARS),
+        status: homeFreeText(
+          rawTurn.status,
+          normalized.registration.canonicalHome,
+          MAX_SHORT_TEXT_CHARS,
+        ),
         startedAt: canonicalTimestamp(rawTurn.startedAt),
         completedAt: canonicalTimestamp(rawTurn.completedAt),
         ordinal: turnOrdinal,
