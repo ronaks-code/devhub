@@ -172,3 +172,11 @@
 - Verifying only the requested task rowset does not catch a hostile trigger that writes the requested row and injects a sibling task. Snapshot the bounded generation census and target-task census before mutation, derive the exact post-replacement census, and require that delta before commit.
 - Capacity is a property of the final deduplicated generation, not the incoming payload in isolation. Enforce it after replacement inside the owned transaction so rollback restores both cache and lease authority.
 - When extracting internal SQL helpers, preserve their stable failure identity through the transaction owner as well as the public boundary. Otherwise a domain `CAPACITY` or `CORRUPT_ROW` can be accidentally flattened into `DATABASE_UNAVAILABLE` during rollback.
+
+## 2026-07-14 - Keep cache proof bounded and provenance internal
+
+- A public error class cannot prove failure provenance because hostile caller code can construct it. Convert preparation to a private discriminated result at the codec/store boundary, and translate that result into the store's unforgeable internal failure before callbacks or SQL.
+- Min/max/count does not prove ordinal uniqueness: compensated duplicates such as `[0,0,2]` satisfy all three. Require the distinct-ordinal count to equal the total row count as an independent invariant.
+- Promotion is a replacement boundary, so retirement must remove every other same-scope generation, including corrupt future rows. Postcheck `generation <> promoted`, and test a trigger that recreates a deleted future row plus exact cross-scope rollback.
+- Census and existence checks must not materialize staged child rows. Use SQL COUNT/EXISTS and arithmetic deltas; enumerate only one incoming-bounded snapshot rowset with an extra sentinel row to detect stored expansion.
+- When summary hash fields match a complete staged snapshot, rewriting only the task observation splits task and receipt authority. Renew the lease while preserving the entire snapshot subtree byte-for-byte.
