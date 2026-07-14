@@ -20,6 +20,7 @@ import { scanSession, emptySeed } from "./parse-session.js";
 import type { ScanSeed, ScanResult, SearchText } from "./parse-session.js";
 import { workerScanEnabled, runScanInWorker, closeScanWorker } from "./index-worker.js";
 import { runMigrations } from "./migrations.js";
+import { ProviderTaskIndexStore } from "./provider-index/store.js";
 import { archiveSession } from "./archive.js";
 import { SettingsStore } from "./settings.js";
 import { ProjectMetaStore } from "./project-meta.js";
@@ -227,6 +228,8 @@ export class TranscriptIndex {
   private selectOne: StatementSync;
   /** User preferences, sharing this index's DB connection. */
   readonly settings: SettingsStore;
+  /** Provider-native task index state, sharing this index's DB connection. */
+  readonly providerIndex: ProviderTaskIndexStore;
   /** Per-project UI metadata (favorite/archived/order/color), sharing this DB. */
   readonly projectMeta: ProjectMetaStore;
   /** Per-session tags (session_meta.tags JSON array), sharing this DB. */
@@ -264,6 +267,7 @@ export class TranscriptIndex {
     // Apply additive schema migrations BEFORE preparing statements that may depend
     // on migrated columns/tables.
     runMigrations(this.db);
+    this.providerIndex = new ProviderTaskIndexStore(this.db);
     this.settings = new SettingsStore(this.db);
     this.projectMeta = new ProjectMetaStore(this.db);
     this.tags = new TagStore(this.db);

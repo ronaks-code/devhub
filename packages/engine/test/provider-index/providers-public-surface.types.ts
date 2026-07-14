@@ -19,6 +19,7 @@ import type {
   ProviderReconciliationStore,
   ReconciliationLatchInput,
 } from "../../src/providers/index.js";
+import { ProviderTaskIndexStore as RootProviderTaskIndexStore } from "../../src/index.js";
 
 void PROVIDER_INDEX_STORE_DEFAULTS;
 void PROVIDER_INDEX_STORE_HARD_LIMITS;
@@ -40,6 +41,11 @@ type PublicProviderIndexTypes =
   | ReconciliationLatchInput;
 declare const publicProviderIndexType: PublicProviderIndexTypes;
 void publicProviderIndexType;
+void RootProviderTaskIndexStore;
+
+declare const rootProviderIndexStore: InstanceType<typeof RootProviderTaskIndexStore>;
+// @ts-expect-error TranscriptIndex exclusively owns the shared database connection
+rootProviderIndexStore.close();
 
 // @ts-expect-error backend raw-home carrier must not cross the providers package boundary
 import type { ProviderIndexRegisteredHome } from "../../src/providers/index.js";
