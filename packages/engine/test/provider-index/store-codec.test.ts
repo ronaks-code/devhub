@@ -3,6 +3,26 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const contentTransformCalls = vi.hoisted(() => ({ readable: 0, injective: 0 }));
+
+vi.mock("../../src/provider-index/content-transform.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../src/provider-index/content-transform.js")
+  >();
+  return {
+    ...actual,
+    readableContentString(value: string, providerHome: string): string {
+      contentTransformCalls.readable += 1;
+      return actual.readableContentString(value, providerHome);
+    },
+    injectiveContentString(value: string, providerHome: string): string {
+      contentTransformCalls.injective += 1;
+      return actual.injectiveContentString(value, providerHome);
+    },
+  };
+});
+
 import {
   cachedTurnKey,
   canonicalProviderIndexJson,
@@ -199,6 +219,8 @@ describe("provider index store codec public surface", () => {
       "providerTaskSnapshotReceiptKey",
       "decodeCachedProviderEvent",
       "projectProviderEventCacheBundleFromSnapshot",
+      "readableContentString",
+      "injectiveContentString",
     ]) {
       expect(api[name], name).toBeUndefined();
     }
@@ -562,7 +584,7 @@ describe("provider task snapshot preparation", () => {
     );
   });
 
-  it("rejects provider-home projection expansion before clone or materialization", () => {
+  it("rejects provider-home expansion before readable or injective materialization", () => {
     const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
     const event = normalizeProviderEvent({
       type: "message",
@@ -586,16 +608,33 @@ describe("provider task snapshot preparation", () => {
         events: [event],
       }],
     });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    try {
-      expectStoreError(
-        () => prepareProviderTaskSnapshot(registrationFor(rootKey), rootKey, task),
-        "INVALID_INPUT",
-      );
-      expect(clone).not.toHaveBeenCalled();
-    } finally {
-      clone.mockRestore();
-    }
+    const benignEvent = eventFor({
+      type: "message",
+      role: "assistant",
+      text: "benign transform probe",
+      turnId: "turn-transform-probe",
+      itemId: null,
+    });
+    contentTransformCalls.readable = 0;
+    contentTransformCalls.injective = 0;
+    prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+      turns: [{
+        id: "turn-transform-probe",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [benignEvent],
+      }],
+    }));
+    expect(contentTransformCalls).toEqual({ readable: 1, injective: 1 });
+
+    contentTransformCalls.readable = 0;
+    contentTransformCalls.injective = 0;
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(registrationFor(rootKey), rootKey, task),
+      "INVALID_INPUT",
+    );
+    expect(contentTransformCalls).toEqual({ readable: 0, injective: 0 });
 
     const injectiveTask = nativeTask({
       turns: [{
@@ -612,16 +651,13 @@ describe("provider task snapshot preparation", () => {
         })],
       }],
     });
-    const injectiveClone = vi.spyOn(globalThis, "structuredClone");
-    try {
-      expectStoreError(
-        () => prepareProviderTaskSnapshot(registrationFor(), key, injectiveTask),
-        "INVALID_INPUT",
-      );
-      expect(injectiveClone).not.toHaveBeenCalled();
-    } finally {
-      injectiveClone.mockRestore();
-    }
+    contentTransformCalls.readable = 0;
+    contentTransformCalls.injective = 0;
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(registrationFor(), key, injectiveTask),
+      "INVALID_INPUT",
+    );
+    expect(contentTransformCalls).toEqual({ readable: 0, injective: 0 });
   });
 
   it("does not recursively resnapshot the trusted persistence projection seam", () => {
@@ -1162,6 +1198,118 @@ describe("provider task snapshot preparation", () => {
         HOME,
       );
     }
+  });
+
+  it("redacts credential-shaped title text before persistence", () => {
+    const credential = "sk-proj-0123456789abcdefghijklmnop";
+    const title = `Visible ${credential} title`;
+    const expectedTitle = "Visible [REDACTED] title";
+    const preparedSummary = prepareProviderTaskSummary(
+      registrationFor(),
+      key,
+      nativeSummary({ title }),
+    );
+    const preparedSnapshot = prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      nativeTask({ title }),
+    );
+
+    expect(preparedSummary.title).toBe(expectedTitle);
+    expect(preparedSnapshot.title).toBe(expectedTitle);
+    expect(JSON.stringify(preparedSummary)).not.toContain(credential);
+    expect(JSON.stringify(preparedSnapshot)).not.toContain(credential);
+
+    const expandingSuffix = " API_TOKEN=x";
+    const expandingTitle = `${"a".repeat(65_536 - expandingSuffix.length)}${expandingSuffix}`;
+    expectStoreError(
+      () => prepareProviderTaskSummary(
+        registrationFor(),
+        key,
+        nativeSummary({ title: expandingTitle }),
+      ),
+      "INVALID_INPUT",
+      "API_TOKEN=x",
+    );
+  });
+
+  it("rejects credential-shaped semantic and identity scalars before persistence", () => {
+    const credential = "sk-proj-0123456789abcdefghijklmnop";
+    const secretValue = (label: string): string => `${label}:${credential}`;
+    const summaryCases: readonly NativeTaskSummary[] = [
+      nativeSummary({ model: secretValue("model") }),
+      nativeSummary({ status: secretValue("task-status") }),
+      nativeSummary({ revision: revision({ status: secretValue("revision-status") }) }),
+      nativeSummary({
+        revision: revision({ lastTurnStatus: secretValue("revision-last-turn-status") }),
+      }),
+      nativeSummary({
+        revision: revision({ fingerprint: secretValue("revision-fingerprint") }),
+      }),
+    ];
+    for (const summary of summaryCases) {
+      expectStoreError(
+        () => prepareProviderTaskSummary(registrationFor(), key, summary),
+        "INVALID_INPUT",
+        credential,
+      );
+    }
+
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        nativeTask({
+          turns: [{
+            id: "turn-secret-status",
+            status: secretValue("turn-status"),
+            startedAt: null,
+            completedAt: null,
+            events: [],
+          }],
+        }),
+      ),
+      "INVALID_INPUT",
+      credential,
+    );
+  });
+
+  it("preserves benign title, model, task, revision, and turn semantics exactly", () => {
+    const task = nativeTask({
+      title: "Visible provider task",
+      model: "gpt-5-codex",
+      status: "idle",
+      revision: revision({
+        status: "complete",
+        lastTurnStatus: "interrupted",
+        fingerprint: "openai:v1:revision-benign",
+      }),
+      turns: [{
+        id: "turn-benign",
+        status: "interrupted",
+        startedAt: null,
+        completedAt: null,
+        events: [],
+      }],
+    });
+    const preparedSummary = prepareProviderTaskSummary(
+      registrationFor(),
+      key,
+      nativeSummary(task),
+    );
+    const preparedSnapshot = prepareProviderTaskSnapshot(registrationFor(), key, task);
+
+    expect(preparedSummary).toMatchObject({
+      title: "Visible provider task",
+      model: "gpt-5-codex",
+      status: "idle",
+      revision: {
+        status: "complete",
+        lastTurnStatus: "interrupted",
+        fingerprint: "openai:v1:revision-benign",
+      },
+    });
+    expect(preparedSnapshot.turns[0]?.status).toBe("interrupted");
   });
 
   it("never serializes the registered home from accepted prepared scalar output", () => {

@@ -108,3 +108,9 @@
 - Replacing `structuredClone` with a descriptor-only snapshot makes a `structuredClone` spy permanently green and therefore useless. A trusted-path regression must observe the new mechanism directly, such as asserting zero descriptor reads on an ignored nested object.
 - Recursive hostile-graph tests must cover each distinct rejection branch: cycles, symbol keys, exotic prototypes, proxies, accessors, sparse/oversized arrays, and every aggregate budget. One representative oversized graph does not certify unrelated branches.
 - A type-valid test helper must still be in lexical scope. When a RED fixture itself fails, repair and rerun the fixture before treating its output as product evidence.
+
+## 2026-07-14 - Classify persisted text before applying secret policy
+
+- Display text and semantic identity text need different sink policies. Redact legitimate free text before persistence, but reject model/status/fingerprint values unless secret redaction is a fixed point so their exact meaning cannot silently change.
+- Apply raw-home exclusion before redaction, then revalidate the redacted display output against the same Unicode, NUL, and final-size bound; redaction itself can change representation length.
+- To certify a removed allocation boundary, extract the real pure transform into an internal non-barrel module and wrap that import in tests. Pair zero-call overflow assertions with a benign positive control, and avoid mutable observer setters that add reentrancy or denial-of-service surface.

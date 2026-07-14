@@ -258,12 +258,33 @@ function homeFreeText(
   return text;
 }
 
-function optionalHomeFreeText(
+function redactedHomeFreeText(
+  value: unknown,
+  canonicalHome: string,
+  maximum: number,
+  minimum = 1,
+): string {
+  const text = homeFreeText(value, canonicalHome, maximum, minimum);
+  return homeFreeText(redactSecrets(text), canonicalHome, maximum, minimum);
+}
+
+function secretFreeHomeText(
+  value: unknown,
+  canonicalHome: string,
+  maximum: number,
+  minimum = 1,
+): string {
+  const text = homeFreeText(value, canonicalHome, maximum, minimum);
+  if (redactSecrets(text) !== text) throw new TypeError();
+  return text;
+}
+
+function optionalSecretFreeHomeText(
   value: unknown,
   canonicalHome: string,
   maximum: number,
 ): string | null {
-  return value === null ? null : homeFreeText(value, canonicalHome, maximum);
+  return value === null ? null : secretFreeHomeText(value, canonicalHome, maximum);
 }
 
 function homeFreeNativeId(value: unknown, canonicalHome: string, label: string): string {
@@ -297,11 +318,11 @@ function normalizedRevision(value: unknown, canonicalHome: string): Readonly<Nat
   ]);
   return Object.freeze({
     updatedAt: optionalSafeInteger(snapshot.updatedAt),
-    status: homeFreeText(snapshot.status, canonicalHome, MAX_SHORT_TEXT_CHARS),
+    status: secretFreeHomeText(snapshot.status, canonicalHome, MAX_SHORT_TEXT_CHARS),
     lastTurnId: snapshot.lastTurnId === null
       ? null
       : homeFreeNativeId(snapshot.lastTurnId, canonicalHome, "revision last turn id"),
-    lastTurnStatus: optionalHomeFreeText(
+    lastTurnStatus: optionalSecretFreeHomeText(
       snapshot.lastTurnStatus,
       canonicalHome,
       MAX_SHORT_TEXT_CHARS,
@@ -309,7 +330,11 @@ function normalizedRevision(value: unknown, canonicalHome: string): Readonly<Nat
     lastItemId: snapshot.lastItemId === null
       ? null
       : homeFreeNativeId(snapshot.lastItemId, canonicalHome, "revision last item id"),
-    fingerprint: homeFreeText(snapshot.fingerprint, canonicalHome, MAX_FINGERPRINT_CHARS),
+    fingerprint: secretFreeHomeText(
+      snapshot.fingerprint,
+      canonicalHome,
+      MAX_FINGERPRINT_CHARS,
+    ),
   });
 }
 
@@ -357,11 +382,19 @@ function normalizedSummary(
   const revision = normalizedRevision(raw.revision, registration.canonicalHome);
   const prepared = Object.freeze({
     locator: methodLocator,
-    title: homeFreeText(raw.title, registration.canonicalHome, MAX_TITLE_CHARS, 0),
+    title: redactedHomeFreeText(raw.title, registration.canonicalHome, MAX_TITLE_CHARS, 0),
     cwd: cwd.cwd,
     cwdRedacted: cwd.cwdRedacted,
-    model: optionalHomeFreeText(raw.model, registration.canonicalHome, MAX_SHORT_TEXT_CHARS),
-    status: homeFreeText(raw.status, registration.canonicalHome, MAX_SHORT_TEXT_CHARS),
+    model: optionalSecretFreeHomeText(
+      raw.model,
+      registration.canonicalHome,
+      MAX_SHORT_TEXT_CHARS,
+    ),
+    status: secretFreeHomeText(
+      raw.status,
+      registration.canonicalHome,
+      MAX_SHORT_TEXT_CHARS,
+    ),
     createdAt: canonicalTimestamp(raw.createdAt),
     updatedAt: canonicalTimestamp(raw.updatedAt),
     archived,
@@ -932,7 +965,7 @@ export function prepareProviderTaskSnapshot(
       turns.push(Object.freeze({
         nativeTurnKey,
         id,
-        status: homeFreeText(
+        status: secretFreeHomeText(
           rawTurn.status,
           normalized.registration.canonicalHome,
           MAX_SHORT_TEXT_CHARS,

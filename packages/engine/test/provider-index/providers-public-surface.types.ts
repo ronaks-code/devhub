@@ -63,6 +63,10 @@ import { providerTaskSnapshotReceiptKey } from "../../src/providers/index.js";
 import { decodeCachedProviderEvent } from "../../src/providers/index.js";
 // @ts-expect-error internal one-pass cache projection is not public provider API
 import { projectProviderEventCacheBundleFromSnapshot } from "../../src/providers/index.js";
+// @ts-expect-error internal readable content transform is not public provider API
+import { readableContentString } from "../../src/providers/index.js";
+// @ts-expect-error internal injective content transform is not public provider API
+import { injectiveContentString } from "../../src/providers/index.js";
 // @ts-expect-error trusted snapshot hashing is module-private even on the backend module
 import { providerTaskSnapshotFingerprint as privateSnapshotFingerprint } from "../../src/provider-index/store-codec.js";
 // @ts-expect-error trusted receipt derivation is module-private even on the backend module
@@ -87,5 +91,7 @@ void providerTaskSnapshotFingerprint;
 void providerTaskSnapshotReceiptKey;
 void decodeCachedProviderEvent;
 void projectProviderEventCacheBundleFromSnapshot;
+void readableContentString;
+void injectiveContentString;
 void privateSnapshotFingerprint;
 void privateSnapshotReceiptKey;

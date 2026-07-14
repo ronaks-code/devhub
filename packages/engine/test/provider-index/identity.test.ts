@@ -3,6 +3,26 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+const contentTransformCalls = vi.hoisted(() => ({ readable: 0, injective: 0 }));
+
+vi.mock("../../src/provider-index/content-transform.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../src/provider-index/content-transform.js")
+  >();
+  return {
+    ...actual,
+    readableContentString(value: string, providerHome: string): string {
+      contentTransformCalls.readable += 1;
+      return actual.readableContentString(value, providerHome);
+    },
+    injectiveContentString(value: string, providerHome: string): string {
+      contentTransformCalls.injective += 1;
+      return actual.injectiveContentString(value, providerHome);
+    },
+  };
+});
+
 import {
   assertLocatorMatchesKey,
   canonicalProviderIndexJson,
@@ -1044,7 +1064,7 @@ describe("indexed provider event projection", () => {
       .toBe(providerEventReplayKey(base as ProviderEvent, 0));
   });
 
-  it("rejects readable or injective projection expansion before structured cloning", () => {
+  it("rejects readable or injective expansion before either content transform", () => {
     const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
     const readableExpansion = normalizeProviderEvent({
       type: "message",
@@ -1065,18 +1085,21 @@ describe("indexed provider event projection", () => {
       itemId: null,
     });
 
+    contentTransformCalls.readable = 0;
+    contentTransformCalls.injective = 0;
+    expect(projectIndexedProviderEvent(messageDelta("benign transform probe")))
+      .toMatchObject({ type: "message-delta", delta: "benign transform probe" });
+    expect(contentTransformCalls).toEqual({ readable: 1, injective: 0 });
+
     for (const event of [readableExpansion, injectiveExpansion]) {
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      try {
-        expectValueFreeTypeError(
-          () => projectIndexedProviderEvent(event),
-          "provider event could not be safely projected",
-          rootKey.home,
-        );
-        expect(clone).not.toHaveBeenCalled();
-      } finally {
-        clone.mockRestore();
-      }
+      contentTransformCalls.readable = 0;
+      contentTransformCalls.injective = 0;
+      expectValueFreeTypeError(
+        () => projectIndexedProviderEvent(event),
+        "provider event could not be safely projected",
+        rootKey.home,
+      );
+      expect(contentTransformCalls).toEqual({ readable: 0, injective: 0 });
     }
   });
 

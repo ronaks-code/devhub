@@ -21,6 +21,14 @@ import {
   MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
   sqliteTextLengthAtMost,
 } from "./text-boundary.js";
+import {
+  contentEscapeSentinel,
+  EVENT_PROJECTION_ERROR,
+  HOME_REPLACEMENT,
+  injectiveContentString,
+  readableContentString,
+  type ContentTransform,
+} from "./content-transform.js";
 
 const LOCATOR_VERSION = 1 as const;
 const LOCATOR_PREFIX = "pt1";
@@ -52,12 +60,10 @@ const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HIDDEN_PROVIDER_MARKER =
   /(?:hidden|private|internal)[-_ ]?(?:reasoning|thought)|chain[-_ ]?of[-_ ]?thought/iu;
 const LOCATOR_ERROR = "provider task locator is invalid";
-const EVENT_PROJECTION_ERROR = "provider event could not be safely projected";
 const TASK_KEY_ERROR = "native task key is unsafe for provider indexing";
 const HOME_ERROR = "provider home must be canonical exact UTF-8";
 const CACHED_TURN_KEY_ERROR = "cached turn key is invalid";
 const CACHED_EVENT_ITEM_KEY_ERROR = "cached event item key is invalid";
-const HOME_REPLACEMENT = "[PROVIDER_HOME]";
 
 export interface ProviderTaskLocator {
   readonly version: 1;
@@ -449,67 +455,6 @@ function indexedJsonRpcId(
 ): JsonRpcRequestId | null {
   if (value === null || typeof value === "number") return value;
   return indexedNativeId(value, providerHome, label);
-}
-
-function contentEscapeSentinel(providerHome: string): string {
-  const unavailable = new Set<string>();
-  for (let index = 0; index < providerHome.length; index += 1) {
-    unavailable.add(providerHome[index]!);
-  }
-  for (let index = 0; index < HOME_REPLACEMENT.length; index += 1) {
-    unavailable.add(HOME_REPLACEMENT[index]!);
-  }
-  const ranges = [
-    [0xe000, 0xf8ff],
-    [0x00a1, 0xd7ff],
-    [0xf900, 0xfffd],
-  ] as const;
-  for (const [start, end] of ranges) {
-    for (let codeUnit = start; codeUnit <= end; codeUnit += 1) {
-      const candidate = String.fromCharCode(codeUnit);
-      if (!unavailable.has(candidate)) return candidate;
-    }
-  }
-  throw new TypeError(EVENT_PROJECTION_ERROR);
-}
-
-type ContentTransform = (value: string, providerHome: string) => string;
-
-function readableContentString(value: string, providerHome: string): string {
-  const first = value.indexOf(providerHome);
-  if (first < 0) return value;
-  let projected = "";
-  let cursor = 0;
-  let match = first;
-  while (match >= 0) {
-    projected += `${value.slice(cursor, match)}${HOME_REPLACEMENT}`;
-    cursor = match + providerHome.length;
-    match = value.indexOf(providerHome, cursor);
-  }
-  return `${projected}${value.slice(cursor)}`;
-}
-
-function injectiveContentString(value: string, providerHome: string): string {
-  const sentinel = contentEscapeSentinel(providerHome);
-  // Prefix-decodable tokens: home -> marker, literal marker -> S1, literal S -> S0.
-  let projected = "";
-  let index = 0;
-  while (index < value.length) {
-    if (value.startsWith(providerHome, index)) {
-      projected += HOME_REPLACEMENT;
-      index += providerHome.length;
-    } else if (value.startsWith(HOME_REPLACEMENT, index)) {
-      projected += `${sentinel}1`;
-      index += HOME_REPLACEMENT.length;
-    } else if (value[index] === sentinel) {
-      projected += `${sentinel}0`;
-      index += 1;
-    } else {
-      projected += value[index]!;
-      index += 1;
-    }
-  }
-  return projected;
 }
 
 function nullableContentString(

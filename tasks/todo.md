@@ -348,3 +348,18 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Writer and decoder both reject 33 diagnostic shape keys before `Reflect.ownKeys` or numeric element descriptors, producing `INVALID_INPUT` and `CORRUPT_ROW` respectively.
 - Initial independent review returned P3-only for missing cycle/symbol/exotic cases and an obsolete `structuredClone` spy. After exact test repairs, independent rereview returned GO with no P0-P3 findings.
 - Fresh final gate: identity plus codec tests `177/177` in `16.00s` (`17.68s` test execution); engine typecheck and the negative public-surface fixture pass; `git diff --check` passes.
+
+## M5 store slice 1: final persistence-boundary repair
+
+- [x] Add RED regressions for credential-shaped title redaction and fixed-point rejection in every semantic summary/revision/turn scalar.
+- [x] Replace the three obsolete `structuredClone` spies with direct internal readable/injective transform-boundary instrumentation and prove overflow rejects before either transform runs.
+- [x] Implement the narrow writer policy while preserving raw-home rejection, Unicode/bounds, value-free errors, deep freezing, and benign exact values.
+- [x] Run focused identity/codec tests, engine typecheck/public-surface fixture, and diff hygiene.
+- [x] Record exact RED/GREEN evidence and commit a new checkpoint without amending or pushing.
+
+### Final persistence-boundary repair review
+
+- TDD RED was exact: the focused scalar regressions reported `2 failed / 1 passed`; title retained the credential verbatim and the first semantic field returned normally instead of `INVALID_INPUT`.
+- Title is the sole display/free-text scalar in this boundary: it rejects raw home first, redacts credential shapes, then revalidates the final Unicode/NUL/SQLite bound. Model, task/revision/last-turn/turn statuses, and revision fingerprint reject unless already secret-redaction fixed points.
+- The obsolete clone spies are gone. The real readable and injective transforms now live in one pure internal non-barrel module; Vitest wraps those imports, a benign control proves the counters are live, and both overflow classes record zero transform/materialization calls.
+- The focused identity/codec gate passes `180/180`; engine source typecheck and the negative provider-surface fixture pass; `git diff --check` passes. No SQL, migration, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
