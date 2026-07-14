@@ -465,6 +465,29 @@ export const codexApi = {
   stats: () => getMaybe<CodexStats>("/api/codex/stats"),
 };
 
+/**
+ * OpenAI session REST helpers. `createSession` POSTs to /api/openai/sessions
+ * and returns the new session id; `models` fetches the available model list.
+ * Both use the *Maybe helpers so an older server without these routes surfaces
+ * a {@link NotImplementedError} rather than a hard error — the OpenAIPane
+ * catches that and shows a graceful fallback.
+ */
+export interface OpenAISession {
+  /** Server-assigned session id used to open the WebSocket. */
+  id: string;
+}
+
+export interface OpenAIModelList {
+  models: string[];
+}
+
+export const openaiApi = {
+  /** POST /api/openai/sessions → { id } */
+  createSession: () => sendMaybe<OpenAISession>("/api/openai/sessions", "POST"),
+  /** GET /api/openai/models → { models: string[] } */
+  models: () => getMaybe<OpenAIModelList>("/api/openai/models"),
+};
+
 export const api = {
   health: () => get<Health>("/api/health"),
   // Projects. ProjectSummary carries the per-project chat defaults

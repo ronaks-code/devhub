@@ -1151,3 +1151,11 @@ export * from "./types.js";
 export type * from "./driver/types.js";
 export { listCodexSessions, getCodexStats } from "./codex.js";
 export type { CodexSession, CodexStats } from "./codex.js";
+export { OpenAISession } from "./openai-session.js";
+export type {
+  OpenAIModel,
+  OpenAIMessage,
+  OpenAITurn,
+  OpenAISessionOptions,
+  OpenAIEvent,
+} from "./openai-session.js";

@@ -20,12 +20,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 /** The tabs the URL can address. Kept in lockstep with App's `Tab` union. */
 export const ROUTE_TABS = [
+  "home",
   "browse",
   "chat",
   "ops",
   "inbox",
   "dashboard",
   "settings",
+  "openai-chat",
+  "codex-history",
 ] as const;
 
 export type RouteTab = (typeof ROUTE_TABS)[number];

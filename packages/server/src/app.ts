@@ -45,6 +45,8 @@ import { registerPortableRoutes } from "./routes/portable.js";
 import { registerAutotagRoutes } from "./routes/autotag.js";
 import { registerWebhooksRoutes } from "./routes/webhooks.js";
 import { registerCodexRoutes } from "./routes/codex.js";
+import { registerOpenAIRoutes } from "./routes/openai.js";
+import { registerOpenAIWs } from "./openai-ws.js";
 import { fireWebhooks } from "./webhook-fire.js";
 import {
   startNotificationsWatcher,
@@ -103,6 +105,7 @@ export function buildApp(opts: BuildOptions = {}): {
   // isn't applied yet and the handler is wrongly called with (request, reply).
   app.register(async (instance) => {
     registerWs(instance, engine, token);
+    registerOpenAIWs(instance, token);
   });
 
   app.get<{ Querystring: { q: string; limit?: number } }>(
@@ -199,6 +202,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerWebhooksRoutes(app, engine);
 
   registerCodexRoutes(app);
+
+  registerOpenAIRoutes(app);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

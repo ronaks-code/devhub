@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Archive,
+  Bot,
   Command as CommandIcon,
   Cpu,
   DatabaseZap,
@@ -26,11 +27,13 @@ import {
 } from "lucide-react";
 import {
   api,
+  codexApi,
   exportArchiveUrl,
   NotImplementedError,
   subscribeEvents,
   type AppSettings,
 } from "./lib/api";
+import type { CodexSession } from "./lib/types";
 import type {
   ProjectSummary,
   SearchHitWithSeq,
@@ -88,6 +91,10 @@ const ProjectOverview = lazy(() =>
 const HomePane = lazy(() =>
   import("./components/HomePane").then((m) => ({ default: m.HomePane })),
 );
+// OpenAI chat pane — lazy so its chunk doesn't inflate the initial load:
+const OpenAIPane = lazy(() =>
+  import("./components/OpenAIPane").then((m) => ({ default: m.OpenAIPane })),
+);
 // Modal-only views — never in the initial paint, so loaded on first open:
 const SessionCompare = lazy(() =>
   import("./components/SessionCompare").then((m) => ({ default: m.SessionCompare })),
@@ -114,7 +121,7 @@ const CHAT_MODELS = [
   "claude-fable-5",
 ] as const;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings" | "openai-chat" | "codex-history";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -149,7 +156,7 @@ function writeUiState(state: PersistedUiState): void {
   }
 }
 
-const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings"];
+const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history"];
 
 /**
  * A small "Recent" jump-back dropdown in the header: the last sessions the user
@@ -243,6 +250,98 @@ function RecentMenu({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Inline Codex session history list. Fetches from /api/codex/sessions and
+ * renders a simple chronological list: date, cwd, turn count. No heavy deps —
+ * intentionally kept small since all the rich analytics live in HomePane.
+ */
+function CodexHistoryPane() {
+  const [sessions, setSessions] = useState<CodexSession[] | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    codexApi.sessions()
+      .then((s) => setSessions(s ?? []))
+      .catch(() => setError(true));
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+        <p className="text-sm text-zinc-500">Codex history unavailable (server may not support it yet).</p>
+      </div>
+    );
+  }
+
+  if (sessions === null) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+        <Spinner className="h-5 w-5" />
+      </div>
+    );
+  }
+
+  if (sessions.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+        <EmptyState
+          icon={<History className="h-12 w-12" />}
+          title="No Codex sessions yet"
+          hint="Run the Codex CLI in a project to see your session history here."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
+      <div className="border-b border-zinc-800/80 px-6 py-3">
+        <h2 className="text-sm font-semibold text-zinc-200">Codex Session History</h2>
+        <p className="mt-0.5 text-[11px] text-zinc-500">{sessions.length} sessions</p>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {sessions.map((s) => {
+          const date = new Date(s.startedAt);
+          const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+          const timeStr = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+          const dirName = s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? s.cwd : "—";
+          return (
+            <div
+              key={s.id}
+              className="flex items-start gap-3 border-b border-zinc-800/50 px-6 py-3 hover:bg-zinc-900/40"
+            >
+              <Bot className="mt-0.5 h-4 w-4 shrink-0 text-zinc-600" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-[13px] font-medium text-zinc-200" title={s.cwd ?? undefined}>
+                    {dirName}
+                  </span>
+                  {s.model ? (
+                    <span className="shrink-0 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                      {s.model}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-0.5 flex items-center gap-2 text-[11px] text-zinc-500">
+                  <span>{dateStr} · {timeStr}</span>
+                  <span>·</span>
+                  <span>{s.turnCount} {s.turnCount === 1 ? "turn" : "turns"}</span>
+                  {s.cwd ? (
+                    <>
+                      <span>·</span>
+                      <span className="truncate" title={s.cwd}>{s.cwd}</span>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1288,6 +1387,98 @@ export default function App() {
           focus here (it's not natively focusable) without adding it to the Tab
           order. `outline-none` so that programmatic focus doesn't draw a ring. */}
       <div id="main-content" role="main" tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
+        {/* ── Sidebar nav ─────────────────────────────────────────────────── */}
+        <nav
+          aria-label="Primary navigation"
+          className="flex w-44 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950 py-2"
+        >
+          {/* ── CLAUDE section ── */}
+          <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+            Claude
+          </div>
+          {(
+            [
+              { id: "home" as Tab, icon: <Home className="h-3.5 w-3.5" />, label: "Home" },
+              { id: "browse" as Tab, icon: <Folder className="h-3.5 w-3.5" />, label: "Browse" },
+              { id: "chat" as Tab, icon: <Sparkles className="h-3.5 w-3.5" />, label: "New Chat" },
+              { id: "dashboard" as Tab, icon: <LayoutDashboard className="h-3.5 w-3.5" />, label: "Dashboard" },
+            ] as const
+          ).map(({ id, icon, label }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => { setChatSeed(null); setTab(id); }}
+              className={cn(
+                "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+                tab === id
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/20"
+                  : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300",
+              )}
+            >
+              {icon}
+              {label}
+            </button>
+          ))}
+
+          {/* ── OPENAI section ── */}
+          <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+            OpenAI
+          </div>
+          {(
+            [
+              { id: "openai-chat" as Tab, icon: <Bot className="h-3.5 w-3.5" />, label: "New Chat" },
+              { id: "codex-history" as Tab, icon: <History className="h-3.5 w-3.5" />, label: "History" },
+            ] as const
+          ).map(({ id, icon, label }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => { setChatSeed(null); setTab(id); }}
+              className={cn(
+                "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+                tab === id
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/20"
+                  : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300",
+              )}
+            >
+              {icon}
+              {label}
+            </button>
+          ))}
+
+          {/* ── GENERAL section ── */}
+          <div className="px-3 pb-1 pt-4 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+            General
+          </div>
+          {(
+            [
+              { id: "ops" as Tab, icon: <Radio className="h-3.5 w-3.5" />, label: "Live Ops" },
+              { id: "inbox" as Tab, icon: <Inbox className="h-3.5 w-3.5" />, label: "Inbox" },
+              { id: "settings" as Tab, icon: <Settings className="h-3.5 w-3.5" />, label: "Settings" },
+            ] as const
+          ).map(({ id, icon, label }) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => { setChatSeed(null); setTab(id); }}
+              className={cn(
+                "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+                tab === id
+                  ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/20"
+                  : "text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300",
+              )}
+            >
+              {icon}
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ── Main content area ────────────────────────────────────────────── */}
+        <div className="flex min-w-0 flex-1 flex-col">
         {tab === "home" ? (
           <Suspense fallback={<PaneFallback />}>
             <HomePane onNewChat={startNewChat} />
@@ -1437,8 +1628,14 @@ export default function App() {
               )
             }
           />
+        ) : tab === "openai-chat" ? (
+          <Suspense fallback={<PaneFallback />}>
+            <OpenAIPane />
+          </Suspense>
+        ) : tab === "codex-history" ? (
+          <CodexHistoryPane />
         ) : (
-          <>
+          <div className="flex min-h-0 flex-1">
             <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
             {project ? (
               <ChatPane
@@ -1472,8 +1669,9 @@ export default function App() {
                 />
               </div>
             )}
-          </>
+          </div>
         )}
+        </div>{/* end main content area */}
       </div>
       </ErrorBoundary>
 
