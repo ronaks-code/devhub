@@ -468,6 +468,91 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       .toBe(false);
   });
 
+  it("refuses a require when another connection deletes the home during the clock", () => {
+    const root = tempDirectory();
+    const databaseFile = path.join(root, "require-home-race.db");
+    const home = tempDirectory();
+    const db = openDatabase(databaseFile);
+    const deleter = reopenDatabase(databaseFile);
+    let registration: ReturnType<ProviderTaskIndexStore["registerHome"]>;
+    let clockCalls = 0;
+    const store = new ProviderTaskIndexStore(db, {
+      now: () => {
+        clockCalls += 1;
+        const deleted = deleter.prepare(`DELETE FROM provider_homes
+          WHERE provider = ? AND home_fingerprint = ?`)
+          .run(registration.provider, registration.homeFingerprint);
+        expect(Number(deleted.changes)).toBe(1);
+        return 600;
+      },
+    });
+    registration = register(store, "openai", home);
+    const target = locator("openai", home, "task-require-home-race");
+
+    const error = expectStoreError(
+      () => store.requireReconciliation(target, {
+        reviewedFingerprint: null,
+        nativeFingerprint: NATIVE_FINGERPRINT,
+        writerEpoch: 1,
+        reason: "NATIVE_TASK_MISSING",
+      }),
+      "UNKNOWN_HOME",
+    );
+
+    expect(clockCalls).toBe(1);
+    expect(error.message).toBe("provider index home is unknown");
+    expect(error.message).not.toContain(home);
+    expect(rawReconciliationRow(db, target)).toBeUndefined();
+  });
+
+  it("refuses an acknowledgement when another connection deletes the home during the clock", () => {
+    const root = tempDirectory();
+    const databaseFile = path.join(root, "ack-home-race.db");
+    const home = tempDirectory();
+    const db = openDatabase(databaseFile);
+    const deleter = reopenDatabase(databaseFile);
+    let registration: ReturnType<ProviderTaskIndexStore["registerHome"]>;
+    let deleteOnClock = false;
+    let clockCalls = 0;
+    const store = new ProviderTaskIndexStore(db, {
+      now: () => {
+        clockCalls += 1;
+        if (deleteOnClock) {
+          const deleted = deleter.prepare(`DELETE FROM provider_homes
+            WHERE provider = ? AND home_fingerprint = ?`)
+            .run(registration.provider, registration.homeFingerprint);
+          expect(Number(deleted.changes)).toBe(1);
+        }
+        return deleteOnClock ? 800 : 700;
+      },
+    });
+    registration = register(store, "openai", home);
+    const target = locator("openai", home, "task-ack-home-race");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: REVIEWED_FINGERPRINT,
+      writerEpoch: 2,
+      reason: "MUTATION_OUTCOME_UNCERTAIN",
+    });
+    const before = rawReconciliationRow(db, target);
+    deleteOnClock = true;
+
+    const error = expectStoreError(
+      () => store.acknowledgeReconciliation(
+        target,
+        1,
+        REVIEWED_FINGERPRINT,
+        REVIEWED_FINGERPRINT,
+      ),
+      "UNKNOWN_HOME",
+    );
+
+    expect(clockCalls).toBe(2);
+    expect(error.message).toBe("provider index home is unknown");
+    expect(error.message).not.toContain(home);
+    expect(rawReconciliationRow(db, target)).toEqual(before);
+  });
+
   it("persists latches across restart and isolates provider, home, and task scopes", () => {
     const root = tempDirectory();
     const databaseFile = path.join(root, "provider-index.db");

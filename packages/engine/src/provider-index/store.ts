@@ -356,6 +356,24 @@ function knownLocator(
   return Object.freeze({ locator, canonicalHome });
 }
 
+function recheckRegisteredHomeInsideOwnedTransaction(
+  db: SqliteDatabase,
+  target: KnownLocator,
+): void {
+  const row = queryRegisteredHomeByFingerprint(
+    db,
+    target.locator.provider,
+    target.locator.homeFingerprint,
+  );
+  if (row === null) fail("UNKNOWN_HOME");
+  const decoded = decodeRegisteredHomeRow(row);
+  if (decoded.provider !== target.locator.provider ||
+    decoded.homeFingerprint !== target.locator.homeFingerprint ||
+    decoded.canonicalHome !== target.canonicalHome) {
+    fail("CORRUPT_ROW");
+  }
+}
+
 function queryReconciliationRow(
   db: SqliteDatabase,
   locator: ProviderTaskLocator,
@@ -660,6 +678,7 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
       const input = normalizeReconciliationInput(inputValue, target.canonicalHome);
       const now = sampleNow(this.config);
       withOwnedImmediateTransaction(this.db, () => {
+        recheckRegisteredHomeInsideOwnedTransaction(this.db, target);
         writeRequiredReconciliationInsideOwnedTransaction(this.db, target, input, now);
       });
     });
@@ -684,14 +703,17 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
         target.canonicalHome,
       );
       const now = sampleNow(this.config);
-      return withOwnedImmediateTransaction(this.db, () => acknowledgeInsideOwnedTransaction(
-        this.db,
-        target,
-        expectedLatchRevision,
-        reviewedFingerprint,
-        observedNativeFingerprint,
-        now,
-      ));
+      return withOwnedImmediateTransaction(this.db, () => {
+        recheckRegisteredHomeInsideOwnedTransaction(this.db, target);
+        return acknowledgeInsideOwnedTransaction(
+          this.db,
+          target,
+          expectedLatchRevision,
+          reviewedFingerprint,
+          observedNativeFingerprint,
+          now,
+        );
+      });
     });
   }
 

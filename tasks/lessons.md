@@ -118,5 +118,6 @@
 ## 2026-07-14 - Keep filesystem canonicalization outside owned database transactions
 
 - Snapshot and fully canonicalize caller paths before `BEGIN`; transaction-time conflict checks should decode stored paths only enough to compare their exact bounded text with that already-canonical snapshot.
+- A pre-BEGIN callback can invalidate an earlier authority read. When dependent state intentionally has no foreign key, recheck the exact bounded authority tuple after acquiring the writer transaction and before the first mutation.
 - Do not re-run `realpath` merely to decode an idempotent or conflicting row while holding a SQLite writer lock. Exact equality inherits the prevalidated input; inequality is a conflict, not an invitation to perform filesystem work.
 - Prove callback ordering with a delegated-real instrumented boundary that records transaction state. This catches accidental filesystem, clock, or token callbacks under the writer lock without replacing the real SQLite behavior.
