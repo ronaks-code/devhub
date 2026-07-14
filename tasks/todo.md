@@ -222,3 +222,23 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The execution plan now defines generation-keyed staged cache promotion, tagged non-null replay identity, additive metadata and verified-only legacy mapping, durable provider reconciliation CAS, Codex lease parity, a full path-free locator API/SSE boundary, metadata-only portable v2 with quarantined v1 compatibility, identifier aliases, induced-failure drills, and an exact enabled-tip full gate.
 - Independent architecture/specification review converged to GO with no P1-P3 findings after three repair rounds. No product code, provider call, Python process, heavy job, or user-owned dirty path was used during planning.
 - Task 1 identity slice: exact locator/home fingerprinting, tagged non-null turn/item keys, readable path-free event projection, and private injective replay hashing pass root-owned `87/87` focused tests plus engine typecheck. Independent final specification and quality/security reviews are both GO with no P1-P3 findings after closing UTF-8, hostile-object, timestamp, diagnostic, raw-home, sparse-array, injectivity, and exhaustiveness defects.
+
+## M5 provider-task CWD redaction invariant (complete)
+
+- [x] Add a focused failing regression for rejecting non-null `cwd` when `cwd_redacted = 1`.
+- [x] Prove the three allowed states: `(NULL, 1)`, `(NULL, 0)`, and `(non-null, 0)`.
+- [x] Add the minimal table-level `provider_task_cache` CHECK without changing schema version 14.
+- [x] Run the exact focused migration suite, engine typecheck, and diff hygiene checks.
+- [x] Add the final claimed-v14 missing-index tamper regression from adversarial review.
+- [x] Record the review evidence and commit the follow-up without amending `8b007f1`.
+
+### Review
+
+- TDD red: the exact migration suite failed only the new forbidden `(non-null cwd, cwd_redacted = 1)` case; 30 prior tests passed.
+- Minimal fix: `CHECK (cwd_redacted = 0 OR cwd IS NULL)` on `provider_task_cache`; no schema-version bump or unrelated DDL change.
+- Final review regression proves a claimed-v14 database missing `idx_provider_event_cache_task_ordinal` returns only the constant schema-validation error while preserving its version, sentinel row, and missing-index state.
+- Fresh final gates: migration tests `32/32`, engine typecheck, and `git diff --check` pass.
+
+### Store-boundary follow-up
+
+- [ ] Reject caller-supplied numeric strings such as `"0"` and `"1"` before SQL binding; SQLite affinity coercion is not an API validation boundary.
