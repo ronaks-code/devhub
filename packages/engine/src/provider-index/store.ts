@@ -501,7 +501,7 @@ function writeRequiredReconciliationInsideOwnedTransaction(
   } catch {
     return fail("DATABASE_UNAVAILABLE");
   }
-  if (row === undefined) fail("CAPACITY");
+  if (row === undefined) fail("CORRUPT_ROW");
   const committedRow = queryReconciliationRow(db, target.locator);
   if (committedRow === null) fail("CORRUPT_ROW");
   const written = decodeReconciliationRow(committedRow, target);
@@ -560,7 +560,7 @@ function acknowledgeInsideOwnedTransaction(
   } catch {
     return fail("DATABASE_UNAVAILABLE");
   }
-  if (row === undefined) return fail("RECONCILIATION_CAS_MISMATCH");
+  if (row === undefined) return fail("CORRUPT_ROW");
   const committedRow = queryReconciliationRow(db, target.locator);
   if (committedRow === null) fail("CORRUPT_ROW");
   const acknowledged = decodeReconciliationRow(committedRow, target);

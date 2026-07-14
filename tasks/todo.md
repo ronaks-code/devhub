@@ -406,12 +406,15 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 
 ### Checkpoint C0: current-contract reconciliation and public store types
 
+- [x] Preserve the historical v14 schema and append v15 `generation_epoch` with exact layout validation and active/staging backfill.
+- [x] Prove fresh/v13/v14-to-v15 convergence, idempotency, rollback, data preservation, claimed-v15 corruption refusal, and future migration appends.
 - [x] Replace the stale known-home reconciliation assumption with path-free orphan metadata identity semantics while retaining registered-home raw-path validation when that optional authority exists.
 - [x] Make every `requireReconciliation` return its exact committed frozen state/CAS token and make acknowledgement accept/return an exact nullable authoritative pair.
 - [x] Permit exact-revision `C/C` or `NULL/NULL` acknowledgement to supersede an older latch pair, while preserving exact prior-row SQL fencing and newer-relatch refusal.
 - [x] Reread and verify reconciliation authority after both require and acknowledgement writes inside the owned transaction.
 - [x] Add the frozen page/scope/cache-clear/metadata/fork/legacy public types and keep raw-home, concrete-store, prepared, and internal carriers outside the provider barrel.
 - [x] Freeze staged/active summary demotion and replay-conflict latch payload semantics without implementing the later lifecycle methods.
+- [x] Classify suppressed reconciliation writes as `CORRUPT_ROW` after capacity/CAS preconditions were already proven.
 - [x] Run the fresh focused store/codec/wiring regression, typecheck/public-surface, and diff-hygiene gate.
 - [ ] Obtain independent specification then quality/security GO on the exact checkpoint.
 
@@ -420,4 +423,6 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - TDD RED was exact: focused store tests reported `6 failed / 24 passed`, covering orphan get/require/ack, returned require state, exact-revision authoritative fingerprint supersession, and nullable deletion acknowledgement.
 - The negative/positive public-surface compiler RED named exactly ten absent frozen exports before implementation.
 - A separate persisted-authority RED removed the new reread and made both real AFTER-trigger require/ack regressions fail (`2 failed / 30 skipped`); restoring the reread makes both mutations fail closed and roll back trigger changes.
-- Fresh exact-tip gate: store `32/32` plus codec `76/76` plus wiring `5/5` = `113/113`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes. Independent review remains pending.
+- The additive v15 migration gate passes `39/39`, including active/live backfill, injected rollback, byte-preservation, claimed-v15 tamper refusal, reset/idempotency, and future-append coverage; wiring now observes latest version 15.
+- BEFORE `RAISE(IGNORE)` regressions were exact RED (`2 failed / 32 passed`): require misreported `CAPACITY` and acknowledgement misreported `RECONCILIATION_CAS_MISMATCH`; both now return `CORRUPT_ROW` with no mutation.
+- Fresh combined exact-tip gate: store `34/34` plus migration `39/39` plus codec `76/76` plus wiring `5/5` = `154/154`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes. Independent rereview remains pending.

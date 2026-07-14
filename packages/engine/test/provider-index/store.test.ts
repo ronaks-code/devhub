@@ -551,6 +551,62 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     expect(rawReconciliationRow(db, target)).toEqual(before);
   });
 
+  it("classifies a suppressed require write as persisted-row corruption", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(180) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-require-ignore-trigger");
+    db.exec(`CREATE TRIGGER ignore_required_reconciliation
+      BEFORE INSERT ON provider_reconciliation_state
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END`);
+
+    expectStoreError(
+      () => store.requireReconciliation(target, {
+        reviewedFingerprint: REVIEWED_FINGERPRINT,
+        nativeFingerprint: NATIVE_FINGERPRINT,
+        writerEpoch: 6,
+        reason: "NATIVE_REVISION_MISMATCH",
+      }),
+      "CORRUPT_ROW",
+    );
+    expect(rawReconciliationRow(db, target)).toBeUndefined();
+  });
+
+  it("classifies a suppressed acknowledgement as persisted-row corruption", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(190, 200) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-ack-ignore-trigger");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 7,
+      reason: "NATIVE_REVISION_MISMATCH",
+    });
+    const before = rawReconciliationRow(db, target);
+    db.exec(`CREATE TRIGGER ignore_acknowledged_reconciliation
+      BEFORE UPDATE ON provider_reconciliation_state
+      WHEN OLD.required = 1 AND NEW.required = 0
+      BEGIN
+        SELECT RAISE(IGNORE);
+      END`);
+
+    expectStoreError(
+      () => store.acknowledgeReconciliation(
+        target,
+        1,
+        AUTHORITATIVE_FINGERPRINT,
+        AUTHORITATIVE_FINGERPRINT,
+      ),
+      "CORRUPT_ROW",
+    );
+    expect(rawReconciliationRow(db, target)).toEqual(before);
+  });
+
   it("snapshots every reconciliation input before one pre-BEGIN clock sample", () => {
     const home = tempDirectory();
     const db = openDatabase();
