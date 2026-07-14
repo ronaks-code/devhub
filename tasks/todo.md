@@ -392,7 +392,14 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 
 ### Checkpoint B: TranscriptIndex wiring
 
-- [ ] Add RED integration coverage proving `TranscriptIndex.providerIndex` is constructed after migrations on the same connection, persists across reopen, and does not independently own/close that connection.
-- [ ] Wire and root-export the concrete store for backend composition while compiler/runtime fixtures keep it, `resolveHome`, and raw-home carriers absent from `@devhub/engine/providers`.
-- [ ] Run focused store+migration/index integration tests, engine typecheck/public-surface fixture, and diff hygiene; commit the green checkpoint.
+- [x] Add RED integration coverage proving `TranscriptIndex.providerIndex` is constructed after migrations on the same connection, persists across reopen, and does not independently own/close that connection.
+- [x] Wire and root-export the concrete store for backend composition while compiler/runtime fixtures keep it, `resolveHome`, and raw-home carriers absent from `@devhub/engine/providers`.
+- [x] Run focused store+migration/index integration tests, engine typecheck/public-surface fixture, and diff hygiene; commit the green checkpoint.
 - [ ] Obtain independent specification GO, then independent code-quality/security GO before promoting Slice 2.
+
+#### Checkpoint B review
+
+- TDD RED was exact: the dedicated wiring suite reported `5 failed / 5` because `TranscriptIndex.providerIndex`, its constructor observation, persistence calls, shared-transaction proof, and root export were absent.
+- `TranscriptIndex` now constructs one `ProviderTaskIndexStore` immediately after `runMigrations(this.db)` and passes that exact owned `DatabaseSync` handle before initializing dependent stores or statements. The store has no close API; `TranscriptIndex.close()` remains the sole connection close path.
+- Focused integration proves the constructor observes user version 14 plus `provider_homes`, fresh register/resolve, durable authority and reconciliation across reopen, caller-transaction refusal on the shared handle, post-owner-close `DATABASE_UNAVAILABLE`, unchanged legacy settings/read behavior, and root-versus-provider package boundaries.
+- Fresh focused gate: wiring `5/5` plus store `30/30` plus migration `32/32` = `67/67`; engine typecheck and its negative public-surface compiler fixture pass. `git diff --check` passes. No store semantics, schema/migration, cache/stage/coordinator/route/adapter/UI, provider process, browser, full suite, heavy queue, Python runtime, or push was used.

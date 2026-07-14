@@ -928,6 +928,7 @@ export class Engine {
 }
 
 export { TranscriptIndex } from "./index-db.js";
+export { ProviderTaskIndexStore } from "./provider-index/store.js";
 export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";
 export { parseSearchQuery, mergeFacets } from "./query-parser.js";
