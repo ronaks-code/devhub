@@ -8,11 +8,16 @@ import type {
   IndexedProviderTaskSummary,
   IndexedProviderTurn,
   ProviderHomeScope,
+  ProviderHomeRegistration,
   ProviderIndexCompletion,
   ProviderIndexPromotion,
   ProviderIndexStage,
   ProviderIndexStoreErrorCode,
   ProviderIndexStoreOptions,
+  ProviderReconciliationReason,
+  ProviderReconciliationState,
+  ProviderReconciliationStore,
+  ReconciliationLatchInput,
 } from "../../src/providers/index.js";
 
 void PROVIDER_INDEX_STORE_DEFAULTS;
@@ -23,16 +28,23 @@ type PublicProviderIndexTypes =
   | IndexedProviderTaskSummary
   | IndexedProviderTurn
   | ProviderHomeScope
+  | ProviderHomeRegistration
   | ProviderIndexCompletion
   | ProviderIndexPromotion
   | ProviderIndexStage
   | ProviderIndexStoreErrorCode
-  | ProviderIndexStoreOptions;
+  | ProviderIndexStoreOptions
+  | ProviderReconciliationReason
+  | ProviderReconciliationState
+  | ProviderReconciliationStore
+  | ReconciliationLatchInput;
 declare const publicProviderIndexType: PublicProviderIndexTypes;
 void publicProviderIndexType;
 
 // @ts-expect-error backend raw-home carrier must not cross the providers package boundary
 import type { ProviderIndexRegisteredHome } from "../../src/providers/index.js";
+// @ts-expect-error concrete backend store must not cross the providers package boundary
+import { ProviderTaskIndexStore } from "../../src/providers/index.js";
 // @ts-expect-error backend normalized callback/config state is not public provider API
 import type { NormalizedProviderIndexStoreConfig } from "../../src/providers/index.js";
 // @ts-expect-error backend SQL row shape is not public provider API
@@ -95,3 +107,8 @@ void readableContentString;
 void injectiveContentString;
 void privateSnapshotFingerprint;
 void privateSnapshotReceiptKey;
+void ProviderTaskIndexStore;
+
+declare const reconciliationStore: ProviderReconciliationStore;
+// @ts-expect-error canonical home resolution is backend-only
+reconciliationStore.resolveHome("openai", "a".repeat(64));

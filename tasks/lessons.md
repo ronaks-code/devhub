@@ -114,3 +114,9 @@
 - Display text and semantic identity text need different sink policies. Redact legitimate free text before persistence, but reject model/status/fingerprint values unless secret redaction is a fixed point so their exact meaning cannot silently change.
 - Apply raw-home exclusion before redaction, then revalidate the redacted display output against the same Unicode, NUL, and final-size bound; redaction itself can change representation length.
 - To certify a removed allocation boundary, extract the real pure transform into an internal non-barrel module and wrap that import in tests. Pair zero-call overflow assertions with a benign positive control, and avoid mutable observer setters that add reentrancy or denial-of-service surface.
+
+## 2026-07-14 - Keep filesystem canonicalization outside owned database transactions
+
+- Snapshot and fully canonicalize caller paths before `BEGIN`; transaction-time conflict checks should decode stored paths only enough to compare their exact bounded text with that already-canonical snapshot.
+- Do not re-run `realpath` merely to decode an idempotent or conflicting row while holding a SQLite writer lock. Exact equality inherits the prevalidated input; inequality is a conflict, not an invitation to perform filesystem work.
+- Prove callback ordering with a delegated-real instrumented boundary that records transaction state. This catches accidental filesystem, clock, or token callbacks under the writer lock without replacing the real SQLite behavior.

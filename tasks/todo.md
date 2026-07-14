@@ -363,3 +363,30 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Title is the sole display/free-text scalar in this boundary: it rejects raw home first, redacts credential shapes, then revalidates the final Unicode/NUL/SQLite bound. Model, task/revision/last-turn/turn statuses, and revision fingerprint reject unless already secret-redaction fixed points.
 - The obsolete clone spies are gone. The real readable and injective transforms now live in one pure internal non-barrel module; Vitest wraps those imports, a benign control proves the counters are live, and both overflow classes record zero transform/materialization calls.
 - The focused identity/codec gate passes `180/180`; engine source typecheck and the negative provider-surface fixture pass; `git diff --check` passes. No SQL, migration, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
+
+## M5 store slice 2: home registry and durable reconciliation
+
+### Checkpoint A: serial store foundation
+
+- [x] Add RED `store.test.ts` coverage for exact canonical home registration, idempotency with original timestamp preservation, provider isolation, conflict directions, hostile descriptor/proxy inputs, raw-home-free frozen results, backend-only resolution, and unknown homes.
+- [x] Add RED reconciliation coverage for missing state, monotonic relatch, overflow rollback, restart/provider/home/task isolation, exact CAS acknowledgement, stale/newer relatch refusal, corrupt rows, caller-owned transactions, reentrant clocks, and unavailable databases.
+- [x] Implement `ProviderTaskIndexStore` over the existing v14 tables with one owned `BEGIN IMMEDIATE` helper, one-sample callback discipline, value-free errors, and a private in-transaction latch primitive reusable by replay-conflict handling.
+- [x] Extend only the path-free reconciliation types required by this checkpoint; keep canonical homes and the concrete store out of the provider/browser barrel.
+- [x] Run focused store+migration tests with at most two workers, engine typecheck/public-surface fixture, and diff hygiene; commit the green checkpoint.
+- [ ] Obtain independent specification GO, then independent code-quality/security GO on the exact checkpoint before wiring it into `TranscriptIndex`.
+
+#### Checkpoint A review
+
+- Initial TDD RED was exact: focused Vitest failed one suite with zero collected tests because the new backend store module did not exist. The public-surface compiler gate independently failed on the five absent frozen public types. No production store code existed for either RED.
+- The serial store registers only exact own-data canonical homes, preserves the first timestamp idempotently, resolves raw homes only through its backend method, and returns frozen path-free registration/reconciliation carriers. Both conflict directions, provider isolation, hostile objects, unknown homes, tampered rows, and raw-home-containing task IDs fail closed with value-free errors.
+- Reconciliation uses one guarded top-level `BEGIN IMMEDIATE` helper. Inputs are snapshotted and the clock is sampled exactly once before BEGIN; a real delegated canonicalizer records `[false, false, false]` for insert/idempotent/conflict registration, proving no filesystem canonicalization occurs in an owned transaction. The private in-transaction UPSERT increments every latch, including identical relatches, and overflow rolls back without change.
+- Exact acknowledgement is a durable CAS over required state, latch revision, reviewed fingerprint, and freshly observed native fingerprint. Missing, stale, mismatched, already-cleared, and newer same-fingerprint latches retain their prior row and return only `RECONCILIATION_CAS_MISMATCH`.
+- A self-review RED exposed one unavailable reconciliation-read path leaking the private internal error (`1 failed / 19 passed`); the read now maps it to the stable public database error and the regression stays covered. A separate self-review removed filesystem canonicalization from transaction-time home-row decoding before the final gates.
+- Fresh focused gate: store `22/22` plus migration `32/32` = `54/54`; engine typecheck and its negative public-surface compiler fixture pass. `git diff --check` passes. No migration/schema, cache/stage/meta/fork/legacy/coordinator/route/adapter/`TranscriptIndex`, provider process, browser, full suite, heavy queue, Python runtime, or push was used.
+
+### Checkpoint B: TranscriptIndex wiring
+
+- [ ] Add RED integration coverage proving `TranscriptIndex.providerIndex` is constructed after migrations on the same connection, persists across reopen, and does not independently own/close that connection.
+- [ ] Wire and root-export the concrete store for backend composition while compiler/runtime fixtures keep it, `resolveHome`, and raw-home carriers absent from `@devhub/engine/providers`.
+- [ ] Run focused store+migration/index integration tests, engine typecheck/public-surface fixture, and diff hygiene; commit the green checkpoint.
+- [ ] Obtain independent specification GO, then independent code-quality/security GO before promoting Slice 2.
