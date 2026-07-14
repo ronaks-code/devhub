@@ -30,6 +30,7 @@ import {
   type IndexedProviderRequestIdentity,
   type ProviderTaskLocator,
 } from "./identity.js";
+import { hashPersistedProviderHome } from "./home-fingerprint.js";
 import {
   hasCanonicalUnicode,
   MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
@@ -306,6 +307,30 @@ function persistedCwd(
   return Object.freeze({ cwd: contained ? null : cwd, cwdRedacted: contained });
 }
 
+function decodedPersistedCwd(
+  value: unknown,
+  redactedValue: unknown,
+  canonicalHome: string,
+): Readonly<{ cwd: string | null; cwdRedacted: boolean }> {
+  if (redactedValue !== 0 && redactedValue !== 1) throw new TypeError();
+  const cwdRedacted = redactedValue === 1;
+  if (value === null) return Object.freeze({ cwd: null, cwdRedacted });
+  if (cwdRedacted) throw new TypeError();
+  const cwd = boundedText(value, MAX_PATH_CHARS);
+  if (!path.isAbsolute(cwd) || path.normalize(cwd) !== cwd) throw new TypeError();
+  const relative = path.relative(canonicalHome, cwd);
+  if (relative === "" || (
+    relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+  )) throw new TypeError();
+  return Object.freeze({ cwd, cwdRedacted: false });
+}
+
+function decodedPersistedArchive(value: unknown): boolean | null {
+  if (value === null) return null;
+  if (value !== 0 && value !== 1) throw new TypeError();
+  return value === 1;
+}
+
 function normalizedRevision(value: unknown, canonicalHome: string): Readonly<NativeRevision> | null {
   if (value === undefined) return null;
   const snapshot = exactOwnData(value, [
@@ -335,6 +360,55 @@ function normalizedRevision(value: unknown, canonicalHome: string): Readonly<Nat
       canonicalHome,
       MAX_FINGERPRINT_CHARS,
     ),
+  });
+}
+
+export function decodePersistedProviderTaskSummaryForStore(
+  row: Readonly<Record<string, unknown>>,
+  registration: ProviderIndexRegisteredHome,
+  locator: ProviderTaskLocator,
+): Readonly<PreparedProviderTaskSummary> {
+  const canonicalHome = boundedText(registration.canonicalHome, MAX_PATH_CHARS);
+  const provider = providerId(registration.provider);
+  const fingerprint = boundedText(registration.homeFingerprint, 64);
+  if (!LOWER_HEX_64.test(fingerprint) ||
+    hashPersistedProviderHome(provider, canonicalHome) !== fingerprint ||
+    locator.provider !== provider || locator.homeFingerprint !== fingerprint ||
+    row.provider !== provider || row.home_fingerprint !== fingerprint ||
+    row.native_task_id !== locator.nativeTaskId) throw new TypeError();
+  const revisionValues = [
+    row.revision_updated_at,
+    row.revision_status,
+    row.revision_last_turn_id,
+    row.revision_last_turn_status,
+    row.revision_last_item_id,
+    row.revision_fingerprint,
+  ];
+  const revision = revisionValues.every((value) => value === null)
+    ? null
+    : normalizedRevision({
+      updatedAt: row.revision_updated_at,
+      status: row.revision_status,
+      lastTurnId: row.revision_last_turn_id,
+      lastTurnStatus: row.revision_last_turn_status,
+      lastItemId: row.revision_last_item_id,
+      fingerprint: row.revision_fingerprint,
+    }, canonicalHome);
+  const title = redactedHomeFreeText(row.title, canonicalHome, MAX_TITLE_CHARS, 0);
+  if (title !== row.title) throw new TypeError();
+  const cwd = decodedPersistedCwd(row.cwd, row.cwd_redacted, canonicalHome);
+  return Object.freeze({
+    locator,
+    title,
+    cwd: cwd.cwd,
+    cwdRedacted: cwd.cwdRedacted,
+    model: optionalSecretFreeHomeText(row.model, canonicalHome, MAX_SHORT_TEXT_CHARS),
+    status: secretFreeHomeText(row.status, canonicalHome, MAX_SHORT_TEXT_CHARS),
+    createdAt: canonicalTimestamp(row.created_at),
+    updatedAt: canonicalTimestamp(row.updated_at),
+    archived: decodedPersistedArchive(row.archived),
+    source: source(row.source),
+    revision,
   });
 }
 
@@ -1033,6 +1107,21 @@ export function prepareProviderTaskSnapshot(
   const result = prepareProviderTaskSnapshotResult(registration, methodKey, task, config);
   if (result.status === "failed") throw new ProviderIndexStoreError(result.code);
   return result.value;
+}
+
+export function verifyPreparedProviderTaskSnapshotForStore(
+  summary: PreparedProviderTaskSummary,
+  turns: readonly PreparedProviderTurn[],
+  receiptKey: string,
+  snapshotFingerprint: string,
+): boolean {
+  try {
+    const expectedFingerprint = providerTaskSnapshotFingerprintUnsafe(summary, turns);
+    return snapshotFingerprint === expectedFingerprint &&
+      receiptKey === providerTaskSnapshotReceiptKeyUnsafe(summary, expectedFingerprint);
+  } catch {
+    return false;
+  }
 }
 
 function indexedEventText(

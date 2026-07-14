@@ -16,6 +16,7 @@ import type {
   ProviderId,
   ProviderRequestIdentity,
 } from "../providers/types.js";
+import { hashPersistedProviderHome } from "./home-fingerprint.js";
 import {
   hasCanonicalUnicode,
   MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
@@ -247,7 +248,7 @@ export function homeFingerprint(provider: ProviderId, canonicalHome: string): st
       home: canonicalHome,
       nativeTaskId: "home-fingerprint-validation",
     });
-    return sha256(`devhub-home:v1\u0000${provider}\u0000${canonicalHome}`);
+    return hashPersistedProviderHome(provider, canonicalHome);
   } catch {
     throw new TypeError(HOME_ERROR);
   }

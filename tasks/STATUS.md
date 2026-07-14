@@ -37,13 +37,13 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
-- `campaign/auto-improve` — tested shared branch; board bootstrap descends from tested handoff tip `77ba227`, and the current goal coordinator owns promotion/integration.
-- detached `m5` at `e28cfa1` — exact M5 E commit under independent SPEC review; current goal coordinator.
+- `campaign/auto-improve` — tested shared branch; M5 E reviewed source `3808d21` is integrated in this checkpoint after the exact 387-test mainline gate, engine/public-surface typecheck, and independent SPEC/QUALITY/SECURITY GO.
+- detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
 - detached `m5-f` at `4244c39` — reviewed F internal-foundation source; read-only until E promotion.
 - `wip/devhub` at `641af8e` — remote-backed WIP with user-owned dirt and evidence; never merge wholesale.
 - detached `m5-c0-schema` at `377a724` and `m5-cursor` at `82a8b74` — stale; do not build on them.
 
 ## Recent checkpoints (last 3 tested commits on shared branch)
+- `this commit`  M5 E active cache promotion; 387/387 targeted mainline tests plus exact-tip SPEC/QUALITY/SECURITY GO.
 - `6b2293b`  M5 D staged promotion dual-review approval; tested main checkpoint.
 - `af6e259`  M5 D promotion hardening; 176 focused tests passed before review promotion.
-- `215c1fa`  M5 F internal local-state foundation; 26 focused tests and dual review passed.

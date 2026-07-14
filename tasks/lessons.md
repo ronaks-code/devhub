@@ -192,3 +192,12 @@
 - Promotion is a replacement boundary, so retirement must remove every other same-scope generation, including corrupt future rows. Postcheck `generation <> promoted`, and test a trigger that recreates a deleted future row plus exact cross-scope rollback.
 - Census and existence checks must not materialize staged child rows. Use SQL COUNT/EXISTS and arithmetic deltas; enumerate only one incoming-bounded snapshot rowset with an extra sentinel row to detect stored expansion.
 - When summary hash fields match a complete staged snapshot, rewriting only the task observation splits task and receipt authority. Renew the lease while preserving the entire snapshot subtree byte-for-byte.
+
+## 2026-07-14 - Treat active cache reads and destruction as integrity boundaries
+
+- Decode active snapshots from an aggregate task census, then fetch each child table with exactly one bounded sentinel row. Recompute writer-equivalent event, receipt, and snapshot identities before returning any part of the task.
+- A count-only census cannot detect same-count sibling rewrites. For triggerable SQLite mutations, combine exact target/sync postconditions with a guarded-connection bigint `total_changes()` delta; for broad scopes, keyset-decode one authority row at a time rather than materializing an unbounded `.all()` result.
+- Decode persisted CWD and its redaction bit as one authority pair. Feeding a stored redacted `NULL` back through the writer's input projection erases provenance and falsely classifies a valid cache row as corrupt.
+- Stable cache pagination belongs in parameterized SQL: join only the current active generation, order timestamps NULL-last, bind the complete deterministic identity tuple, and fetch only `limit + 1` rows before issuing the next cursor.
+- Invalidation and rebuildable-cache clearing are all-generation operations. Count before mutation, postcheck every affected cache table and sync row inside the owned transaction, preserve the monotonic generation epoch and durable tables, and keep callback-free read/keyset SQL in a private non-barrel module.
+- A non-null preflight token remains mandatory authority even if concurrent state changes remove the active sync or recompute a different mutation branch inside the writer. Reject sync-null drift before any early return, then validate version, sync, census, and raw-row witnesses before branch selection or any write; never let control-flow drift bypass the fence.

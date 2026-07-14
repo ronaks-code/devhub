@@ -518,3 +518,51 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The remaining twelve proof cases passed on first execution: real multi-turn global event ordinals, same-fingerprint replay tamper detection, replay-conflict COMMIT rollback, cross-instance same-DB callback rejection/release, stage-write caller transaction/closed/busy failures, and complete promotion-sync/conflict-latch IGNORE/delete/rewrite matrices.
 - Final gates: codec `76/76`, focused D `59/59`, and combined D/lifecycle/store/migration/wiring `176/176`. Engine source typecheck, the negative public-surface compiler fixture, and `git diff --check` all pass; the preparation adapter remains private/non-barrel. No E/F API, schema/migration, provider process, browser, full suite, heavy queue, Python runtime, main checkout, amend, push, or user-owned path was used.
 - Exact implementation tip `b7e3b44165ad61ecd864b9dcaea7d43e57f2b5c5` received independent SPEC GO and QUALITY GO with zero P0-P3 after all five P1s, the P2 clock regression, and every induced-failure proof gap were closed.
+
+### Checkpoint E: active cache reads, replacement, invalidation, and clear
+
+- [x] Add RED coverage for pre-promotion null replacement, active-only summary/snapshot replacement, unchanged-subtree preservation, authoritative replay/conflict, capacity, isolation, and trigger/commit rollback.
+- [x] Add RED coverage for strict active-only read decoding, summary/snapshot detail, multi-turn ownership/ordinals/fingerprints, staging invisibility, and whole-read corruption failure.
+- [x] Add RED coverage for stable SQL list order/scope/archive filtering, null timestamps, limit `1..200`, canonical cursor pagination, scope abuse, limit+1 only, and immutable results.
+- [x] Add RED coverage for exact active invalidation plus global/provider/home clear counts, visibility reset, epoch and durable-state preservation, scope isolation, and induced failure rollback.
+- [x] Prove hostile inputs and preparation ordering, shared-connection reentrancy, caller transactions, closed/busy databases, and IGNORE/delete/valid-rewrite triggers.
+- [x] Implement only `replaceActiveSummary`, `replaceActiveSnapshot`, `list`, `read`, `invalidate`, and `clearRebuildableCache`; keep F facade/coordinator/routes out of scope and extend only private non-barrel cache helpers.
+- [x] Run focused E plus D with at most two workers, engine typecheck/negative fixture, diff hygiene, and commit the SPEC repair without pushing.
+- [x] Obtain independent exact-tip SPEC rereview plus separate QUALITY/SECURITY GO, then promote only that reviewed E source after the tested-main gate passes.
+
+#### Checkpoint E SPEC NO-GO repair evidence
+
+- Strict RED was exact: focused E reported `21 failed / 35 passed`. Six active sync-authority rewrites, two same-count sibling rewrites, two list sync corruptions, two invalidate side effects, two pre-clear sync corruptions, two unbounded sync-row `.all()` tripwires, three durable-row clear scopes, and two foreign cache/sync clear scopes all reproduced independently before production edits.
+- Active summary/snapshot replacement now captures the complete decoded sync tuple, re-fences it and registered-home authority before commit, and requires an exact bigint `total_changes()` delta derived from the prior and replacement rowsets. Trigger writes to same-count siblings or sync authority therefore return `CORRUPT_ROW` and roll back byte-exactly.
+- Exact-task invalidation counts task/turn/event/receipt rows across every generation, deletes only that locator, requires zero survivors, and matches the trigger/FK-inclusive change delta. Clear validates every selected sync row through LIMIT-1 keyset reads before mutation, proves cache-to-sync authority, verifies exact cache deletion deltas, resets each non-idle sync row with a fully fenced update, preserves `generation_epoch`, and never uses unrestricted sync-row `.all()` materialization.
+- List keeps its existing `limit + 1` bound while selecting and decoding the complete joined sync authority for every returned row; active generation, epoch, and staging mismatches fail the whole page.
+- Fresh final gates: focused E `57/57`; required E+D `116/116`; engine source plus negative public-surface typecheck pass; `git diff --check` passes. No public API, schema/migration, F surface, provider process, browser, heavy suite/queue, Python runtime, branch/worktree, amend, push, or protected path was used.
+
+#### Checkpoint E second SPEC P2 repair evidence
+
+- Strict RED was exact: focused E reported `5 failed / 57 passed`. The corrupt sync and task variants both proved the `limit + 1` sentinel was sliced away before authorization; real `node:fs` instrumentation proved global, provider, and home clear each reached `realpathSync` six times while `db.isTransaction` was true.
+- Clear now decodes the exact bounded persisted provider/fingerprint/canonical-home tuple and recomputes the frozen SHA-256 fingerprint bytes without path canonicalization inside the writer. A private non-barrel helper remains the single owner of that preimage for both canonical registration and persisted-authority checks; LIMIT-1 keyset behavior, home deletion/tamper detection, exact mutation deltas, epoch preservation, and raw-home confinement remain unchanged.
+- List authorizes all at-most-`limit + 1` fetched rows before slicing the returned page, so a corrupt sentinel fails the whole request while only `limit` immutable items and the last-returned-item cursor escape.
+- Fresh final gates: focused E `62/62`; required E+D `121/121`; engine source plus negative public-surface typecheck pass; `git diff --check` passes. The independent exact-tip SPEC rereview/promotion checkbox remains pending.
+
+#### Checkpoint E QUALITY/SECURITY repair evidence
+
+- Strict RED was exact: focused E reported `5 failed / 66 passed`. Promoted redacted-null summary and snapshot rows returned `CORRUPT_ROW`; missing list home authority leaked `UNKNOWN_HOME`; unchanged-snapshot summary success and induced failure reached `realpathSync` 30 and 16 times respectively while the writer transaction was active.
+- The private persisted-summary decoder now validates writer-equivalent scalar, revision, secret, timestamp, locator, and fingerprint fixed points without filesystem work, while preserving exactly the three valid CWD authorities `(NULL,1)`, `(NULL,0)`, and `(absolute normalized non-home path,0)`. All six summary/snapshot list/read cases and active replacement preservation pass.
+- Global list treats a selected row's missing internal home authority as value-free `CORRUPT_ROW`; direct `read(locator)` retains caller-facing `UNKNOWN_HOME` semantics for an unknown fingerprint.
+- Unchanged snapshot preservation performs its bounded authoritative full decode before `BEGIN`, fences `main.data_version`, connection changes, full sync/task census, and exact raw task/receipt authority before and after that read and again inside the writer, then updates only `observed_at` through an every-column CAS. The writer performs no realpath call or full turn/event materialization; child/receipt bytes, sibling authority, sync, home, and exact change delta remain fenced, and induced failure rolls back byte-exactly.
+- Fresh final gates: focused E `71/71`; required E+D `130/130`; engine source plus negative public-surface typecheck pass; `git diff --check` passes. E remains pending independent QUALITY/SECURITY rereviews and promotion.
+
+#### Checkpoint E SECURITY P2 preserved-preflight race repair evidence
+
+- Strict file-backed two-connection RED was exact: focused E reported `2 failed / 71 passed`. A peer summary demotion and a peer active-generation switch committed immediately before the owner's `BEGIN IMMEDIATE`; both changed the recomputed branch classification and let the owner stale-overwrite peer authority.
+- Every non-null preserved-snapshot preflight is now mandatory authority regardless of the branch recomputed inside the writer. Before either preservation or summary replacement can write, the transaction validates `main.data_version`, active generation and the full sync tuple, target task census, and exact raw task/receipt authority. Any drift returns `CORRUPT_ROW`; genuinely null preflight behavior remains unchanged.
+- Fresh final gates: focused E `73/73`; required E+D `132/132`; engine source plus negative public-surface typecheck pass; `git diff --check` passes. The prior QUALITY GO is retained; E remains pending independent SECURITY rereview and promotion.
+
+#### Checkpoint E SECURITY P2 sync-null race repair evidence
+
+- Strict file-backed two-connection RED was exact: focused E reported `1 failed / 73 passed`. A peer scoped clear committed immediately before the owner's `BEGIN IMMEDIATE`; the owner's non-null preserved preflight then reached the `sync === null` early return and returned `null` instead of rejecting the authority change.
+- The writer now checks the non-null preserved preflight before its sync-null return. A cleared/reset sync therefore returns `CORRUPT_ROW` before any write, while a genuinely null preflight retains the existing legitimate `null` behavior; the peer database remains byte-exact after rejection.
+- Fresh repair gates: focused E `74/74`; required E+D `133/133`; engine source plus negative public-surface typecheck pass; `git diff --check` passes.
+- Exact source tip `3808d219e07603cb400428d9ac82bb262f6d83ea` received independent SPEC GO, QUALITY GO, and SECURITY GO with zero P0-P3 findings. Only the reviewed E chain was applied to tested main; the duplicate board commit and `wip/devhub` were excluded.
+- The post-application mainline provider-index gate passed `387/387` across all eight required files (the handoff's `348` was the pre-repair count). Engine source and negative public-surface typecheck, reviewed-source equality for every E-touched engine file, diff hygiene, and the three protected-file hashes all pass. This commit is the M5 E promotion checkpoint; milestone progress remains `3/9 = 33%`.
