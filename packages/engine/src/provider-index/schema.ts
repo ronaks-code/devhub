@@ -44,7 +44,8 @@ function provider(column: string): string {
 function fingerprint(column: string): string {
   return `typeof(${column}) = 'text'
     AND length(${column}) = 64
-    AND ${column} NOT GLOB '*[^0-9a-f]*'`;
+    AND ${column} NOT GLOB '*[^0-9a-f]*'
+    AND instr(${column}, char(0)) = 0`;
 }
 
 function booleanInteger(column: string): string {
@@ -278,7 +279,93 @@ CREATE INDEX IF NOT EXISTS idx_provider_reconciliation_required
   ) WHERE required = 1;
 `;
 
+interface ProviderIndexSchemaObject {
+  readonly type: "table" | "index";
+  readonly name: string;
+  readonly tbl_name: string;
+  readonly sql: string;
+}
+
+function normalizedSchemaSql(value: string): string {
+  return value
+    .replace(/\bIF NOT EXISTS\s+/gu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function expectedSchemaObjects(): readonly ProviderIndexSchemaObject[] {
+  const objects: ProviderIndexSchemaObject[] = [];
+  for (const rawStatement of PROVIDER_INDEX_SCHEMA_SQL.split(";")) {
+    const statement = rawStatement.trim();
+    if (statement.length === 0) continue;
+    const table = /^CREATE TABLE IF NOT EXISTS ([a-z_]+)\b/u.exec(statement);
+    if (table?.[1]) {
+      objects.push({
+        type: "table",
+        name: table[1],
+        tbl_name: table[1],
+        sql: normalizedSchemaSql(statement),
+      });
+      continue;
+    }
+    const index = /^CREATE INDEX IF NOT EXISTS ([a-z_]+)\s+ON\s+([a-z_]+)\b/u
+      .exec(statement);
+    if (index?.[1] && index[2]) {
+      objects.push({
+        type: "index",
+        name: index[1],
+        tbl_name: index[2],
+        sql: normalizedSchemaSql(statement),
+      });
+      continue;
+    }
+    throw new Error("provider index schema definition is invalid");
+  }
+  return Object.freeze(objects.sort((left, right) => {
+    if (left.type !== right.type) return left.type < right.type ? -1 : 1;
+    if (left.name === right.name) return 0;
+    return left.name < right.name ? -1 : 1;
+  }));
+}
+
+const EXPECTED_SCHEMA_OBJECTS = expectedSchemaObjects();
+
+function validateProviderIndexSchema(db: SqliteDatabase): void {
+  const actual = db.prepare(`SELECT type, name, tbl_name, sql
+    FROM sqlite_master
+    WHERE (
+      type IN ('table', 'view')
+      AND (
+        name LIKE 'provider\\_%' ESCAPE '\\'
+        OR name LIKE 'legacy\\_session\\_%' ESCAPE '\\'
+      )
+    ) OR (
+      type IN ('index', 'trigger')
+      AND sql IS NOT NULL
+      AND (
+        tbl_name LIKE 'provider\\_%' ESCAPE '\\'
+        OR tbl_name LIKE 'legacy\\_session\\_%' ESCAPE '\\'
+      )
+    )
+    ORDER BY type, name`).all() as Array<{
+      type: string;
+      name: string;
+      tbl_name: string;
+      sql: string | null;
+    }>;
+  const normalized = actual.map((object) => ({
+    type: object.type,
+    name: object.name,
+    tbl_name: object.tbl_name,
+    sql: typeof object.sql === "string" ? normalizedSchemaSql(object.sql) : "",
+  }));
+  if (JSON.stringify(normalized) !== JSON.stringify(EXPECTED_SCHEMA_OBJECTS)) {
+    throw new Error("provider index schema validation failed");
+  }
+}
+
 /** Create the complete additive provider-index schema. Safe to call repeatedly. */
 export function createProviderIndexSchema(db: SqliteDatabase): void {
   db.exec(PROVIDER_INDEX_SCHEMA_SQL);
+  validateProviderIndexSchema(db);
 }
