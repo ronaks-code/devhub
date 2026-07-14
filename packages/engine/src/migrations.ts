@@ -21,9 +21,11 @@ import {
   ftsLacksColumn,
 } from "./fts-schema.js";
 import {
+  addProviderIndexGenerationEpoch,
   createProviderIndexSchema,
+  PROVIDER_INDEX_LATEST_SCHEMA_VERSION,
   PROVIDER_INDEX_SCHEMA_VERSION,
-  validateProviderIndexSchema,
+  validateProviderIndexLatestSchema,
 } from "./provider-index/schema.js";
 
 type Migration = (db: SqliteDatabase) => void;
@@ -226,12 +228,17 @@ const MIGRATIONS: Migration[] = [
   // latches. Keep this DDL migration-only (not in index-db.ts's legacy base schema)
   // so a v13 database reaches the full shape atomically in this version transaction.
   createProviderIndexSchema,
+  // v15: preserve a monotonic allocation epoch independently from active/staging
+  // visibility so aborting a generation cannot make its identity reusable (ABA).
+  addProviderIndexGenerationEpoch,
 ];
 
 export function assertProviderIndexMigrationLayout(steps: readonly unknown[]): void {
   if (
     steps.length < PROVIDER_INDEX_SCHEMA_VERSION ||
-    steps[PROVIDER_INDEX_SCHEMA_VERSION - 1] !== createProviderIndexSchema
+    steps[PROVIDER_INDEX_SCHEMA_VERSION - 1] !== createProviderIndexSchema ||
+    steps.length < PROVIDER_INDEX_LATEST_SCHEMA_VERSION ||
+    steps[PROVIDER_INDEX_LATEST_SCHEMA_VERSION - 1] !== addProviderIndexGenerationEpoch
   ) {
     throw new Error("provider index migration version is inconsistent");
   }
@@ -320,8 +327,8 @@ export function runMigrations(db: SqliteDatabase): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
   let current = row ? Number(row.user_version) : 0;
 
-  if (current === PROVIDER_INDEX_SCHEMA_VERSION) {
-    validateProviderIndexSchema(db);
+  if (current === PROVIDER_INDEX_LATEST_SCHEMA_VERSION) {
+    validateProviderIndexLatestSchema(db);
   }
 
   for (let v = current; v < MIGRATIONS.length; v++) {

@@ -1,6 +1,7 @@
 import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
 
 export const PROVIDER_INDEX_SCHEMA_VERSION = 14;
+export const PROVIDER_INDEX_LATEST_SCHEMA_VERSION = 15;
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_PROVIDER_HOME_CHARS = 16_384;
@@ -345,9 +346,23 @@ function expectedSchemaObjects(): readonly ProviderIndexSchemaObject[] {
   }));
 }
 
-const EXPECTED_SCHEMA_OBJECTS = expectedSchemaObjects();
+const EXPECTED_V14_SCHEMA_OBJECTS = expectedSchemaObjects();
 
-export function validateProviderIndexSchema(db: SqliteDatabase): void {
+const PROVIDER_INDEX_GENERATION_EPOCH_COLUMN_SQL = `generation_epoch INTEGER NOT NULL DEFAULT 0
+  CHECK (${safeInteger("generation_epoch")})`;
+
+const EXPECTED_V15_SCHEMA_OBJECTS = Object.freeze(EXPECTED_V14_SCHEMA_OBJECTS.map((object) => {
+  if (object.name !== "provider_sync_state") return object;
+  return {
+    ...object,
+    sql: object.sql.replace(
+      /, PRIMARY KEY \(provider, home_fingerprint\)/u,
+      `, ${normalizedSchemaSql(PROVIDER_INDEX_GENERATION_EPOCH_COLUMN_SQL)}, PRIMARY KEY (provider, home_fingerprint)`,
+    ),
+  };
+}));
+
+function actualSchemaObjects(db: SqliteDatabase): readonly ProviderIndexSchemaObject[] {
   const actual = db.prepare(`SELECT type, name, tbl_name, sql
     FROM sqlite_master
     WHERE (
@@ -365,18 +380,49 @@ export function validateProviderIndexSchema(db: SqliteDatabase): void {
       )
     )
     ORDER BY type, name`).all() as Array<{
-      type: string;
-      name: string;
-      tbl_name: string;
-      sql: string | null;
-    }>;
-  const normalized = actual.map((object) => ({
-    type: object.type,
+    type: string;
+    name: string;
+    tbl_name: string;
+    sql: string | null;
+  }>;
+  return actual.map((object) => ({
+    type: object.type as "table" | "index",
     name: object.name,
     tbl_name: object.tbl_name,
     sql: typeof object.sql === "string" ? normalizedSchemaSql(object.sql) : "",
   }));
-  if (JSON.stringify(normalized) !== JSON.stringify(EXPECTED_SCHEMA_OBJECTS)) {
+}
+
+function validateSchemaObjects(
+  db: SqliteDatabase,
+  expected: readonly ProviderIndexSchemaObject[],
+): void {
+  if (JSON.stringify(actualSchemaObjects(db)) !== JSON.stringify(expected)) {
+    throw new Error("provider index schema validation failed");
+  }
+}
+
+function hasGenerationEpoch(db: SqliteDatabase): boolean {
+  const columns = db.prepare("PRAGMA table_info(provider_sync_state)").all() as Array<{
+    name: string;
+  }>;
+  return columns.some((column) => column.name === "generation_epoch");
+}
+
+/** Validate the exact historical schema introduced by migration v14. */
+export function validateProviderIndexSchema(db: SqliteDatabase): void {
+  validateSchemaObjects(db, EXPECTED_V14_SCHEMA_OBJECTS);
+}
+
+/** Validate the exact additive v15 layout plus its monotonic epoch invariants. */
+export function validateProviderIndexLatestSchema(db: SqliteDatabase): void {
+  validateSchemaObjects(db, EXPECTED_V15_SCHEMA_OBJECTS);
+  const invalid = db.prepare(`SELECT 1 AS invalid
+    FROM provider_sync_state
+    WHERE generation_epoch < active_generation
+      OR (state = 'staging' AND generation_epoch <> staging_generation)
+    LIMIT 1`).get();
+  if (invalid !== undefined) {
     throw new Error("provider index schema validation failed");
   }
 }
@@ -384,5 +430,33 @@ export function validateProviderIndexSchema(db: SqliteDatabase): void {
 /** Create the complete additive provider-index schema. Safe to call repeatedly. */
 export function createProviderIndexSchema(db: SqliteDatabase): void {
   db.exec(PROVIDER_INDEX_SCHEMA_SQL);
+  if (hasGenerationEpoch(db)) {
+    validateProviderIndexLatestSchema(db);
+  } else {
+    validateProviderIndexSchema(db);
+  }
+}
+
+/**
+ * Add the v15 monotonic generation allocator. The historical v14 table remains
+ * intact; SQLite appends one constrained column and the owned migration
+ * transaction backfills every existing scope from its greatest allocated
+ * generation.
+ */
+export function addProviderIndexGenerationEpoch(db: SqliteDatabase): void {
+  if (hasGenerationEpoch(db)) {
+    validateProviderIndexLatestSchema(db);
+    return;
+  }
+
   validateProviderIndexSchema(db);
+  db.exec(`ALTER TABLE provider_sync_state
+    ADD COLUMN ${PROVIDER_INDEX_GENERATION_EPOCH_COLUMN_SQL}`);
+  db.exec(`UPDATE provider_sync_state
+    SET generation_epoch = CASE
+      WHEN staging_generation IS NOT NULL AND staging_generation > active_generation
+        THEN staging_generation
+      ELSE active_generation
+    END`);
+  validateProviderIndexLatestSchema(db);
 }

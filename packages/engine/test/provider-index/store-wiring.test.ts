@@ -43,7 +43,7 @@ afterEach(() => {
 });
 
 describe("TranscriptIndex provider-index wiring", () => {
-  it("exposes a usable provider store only after the v14 migration exists", async () => {
+  it("exposes a usable provider store only after the latest provider schema exists", async () => {
     const databaseFile = path.join(tempDirectory(), "index.db");
     const home = tempDirectory("devhub-provider-home-");
     const [{ TranscriptIndex }, { ProviderTaskIndexStore }] = await Promise.all([
@@ -64,7 +64,7 @@ describe("TranscriptIndex provider-index wiring", () => {
     }
   });
 
-  it("constructs the provider store after migrations have installed the exact v14 schema", async () => {
+  it("constructs the provider store after migrations have installed the exact v15 schema", async () => {
     const observations: Array<{ version: number; providerHomesTable: string | null }> = [];
     const actualStore = await vi.importActual<typeof import("../../src/provider-index/store.js")>(
       "../../src/provider-index/store.js",
@@ -91,7 +91,7 @@ describe("TranscriptIndex provider-index wiring", () => {
     const index = new TranscriptIndex(path.join(tempDirectory(), "index.db"));
     try {
       expect(observations).toEqual([{
-        version: 14,
+        version: 15,
         providerHomesTable: "provider_homes",
       }]);
     } finally {
