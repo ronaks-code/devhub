@@ -126,3 +126,8 @@
 
 - A historical reviewed fingerprint is the baseline that detected drift, not the target an acknowledgement must reproduce. Clear only when the caller's new reviewed value equals freshly observed native state and that fresh value still equals the latch's stored native fingerprint.
 - Preserve exact CAS without freezing the stale baseline semantically: fence the previously read nullable reviewed value, native value, required bit, and latch revision in SQL, then replace both fingerprints with the acknowledged fresh native value.
+
+## 2026-07-14 - Verify persisted authority after triggerable writes
+
+- A successful SQLite statement execution does not prove its intended row survives: `RAISE(IGNORE)` can suppress an insert and AFTER triggers can delete or rewrite it. Treat the exact post-write row as the authority, not the attempted statement or change count.
+- Reread and bounded-decode the full intended authority tuple before commit. A missing or mismatched row must abort the owned transaction so trigger side effects cannot escape with a false-success response.

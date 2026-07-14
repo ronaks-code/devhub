@@ -189,6 +189,52 @@ describe("ProviderTaskIndexStore home registry", () => {
     }
   });
 
+  it.each([
+    {
+      name: "a BEFORE INSERT RAISE(IGNORE)",
+      trigger: `CREATE TRIGGER ignore_provider_home
+        BEFORE INSERT ON provider_homes
+        BEGIN SELECT RAISE(IGNORE); END`,
+    },
+    {
+      name: "an AFTER INSERT delete",
+      trigger: `CREATE TRIGGER delete_provider_home
+        AFTER INSERT ON provider_homes
+        BEGIN
+          DELETE FROM provider_homes
+          WHERE provider = NEW.provider
+            AND home_fingerprint = NEW.home_fingerprint;
+        END`,
+    },
+    {
+      name: "an AFTER INSERT timestamp replacement",
+      trigger: `CREATE TRIGGER replace_provider_home_timestamp
+        AFTER INSERT ON provider_homes
+        BEGIN
+          UPDATE provider_homes
+          SET registered_at = NEW.registered_at + 1
+          WHERE provider = NEW.provider
+            AND home_fingerprint = NEW.home_fingerprint;
+        END`,
+    },
+  ])("rejects registration corrupted by $name and rolls back authority", ({ trigger }) => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db);
+    db.exec(trigger);
+
+    const error = expectStoreError(
+      () => register(store, "openai", home, 1_000),
+      "CORRUPT_ROW",
+    );
+
+    expect(error.message).toBe("provider index store row is corrupt");
+    expect(error.message).not.toContain(home);
+    expect(db.isTransaction).toBe(false);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM provider_homes").get())
+      .toEqual({ count: 0 });
+  });
+
   it("isolates the same canonical home by provider", () => {
     const home = tempDirectory();
     const db = openDatabase();

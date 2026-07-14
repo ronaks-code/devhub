@@ -73,6 +73,10 @@ interface NormalizedReconciliationInput {
   readonly reason: ProviderReconciliationReason;
 }
 
+interface NormalizedHomeRegistration extends ProviderHomeRegistration {
+  readonly canonicalHome: string;
+}
+
 class InternalStoreFailure extends Error {
   readonly code: ProviderIndexStoreErrorCode;
 
@@ -152,12 +156,7 @@ function exactCanonicalHome(value: unknown): string {
 function normalizeRegistrationInput(
   keyValue: Pick<NativeTaskKey, "provider" | "home">,
   registeredAtValue: number,
-): Readonly<{
-  provider: ProviderId;
-  canonicalHome: string;
-  homeFingerprint: string;
-  registeredAt: number;
-}> {
+): Readonly<NormalizedHomeRegistration> {
   const key = exactOwnData(keyValue, ["provider", "home"]);
   const provider = providerId(key.provider);
   const canonicalHome = exactCanonicalHome(key.home);
@@ -334,6 +333,30 @@ function resolveRegisteredHome(
   }
   if (expected !== fingerprint) return fail("CORRUPT_ROW");
   return canonicalHome;
+}
+
+function verifyInsertedRegisteredHomeInsideOwnedTransaction(
+  db: SqliteDatabase,
+  expected: NormalizedHomeRegistration,
+): Readonly<ProviderHomeRegistration> {
+  const row = queryRegisteredHomeByFingerprint(
+    db,
+    expected.provider,
+    expected.homeFingerprint,
+  );
+  if (row === null) fail("CORRUPT_ROW");
+  const decoded = decodeRegisteredHomeRow(row);
+  if (decoded.provider !== expected.provider ||
+    decoded.homeFingerprint !== expected.homeFingerprint ||
+    decoded.canonicalHome !== expected.canonicalHome ||
+    decoded.registeredAt !== expected.registeredAt) {
+    fail("CORRUPT_ROW");
+  }
+  return Object.freeze({
+    provider: expected.provider,
+    homeFingerprint: expected.homeFingerprint,
+    registeredAt: expected.registeredAt,
+  });
 }
 
 function knownLocator(
@@ -626,11 +649,7 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
         } catch {
           return fail("DATABASE_UNAVAILABLE");
         }
-        return Object.freeze({
-          provider: input.provider,
-          homeFingerprint: input.homeFingerprint,
-          registeredAt: input.registeredAt,
-        });
+        return verifyInsertedRegisteredHomeInsideOwnedTransaction(this.db, input);
       });
     });
   }
