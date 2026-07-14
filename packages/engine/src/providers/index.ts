@@ -10,6 +10,8 @@ export * from "./registry.js";
 export * from "./writer-lease.js";
 export * from "../provider-index/identity.js";
 export * from "../provider-index/cursor.js";
+export * from "../provider-index/store-types.js";
+export * from "../provider-index/store-codec.js";
 export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";
 export * from "./claude/native-adapter.js";

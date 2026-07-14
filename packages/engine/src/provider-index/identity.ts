@@ -19,6 +19,7 @@ import type {
 const LOCATOR_VERSION = 1 as const;
 const LOCATOR_PREFIX = "pt1";
 const MAX_SERIALIZED_LOCATOR_CHARS = 1_024;
+const MAX_CACHED_KEY_CHARS = 1_024;
 const MAX_EVENT_ORDINAL = 1_000_000;
 const MAX_OCCURRED_AT_CHARS = 32;
 const MAX_DIAGNOSTIC_CODE_CHARS = 128;
@@ -34,6 +35,7 @@ const LOCATOR_ERROR = "provider task locator is invalid";
 const EVENT_PROJECTION_ERROR = "provider event could not be safely projected";
 const TASK_KEY_ERROR = "native task key is unsafe for provider indexing";
 const HOME_ERROR = "provider home must be canonical exact UTF-8";
+const CACHED_TURN_KEY_ERROR = "cached turn key is invalid";
 const HOME_REPLACEMENT = "[PROVIDER_HOME]";
 
 export interface ProviderTaskLocator {
@@ -345,8 +347,35 @@ function nativeCacheKey(value: unknown, label: string): string {
   return `native:v1:${Buffer.from(nativeId, "utf8").toString("base64url")}`;
 }
 
+function parseNativeCacheKey(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 ||
+    value.length > MAX_CACHED_KEY_CHARS || !value.startsWith("native:v1:")) {
+    throw new TypeError();
+  }
+  const encoded = value.slice("native:v1:".length);
+  if (!BASE64URL.test(encoded)) throw new TypeError();
+  const bytes = Buffer.from(encoded, "base64url");
+  const nativeId = bytes.toString("utf8");
+  if (!Buffer.from(nativeId, "utf8").equals(bytes) ||
+    Buffer.from(nativeId, "utf8").toString("base64url") !== encoded) {
+    throw new TypeError();
+  }
+  canonicalNativeId(nativeId, label);
+  if (nativeCacheKey(nativeId, label) !== value) throw new TypeError();
+  return nativeId;
+}
+
 export function cachedTurnKey(nativeTurnId: string | null): string {
   return nativeTurnId === null ? "none:v1" : nativeCacheKey(nativeTurnId, "native turn id");
+}
+
+export function parseCachedTurnKey(value: unknown): string | null {
+  try {
+    if (value === "none:v1") return null;
+    return parseNativeCacheKey(value, "native turn id");
+  } catch {
+    throw new TypeError(CACHED_TURN_KEY_ERROR);
+  }
 }
 
 function indexedIdentity(
@@ -733,7 +762,7 @@ function eventOrdinal(value: number): number {
   return value;
 }
 
-function actualItemId(event: IndexedProviderEvent): string | null {
+export function indexedProviderEventItemId(event: IndexedProviderEvent): string | null {
   switch (event.type) {
     case "message":
     case "message-delta":
@@ -755,41 +784,64 @@ function actualItemId(event: IndexedProviderEvent): string | null {
   }
 }
 
-function canonicalJson(value: unknown): string {
+function canonicalProviderIndexJsonUnsafe(value: unknown): string {
   if (value === null || typeof value === "string" || typeof value === "boolean") {
+    if (typeof value === "string" && !hasExactUtf8Encoding(value)) throw new TypeError();
     return JSON.stringify(value);
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("canonical JSON contains a non-finite number");
+    if (!Number.isFinite(value)) throw new TypeError();
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.some((key) => typeof key !== "string") ||
+      ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) {
+      throw new TypeError();
+    }
     const items: string[] = [];
     for (let index = 0; index < value.length; index += 1) {
-      if (!Object.prototype.hasOwnProperty.call(value, index)) {
-        throw new TypeError("canonical JSON contains a sparse array");
-      }
-      items.push(canonicalJson(value[index]));
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+      items.push(canonicalProviderIndexJsonUnsafe(descriptor.value));
     }
     return `[${items.join(",")}]`;
   }
   if (typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
-      .join(",")}}`;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string" || !hasExactUtf8Encoding(key))) {
+      throw new TypeError();
+    }
+    const pairs: string[] = [];
+    for (const key of (keys as string[]).sort()) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+      pairs.push(`${JSON.stringify(key)}:${canonicalProviderIndexJsonUnsafe(descriptor.value)}`);
+    }
+    return `{${pairs.join(",")}}`;
   }
-  throw new TypeError("canonical JSON contains an unsupported value");
+  throw new TypeError();
+}
+
+export function canonicalProviderIndexJson(value: unknown): string {
+  try {
+    return canonicalProviderIndexJsonUnsafe(value);
+  } catch {
+    throw new TypeError("provider index canonical JSON is invalid");
+  }
 }
 
 function projectedEventDigest(event: IndexedProviderEvent, ordinal: number): string {
-  return sha256(canonicalJson({ event, ordinal }));
+  return sha256(canonicalProviderIndexJson({ event, ordinal }));
 }
 
 export function cachedEventItemId(event: ProviderEvent, ordinalValue: number): string {
   const ordinal = eventOrdinal(ordinalValue);
   const projections = eventProjectionsForHash(event);
-  const nativeItemId = actualItemId(projections.publicEvent);
+  const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
   if (nativeItemId !== null) return nativeCacheKey(nativeItemId, "native item id");
   return `synthetic:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
 }
@@ -798,4 +850,71 @@ export function providerEventReplayKey(event: ProviderEvent, ordinalValue: numbe
   const ordinal = eventOrdinal(ordinalValue);
   const projections = eventProjectionsForHash(event);
   return `replay:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
+}
+
+export type ParsedCachedEventItemKey =
+  | Readonly<{ kind: "native"; nativeItemId: string }>
+  | Readonly<{ kind: "synthetic"; nativeItemId: null }>;
+
+export function parseCachedEventItemKey(
+  value: unknown,
+  expectedOrdinalValue: number,
+): ParsedCachedEventItemKey {
+  try {
+    const expectedOrdinal = eventOrdinal(expectedOrdinalValue);
+    if (typeof value === "string" && value.startsWith("native:v1:")) {
+      return Object.freeze({
+        kind: "native" as const,
+        nativeItemId: parseNativeCacheKey(value, "native item id"),
+      });
+    }
+    if (typeof value !== "string" || value.length > MAX_CACHED_KEY_CHARS ||
+      value !== `synthetic:v1:${expectedOrdinal}:${value.slice(-64)}`) {
+      throw new TypeError();
+    }
+    const digest = value.slice(-64);
+    if (!FINGERPRINT.test(digest)) throw new TypeError();
+    return Object.freeze({ kind: "synthetic" as const, nativeItemId: null });
+  } catch {
+    throw new TypeError("cached event item key is invalid");
+  }
+}
+
+export function parseProviderEventReplayKey(
+  value: unknown,
+  expectedOrdinalValue: number,
+): string {
+  try {
+    const expectedOrdinal = eventOrdinal(expectedOrdinalValue);
+    if (typeof value !== "string" || value.length > MAX_CACHED_KEY_CHARS ||
+      value !== `replay:v1:${expectedOrdinal}:${value.slice(-64)}` ||
+      !FINGERPRINT.test(value.slice(-64))) {
+      throw new TypeError();
+    }
+    return value;
+  } catch {
+    throw new TypeError("provider event replay key is invalid");
+  }
+}
+
+export function indexedProviderEventTurnId(event: IndexedProviderEvent): string | null {
+  switch (event.type) {
+    case "message":
+    case "message-delta":
+    case "plan":
+    case "activity":
+    case "diff-summary":
+    case "usage":
+      return event.turnId;
+    case "request":
+      return event.request.identity.turnId;
+    case "request-resolved":
+      return event.identity.turnId;
+    case "status":
+      return event.scope === "turn" ? event.nativeId : null;
+    case "diagnostic":
+      return null;
+    default:
+      return assertNever(event);
+  }
 }

@@ -54,3 +54,9 @@
 - When a database already claims the exact version that introduced a critical schema, validate that schema before skipping the migration loop. Validate inside the introducing migration for older databases, but do not apply the old exact-shape validator to unknown newer versions.
 - Keep schema goldens independent from the generated DDL, including explicit index table, column order, direction, and partial predicate, so a shared source cannot make implementation and tests drift together.
 - For claimed-version tamper coverage, start from a valid schema with sentinel data, remove one critical object, and prove validation emits only its constant error while preserving the version, data, and missing-object state instead of silently healing it.
+
+## 2026-07-13 - Validate ownership before provider-event normalization
+
+- Provider-event normalization is a safety projection, not an authorization boundary: it may turn mismatched provider/task/request identity into a benign diagnostic.
+- Before projection or persistence, snapshot raw own-data descriptors and independently prove the top-level provider/key plus nested request and request-resolved identity keys match the method, payload, registered home, and stage scope.
+- Keep canonical JSON and cached turn/item/replay key formats in the identity module with strict reciprocal helpers; persistence codecs should reuse those helpers instead of duplicating security-sensitive grammars.

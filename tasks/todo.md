@@ -241,4 +241,24 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 
 ### Store-boundary follow-up
 
-- [ ] Reject caller-supplied numeric strings such as `"0"` and `"1"` before SQL binding; SQLite affinity coercion is not an API validation boundary.
+- [x] Reject caller-supplied numeric strings such as `"0"` and `"1"` before SQL binding; SQLite affinity coercion is not an API validation boundary.
+
+## M5 store slice 1: pure types, config, and snapshot codecs (complete)
+
+- [x] Add a strict reciprocal `parseCachedTurnKey` with canonical UTF-8/base64url tests and a fixed Unicode vector.
+- [x] Define the exact store error union/class, public store shapes, default/hard constants, and frozen hostile-safe normalized config.
+- [x] Prove clock/token wrappers, explicit-undefined defaults, numeric-string rejection, individual bounds, and cross-bound validation.
+- [x] Prepare summaries/snapshots only when method key, payload key, and registered provider/home agree; preserve the three CWD/redaction states.
+- [x] Enforce dense turn/event arrays, global ordinals, native/synthetic identities, canonical persisted event JSON, event fingerprints, snapshot fingerprints, and source-driven receipt bases.
+- [x] Strictly decode every `IndexedProviderEvent` variant and reject independent row/JSON/fingerprint/ordinal/turn/item/replay mutations with value-free `CORRUPT_ROW`.
+- [x] Prove hostile accessor/proxy handling, Unicode and canonical UTF-8 behavior, deep immutability, and absence of raw provider-home leakage.
+- [x] Re-export the public slice, run focused identity+codec tests with two workers, engine typecheck, and diff hygiene, then commit one coherent slice.
+
+### Review
+
+- TDD red checkpoints were diagnostic and isolated: reciprocal parser `1 failed / 87 passed`; identity-owned helpers `4 / 90`; config `32 / 2`; summary/snapshot preparation `10 / 35`; strict decoder `5 / 45`; exported snapshot binding helper `1 / 51`.
+- Frozen contract details are explicit: snapshot preimage is `[1, serializeTaskLocator(locator), summary, turns]`; native receipt basis is `native:<revision fingerprint>` while both fallback sources always use `fallback:<snapshot fingerprint>`.
+- Raw top-level event ownership and nested request/request-resolved identity ownership are checked before projection; no normalization path can convert a cross-task write into persisted diagnostic data.
+- CWD redaction resolves the deepest existing ancestor before component-boundary containment, including root, symlink, and missing-leaf cases. Fixed raw-home/literal-marker snapshot goldens remain distinct and path-free.
+- Strict read decoding covers all ten event variants and five request kinds, exact canonical JSON/UTF-8, immutable reconstruction, readable ownership, ordinal tags, and independent row/JSON/key/fingerprint mutations.
+- Fresh focused gate: identity plus codec tests `146/146`; engine typecheck and `git diff --check` pass. No SQL, migration, `store.ts`, `index-db`, full suite, provider call, Python process, or user-owned path was touched.

@@ -4,9 +4,15 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertLocatorMatchesKey,
+  canonicalProviderIndexJson,
   cachedEventItemId,
   cachedTurnKey,
   homeFingerprint,
+  indexedProviderEventItemId,
+  indexedProviderEventTurnId,
+  parseCachedEventItemKey,
+  parseCachedTurnKey,
+  parseProviderEventReplayKey,
   parseTaskLocator,
   projectIndexedProviderEvent,
   providerEventReplayKey,
@@ -439,6 +445,162 @@ describe("cache identity keys", () => {
     expect(cachedTurnKey("轮次/🧪")).toBe(
       `native:v1:${Buffer.from("轮次/🧪", "utf8").toString("base64url")}`,
     );
+  });
+
+  it("strictly parses cached turn keys with a fixed Unicode vector", () => {
+    const vector = "native:v1:6L2u5qyhL_Cfp6o";
+    expect(cachedTurnKey("轮次/🧪")).toBe(vector);
+    expect(parseCachedTurnKey("none:v1")).toBeNull();
+    expect(parseCachedTurnKey(vector)).toBe("轮次/🧪");
+
+    for (const malformed of [
+      "",
+      "none:v1:extra",
+      "native:v1:",
+      "native:v1:dHVybg==",
+      "native:v1:***",
+      "native:v1:_w",
+      "native:v1:IA",
+      `native:v1:${"e".repeat(1_025)}`,
+    ]) {
+      expect(() => parseCachedTurnKey(malformed)).toThrow("cached turn key is invalid");
+    }
+  });
+
+  it("exports canonical JSON and strict event cache identity helpers", () => {
+    const api = providersIndex as unknown as Record<string, unknown>;
+    for (const name of [
+      "canonicalProviderIndexJson",
+      "parseCachedTurnKey",
+      "parseCachedEventItemKey",
+      "parseProviderEventReplayKey",
+      "indexedProviderEventItemId",
+      "indexedProviderEventTurnId",
+    ]) {
+      expect(api[name], name).toBeTypeOf("function");
+    }
+  });
+
+  it("canonicalizes dense finite JSON with lexicographic record keys", () => {
+    expect(canonicalProviderIndexJson({
+      z: [1, true, null],
+      a: { y: "界", x: -0 },
+    })).toBe('{"a":{"x":0,"y":"界"},"z":[1,true,null]}');
+    expect(canonicalProviderIndexJson(Object.assign(Object.create(null), {
+      b: 2,
+      a: 1,
+    }))).toBe('{"a":1,"b":2}');
+  });
+
+  it("rejects hostile or non-JSON canonicalization inputs with one value-free error", () => {
+    const sparse = Array(1);
+    const accessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        throw new Error("must-never-leak-canonical-accessor");
+      },
+    });
+    const proxy = new Proxy({}, {
+      ownKeys() {
+        throw new Error("must-never-leak-canonical-proxy");
+      },
+    });
+    for (const value of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      undefined,
+      1n,
+      sparse,
+      new Date(0),
+      { [Symbol("hidden")]: 1 },
+      accessor,
+      proxy,
+    ]) {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(value),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+    }
+  });
+
+  it("strictly parses native and synthetic event item keys", () => {
+    const native = `native:v1:${Buffer.from("项目/🧪", "utf8").toString("base64url")}`;
+    expect(parseCachedEventItemKey(native, 7)).toEqual({
+      kind: "native",
+      nativeItemId: "项目/🧪",
+    });
+    const synthetic = `synthetic:v1:7:${"a".repeat(64)}`;
+    const parsedSynthetic = parseCachedEventItemKey(synthetic, 7);
+    expect(parsedSynthetic).toEqual({ kind: "synthetic", nativeItemId: null });
+    expect(Object.isFrozen(parsedSynthetic)).toBe(true);
+
+    for (const malformed of [
+      "none:v1",
+      "native:v1:",
+      "native:v1:_w",
+      `synthetic:v1:07:${"a".repeat(64)}`,
+      `synthetic:v1:8:${"a".repeat(64)}`,
+      `synthetic:v1:7:${"A".repeat(64)}`,
+      `synthetic:v1:7:${"a".repeat(63)}`,
+    ]) {
+      expect(() => parseCachedEventItemKey(malformed, 7))
+        .toThrow("cached event item key is invalid");
+    }
+  });
+
+  it("strictly parses replay keys against the exact canonical ordinal", () => {
+    const replay = `replay:v1:23:${"b".repeat(64)}`;
+    expect(parseProviderEventReplayKey(replay, 23)).toBe(replay);
+    for (const malformed of [
+      `replay:v1:023:${"b".repeat(64)}`,
+      `replay:v1:24:${"b".repeat(64)}`,
+      `replay:v1:23:${"B".repeat(64)}`,
+      `replay:v1:23:${"b".repeat(63)}`,
+      `synthetic:v1:23:${"b".repeat(64)}`,
+    ]) {
+      expect(() => parseProviderEventReplayKey(malformed, 23))
+        .toThrow("provider event replay key is invalid");
+    }
+  });
+
+  it("extracts readable item and turn ownership from indexed event variants", () => {
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "command-approval", identity },
+    }));
+    const resolved = projectIndexedProviderEvent(providerEvent({
+      type: "request-resolved",
+      identity,
+    }));
+    const turnStatus = projectIndexedProviderEvent(providerEvent({
+      type: "status",
+      scope: "turn",
+      status: "running",
+      nativeId: "turn-status",
+    }));
+    const itemStatus = projectIndexedProviderEvent(providerEvent({
+      type: "status",
+      scope: "item",
+      status: "running",
+      nativeId: "item-status",
+    }));
+    const delta = projectIndexedProviderEvent(messageDelta("owned", "item-α"));
+    const diagnostic = projectIndexedProviderEvent(diagnosticEvent());
+
+    expect(indexedProviderEventItemId(delta)).toBe("item-α");
+    expect(indexedProviderEventItemId(request)).toBe("request-item-1");
+    expect(indexedProviderEventItemId(resolved)).toBe("request-item-1");
+    expect(indexedProviderEventItemId(itemStatus)).toBe("item-status");
+    expect(indexedProviderEventItemId(turnStatus)).toBeNull();
+    expect(indexedProviderEventItemId(diagnostic)).toBeNull();
+
+    expect(indexedProviderEventTurnId(delta)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(request)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(resolved)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(turnStatus)).toBe("turn-status");
+    expect(indexedProviderEventTurnId(itemStatus)).toBeNull();
+    expect(indexedProviderEventTurnId(diagnostic)).toBeNull();
   });
 
   it.each(["   ", "turn\ncontrol", "sk-proj-0123456789abcdefghijklmnop", "x".repeat(513)])(
