@@ -518,3 +518,13 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The remaining twelve proof cases passed on first execution: real multi-turn global event ordinals, same-fingerprint replay tamper detection, replay-conflict COMMIT rollback, cross-instance same-DB callback rejection/release, stage-write caller transaction/closed/busy failures, and complete promotion-sync/conflict-latch IGNORE/delete/rewrite matrices.
 - Final gates: codec `76/76`, focused D `59/59`, and combined D/lifecycle/store/migration/wiring `176/176`. Engine source typecheck, the negative public-surface compiler fixture, and `git diff --check` all pass; the preparation adapter remains private/non-barrel. No E/F API, schema/migration, provider process, browser, full suite, heavy queue, Python runtime, main checkout, amend, push, or user-owned path was used.
 - Exact implementation tip `b7e3b44165ad61ecd864b9dcaea7d43e57f2b5c5` received independent SPEC GO and QUALITY GO with zero P0-P3 after all five P1s, the P2 clock regression, and every induced-failure proof gap were closed.
+
+### Checkpoint E: active cache reads, replacement, invalidation, and clear
+
+- [x] Add RED coverage for pre-promotion null replacement, active-only summary/snapshot replacement, unchanged-subtree preservation, authoritative replay/conflict, capacity, isolation, and trigger/commit rollback.
+- [x] Add RED coverage for strict active-only read decoding, summary/snapshot detail, multi-turn ownership/ordinals/fingerprints, staging invisibility, and whole-read corruption failure.
+- [x] Add RED coverage for stable SQL list order/scope/archive filtering, null timestamps, limit `1..200`, canonical cursor pagination, scope abuse, limit+1 only, and immutable results.
+- [x] Add RED coverage for exact active invalidation plus global/provider/home clear counts, visibility reset, epoch and durable-state preservation, scope isolation, and induced failure rollback.
+- [x] Prove hostile inputs and preparation ordering, shared-connection reentrancy, caller transactions, closed/busy databases, and IGNORE/delete/valid-rewrite triggers.
+- [x] Implement only `replaceActiveSummary`, `replaceActiveSnapshot`, `list`, `read`, `invalidate`, and `clearRebuildableCache`; keep F facade/coordinator/routes out of scope and extend only private non-barrel cache helpers.
+- [ ] Run focused E plus prior provider-index gates with at most two workers, engine typecheck/negative fixture, diff hygiene, independent review, and commit without pushing.

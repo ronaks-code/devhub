@@ -1,10 +1,14 @@
 import type { DatabaseSync as SqliteDatabase } from "node:sqlite";
 import type {
   NormalizedProviderIndexStoreConfig,
+  ProviderCacheClearResult,
   ProviderHomeScope,
+  ProviderIndexScope,
 } from "./store-types.js";
+import type { ProviderTaskLocator } from "./identity.js";
 
-export type ProviderIndexCacheErrorCode = "CAPACITY" | "CORRUPT_ROW" | "DATABASE_UNAVAILABLE";
+export type ProviderIndexCacheErrorCode = "CAPACITY" | "CORRUPT_ROW" |
+  "DATABASE_UNAVAILABLE" | "UNKNOWN_HOME";
 
 export class ProviderIndexCacheError extends Error {
   readonly code: ProviderIndexCacheErrorCode;
@@ -286,4 +290,125 @@ export function retireOtherGenerationRows(
     return fail("DATABASE_UNAVAILABLE");
   }
   if (row !== undefined) fail("CORRUPT_ROW");
+}
+
+export function deleteTaskEveryGeneration(
+  db: SqliteDatabase,
+  locator: ProviderTaskLocator,
+): boolean {
+  let before: { count: unknown } | undefined;
+  try {
+    before = db.prepare(`SELECT COUNT(*) AS count FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ? AND native_task_id = ?`)
+      .get(locator.provider, locator.homeFingerprint, locator.nativeTaskId) as
+        { count: unknown } | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (before === undefined) fail("CORRUPT_ROW");
+  const count = storedCount(before.count);
+  try {
+    db.prepare(`DELETE FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ? AND native_task_id = ?`)
+      .run(locator.provider, locator.homeFingerprint, locator.nativeTaskId);
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  let remaining: Readonly<Record<string, unknown>> | undefined;
+  try {
+    remaining = db.prepare(`SELECT 1 AS remaining FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ? AND native_task_id = ?
+      LIMIT 1`).get(locator.provider, locator.homeFingerprint, locator.nativeTaskId) as
+        Readonly<Record<string, unknown>> | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (remaining !== undefined) fail("CORRUPT_ROW");
+  return count > 0;
+}
+
+export function clearRebuildableCacheRows(
+  db: SqliteDatabase,
+  scope: ProviderIndexScope | null,
+): Readonly<ProviderCacheClearResult> {
+  const cacheWhere = scope === null
+    ? "1 = 1"
+    : scope.homeFingerprint === null
+      ? "provider = ?"
+      : "provider = ? AND home_fingerprint = ?";
+  const parameters = scope === null
+    ? []
+    : scope.homeFingerprint === null
+      ? [scope.provider]
+      : [scope.provider, scope.homeFingerprint];
+  let counts: Readonly<Record<keyof ProviderCacheClearResult, unknown>> | undefined;
+  let syncBefore: readonly Readonly<Record<string, unknown>>[];
+  try {
+    counts = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM provider_task_cache WHERE ${cacheWhere}) AS taskCount,
+      (SELECT COUNT(*) FROM provider_turn_cache WHERE ${cacheWhere}) AS turnCount,
+      (SELECT COUNT(*) FROM provider_event_cache WHERE ${cacheWhere}) AS eventCount,
+      (SELECT COUNT(*) FROM provider_replay_receipts WHERE ${cacheWhere}) AS receiptCount`)
+      .get(...parameters, ...parameters, ...parameters, ...parameters) as
+        Readonly<Record<keyof ProviderCacheClearResult, unknown>> | undefined;
+    syncBefore = db.prepare(`SELECT provider, home_fingerprint, generation_epoch
+      FROM provider_sync_state WHERE ${cacheWhere}
+      ORDER BY provider, home_fingerprint`).all(...parameters) as unknown as
+        readonly Readonly<Record<string, unknown>>[];
+    db.prepare(`DELETE FROM provider_task_cache WHERE ${cacheWhere}`).run(...parameters);
+    db.prepare(`UPDATE provider_sync_state SET
+      active_generation = 0,
+      staging_generation = NULL,
+      staging_owner_token = NULL,
+      staging_heartbeat_at = NULL,
+      staging_expires_at = NULL,
+      state = 'idle',
+      provider_version = NULL,
+      last_completed_at = NULL
+      WHERE ${cacheWhere}`).run(...parameters);
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (counts === undefined) fail("CORRUPT_ROW");
+  let remaining: { count: unknown } | undefined;
+  let syncAfter: readonly Readonly<Record<string, unknown>>[];
+  try {
+    remaining = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM provider_task_cache WHERE ${cacheWhere}) +
+      (SELECT COUNT(*) FROM provider_turn_cache WHERE ${cacheWhere}) +
+      (SELECT COUNT(*) FROM provider_event_cache WHERE ${cacheWhere}) +
+      (SELECT COUNT(*) FROM provider_replay_receipts WHERE ${cacheWhere}) AS count`)
+      .get(...parameters, ...parameters, ...parameters, ...parameters) as
+        { count: unknown } | undefined;
+    syncAfter = db.prepare(`SELECT
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at, state,
+      provider_version, last_completed_at, generation_epoch
+      FROM provider_sync_state WHERE ${cacheWhere}
+      ORDER BY provider, home_fingerprint`).all(...parameters) as unknown as
+        readonly Readonly<Record<string, unknown>>[];
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (remaining === undefined || storedCount(remaining.count) !== 0 ||
+    syncAfter.length !== syncBefore.length) fail("CORRUPT_ROW");
+  for (let index = 0; index < syncBefore.length; index += 1) {
+    const before = syncBefore[index]!;
+    const after = syncAfter[index]!;
+    if (after.provider !== before.provider ||
+      after.home_fingerprint !== before.home_fingerprint ||
+      after.generation_epoch !== before.generation_epoch ||
+      after.active_generation !== 0 || after.staging_generation !== null ||
+      after.staging_owner_token !== null || after.staging_heartbeat_at !== null ||
+      after.staging_expires_at !== null || after.state !== "idle" ||
+      after.provider_version !== null || after.last_completed_at !== null) {
+      fail("CORRUPT_ROW");
+    }
+  }
+  return Object.freeze({
+    taskCount: storedCount(counts.taskCount),
+    turnCount: storedCount(counts.turnCount),
+    eventCount: storedCount(counts.eventCount),
+    receiptCount: storedCount(counts.receiptCount),
+  });
 }

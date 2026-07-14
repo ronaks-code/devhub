@@ -27,6 +27,8 @@ import {
   assertGenerationCapacity,
   countGenerationRows,
   countGenerationSnapshotTasks,
+  clearRebuildableCacheRows,
+  deleteTaskEveryGeneration,
   generationCensus,
   generationHasStructuralGap,
   requireGenerationCensus,
@@ -35,13 +37,26 @@ import {
   type GenerationCensus,
 } from "./store-cache.js";
 import {
+  normalizeProviderIndexListOptions,
+  type ProviderIndexListOptions,
+} from "./cursor.js";
+import {
+  listActiveProviderTasks,
+  readActiveProviderTask,
+} from "./store-active-read.js";
+import {
   ProviderIndexStoreError,
   type NormalizedProviderIndexStoreConfig,
+  type IndexedProviderTask,
+  type IndexedProviderTaskSummary,
   type ProviderHomeRegistration,
   type ProviderHomeScope,
+  type ProviderCacheClearResult,
   type ProviderIndexCompletion,
   type ProviderIndexPromotion,
+  type ProviderIndexPage,
   type ProviderIndexRegisteredHome,
+  type ProviderIndexScope,
   type ProviderIndexStage,
   type ProviderIndexStoreErrorCode,
   type ProviderIndexStoreOptions,
@@ -121,6 +136,11 @@ interface NormalizedHomeRegistration extends ProviderHomeRegistration {
 interface KnownHomeScope {
   readonly scope: Readonly<ProviderHomeScope>;
   readonly canonicalHome: string;
+}
+
+interface KnownTaskKey {
+  readonly known: KnownHomeScope;
+  readonly key: NativeTaskKey;
 }
 
 interface ProviderSyncStateRow {
@@ -249,6 +269,17 @@ function normalizedHomeScope(value: ProviderHomeScope): Readonly<ProviderHomeSco
   return Object.freeze({
     provider: providerId(input.provider),
     homeFingerprint: homeFingerprintValue(input.homeFingerprint),
+  });
+}
+
+function normalizedIndexScope(value: ProviderIndexScope | undefined): Readonly<ProviderIndexScope> | null {
+  if (value === undefined) return null;
+  const input = exactOwnData(value, ["provider", "homeFingerprint"]);
+  return Object.freeze({
+    provider: providerId(input.provider),
+    homeFingerprint: input.homeFingerprint === null
+      ? null
+      : homeFingerprintValue(input.homeFingerprint),
   });
 }
 
@@ -1154,6 +1185,93 @@ function registeredHomeForKnown(
   });
 }
 
+function knownHomeForTaskKey(
+  db: SqliteDatabase,
+  value: NativeTaskKey,
+): Readonly<KnownTaskKey> {
+  const input = exactOwnData(value, ["provider", "home", "nativeTaskId"]);
+  const provider = providerId(input.provider);
+  const home = boundedStoredHome(input.home);
+  const canonicalHome = canonicalizeProviderHome(home);
+  const fingerprint = homeFingerprint(provider, canonicalHome);
+  const known = knownHomeScope(db, { provider, homeFingerprint: fingerprint });
+  if (known.canonicalHome !== canonicalHome) fail("HOME_CONFLICT");
+  return Object.freeze({
+    known,
+    key: Object.freeze({
+      provider,
+      home: canonicalHome,
+      nativeTaskId: input.nativeTaskId,
+    }) as NativeTaskKey,
+  });
+}
+
+function activeGenerationInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+): number | null {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const row = querySyncState(db, known.scope);
+  if (row === null) return null;
+  const current = decodeSyncState(row, known.scope);
+  return current.activeGeneration === 0 ? null : current.activeGeneration;
+}
+
+function cacheTarget(
+  known: KnownHomeScope,
+  generation: number,
+): Readonly<ProviderIndexStage> {
+  return Object.freeze({
+    provider: known.scope.provider,
+    homeFingerprint: known.scope.homeFingerprint,
+    generation,
+    ownerToken: "active-cache",
+  });
+}
+
+function indexedPreparedSummary(
+  prepared: PreparedProviderTaskSummary,
+  generation: number,
+  observedAt: number,
+  cacheDetail: "summary" | "snapshot",
+): Readonly<IndexedProviderTaskSummary> {
+  return Object.freeze({
+    locator: prepared.locator,
+    title: prepared.title,
+    cwd: prepared.cwd,
+    cwdRedacted: prepared.cwdRedacted,
+    model: prepared.model,
+    status: prepared.status,
+    createdAt: prepared.createdAt,
+    updatedAt: prepared.updatedAt,
+    archived: prepared.archived,
+    source: prepared.source,
+    revision: prepared.revision,
+    cacheDetail,
+    cacheGeneration: generation,
+    observedAt,
+  });
+}
+
+function indexedPreparedSnapshot(
+  prepared: PreparedProviderTaskSnapshot,
+  generation: number,
+  observedAt: number,
+): Readonly<IndexedProviderTask> {
+  return Object.freeze({
+    ...indexedPreparedSummary(prepared, generation, observedAt, "snapshot"),
+    turns: Object.freeze(prepared.turns.map((turn) => Object.freeze({
+      id: turn.id,
+      status: turn.status,
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+      ordinal: turn.ordinal,
+      events: Object.freeze(turn.events.map((event) => event.event)),
+    }))),
+  });
+}
+
+
 function renewRequiredStageInsideOwnedTransaction(
   db: SqliteDatabase,
   known: KnownHomeScope,
@@ -1521,10 +1639,11 @@ function snapshotRowsMatchPrepared(
   db: SqliteDatabase,
   stage: ProviderIndexStage,
   prepared: PreparedProviderTaskSnapshot,
-  observedAt: number,
+  taskObservedAt: number,
+  receiptObservedAt = taskObservedAt,
 ): boolean {
   const task = queryTaskRow(db, stage, prepared);
-  if (task === null || !taskRowMatchesPrepared(task, stage, prepared, observedAt)) return false;
+  if (task === null || !taskRowMatchesPrepared(task, stage, prepared, taskObservedAt)) return false;
   const turns = queryTaskChildRows(
     db,
     "provider_turn_cache",
@@ -1582,7 +1701,7 @@ function snapshotRowsMatchPrepared(
     replay_key: prepared.receiptKey,
     snapshot_fingerprint: prepared.snapshotFingerprint,
     event_count: prepared.eventCount,
-    observed_at: observedAt,
+    observed_at: receiptObservedAt,
   }]);
 }
 
@@ -2050,6 +2169,244 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
           now,
           this.config,
         ));
+    });
+  }
+
+  replaceActiveSummary(
+    keyValue: NativeTaskKey,
+    summaryValue: NativeTaskSummary,
+    observedAtValue: number,
+  ): Readonly<IndexedProviderTaskSummary> | null {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const targetKey = knownHomeForTaskKey(this.db, keyValue);
+      const preparation = prepareProviderTaskSummaryForStore(
+        registeredHomeForKnown(targetKey.known),
+        targetKey.key,
+        summaryValue,
+      );
+      if (preparation.status === "failed") fail(preparation.code);
+      const prepared = preparation.value;
+      const observedAt = safeInteger(observedAtValue);
+      return withOwnedImmediateTransaction(this.db, () => {
+        const generation = activeGenerationInsideOwnedTransaction(this.db, targetKey.known);
+        if (generation === null) return null;
+        const target = cacheTarget(targetKey.known, generation);
+        const before = generationCensus(this.db, targetKey.known.scope, generation);
+        const priorTask = taskGenerationCensus(
+          this.db,
+          targetKey.known.scope,
+          prepared.locator.nativeTaskId,
+          generation,
+        );
+        const existing = queryTaskRow(this.db, target, prepared);
+        const preservesSnapshot = existing !== null && priorTask.receiptCount === 1 &&
+          taskRowMatchesPrepared(existing, target, prepared, null);
+        const expected = replacementGenerationCensus(before, priorTask, {
+          taskCount: 1,
+          turnCount: preservesSnapshot ? priorTask.turnCount : 0,
+          eventCount: preservesSnapshot ? priorTask.eventCount : 0,
+          receiptCount: preservesSnapshot ? 1 : 0,
+        });
+        if (preservesSnapshot) {
+          const decodedExisting = readActiveProviderTask(
+            this.db,
+            registeredHomeForKnown(targetKey.known),
+            prepared.locator,
+            generation,
+            this.config,
+          );
+          if (decodedExisting === null || decodedExisting.cacheDetail !== "snapshot") {
+            fail("CORRUPT_ROW");
+          }
+          writePreparedTaskRow(this.db, target, prepared, observedAt);
+          const persisted = queryTaskRow(this.db, target, prepared);
+          if (persisted === null ||
+            !taskRowMatchesPrepared(persisted, target, prepared, observedAt)) {
+            fail("CORRUPT_ROW");
+          }
+        } else {
+          stagePreparedSummaryInsideOwnedTransaction(this.db, target, prepared, observedAt);
+        }
+        requireGenerationCensus(this.db, targetKey.known.scope, generation, expected);
+        assertGenerationCapacity(this.db, targetKey.known.scope, generation, this.config);
+        return indexedPreparedSummary(
+          prepared,
+          generation,
+          observedAt,
+          preservesSnapshot ? "snapshot" : "summary",
+        );
+      });
+    });
+  }
+
+  replaceActiveSnapshot(
+    keyValue: NativeTaskKey,
+    taskValue: NativeTask,
+    observedAtValue: number,
+  ): Readonly<IndexedProviderTask> | null {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const targetKey = knownHomeForTaskKey(this.db, keyValue);
+      const preparation = prepareProviderTaskSnapshotForStore(
+        registeredHomeForKnown(targetKey.known),
+        targetKey.key,
+        taskValue,
+        this.config,
+      );
+      if (preparation.status === "failed") fail(preparation.code);
+      const prepared = preparation.value;
+      const observedAt = safeInteger(observedAtValue);
+      let replayConflict = false;
+      const result = withOwnedImmediateTransaction(this.db, () => {
+        const generation = activeGenerationInsideOwnedTransaction(this.db, targetKey.known);
+        if (generation === null) return null;
+        const target = cacheTarget(targetKey.known, generation);
+        const before = generationCensus(this.db, targetKey.known.scope, generation);
+        const priorTask = taskGenerationCensus(
+          this.db,
+          targetKey.known.scope,
+          prepared.locator.nativeTaskId,
+          generation,
+        );
+        const expected = replacementGenerationCensus(before, priorTask, {
+          taskCount: 1,
+          turnCount: prepared.turns.length,
+          eventCount: prepared.eventCount,
+          receiptCount: 1,
+        });
+        const receipts = queryTaskChildRows(
+          this.db,
+          "provider_replay_receipts",
+          target,
+          prepared,
+          "replay_key",
+          2,
+        );
+        if (receipts.length > 1) fail("CORRUPT_ROW");
+        const existingReceipt = receipts[0];
+        let conflict: Readonly<{
+          existingFingerprint: string;
+          incomingFingerprint: string;
+        }> | null;
+        if (existingReceipt !== undefined &&
+          existingReceipt.replay_key === prepared.receiptKey &&
+          existingReceipt.snapshot_fingerprint === prepared.snapshotFingerprint) {
+          const existingTask = queryTaskRow(this.db, target, prepared);
+          if (existingTask === null) fail("CORRUPT_ROW");
+          const taskObservedAt = safeInteger(existingTask.observed_at);
+          const receiptObservedAt = safeInteger(existingReceipt.observed_at);
+          if (!snapshotRowsMatchPrepared(
+            this.db,
+            target,
+            prepared,
+            taskObservedAt,
+            receiptObservedAt,
+          )) fail("CORRUPT_ROW");
+          deletePreparedTaskRows(this.db, target, prepared);
+          writePreparedTaskRow(this.db, target, prepared, observedAt);
+          writePreparedSnapshotChildren(this.db, target, prepared);
+          writePreparedSnapshotReceipt(this.db, target, prepared, observedAt);
+          if (!snapshotRowsMatchPrepared(this.db, target, prepared, observedAt)) {
+            fail("CORRUPT_ROW");
+          }
+          conflict = null;
+        } else {
+          conflict = stagePreparedSnapshotInsideOwnedTransaction(
+            this.db,
+            target,
+            prepared,
+            observedAt,
+          );
+        }
+        if (conflict !== null) {
+          deletePreparedTaskRows(this.db, target, prepared);
+          const reconciliationTargetValue: ReconciliationTarget = Object.freeze({
+            locator: prepared.locator,
+            canonicalHome: targetKey.known.canonicalHome,
+          });
+          const input = normalizeReconciliationInput({
+            reviewedFingerprint: `provider-index-snapshot:v1:${conflict.existingFingerprint}`,
+            nativeFingerprint: `provider-index-snapshot:v1:${conflict.incomingFingerprint}`,
+            writerEpoch: 0,
+            reason: "REPLAY_CONFLICT",
+          }, targetKey.known.canonicalHome);
+          writeRequiredReconciliationInsideOwnedTransaction(
+            this.db,
+            reconciliationTargetValue,
+            input,
+            observedAt,
+          );
+          replayConflict = true;
+          return null;
+        }
+        requireGenerationCensus(this.db, targetKey.known.scope, generation, expected);
+        assertGenerationCapacity(this.db, targetKey.known.scope, generation, this.config);
+        return indexedPreparedSnapshot(prepared, generation, observedAt);
+      });
+      if (replayConflict) fail("REPLAY_CONFLICT");
+      return result;
+    });
+  }
+
+  list(
+    optionsValue: ProviderIndexListOptions = {},
+  ): Readonly<ProviderIndexPage<IndexedProviderTaskSummary>> {
+    return this.runMutation(() => {
+      let options;
+      try {
+        options = normalizeProviderIndexListOptions(optionsValue);
+      } catch {
+        return fail("INVALID_INPUT");
+      }
+      return listActiveProviderTasks(this.db, options);
+    });
+  }
+
+  read(locatorValue: ProviderTaskLocator): Readonly<IndexedProviderTask> | null {
+    return this.runMutation(() => {
+      const locator = normalizeLocator(locatorValue);
+      const known = knownHomeScope(this.db, {
+        provider: locator.provider,
+        homeFingerprint: locator.homeFingerprint,
+      });
+      const syncRow = querySyncState(this.db, known.scope);
+      if (syncRow === null) return null;
+      const sync = decodeSyncState(syncRow, known.scope);
+      if (sync.activeGeneration === 0) return null;
+      return readActiveProviderTask(
+        this.db,
+        registeredHomeForKnown(known),
+        locator,
+        sync.activeGeneration,
+        this.config,
+      );
+    });
+  }
+
+  invalidate(locatorValue: ProviderTaskLocator): boolean {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const locator = normalizeLocator(locatorValue);
+      const known = knownHomeScope(this.db, {
+        provider: locator.provider,
+        homeFingerprint: locator.homeFingerprint,
+      });
+      return withOwnedImmediateTransaction(this.db, () => {
+        recheckKnownHomeInsideOwnedTransaction(this.db, known);
+        return deleteTaskEveryGeneration(this.db, locator);
+      });
+    });
+  }
+
+  clearRebuildableCache(
+    scopeValue?: ProviderIndexScope,
+  ): Readonly<ProviderCacheClearResult> {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const scope = normalizedIndexScope(scopeValue);
+      return withOwnedImmediateTransaction(this.db, () =>
+        clearRebuildableCacheRows(this.db, scope));
     });
   }
 

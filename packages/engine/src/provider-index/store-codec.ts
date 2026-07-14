@@ -1035,6 +1035,21 @@ export function prepareProviderTaskSnapshot(
   return result.value;
 }
 
+export function verifyPreparedProviderTaskSnapshotForStore(
+  summary: PreparedProviderTaskSummary,
+  turns: readonly PreparedProviderTurn[],
+  receiptKey: string,
+  snapshotFingerprint: string,
+): boolean {
+  try {
+    const expectedFingerprint = providerTaskSnapshotFingerprintUnsafe(summary, turns);
+    return snapshotFingerprint === expectedFingerprint &&
+      receiptKey === providerTaskSnapshotReceiptKeyUnsafe(summary, expectedFingerprint);
+  } catch {
+    return false;
+  }
+}
+
 function indexedEventText(
   value: unknown,
   maximum = MAX_EVENT_JSON_CHARS,
