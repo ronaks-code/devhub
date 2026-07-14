@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS provider_task_cache (
   native_task_id TEXT NOT NULL CHECK (${requiredText("native_task_id", MAX_NATIVE_ID_CHARS)}),
   title TEXT NOT NULL CHECK (${requiredText("title", MAX_TITLE_CHARS, 0)}),
   cwd TEXT CHECK (${optionalText("cwd", MAX_PROVIDER_HOME_CHARS)}),
+  cwd_redacted INTEGER NOT NULL DEFAULT 0 CHECK (${booleanInteger("cwd_redacted")}),
   model TEXT CHECK (${optionalText("model", MAX_SHORT_TEXT_CHARS)}),
   status TEXT NOT NULL CHECK (${requiredText("status", MAX_SHORT_TEXT_CHARS)}),
   created_at TEXT CHECK (${optionalText("created_at", MAX_TIMESTAMP_TEXT_CHARS)}),
@@ -265,6 +266,21 @@ CREATE INDEX IF NOT EXISTS idx_provider_event_cache_order
     native_turn_key, ordinal, native_item_key, replay_key
   );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_turn_cache_task_ordinal
+  ON provider_turn_cache (
+    provider, home_fingerprint, native_task_id, cache_generation, ordinal
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_event_cache_task_ordinal
+  ON provider_event_cache (
+    provider, home_fingerprint, native_task_id, cache_generation, ordinal
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_replay_receipts_task_generation
+  ON provider_replay_receipts (
+    provider, home_fingerprint, native_task_id, cache_generation
+  );
+
 CREATE INDEX IF NOT EXISTS idx_provider_task_meta_updated
   ON provider_task_meta (updated_at DESC, provider, home_fingerprint, native_task_id);
 
@@ -308,7 +324,7 @@ function expectedSchemaObjects(): readonly ProviderIndexSchemaObject[] {
       });
       continue;
     }
-    const index = /^CREATE INDEX IF NOT EXISTS ([a-z_]+)\s+ON\s+([a-z_]+)\b/u
+    const index = /^CREATE (?:UNIQUE )?INDEX IF NOT EXISTS ([a-z_]+)\s+ON\s+([a-z_]+)\b/u
       .exec(statement);
     if (index?.[1] && index[2]) {
       objects.push({

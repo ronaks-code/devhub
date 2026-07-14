@@ -61,6 +61,7 @@ const GOLDEN_TABLE_INFO: Record<ProviderTableName, readonly TableInfoField[]> = 
     ["native_task_id", "TEXT", 1, null, 3],
     ["title", "TEXT", 1, null, 0],
     ["cwd", "TEXT", 0, null, 0],
+    ["cwd_redacted", "INTEGER", 1, "0", 0],
     ["model", "TEXT", 0, null, 0],
     ["status", "TEXT", 1, null, 0],
     ["created_at", "TEXT", 0, null, 0],
@@ -209,6 +210,8 @@ type IndexDirection = 0 | 1;
 interface GoldenIndex {
   readonly table: ProviderTableName;
   readonly columns: readonly (readonly [name: string, desc: IndexDirection])[];
+  readonly unique: 0 | 1;
+  readonly partial: 0 | 1;
   readonly sql: string;
 }
 
@@ -222,6 +225,8 @@ const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
       ["native_task_id", 0],
       ["cache_generation", 0],
     ],
+    unique: 0,
+    partial: 0,
     sql: "CREATE INDEX idx_provider_task_cache_active_list ON provider_task_cache ( updated_at DESC, provider, home_fingerprint, native_task_id, cache_generation )",
   },
   idx_provider_event_cache_order: {
@@ -236,6 +241,8 @@ const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
       ["native_item_key", 0],
       ["replay_key", 0],
     ],
+    unique: 0,
+    partial: 0,
     sql: "CREATE INDEX idx_provider_event_cache_order ON provider_event_cache ( provider, home_fingerprint, native_task_id, cache_generation, native_turn_key, ordinal, native_item_key, replay_key )",
   },
   idx_provider_task_meta_updated: {
@@ -246,6 +253,8 @@ const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
       ["home_fingerprint", 0],
       ["native_task_id", 0],
     ],
+    unique: 0,
+    partial: 0,
     sql: "CREATE INDEX idx_provider_task_meta_updated ON provider_task_meta (updated_at DESC, provider, home_fingerprint, native_task_id)",
   },
   idx_provider_fork_links_target: {
@@ -256,6 +265,8 @@ const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
       ["target_native_task_id", 0],
       ["created_at", 0],
     ],
+    unique: 0,
+    partial: 0,
     sql: "CREATE INDEX idx_provider_fork_links_target ON provider_fork_links ( target_provider, target_home_fingerprint, target_native_task_id, created_at )",
   },
   idx_provider_reconciliation_required: {
@@ -267,7 +278,47 @@ const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
       ["home_fingerprint", 0],
       ["native_task_id", 0],
     ],
+    unique: 0,
+    partial: 1,
     sql: "CREATE INDEX idx_provider_reconciliation_required ON provider_reconciliation_state ( required, updated_at, provider, home_fingerprint, native_task_id ) WHERE required = 1",
+  },
+  idx_provider_turn_cache_task_ordinal: {
+    table: "provider_turn_cache",
+    columns: [
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+      ["cache_generation", 0],
+      ["ordinal", 0],
+    ],
+    unique: 1,
+    partial: 0,
+    sql: "CREATE UNIQUE INDEX idx_provider_turn_cache_task_ordinal ON provider_turn_cache ( provider, home_fingerprint, native_task_id, cache_generation, ordinal )",
+  },
+  idx_provider_event_cache_task_ordinal: {
+    table: "provider_event_cache",
+    columns: [
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+      ["cache_generation", 0],
+      ["ordinal", 0],
+    ],
+    unique: 1,
+    partial: 0,
+    sql: "CREATE UNIQUE INDEX idx_provider_event_cache_task_ordinal ON provider_event_cache ( provider, home_fingerprint, native_task_id, cache_generation, ordinal )",
+  },
+  idx_provider_replay_receipts_task_generation: {
+    table: "provider_replay_receipts",
+    columns: [
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+      ["cache_generation", 0],
+    ],
+    unique: 1,
+    partial: 0,
+    sql: "CREATE UNIQUE INDEX idx_provider_replay_receipts_task_generation ON provider_replay_receipts ( provider, home_fingerprint, native_task_id, cache_generation )",
   },
 };
 
@@ -365,6 +416,42 @@ function insertTask(
     );
 }
 
+function insertTaskWithCwdRedacted(
+  db: TestDatabase,
+  nativeTaskId: string,
+  cwdRedacted: number | string | null,
+): void {
+  db.prepare(`INSERT INTO provider_task_cache (
+    provider, home_fingerprint, native_task_id,
+    title, cwd, cwd_redacted, model, status, created_at, updated_at, archived, source,
+    revision_updated_at, revision_status, revision_last_turn_id,
+    revision_last_turn_status, revision_last_item_id, revision_fingerprint,
+    cache_generation, observed_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      "openai",
+      HOME_FINGERPRINT,
+      nativeTaskId,
+      "Schema task",
+      "/tmp/project",
+      cwdRedacted,
+      "provider-model",
+      "idle",
+      "2026-07-13T00:00:00.000Z",
+      "2026-07-13T00:01:00.000Z",
+      0,
+      "native",
+      1_000,
+      "idle",
+      "turn-1",
+      "complete",
+      "item-1",
+      "openai:v1:revision",
+      1,
+      2_000,
+    );
+}
+
 function insertTurn(
   db: TestDatabase,
   options: {
@@ -373,6 +460,7 @@ function insertTurn(
     cacheGeneration?: number;
     nativeTaskId?: string;
     nativeTurnKey?: string;
+    ordinal?: number;
   } = {},
 ): void {
   db.prepare(`INSERT INTO provider_turn_cache (
@@ -388,7 +476,7 @@ function insertTurn(
       "complete",
       "2026-07-13T00:00:00.000Z",
       "2026-07-13T00:01:00.000Z",
-      0,
+      options.ordinal ?? 0,
     );
 }
 
@@ -403,6 +491,7 @@ function insertEvent(
     nativeItemKey?: string;
     replayKey?: string;
     eventFingerprint?: string;
+    ordinal?: number;
   } = {},
 ): void {
   db.prepare(`INSERT INTO provider_event_cache (
@@ -418,7 +507,7 @@ function insertEvent(
       options.nativeTurnKey ?? "native:v1:turn-1",
       options.nativeItemKey ?? "native:v1:item-1",
       options.replayKey ?? "replay:v1:0:event",
-      0,
+      options.ordinal ?? 0,
       options.eventFingerprint ?? EVENT_FINGERPRINT,
       '{"type":"message"}',
     );
@@ -563,6 +652,12 @@ describe("provider index v14 migration", () => {
       };
       expect(object.tbl_name).toBe(golden.table);
       expect(normalizedSql(object.sql)).toBe(golden.sql);
+      const listed = (db.prepare(`PRAGMA index_list(${golden.table})`).all() as Array<{
+        name: string;
+        unique: number;
+        partial: number;
+      }>).find((index) => index.name === name);
+      expect(listed).toMatchObject({ unique: golden.unique, partial: golden.partial });
       const columns = db.prepare(`PRAGMA index_xinfo(${name})`).all() as Array<{
         name: string | null;
         desc: number;
@@ -868,6 +963,214 @@ describe("provider index v14 migration", () => {
         "native:v1:turn", "native:v1:item", "replay:v1:0:test", 0,
         EVENT_FINGERPRINT, "x".repeat(8_388_609),
       )).toThrow();
+    db.close();
+  });
+
+  it.each([
+    ["NULL", null],
+    ["a non-boolean integer", 2],
+    ["text", "redacted"],
+  ] as const)("rejects cwd_redacted when it is %s", (_description, cwdRedacted) => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+
+    const columns = db.prepare("PRAGMA table_info(provider_task_cache)").all() as Array<{
+      name: string;
+    }>;
+    expect(columns.map((column) => column.name)).toContain("cwd_redacted");
+    expect(() => insertTaskWithCwdRedacted(db, "task-invalid", cwdRedacted)).toThrow();
+    db.close();
+  });
+
+  it("accepts cwd_redacted 0 and 1 as strict integers", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+
+    insertTaskWithCwdRedacted(db, "task-visible", 0);
+    insertTaskWithCwdRedacted(db, "task-redacted", 1);
+
+    expect(db.prepare(`SELECT native_task_id, cwd_redacted,
+      typeof(cwd_redacted) AS storage_type
+      FROM provider_task_cache ORDER BY native_task_id`).all()).toEqual([
+      { native_task_id: "task-redacted", cwd_redacted: 1, storage_type: "integer" },
+      { native_task_id: "task-visible", cwd_redacted: 0, storage_type: "integer" },
+    ]);
+    db.close();
+  });
+
+  it("enforces one turn ordinal per task generation", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-2", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 2 });
+
+    insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 7,
+    });
+    expect(() => insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-b",
+      ordinal: 7,
+    })).toThrow();
+
+    insertTurn(db, {
+      nativeTaskId: "task-2",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 7,
+    });
+    insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 2,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 7,
+    });
+
+    expect(db.prepare(`SELECT native_task_id, cache_generation, ordinal
+      FROM provider_turn_cache ORDER BY native_task_id, cache_generation`).all()).toEqual([
+      { native_task_id: "task-1", cache_generation: 1, ordinal: 7 },
+      { native_task_id: "task-1", cache_generation: 2, ordinal: 7 },
+      { native_task_id: "task-2", cache_generation: 1, ordinal: 7 },
+    ]);
+    db.close();
+  });
+
+  it("enforces one event ordinal across all turns in a task generation", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-2", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 2 });
+    insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 0,
+    });
+    insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-b",
+      ordinal: 1,
+    });
+    insertTurn(db, {
+      nativeTaskId: "task-2",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 0,
+    });
+    insertTurn(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 2,
+      nativeTurnKey: "native:v1:turn-a",
+      ordinal: 0,
+    });
+
+    insertEvent(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      nativeItemKey: "native:v1:item-a",
+      replayKey: "replay:v1:event-a",
+      ordinal: 7,
+    });
+    expect(() => insertEvent(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-b",
+      nativeItemKey: "native:v1:item-b",
+      replayKey: "replay:v1:event-b",
+      ordinal: 7,
+    })).toThrow();
+
+    insertEvent(db, {
+      nativeTaskId: "task-2",
+      cacheGeneration: 1,
+      nativeTurnKey: "native:v1:turn-a",
+      nativeItemKey: "native:v1:item-a",
+      replayKey: "replay:v1:event-a",
+      ordinal: 7,
+    });
+    insertEvent(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 2,
+      nativeTurnKey: "native:v1:turn-a",
+      nativeItemKey: "native:v1:item-a",
+      replayKey: "replay:v1:event-a",
+      ordinal: 7,
+    });
+
+    expect(db.prepare(`SELECT native_task_id, cache_generation, native_turn_key, ordinal
+      FROM provider_event_cache
+      ORDER BY native_task_id, cache_generation, native_turn_key`).all()).toEqual([
+      {
+        native_task_id: "task-1",
+        cache_generation: 1,
+        native_turn_key: "native:v1:turn-a",
+        ordinal: 7,
+      },
+      {
+        native_task_id: "task-1",
+        cache_generation: 2,
+        native_turn_key: "native:v1:turn-a",
+        ordinal: 7,
+      },
+      {
+        native_task_id: "task-2",
+        cache_generation: 1,
+        native_turn_key: "native:v1:turn-a",
+        ordinal: 7,
+      },
+    ]);
+    db.close();
+  });
+
+  it("enforces one replay receipt per task generation", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-2", cacheGeneration: 1 });
+    insertTask(db, { nativeTaskId: "task-1", cacheGeneration: 2 });
+
+    insertReceipt(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      replayKey: "snapshot:v1:first",
+    });
+    expect(() => insertReceipt(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 1,
+      replayKey: "snapshot:v1:second",
+    })).toThrow();
+
+    insertReceipt(db, {
+      nativeTaskId: "task-2",
+      cacheGeneration: 1,
+      replayKey: "snapshot:v1:first",
+    });
+    insertReceipt(db, {
+      nativeTaskId: "task-1",
+      cacheGeneration: 2,
+      replayKey: "snapshot:v1:first",
+    });
+
+    expect(db.prepare(`SELECT native_task_id, cache_generation, replay_key
+      FROM provider_replay_receipts
+      ORDER BY native_task_id, cache_generation`).all()).toEqual([
+      { native_task_id: "task-1", cache_generation: 1, replay_key: "snapshot:v1:first" },
+      { native_task_id: "task-1", cache_generation: 2, replay_key: "snapshot:v1:first" },
+      { native_task_id: "task-2", cache_generation: 1, replay_key: "snapshot:v1:first" },
+    ]);
     db.close();
   });
 
