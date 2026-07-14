@@ -446,3 +446,16 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Heartbeat renews only exact unexpired ownership, samples one clock and no token, returns false for lost/expired handles, rejects clock regression/overflow, and never shortens an existing expiry. Abort samples no callback, accepts an expired exact handle, deletes only its staged generation, and preserves active cache, durable rows, provider completion fields, and epoch.
 - Real SQLite BEFORE-ignore, AFTER-delete, and AFTER-rewrite triggers prove exact post-write rereads/rollback for begin, heartbeat, and abort. Caller transactions, hostile objects, reentrant callbacks, home-authority removal, closed/busy databases, restart recovery, and value-free errors are covered.
 - Fresh focused lifecycle gate passes `29/29`; combined lifecycle/store/migration/wiring passes `107/107`. Engine typecheck and its negative public-surface fixture pass, and `git diff --check` is clean. No D/E/F API, provider process, browser, full suite, heavy queue, Python runtime, main checkout, or user-owned path was touched.
+
+#### Checkpoint C specification-proof follow-up
+
+- [x] Prove expired takeover and abort in one scope preserve a second scope with identical generation/task identity, including exact sync/cache/durable rows.
+- [x] Prove idle-allocation UPDATE suppression, deletion, and rewriting roll back exact prior sync/cache state.
+- [x] Prove expired-takeover UPDATE suppression, deletion, and rewriting restore the abandoned staged cache and exact prior sync row.
+- [x] Run focused lifecycle, combined store/migration/wiring, engine typecheck/public-surface, and diff-hygiene gates; commit without amending or pushing.
+
+#### Checkpoint C specification-proof evidence
+
+- The cross-scope fixture assigns both homes generation `1`, token `same-owner-token`, and native task `same-native-task`; scope B's full sync/cache/meta/reconciliation snapshot is exactly unchanged after scope A's boundary-expired takeover and subsequent abort.
+- Six UPDATE-path induced failures cover idle allocation and expired takeover independently. BEFORE `RAISE(IGNORE)`, AFTER delete, and AFTER rewrite all return `CORRUPT_ROW`; exact prior sync and cache rows survive rollback, including the abandoned generation deleted before takeover's UPDATE.
+- All seven proof cases passed on their first run, so no production source change was needed. Focused lifecycle is `36/36`; combined lifecycle/store/migration/wiring is `114/114`; engine typecheck and the negative public-surface fixture pass; diff hygiene is clean.

@@ -154,3 +154,9 @@
 - A monotonic epoch row is necessary but not sufficient when cache generations are not foreign-keyed to sync state. Before allocating, fail closed if missing/idle sync authority would let cache at or beyond the visible allocation boundary survive into a reused identity.
 - Lease renewal must be monotonic across process/config restarts. A shorter newly configured lease may advance the heartbeat but must preserve a later existing expiry rather than shortening ownership.
 - Snapshot scope/handle inputs and provider-home authority before callbacks, recheck the exact stored home inside the owned transaction without filesystem work, then reread the complete sync row after every write. Trigger suppression, deletion, or rewriting is corruption, not successful ownership.
+
+## 2026-07-14 - Prove scope isolation and every SQL mutation branch
+
+- Composite-key SQL is not fully certified by single-scope tests. Reuse the same generation, token, and native task ID in two homes, snapshot the untouched scope's sync/cache/durable rows, and compare them byte-for-byte after destructive recovery operations.
+- An INSERT trigger matrix does not certify an UPSERT/UPDATE branch. Exercise idle allocation and expired takeover separately with BEFORE-ignore, AFTER-delete, and AFTER-rewrite triggers.
+- When recovery deletes staged cache before updating ownership, every induced UPDATE failure must prove transaction rollback restores both the exact sync row and the abandoned cache rows.
