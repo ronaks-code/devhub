@@ -129,6 +129,30 @@ function seedCache(
     );
 }
 
+function seedDurableRows(
+  db: TestDatabase,
+  scope: ProviderHomeScope,
+  nativeTaskId: string,
+): void {
+  db.prepare(`INSERT INTO provider_task_meta (
+    provider, home_fingerprint, native_task_id, favorite, local_label, updated_at
+  ) VALUES (?, ?, ?, 1, ?, ?)`)
+    .run(scope.provider, scope.homeFingerprint, nativeTaskId, "durable-label", 1_001);
+  db.prepare(`INSERT INTO provider_reconciliation_state (
+    provider, home_fingerprint, native_task_id, required, latch_revision,
+    reviewed_fingerprint, native_fingerprint, writer_epoch, reason, updated_at
+  ) VALUES (?, ?, ?, 1, 1, ?, ?, 4, ?, ?)`)
+    .run(
+      scope.provider,
+      scope.homeFingerprint,
+      nativeTaskId,
+      "durable-reviewed",
+      "durable-native",
+      "WRITER_LEASE_LOST",
+      1_002,
+    );
+}
+
 function cacheIds(db: TestDatabase, scope: ProviderHomeScope): readonly string[] {
   return (db.prepare(`SELECT native_task_id FROM provider_task_cache
     WHERE provider = ? AND home_fingerprint = ?
@@ -669,30 +693,145 @@ describe("ProviderTaskIndexStore stage lifecycle", () => {
   it("maps reentrant clock and token lifecycle callbacks to their stable failures", () => {
     const db = openDatabase();
     const home = tempDirectory("devhub-provider-reentrant-");
+    let clockNowCalls = 0;
+    let clockTokenCalls = 0;
+    let tokenNowCalls = 0;
+    let tokenFactoryCalls = 0;
     let clockStore!: ProviderTaskIndexStore;
     let tokenStore!: ProviderTaskIndexStore;
     let clockScope!: Readonly<ProviderHomeScope>;
     let tokenScope!: Readonly<ProviderHomeScope>;
     clockStore = new ProviderTaskIndexStore(db, {
       now: () => {
+        clockNowCalls += 1;
         clockStore.abortStage({ ...clockScope, generation: 1, ownerToken: "inner" });
         return 100;
       },
-      tokenFactory: () => "outer-clock",
+      tokenFactory: () => {
+        clockTokenCalls += 1;
+        return "outer-clock";
+      },
     });
     clockScope = registerScope(clockStore, home).scope;
     expectStoreError(() => clockStore.beginStage(clockScope), "CLOCK_FAILURE");
+    expect([clockNowCalls, clockTokenCalls]).toEqual([1, 0]);
 
     tokenStore = new ProviderTaskIndexStore(db, {
-      now: () => 100,
+      now: () => {
+        tokenNowCalls += 1;
+        return 100;
+      },
       tokenFactory: () => {
+        tokenFactoryCalls += 1;
         tokenStore.abortStage({ ...tokenScope, generation: 1, ownerToken: "inner" });
         return "outer-token";
       },
     });
     tokenScope = clockScope;
     expectStoreError(() => tokenStore.beginStage(tokenScope), "TOKEN_FAILURE");
+    expect([tokenNowCalls, tokenFactoryCalls]).toEqual([1, 1]);
     expect(rawSync(db, clockScope)).toBeUndefined();
+  });
+
+  it("blocks clock-callback mutation through another store on the same connection", () => {
+    const db = openDatabase();
+    const nestedStore = new ProviderTaskIndexStore(db, {
+      stageLeaseMs: 1_000,
+      now: () => 100,
+      tokenFactory: () => "initial-clock-owner",
+    });
+    const { scope } = registerScope(nestedStore);
+    const stage = nestedStore.beginStage(scope);
+    seedCache(db, scope, stage.generation, "preserved-clock-task");
+    seedDurableRows(db, scope, "preserved-clock-task");
+    const before = scopeRows(db, scope);
+    let clockCalls = 0;
+    let tokenCalls = 0;
+    const outerStore = new ProviderTaskIndexStore(db, {
+      stageLeaseMs: 1_000,
+      now: () => {
+        clockCalls += 1;
+        nestedStore.abortStage(stage);
+        return 1_100;
+      },
+      tokenFactory: () => {
+        tokenCalls += 1;
+        return "outer-clock-owner";
+      },
+    });
+
+    expectStoreError(() => outerStore.beginStage(scope), "CLOCK_FAILURE");
+
+    expect([clockCalls, tokenCalls]).toEqual([1, 0]);
+    expect(scopeRows(db, scope)).toEqual(before);
+    nestedStore.abortStage(stage);
+    expect(cacheIds(db, scope)).toEqual([]);
+  });
+
+  it("blocks token-callback mutation through another store on the same connection", () => {
+    const db = openDatabase();
+    const nestedStore = new ProviderTaskIndexStore(db, {
+      stageLeaseMs: 1_000,
+      now: () => 100,
+      tokenFactory: () => "initial-token-owner",
+    });
+    const { scope } = registerScope(nestedStore);
+    const stage = nestedStore.beginStage(scope);
+    seedCache(db, scope, stage.generation, "preserved-token-task");
+    seedDurableRows(db, scope, "preserved-token-task");
+    const before = scopeRows(db, scope);
+    let clockCalls = 0;
+    let tokenCalls = 0;
+    const outerStore = new ProviderTaskIndexStore(db, {
+      stageLeaseMs: 1_000,
+      now: () => {
+        clockCalls += 1;
+        return 1_100;
+      },
+      tokenFactory: () => {
+        tokenCalls += 1;
+        nestedStore.abortStage(stage);
+        return "outer-token-owner";
+      },
+    });
+
+    expectStoreError(() => outerStore.beginStage(scope), "TOKEN_FAILURE");
+
+    expect([clockCalls, tokenCalls]).toEqual([1, 1]);
+    expect(scopeRows(db, scope)).toEqual(before);
+  });
+
+  it("allows callback mutation through a store on a different connection", () => {
+    const outerDb = openDatabase();
+    const otherDb = openDatabase();
+    const otherStore = new ProviderTaskIndexStore(otherDb, {
+      now: () => 100,
+      tokenFactory: () => "other-owner",
+    });
+    const otherScope = registerScope(otherStore).scope;
+    const otherStage = otherStore.beginStage(otherScope);
+    seedCache(otherDb, otherScope, otherStage.generation, "other-task");
+    let clockCalls = 0;
+    let tokenCalls = 0;
+    const outerStore = new ProviderTaskIndexStore(outerDb, {
+      now: () => {
+        clockCalls += 1;
+        otherStore.abortStage(otherStage);
+        return 100;
+      },
+      tokenFactory: () => {
+        tokenCalls += 1;
+        return "outer-owner";
+      },
+    });
+    const outerScope = registerScope(outerStore).scope;
+
+    const outerStage = outerStore.beginStage(outerScope);
+
+    expect([clockCalls, tokenCalls]).toEqual([1, 1]);
+    expect(outerStage).toEqual({ ...outerScope, generation: 1, ownerToken: "outer-owner" });
+    expect(cacheIds(otherDb, otherScope)).toEqual([]);
+    expect(rawSync(otherDb, otherScope)).toMatchObject({ state: "idle" });
   });
 
   it("rechecks registered-home authority after callbacks and before allocating", () => {

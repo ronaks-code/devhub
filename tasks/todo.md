@@ -459,3 +459,17 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The cross-scope fixture assigns both homes generation `1`, token `same-owner-token`, and native task `same-native-task`; scope B's full sync/cache/meta/reconciliation snapshot is exactly unchanged after scope A's boundary-expired takeover and subsequent abort.
 - Six UPDATE-path induced failures cover idle allocation and expired takeover independently. BEFORE `RAISE(IGNORE)`, AFTER delete, and AFTER rewrite all return `CORRUPT_ROW`; exact prior sync and cache rows survive rollback, including the abandoned generation deleted before takeover's UPDATE.
 - All seven proof cases passed on their first run, so no production source change was needed. Focused lifecycle is `36/36`; combined lifecycle/store/migration/wiring is `114/114`; engine typecheck and the negative public-surface fixture pass; diff hygiene is clean.
+
+#### Checkpoint C shared-connection mutation-guard repair
+
+- [x] Add RED clock/token callback regressions using two stores over the exact same SQLite handle; prove stable callback failures and exact state preservation.
+- [x] Replace the instance-local mutation flag with connection-scoped guard state shared through a module-private `WeakMap`.
+- [x] Preserve same-instance reentrancy, exact callback counts, closed-database mapping, guard release after failure, and independence between distinct database handles.
+- [x] Run focused lifecycle, combined store/migration/wiring, engine typecheck/public-surface, and diff-hygiene gates; commit without amending or pushing.
+
+#### Checkpoint C shared-connection mutation-guard evidence
+
+- RED was exact: the lifecycle suite reported `2 failed / 37 passed`; both cross-instance callbacks mutated successfully because each store owned an independent flag, so the outer begin returned instead of failing closed.
+- The module-private `WeakMap` now binds one guard state to each exact SQLite object. All store instances on that connection share the state; `finally` releases it after every return or throw, while distinct database handles receive independent states.
+- Clock and token regressions preserve exact sync/cache/meta/reconciliation rows and return `CLOCK_FAILURE` and `TOKEN_FAILURE` with callback counts `1/0` and `1/1`. A post-failure abort proves release, and a different-database callback mutation succeeds. Existing same-instance and closed-database cases remain green.
+- Focused lifecycle passes `39/39`; combined lifecycle/store/migration/wiring passes `117/117`; engine typecheck and its negative public-surface fixture pass; diff hygiene is clean.
