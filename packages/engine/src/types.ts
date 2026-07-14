@@ -2,6 +2,10 @@
  * Shared, framework-agnostic types. PURE — no Node imports — so the browser face
  * can `import type` these without pulling Node code into the bundle.
  */
+import {
+  DEFAULT_DEVHUB_FEATURE_FLAGS,
+  type DevHubFeatureFlags,
+} from "./providers/feature-flags.js";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -362,6 +366,14 @@ export interface AppSettings {
   lastTab?: string;
   /** Soft monthly spend budget in USD, or null when unset. */
   monthlyBudgetUsd?: number | null;
+  /** Requested DevHub program features. Runtime availability is resolved by the backend. */
+  devHubFeatures?: DevHubFeatureFlags;
+  /**
+   * Response-only copy of the durable feature requests before runtime clamping.
+   * Clients use this to preserve unavailable sibling preferences on a later save.
+   * The settings HTTP schema never accepts or persists this field.
+   */
+  requestedDevHubFeatures?: DevHubFeatureFlags;
   /**
    * Outbound webhook subscriptions (POSTed by the server lane on engine events).
    * Stored as a JSON array under the `webhooks` settings key; defaults to []. The
@@ -384,6 +396,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   density: "comfortable",
   lastProjectId: null,
   monthlyBudgetUsd: null,
+  devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS },
   webhooks: [],
 };
 

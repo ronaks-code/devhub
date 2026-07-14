@@ -106,6 +106,12 @@ export interface ProjectOverview {
   tagCloud: ProjectTag[];
 }
 
+/** Injectable dependencies for deterministic project-overview aggregation. */
+export interface ProjectOverviewOptions {
+  /** Supplies the current instant used to anchor the rolling UTC daily-cost window. */
+  now?: () => Date;
+}
+
 function num(v: unknown): number {
   return typeof v === "bigint" ? Number(v) : typeof v === "number" ? v : 0;
 }
@@ -140,9 +146,8 @@ function emptyOverview(projectId: string): ProjectOverview {
   };
 }
 
-/** `YYYY-MM-DD` for the UTC day exactly `daysAgo` days before today (0 = today). */
-function utcDayString(daysAgo: number): string {
-  const now = new Date();
+/** `YYYY-MM-DD` for the UTC day exactly `daysAgo` days before `now` (0 = its UTC day). */
+function utcDayString(now: Date, daysAgo: number): string {
   const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   d.setUTCDate(d.getUTCDate() - daysAgo);
   return d.toISOString().slice(0, 10);
@@ -168,7 +173,11 @@ function utcDayString(daysAgo: number): string {
  * An unknown projectId (no matching session row) short-circuits to {@link emptyOverview}
  * after step 1 finds nothing — zeros + empty arrays, never a throw.
  */
-export function projectOverview(db: SqliteDatabase, projectId: string): ProjectOverview {
+export function projectOverview(
+  db: SqliteDatabase,
+  projectId: string,
+  options: ProjectOverviewOptions = {},
+): ProjectOverview {
   // (1) Per-model grouping over just this project's sessions — O(distinct models) rows,
   //     the projectId index narrows the scan. firstTs/lastTs come from MIN/MAX in SQL.
   const modelRows = db
@@ -239,7 +248,8 @@ export function projectOverview(db: SqliteDatabase, projectId: string): ProjectO
 
   // (3) Daily cost — reuse the existing dailyUsage rollup, scoped to the project, over the
   //     last DAILY_WINDOW_DAYS UTC days (since-bound keeps the window bounded).
-  const since = utcDayString(DAILY_WINDOW_DAYS - 1);
+  const now = options.now?.() ?? new Date();
+  const since = utcDayString(now, DAILY_WINDOW_DAYS - 1);
   const dailyCost: ProjectDailyCost[] = dailyUsage(db, { projectId, since }).map((d) => ({
     day: d.date,
     costUsd: d.costUsd,

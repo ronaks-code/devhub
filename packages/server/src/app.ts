@@ -8,6 +8,15 @@ import websocket from "@fastify/websocket";
 import path from "node:path";
 import { Engine, watchTranscripts, startConfigWatcher, paths } from "@devhub/engine";
 import type { EngineEvent } from "@devhub/engine/types";
+import { ProviderRegistry } from "@devhub/engine/providers";
+import {
+  createNativeCodexRuntime,
+  type CreateNativeCodexRuntimeOptions,
+} from "./native-codex-runtime.js";
+import {
+  createNativeClaudeRuntime,
+  type CreateNativeClaudeRuntimeOptions,
+} from "./native-claude-runtime.js";
 import { registerWs } from "./ws.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
 import { registerGitRoutes } from "./routes/git.js";
@@ -45,7 +54,11 @@ import { registerPortableRoutes } from "./routes/portable.js";
 import { registerAutotagRoutes } from "./routes/autotag.js";
 import { registerWebhooksRoutes } from "./routes/webhooks.js";
 import { registerCodexRoutes } from "./routes/codex.js";
-import { registerOpenAIRoutes } from "./routes/openai.js";
+import { registerProviderTaskRoutes } from "./routes/provider-tasks.js";
+import {
+  registerOpenAIRoutes,
+  type OpenAISessionFactory,
+} from "./routes/openai.js";
 import { registerOpenAIWs } from "./openai-ws.js";
 import { fireWebhooks } from "./webhook-fire.js";
 import {
@@ -66,6 +79,25 @@ const notificationsByEngine = new WeakMap<Engine, NotificationsWatcher>();
 export interface BuildOptions {
   engine?: Engine;
   token?: string;
+  providerRegistry?: ProviderRegistry;
+  /** Explicit development-only opt-in. Environment fallback is false by default. */
+  openAIChatEnabled?: boolean;
+  /** Hermetic/test seam; production defaults to the real OpenAISession. */
+  openAISessionFactory?: OpenAISessionFactory;
+  /** false disables discovery; an object provides explicit hermetic/runtime overrides. */
+  nativeCodex?: false | Omit<CreateNativeCodexRuntimeOptions, "registry" | "isEnabled">;
+  /** false disables discovery; an object provides explicit hermetic/runtime overrides. */
+  nativeClaude?: false | Omit<CreateNativeClaudeRuntimeOptions, "registry" | "isEnabled">;
+}
+
+async function settleProviderRuntimeOperations(
+  operations: readonly (() => unknown | Promise<unknown>)[],
+): Promise<void> {
+  const results = await Promise.allSettled(operations.map((operation) =>
+    Promise.resolve().then(operation)));
+  const failure = results.find((result): result is PromiseRejectedResult =>
+    result.status === "rejected");
+  if (failure) throw failure.reason;
 }
 
 export function buildApp(opts: BuildOptions = {}): {
@@ -74,7 +106,51 @@ export function buildApp(opts: BuildOptions = {}): {
 } {
   const engine = opts.engine ?? new Engine();
   const token = (opts.token ?? process.env.CLAUDE_UI_TOKEN)?.trim();
+  const openAIChatEnabled =
+    opts.openAIChatEnabled ?? process.env.DEVHUB_ENABLE_OPENAI_CHAT === "1";
+  const openAIOptions = {
+    enabled: openAIChatEnabled,
+    token,
+    sessionFactory: opts.openAISessionFactory,
+  };
+  const providerRegistry = opts.providerRegistry ?? new ProviderRegistry();
+  const hasMutationToken = typeof token === "string" && token.length > 0;
+  const nativeCodexRequested = (): boolean =>
+    engine.getSettings().devHubFeatures?.nativeCodex === true;
+  const nativeClaudeRequested = (): boolean =>
+    hasMutationToken && engine.getSettings().devHubFeatures?.persistentClaude === true;
+  const shouldCreateNativeCodex = opts.nativeCodex !== false &&
+    (opts.providerRegistry === undefined || opts.nativeCodex !== undefined);
+  const nativeCodexRuntime = shouldCreateNativeCodex
+    ? createNativeCodexRuntime({
+        ...(typeof opts.nativeCodex === "object" ? opts.nativeCodex : {}),
+        registry: providerRegistry,
+        isEnabled: nativeCodexRequested,
+      })
+    : null;
+  const shouldCreateNativeClaude = opts.nativeClaude !== false &&
+    (opts.providerRegistry === undefined || opts.nativeClaude !== undefined);
+  const nativeClaudeRuntime = shouldCreateNativeClaude
+    ? createNativeClaudeRuntime({
+        ...(typeof opts.nativeClaude === "object" ? opts.nativeClaude : {}),
+        registry: providerRegistry,
+        isEnabled: nativeClaudeRequested,
+      })
+    : null;
   const app = Fastify({ logger: false });
+
+  app.addHook("onClose", async () => {
+    await settleProviderRuntimeOperations([
+      ...(nativeCodexRuntime === null ? [] : [() => nativeCodexRuntime.close()]),
+      ...(nativeClaudeRuntime === null ? [] : [() => nativeClaudeRuntime.close()]),
+    ]);
+  });
+  app.addHook("onReady", async () => {
+    if (
+      nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable() &&
+      nativeClaudeRequested()
+    ) await nativeClaudeRuntime.refreshEnabled();
+  });
 
   app.register(cors, { origin: true, credentials: true });
   // WebSocket support must be registered before any ws routes are defined.
@@ -105,7 +181,7 @@ export function buildApp(opts: BuildOptions = {}): {
   // isn't applied yet and the handler is wrongly called with (request, reply).
   app.register(async (instance) => {
     registerWs(instance, engine, token);
-    registerOpenAIWs(instance, token);
+    registerOpenAIWs(instance, openAIOptions);
   });
 
   app.get<{ Querystring: { q: string; limit?: number } }>(
@@ -131,7 +207,20 @@ export function buildApp(opts: BuildOptions = {}): {
 
   app.get("/api/projects", async () => engine.getProjects());
 
-  registerSettingsRoutes(app, engine);
+  registerSettingsRoutes(app, engine, {
+    availableDevHubFeatures: () => ({
+      nativeCodex: nativeCodexRuntime !== null,
+      persistentClaude:
+        hasMutationToken && nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable(),
+    }),
+    appliedDevHubFeatures: () => ({
+      persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
+    }),
+    onDevHubFeaturesChanged: () => settleProviderRuntimeOperations([
+      ...(nativeCodexRuntime === null ? [] : [() => nativeCodexRuntime.refreshEnabled()]),
+      ...(nativeClaudeRuntime === null ? [] : [() => nativeClaudeRuntime.refreshEnabled()]),
+    ]),
+  });
 
   registerGitRoutes(app, engine);
 
@@ -203,7 +292,9 @@ export function buildApp(opts: BuildOptions = {}): {
 
   registerCodexRoutes(app);
 
-  registerOpenAIRoutes(app);
+  registerProviderTaskRoutes(app, providerRegistry, token);
+
+  registerOpenAIRoutes(app, openAIOptions);
 
   app.get<{ Params: { id: string } }>(
     "/api/projects/:id/sessions",

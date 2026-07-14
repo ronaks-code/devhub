@@ -29,6 +29,14 @@ const OPENAI_MODELS = [
 type OpenAIModel = (typeof OPENAI_MODELS)[number];
 const DEFAULT_MODEL: OpenAIModel = "gpt-5.4-mini";
 
+export const OPENAI_CHAT_TITLE = "OpenAI Chat — development only";
+export const OPENAI_CHAT_WARNING =
+  "Chat-only experiment. This is not Codex. Local tools are disabled.";
+export const OPENAI_CHAT_EMPTY_HINT =
+  "Pick a model and type a message. Enter to send, Shift+Enter for a new line.";
+export const OPENAI_CHAT_DISABLED_EXPLANATION =
+  "Development-only: the server stays disabled until it starts with DEVHUB_ENABLE_OPENAI_CHAT=1 and a DevHub access token is configured for Bearer authentication.";
+
 // ---------------------------------------------------------------------------
 // Message types
 // ---------------------------------------------------------------------------
@@ -186,16 +194,18 @@ interface OpenAIHandlers {
 }
 
 interface OpenAIConn {
-  send: (payload: { type: "send"; text: string; cwd: string; model: string }) => void;
+  send: (payload: { type: "send"; text: string }) => void;
+  stop: () => void;
   close: () => void;
 }
 
-function openOpenAIChat(sessionId: string, handlers: OpenAIHandlers): OpenAIConn {
+export function openOpenAIChat(
+  sessionId: string,
+  handlers: OpenAIHandlers,
+): OpenAIConn {
   const token = getToken();
   const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
-  const url =
-    `${wsProto}//${location.host}/api/ws/openai/${encodeURIComponent(sessionId)}` +
-    (token ? `?token=${encodeURIComponent(token)}` : "");
+  const url = `${wsProto}//${location.host}/api/ws/openai/${encodeURIComponent(sessionId)}`;
 
   const queue: string[] = [];
   let ws: WebSocket | null = null;
@@ -207,6 +217,14 @@ function openOpenAIChat(sessionId: string, handlers: OpenAIHandlers): OpenAIConn
     ws = socket;
 
     socket.onopen = () => {
+      if (!token) {
+        closed = true;
+        queue.length = 0;
+        handlers.onError("OpenAI Chat requires access token authentication.");
+        socket.close();
+        return;
+      }
+      socket.send(JSON.stringify({ type: "authenticate", token }));
       for (const raw of queue.splice(0)) socket.send(raw);
     };
 
@@ -221,19 +239,19 @@ function openOpenAIChat(sessionId: string, handlers: OpenAIHandlers): OpenAIConn
       const type = frame.type as string | undefined;
       switch (type) {
         case "token":
-          handlers.onToken((frame.text as string | undefined) ?? "");
+          handlers.onToken((frame.token as string | undefined) ?? "");
           break;
         case "tool_start":
           handlers.onToolStart(
             (frame.id as string | undefined) ?? "",
-            (frame.toolName as string | undefined) ?? "tool",
-            (frame.input as string | undefined) ?? undefined,
+            (frame.name as string | undefined) ?? "tool",
+            (frame.args as string | undefined) ?? undefined,
           );
           break;
         case "tool_end":
           handlers.onToolEnd(
             (frame.id as string | undefined) ?? "",
-            (frame.output as string | undefined) ?? "",
+            (frame.result as string | undefined) ?? "",
           );
           break;
         case "turn_done":
@@ -250,13 +268,12 @@ function openOpenAIChat(sessionId: string, handlers: OpenAIHandlers): OpenAIConn
     socket.onclose = () => {
       if (!closed && ws === socket) {
         ws = null;
-        // attempt one silent reconnect after 1 s
-        setTimeout(() => { if (!closed) connect(); }, 1000);
+        handlers.onError("OpenAI Chat connection closed.");
       }
     };
 
     socket.onerror = () => {
-      if (closed) handlers.onError("WebSocket connection error");
+      if (!closed) handlers.onError("WebSocket connection error");
     };
   }
 
@@ -269,9 +286,20 @@ function openOpenAIChat(sessionId: string, handlers: OpenAIHandlers): OpenAIConn
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(raw);
       else queue.push(raw);
     },
-    close() {
-      closed = true;
+    stop() {
+      if (closed) return;
       queue.length = 0;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "stop" }));
+      }
+    },
+    close() {
+      if (closed) return;
+      queue.length = 0;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "stop" }));
+      }
+      closed = true;
       try { ws?.close(); } catch { /* already closing */ }
       ws = null;
     },
@@ -347,15 +375,15 @@ export function OpenAIPane() {
     if (sessionId) return sessionId;
     setSessionLoading(true);
     try {
-      const { id } = await openaiApi.createSession();
-      setSessionId(id);
+      const created = await openaiApi.createSession({ model, cwd });
+      setSessionId(created.sessionId);
       setSessionLoading(false);
-      return id;
+      return created.sessionId;
     } catch (err) {
       setSessionLoading(false);
       throw err;
     }
-  }, [sessionId]);
+  }, [sessionId, model, cwd]);
 
   // Lazily open (or reuse) the WebSocket for a given session
   const ensureConn = useCallback((sid: string): OpenAIConn => {
@@ -460,11 +488,17 @@ export function OpenAIPane() {
     }
 
     const conn = ensureConn(sid);
-    conn.send({ type: "send", text, cwd, model });
+    conn.send({ type: "send", text });
   }, [draft, running, cwd, model, ensureSession, ensureConn, scrollToBottom]);
 
   const stop = useCallback(() => {
-    // Send interrupt (best-effort — server may not support it)
+    connRef.current?.stop();
+    if (sessionId) {
+      void openaiApi.stopSession(sessionId).catch(() => {
+        // The authenticated WebSocket stop above is the primary path. A failed
+        // REST fallback is reflected by the socket close/error if still active.
+      });
+    }
     connRef.current?.close();
     connRef.current = null;
 
@@ -488,7 +522,7 @@ export function OpenAIPane() {
         },
       ]);
     }
-  }, []);
+  }, [sessionId]);
 
   const newSession = useCallback(() => {
     connRef.current?.close();
@@ -526,7 +560,7 @@ export function OpenAIPane() {
         <div className="min-w-0 flex-1">
           <h1 className="flex items-center gap-2 text-[15px] font-semibold text-zinc-100">
             <Sparkles className="h-4 w-4 shrink-0 text-emerald-400" />
-            OpenAI Chat
+            {OPENAI_CHAT_TITLE}
           </h1>
           {/* CWD pill — click to edit */}
           {cwdEditing ? (
@@ -581,13 +615,23 @@ export function OpenAIPane() {
         </button>
       </div>
 
+      <div
+        role="status"
+        className="border-b border-amber-900/40 bg-amber-950/20 px-5 py-2 text-[11px] text-amber-200"
+      >
+        <div>{OPENAI_CHAT_WARNING}</div>
+        <div className="mt-0.5 text-amber-300/80">
+          {OPENAI_CHAT_DISABLED_EXPLANATION}
+        </div>
+      </div>
+
       {/* ── Message stream ───────────────────────────────────────── */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {isEmpty ? (
           <EmptyState
             icon={<Sparkles className="h-12 w-12" />}
-            title="OpenAI Chat"
-            hint="Pick a model, set your working directory, and type a message. The bash tool runs in your chosen CWD. Enter to send, Shift+Enter for a new line."
+            title={OPENAI_CHAT_TITLE}
+            hint={OPENAI_CHAT_EMPTY_HINT}
           />
         ) : (
           <div className="pb-4">

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Blocks, Bot, Check, FileText, Loader2, PiggyBank, Save, Send, Server, Shield, SlidersHorizontal, Sparkles, Webhook } from "lucide-react";
 import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@devhub/engine/driver";
+import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { cn } from "../lib/utils";
 import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";
@@ -39,6 +40,148 @@ const MODELS = [
 
 const THEMES = ["dark", "light", "system"] as const;
 const DENSITIES = ["comfortable", "compact"] as const;
+
+/** Complete the settings route's exact six-field feature contract without importing Node runtime code. */
+export function completeDevHubFeatures(
+  value: Partial<DevHubFeatureFlags> | undefined,
+): DevHubFeatureFlags {
+  return {
+    nativeCodex: value?.nativeCodex === true,
+    persistentClaude: value?.persistentClaude === true,
+    unifiedTaskIndex: value?.unifiedTaskIndex === true,
+    codexStyleShell: value?.codexStyleShell === true,
+    crossProviderFork: value?.crossProviderFork === true,
+    workMode: value?.workMode === true,
+  };
+}
+
+/** Apply the local checkbox intent while preserving every other feature request. */
+export function withNativeCodexPreference(
+  settings: AppSettings,
+  enabled: boolean,
+): AppSettings {
+  const resolved = completeDevHubFeatures(settings.devHubFeatures);
+  const requested = completeDevHubFeatures(
+    settings.requestedDevHubFeatures ?? settings.devHubFeatures,
+  );
+  return {
+    ...settings,
+    devHubFeatures: {
+      ...resolved,
+      nativeCodex: settings.requestedDevHubFeatures === undefined
+        ? enabled
+        : resolved.nativeCodex,
+    },
+    requestedDevHubFeatures: {
+      ...requested,
+      nativeCodex: enabled,
+    },
+  };
+}
+
+/** Apply the Claude runtime request without presenting a server-clamped flag as enabled. */
+export function withPersistentClaudePreference(
+  settings: AppSettings,
+  enabled: boolean,
+): AppSettings {
+  const resolved = completeDevHubFeatures(settings.devHubFeatures);
+  const requested = completeDevHubFeatures(
+    settings.requestedDevHubFeatures ?? settings.devHubFeatures,
+  );
+  return {
+    ...settings,
+    devHubFeatures: {
+      ...resolved,
+      persistentClaude: settings.requestedDevHubFeatures === undefined
+        ? enabled
+        : resolved.persistentClaude,
+    },
+    requestedDevHubFeatures: {
+      ...requested,
+      persistentClaude: enabled,
+    },
+  };
+}
+
+/** Build the persisted Preferences payload, including every required feature boolean. */
+export function settingsUpdatePayload(settings: AppSettings): Partial<AppSettings> {
+  return {
+    defaultModel: settings.defaultModel,
+    defaultPermissionMode: settings.defaultPermissionMode,
+    theme: settings.theme,
+    density: settings.density,
+    monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
+    devHubFeatures: completeDevHubFeatures(
+      settings.requestedDevHubFeatures ?? settings.devHubFeatures,
+    ),
+  };
+}
+
+const EDITABLE_SETTING_KEYS = [
+  "defaultModel",
+  "defaultPermissionMode",
+  "theme",
+  "density",
+  "monthlyBudgetUsd",
+] as const satisfies readonly (keyof AppSettings)[];
+
+/** Build a merge-safe patch containing only fields the Preferences form changed. */
+export function dirtySettingsUpdatePayload(
+  settings: AppSettings,
+  dirty: ReadonlySet<keyof AppSettings>,
+): Partial<AppSettings> {
+  const full = settingsUpdatePayload(settings);
+  const patch: Partial<AppSettings> = {};
+  for (const key of EDITABLE_SETTING_KEYS) {
+    if (dirty.has(key)) (patch as Record<string, unknown>)[key] = full[key];
+  }
+  if (dirty.has("devHubFeatures") || dirty.has("requestedDevHubFeatures")) {
+    patch.devHubFeatures = full.devHubFeatures;
+  }
+  return patch;
+}
+
+/** Rebase an authoritative snapshot underneath unsaved local fields. */
+export function mergeAuthoritativeSettings(
+  current: AppSettings | null,
+  authoritative: AppSettings,
+  dirty: Set<keyof AppSettings>,
+): AppSettings {
+  if (!current || dirty.size === 0) return authoritative;
+  const merged: AppSettings = { ...authoritative };
+  for (const key of [...dirty]) {
+    const authoritativeValue = authoritative[key];
+    const localValue = current[key];
+    if (JSON.stringify(authoritativeValue) === JSON.stringify(localValue)) {
+      dirty.delete(key);
+    } else {
+      (merged as Record<string, unknown>)[key] = localValue;
+    }
+  }
+  return merged;
+}
+
+/** Publish to the shell before deciding whether this pane still owns local UI state. */
+export function deliverSettingsResponse(
+  settings: AppSettings,
+  requestVersion: number | undefined,
+  onSettingsSaved: ((settings: AppSettings, requestVersion?: number) => boolean | void) | undefined,
+  localRequestIsCurrent: boolean,
+): boolean {
+  const shellAccepted = onSettingsSaved?.(settings, requestVersion) !== false;
+  return shellAccepted && localRequestIsCurrent;
+}
+
+/** A dropped PUT response may still have committed, so recovery must outlive this pane. */
+export function requestSettingsReconciliation(
+  onSettingsReconcile: (() => void | Promise<void>) | undefined,
+): void {
+  try {
+    void onSettingsReconcile?.();
+  } catch {
+    // The App-level bounded reconciliation keeps the last known-safe snapshot.
+  }
+}
 
 /**
  * Client-only connection settings (API host + token), kept in localStorage as
@@ -104,68 +247,122 @@ const inputCls =
  */
 export function SettingsPane({
   onSettingsSaved,
+  onSettingsRequestStart,
+  onSettingsReconcile,
+  authoritativeSettings,
   projectCwd,
 }: {
-  onSettingsSaved?: (s: AppSettings) => void;
+  onSettingsSaved?: (s: AppSettings, requestVersion?: number) => boolean | void;
+  /** Share request ordering with the shell so stale responses cannot re-enable a clamped runtime. */
+  onSettingsRequestStart?: () => number;
+  /** App-owned reread that remains valid after this pane unmounts. */
+  onSettingsReconcile?: () => void | Promise<void>;
+  /** App-level latest-wins snapshot; keeps this editor from adopting stale concurrent responses. */
+  authoritativeSettings?: AppSettings | null;
   /** Active project's working dir; enables project-scoped MCP server edits. */
   projectCwd?: string;
 }) {
   const [section, setSection] = useState<SettingsSection>("preferences");
-  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(authoritativeSettings ?? null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   const [conn, setConn] = useState<ConnSettings>(() => readConn());
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestVersion = useRef(0);
+  const dirtySettings = useRef(new Set<keyof AppSettings>());
+
+  const loadSettings = useCallback(async (preserveNotice = false) => {
+    const localVersion = ++requestVersion.current;
+    const shellVersion = onSettingsRequestStart?.();
+    if (!preserveNotice) setLoadError(null);
+    try {
+      const next = await api.getSettings();
+      if (!deliverSettingsResponse(
+        next,
+        shellVersion,
+        onSettingsSaved,
+        requestVersion.current === localVersion,
+      )) return;
+      setSettings((current) => mergeAuthoritativeSettings(
+        current,
+        next,
+        dirtySettings.current,
+      ));
+    } catch (reason) {
+      if (requestVersion.current !== localVersion) return;
+      setLoadError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [onSettingsRequestStart, onSettingsSaved]);
 
   useEffect(() => {
-    let cancelled = false;
-    api
-      .getSettings()
-      .then((s) => {
-        if (!cancelled) setSettings(s);
-      })
-      .catch((e) => {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    if (authoritativeSettings) {
+      requestVersion.current += 1;
+      setSettings((current) => mergeAuthoritativeSettings(
+        current,
+        authoritativeSettings,
+        dirtySettings.current,
+      ));
+      setLoadError((current) => current?.startsWith("Save response was not confirmed")
+        ? current
+        : null);
+      return;
+    }
+    void loadSettings();
+  }, [authoritativeSettings, loadSettings]);
 
   useEffect(() => {
     return () => {
+      requestVersion.current += 1;
       if (savedTimer.current) clearTimeout(savedTimer.current);
     };
   }, []);
 
   // Local edit helper: patch a single key in the in-memory settings object.
   const patch = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
+    dirtySettings.current.add(key);
     setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
   };
 
   const save = async () => {
     if (!settings) return;
-    setSaving(true);
-    try {
-      const next = await api.putSettings({
-        defaultModel: settings.defaultModel,
-        defaultPermissionMode: settings.defaultPermissionMode,
-        theme: settings.theme,
-        density: settings.density,
-        monthlyBudgetUsd: settings.monthlyBudgetUsd ?? null,
-      });
-      setSettings(next);
+    const payload = dirtySettingsUpdatePayload(settings, dirtySettings.current);
+    const savedKeys = [...dirtySettings.current];
+    if (Object.keys(payload).length === 0) {
       writeConn(conn);
-      onSettingsSaved?.(next);
+      setSavedAt(Date.now());
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+      return;
+    }
+    const localVersion = ++requestVersion.current;
+    const shellVersion = onSettingsRequestStart?.();
+    setSaving(true);
+    setLoadError(null);
+    try {
+      const next = await api.putSettings(payload);
+      const keepLocalState = deliverSettingsResponse(
+        next,
+        shellVersion,
+        onSettingsSaved,
+        requestVersion.current === localVersion,
+      );
+      writeConn(conn);
+      if (!keepLocalState) return;
+      for (const key of savedKeys) dirtySettings.current.delete(key);
+      // The response is authoritative: runtime-unavailable features are clamped
+      // false by the server, so neither this form nor the shell advertises them.
+      setSettings(next);
       setSavedAt(Date.now());
       if (savedTimer.current) clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      requestSettingsReconciliation(onSettingsReconcile);
+      if (requestVersion.current !== localVersion) return;
+      setLoadError(`Save response was not confirmed; reconciling settings. ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      setSaving(false);
+      if (requestVersion.current === localVersion) setSaving(false);
     }
   };
 
@@ -176,15 +373,29 @@ export function SettingsPane({
   // sub-tab chrome (and the MCP tab) stays usable even if settings fail to load.
   const preferencesBody =
     loadError && !settings ? (
-      <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-300">
-        Failed to load settings: {loadError}
+      <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-[13px] text-red-300">
+        <p>Failed to load settings: {loadError}</p>
+        <button
+          type="button"
+          onClick={() => void loadSettings()}
+          className="mt-3 rounded-md bg-red-500/15 px-2.5 py-1 text-[12px] font-medium text-red-200 ring-1 ring-red-500/30 hover:bg-red-500/25"
+        >
+          Retry settings
+        </button>
       </div>
     ) : !settings ? (
-      <div className="flex items-center justify-center py-16">
-        <Spinner className="h-5 w-5" />
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="flex items-center justify-center gap-2 py-16"
+      >
+        <Spinner aria-hidden="true" className="h-5 w-5" />
+        <span className="sr-only">Loading settings…</span>
       </div>
     ) : (
       <>
+        <fieldset disabled={saving} className="contents">
         <section className="space-y-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5">
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
             <Field label="Default model" hint="Used when starting a new chat.">
@@ -261,6 +472,72 @@ export function SettingsPane({
               />
             </Field>
           </div>
+
+          <div className="border-t border-zinc-800/80 pt-4">
+            <label className="flex cursor-pointer items-start justify-between gap-4">
+              <span className="min-w-0">
+                <span className="block text-[12px] font-medium text-zinc-300">
+                  Native Codex
+                </span>
+                <span id="native-codex-hint" className="mt-1 block text-[11px] text-zinc-600">
+                  {completeDevHubFeatures(settings.requestedDevHubFeatures ?? settings.devHubFeatures).nativeCodex &&
+                  !completeDevHubFeatures(settings.devHubFeatures).nativeCodex
+                    ? "Requested, but the verified Codex runtime is unavailable. Turn this off to clear the saved request."
+                    : "Use the verified Codex app-server task surface. The server keeps the effective feature off when the runtime gate is unavailable."}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label="Enable native Codex"
+                aria-describedby="native-codex-hint"
+                checked={completeDevHubFeatures(
+                  settings.requestedDevHubFeatures ?? settings.devHubFeatures,
+                ).nativeCodex}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  dirtySettings.current.add("requestedDevHubFeatures");
+                  setSettings((current) => current
+                    ? withNativeCodexPreference(current, enabled)
+                    : current);
+                }}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-clay-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              />
+            </label>
+          </div>
+
+          <div className="border-t border-zinc-800/80 pt-4">
+            <label className="flex cursor-pointer items-start justify-between gap-4">
+              <span className="min-w-0">
+                <span className="block text-[12px] font-medium text-zinc-300">
+                  Persistent Claude
+                </span>
+                <span id="persistent-claude-hint" className="mt-1 block text-[11px] text-zinc-600">
+                  {completeDevHubFeatures(settings.requestedDevHubFeatures ?? settings.devHubFeatures).persistentClaude &&
+                  !completeDevHubFeatures(settings.devHubFeatures).persistentClaude
+                    ? "Requested, but the verified Claude CLI runtime or programmatic API/cloud authentication is unavailable. Turn this off to clear the saved request."
+                    : "Use the provider-native persistent Claude CLI task surface. The server keeps it off unless its runtime, authentication, and lifecycle gates are available."}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label="Enable persistent Claude"
+                aria-describedby="persistent-claude-hint"
+                checked={completeDevHubFeatures(
+                  settings.requestedDevHubFeatures ?? settings.devHubFeatures,
+                ).persistentClaude}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  dirtySettings.current.add("requestedDevHubFeatures");
+                  setSettings((current) => current
+                    ? withPersistentClaudePreference(current, enabled)
+                    : current);
+                }}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-clay-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              />
+            </label>
+          </div>
         </section>
 
         <section className="mt-6 space-y-5 rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5">
@@ -296,6 +573,7 @@ export function SettingsPane({
             </Field>
           </div>
         </section>
+        </fieldset>
 
         {/* Forced full re-index control. Self-contained: hides itself on a server
             without the /api/reindex route, and reflects live progress over the
@@ -326,13 +604,13 @@ export function SettingsPane({
             Save settings
           </button>
           {savedAt && (
-            <span className="inline-flex items-center gap-1.5 text-[12px] text-emerald-400">
+            <span role="status" className="inline-flex items-center gap-1.5 text-[12px] text-emerald-400">
               <Check className="h-3.5 w-3.5" />
               Saved
             </span>
           )}
           {loadError && settings && (
-            <span className="text-[12px] text-red-400">{loadError}</span>
+            <span role="alert" className="text-[12px] text-red-400">Save failed: {loadError}. Review the current values, then retry.</span>
           )}
         </div>
       </>

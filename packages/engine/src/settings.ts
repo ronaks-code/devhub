@@ -44,7 +44,11 @@ export class SettingsStore {
       const parsed = parseValue(row.value);
       if (parsed !== undefined) return parsed as AppSettings[K];
     }
-    return DEFAULT_SETTINGS[key];
+    const fallback = DEFAULT_SETTINGS[key];
+    if (key === "devHubFeatures" && fallback && typeof fallback === "object") {
+      return { ...fallback } as AppSettings[K];
+    }
+    return fallback;
   }
 
   /** Persist one setting (stored as JSON). */
@@ -54,7 +58,12 @@ export class SettingsStore {
 
   /** Full settings object: stored values layered over DEFAULT_SETTINGS. */
   getAll(): AppSettings {
-    const out: AppSettings = { ...DEFAULT_SETTINGS };
+    const out: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      devHubFeatures: DEFAULT_SETTINGS.devHubFeatures
+        ? { ...DEFAULT_SETTINGS.devHubFeatures }
+        : undefined,
+    };
     const rows = this.selectAll.all() as Array<{ key: string; value: string | null }>;
     for (const { key, value } of rows) {
       if (value == null) continue;

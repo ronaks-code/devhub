@@ -1355,6 +1355,9 @@ describe("redactSecrets (credential masking)", () => {
     expect(bear).toContain("Bearer");
     expect(bear).not.toContain("abcDEF1234567890");
     expect(bear).toContain(REDACTED);
+    expect(redactSecrets("auth: Bearer abcDEF1234567890")).not.toContain(
+      "abcDEF1234567890",
+    );
   });
 
   it("masks the password inside a connection string, keeping the rest", () => {
@@ -1369,6 +1372,22 @@ describe("redactSecrets (credential masking)", () => {
     expect(json).toContain(REDACTED);
     // The non-secret field is preserved verbatim.
     expect(json).toContain('"name": "ok"');
+  });
+
+  it("masks complete multiword and unclosed quoted assignment values", () => {
+    expect(redactSecrets('API_TOKEN="secret first second" tail')).toBe(
+      `API_TOKEN="${REDACTED}" tail`,
+    );
+    expect(redactSecrets("PASSWORD='correct horse battery staple' tail")).toBe(
+      `PASSWORD='${REDACTED}' tail`,
+    );
+    expect(redactSecrets('API_TOKEN = " secret first second trailing')).toBe(
+      `API_TOKEN = " ${REDACTED}`,
+    );
+    const json = redactSecrets(
+      '{"client_secret": "secret first second", "name": "safe"}',
+    );
+    expect(json).toBe(`{"client_secret": "${REDACTED}", "name": "safe"}`);
   });
 
   it("is a pure no-op on benign text and on nullish input", () => {

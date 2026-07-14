@@ -1,5 +1,5 @@
 /**
- * Codex session discovery — reads ~/.codex/sessions/**\/rollout-*.jsonl files.
+ * Codex session discovery — reads <codex-home>/sessions/**\/rollout-*.jsonl files.
  * Each .jsonl is one session; the first line is a session_meta record and
  * subsequent lines are event_msg records.
  */
@@ -47,6 +47,25 @@ async function findJsonlFiles(dir: string): Promise<string[]> {
     }
   }
   return results;
+}
+
+async function resolveSessionsDir(codexHome: string): Promise<string | null> {
+  try {
+    const canonicalHome = await fs.promises.realpath(path.resolve(codexHome));
+    const canonicalSessions = await fs.promises.realpath(path.join(canonicalHome, "sessions"));
+    const relative = path.relative(canonicalHome, canonicalSessions);
+    if (
+      relative.length === 0 ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      return null;
+    }
+    return canonicalSessions;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -123,19 +142,15 @@ async function parseSessionFile(filePath: string): Promise<CodexSession | null> 
 }
 
 /**
- * List Codex sessions from ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
+ * List Codex sessions from <codex-home>/sessions/YYYY/MM/DD/rollout-*.jsonl.
  * Returns the most recent 200 sessions sorted by startedAt descending.
  * Gracefully returns [] if the directory does not exist.
  */
-export async function listCodexSessions(): Promise<CodexSession[]> {
-  const sessionsDir = path.join(os.homedir(), ".codex", "sessions");
-
-  try {
-    await fs.promises.stat(sessionsDir);
-  } catch {
-    // ~/.codex/sessions doesn't exist — Codex not installed or never run
-    return [];
-  }
+export async function listCodexSessions(
+  codexHome = path.join(os.homedir(), ".codex"),
+): Promise<CodexSession[]> {
+  const sessionsDir = await resolveSessionsDir(codexHome);
+  if (sessionsDir === null) return [];
 
   const files = await findJsonlFiles(sessionsDir);
   if (files.length === 0) return [];

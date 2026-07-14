@@ -1,14 +1,12 @@
 /**
- * OpenAI live-chat engine: manages a multi-turn chat session against the
- * OpenAI chat completions API with streaming and an agentic tool-execution loop.
+ * OpenAI live-chat engine: manages a multi-turn, chat-only session against the
+ * OpenAI chat completions API with streaming.
  *
  * Mirrors the pattern in driver/cli.ts but calls OpenAI directly over HTTPS
  * instead of spawning the Claude CLI subprocess.
  */
 import { EventEmitter } from "node:events";
 import https from "node:https";
-import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,103 +57,40 @@ export type OpenAIEvent =
   | { type: "error"; message: string };
 
 // ---------------------------------------------------------------------------
-// Tool definitions (sent to OpenAI so it can call them)
+// Chat-completion request
 // ---------------------------------------------------------------------------
 
-interface OAIFunctionDef {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: {
-      type: "object";
-      properties: Record<string, { type: string; description: string }>;
-      required: string[];
-    };
+export const DEFAULT_OPENAI_CHAT_SYSTEM_PROMPT =
+  "You are a helpful conversational assistant. Answer the user's message directly and concisely.";
+
+export interface OpenAICompletionRequestBody {
+  model: OpenAIModel;
+  stream: true;
+  stream_options: { include_usage: true };
+  messages: Array<OpenAIMessage | { role: "system"; content: string }>;
+}
+
+/**
+ * Test-visible seam for the exact payload sent to OpenAI. Local tools are
+ * intentionally absent from both the schema and the default system prompt.
+ */
+export function buildOpenAICompletionRequestBody(input: {
+  model: OpenAIModel;
+  messages: OpenAIMessage[];
+  systemPrompt?: string;
+}): OpenAICompletionRequestBody {
+  return {
+    model: input.model,
+    stream: true,
+    stream_options: { include_usage: true },
+    messages: [
+      {
+        role: "system",
+        content: input.systemPrompt ?? DEFAULT_OPENAI_CHAT_SYSTEM_PROMPT,
+      },
+      ...input.messages,
+    ],
   };
-}
-
-const TOOLS: OAIFunctionDef[] = [
-  {
-    type: "function",
-    function: {
-      name: "bash",
-      description: "Run a shell command in the session cwd",
-      parameters: {
-        type: "object",
-        properties: {
-          command: { type: "string", description: "The shell command to run" },
-        },
-        required: ["command"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "read_file",
-      description: "Read a file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string", description: "Absolute or relative file path" },
-        },
-        required: ["path"],
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
-      name: "write_file",
-      description: "Write or create a file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string", description: "Absolute or relative file path" },
-          content: { type: "string", description: "Content to write" },
-        },
-        required: ["path", "content"],
-      },
-    },
-  },
-];
-
-// ---------------------------------------------------------------------------
-// Tool execution helpers
-// ---------------------------------------------------------------------------
-
-const MAX_OUTPUT = 8000;
-
-function truncate(s: string): string {
-  return s.length > MAX_OUTPUT ? s.slice(0, MAX_OUTPUT) + "\n[truncated]" : s;
-}
-
-function execBash(command: string, cwd: string): Promise<string> {
-  return new Promise((resolve) => {
-    execFile("bash", ["-c", command], { cwd, shell: false }, (err, stdout, stderr) => {
-      const combined = [stdout, stderr].filter(Boolean).join("\n");
-      resolve(truncate(combined || (err ? err.message : "")));
-    });
-  });
-}
-
-async function execReadFile(filePath: string): Promise<string> {
-  try {
-    const content = await fs.readFile(filePath, "utf8");
-    return truncate(content);
-  } catch (err) {
-    return `Error: ${(err as Error).message}`;
-  }
-}
-
-async function execWriteFile(filePath: string, content: string): Promise<string> {
-  try {
-    await fs.writeFile(filePath, content, "utf8");
-    return "ok";
-  } catch (err) {
-    return `Error: ${(err as Error).message}`;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,27 +111,26 @@ interface PendingToolCall {
 export class OpenAISession extends EventEmitter {
   readonly model: OpenAIModel;
   readonly cwd: string;
+  /** Auditable capability flag. There is deliberately no option that can enable it. */
+  readonly localToolsEnabled = false as const;
   private readonly systemPrompt: string;
 
   /** Running message history (excludes the system message). */
   messages: OpenAIMessage[] = [];
 
-  /** The in-flight request; set during send(), cleared on completion. */
-  private abortController: AbortController | null = null;
+  /** One controller owns the complete in-flight turn, including any follow-up completion. */
+  private inFlightController: AbortController | null = null;
 
   constructor(opts: OpenAISessionOptions = {}) {
     super();
     this.model = opts.model ?? "gpt-4.1";
     this.cwd = opts.cwd ?? process.cwd();
-    this.systemPrompt =
-      opts.systemPrompt ??
-      `You are a helpful AI coding assistant. You have access to bash, read_file, and write_file tools. The working directory is ${this.cwd}. Be concise and direct.`;
+    this.systemPrompt = opts.systemPrompt ?? DEFAULT_OPENAI_CHAT_SYSTEM_PROMPT;
   }
 
   /** Abort the current in-flight HTTPS request, if any. */
   stop(): void {
-    this.abortController?.abort();
-    this.abortController = null;
+    this.inFlightController?.abort();
   }
 
   /**
@@ -204,6 +138,22 @@ export class OpenAISession extends EventEmitter {
    * Loops until OpenAI stops requesting tool calls (finish_reason === "stop").
    */
   async send(userText: string): Promise<void> {
+    if (this.inFlightController) {
+      throw new Error("OpenAI session is busy");
+    }
+
+    const controller = new AbortController();
+    this.inFlightController = controller;
+    try {
+      await this._send(userText, controller.signal);
+    } finally {
+      if (this.inFlightController === controller) {
+        this.inFlightController = null;
+      }
+    }
+  }
+
+  private async _send(userText: string, signal: AbortSignal): Promise<void> {
     // Append the user turn to history.
     this.messages.push({ role: "user", content: userText });
 
@@ -239,12 +189,15 @@ export class OpenAISession extends EventEmitter {
             inputTokens = inp;
             outputTokens = out;
           },
+          signal,
         );
       } catch (err) {
         const msg = (err as Error).message ?? String(err);
         this.emit("event", { type: "error", message: msg } satisfies OpenAIEvent);
         return;
       }
+
+      if (signal.aborted) return;
 
       const toolCallList = [...pendingCalls.values()];
       const hasToolCalls = toolCallList.length > 0;
@@ -334,29 +287,27 @@ export class OpenAISession extends EventEmitter {
     onToolDelta: (index: number, id: string | undefined, name: string | undefined, argsDelta: string | undefined) => void,
     onFinishReason: (reason: string) => void,
     onUsage: (input: number, output: number) => void,
+    signal: AbortSignal,
   ): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new Error("Request aborted by caller"));
+        return;
+      }
+
       const key = process.env.OPENAI_KEY;
       if (!key) {
         reject(new Error("OPENAI_KEY environment variable is not set"));
         return;
       }
 
-      const body = JSON.stringify({
-        model: this.model,
-        stream: true,
-        stream_options: { include_usage: true },
-        messages: [
-          { role: "system", content: this.systemPrompt },
-          // Strip internal tool_calls from history before sending — OpenAI expects
-          // the shape we set (with tool_calls on the assistant and tool role replies).
-          ...this.messages,
-        ],
-        tools: TOOLS,
-      });
-
-      const ac = new AbortController();
-      this.abortController = ac;
+      const body = JSON.stringify(
+        buildOpenAICompletionRequestBody({
+          model: this.model,
+          systemPrompt: this.systemPrompt,
+          messages: this.messages,
+        }),
+      );
 
       const options: https.RequestOptions = {
         hostname: "api.openai.com",
@@ -448,9 +399,9 @@ export class OpenAISession extends EventEmitter {
       req.on("error", reject);
 
       // Wire abort — destroy the request when stop() is called.
-      ac.signal.addEventListener("abort", () => {
+      signal.addEventListener("abort", () => {
         req.destroy(new Error("Request aborted by caller"));
-      });
+      }, { once: true });
 
       req.write(body);
       req.end();
@@ -458,26 +409,10 @@ export class OpenAISession extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // Private: execute a tool by name
+  // Private: reject every unexpected local-tool request
   // ---------------------------------------------------------------------------
 
-  private async _executeTool(name: string, argsJson: string): Promise<string> {
-    let args: Record<string, string>;
-    try {
-      args = JSON.parse(argsJson) as Record<string, string>;
-    } catch {
-      throw new Error(`Invalid JSON arguments for tool ${name}: ${argsJson}`);
-    }
-
-    switch (name) {
-      case "bash":
-        return execBash(args.command ?? "", this.cwd);
-      case "read_file":
-        return execReadFile(args.path ?? "");
-      case "write_file":
-        return execWriteFile(args.path ?? "", args.content ?? "");
-      default:
-        return `Unknown tool: ${name}`;
-    }
+  private async _executeTool(name: string, _argsJson: string): Promise<string> {
+    throw new Error(`Local tools are disabled for OpenAI Chat; blocked ${name}.`);
   }
 }

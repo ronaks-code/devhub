@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Archive,
   Bot,
@@ -95,6 +95,14 @@ const HomePane = lazy(() =>
 const OpenAIPane = lazy(() =>
   import("./components/OpenAIPane").then((m) => ({ default: m.OpenAIPane })),
 );
+// Native Codex is both feature-gated and lazy: when the resolved server flag is
+// false, the browser keeps using the small legacy read-only history surface and
+// never downloads the native task client/pane chunk.
+const CodexNativePane = lazy(() =>
+  import("./components/CodexNativePane")
+    .then((m) => ({ default: m.CodexNativePane }))
+    .catch(() => ({ default: CodexNativeLoadFailure })),
+);
 // Modal-only views — never in the initial paint, so loaded on first open:
 const SessionCompare = lazy(() =>
   import("./components/SessionCompare").then((m) => ({ default: m.SessionCompare })),
@@ -103,11 +111,17 @@ const ShortcutOverlay = lazy(() =>
   import("./components/ShortcutOverlay").then((m) => ({ default: m.ShortcutOverlay })),
 );
 
-/** Centered spinner fallback for a lazy view whose chunk is still loading. */
-function PaneFallback() {
+/** Centered, named status for a lazy view whose chunk is still loading. */
+export function PaneFallback() {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
-      <Spinner className="h-5 w-5" />
+    <div
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+      className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950"
+    >
+      <Spinner aria-hidden="true" className="h-5 w-5" />
+      <span className="sr-only">Loading view…</span>
     </div>
   );
 }
@@ -157,6 +171,66 @@ function writeUiState(state: PersistedUiState): void {
 }
 
 const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history"];
+
+export type CodexShellMode = "native" | "history";
+export type ClaudeShellMode = "native" | "legacy";
+
+/** Only a server-resolved true flag may expose the native provider surface. */
+export function resolveCodexShellMode(settings: AppSettings | null): CodexShellMode {
+  return settings?.devHubFeatures?.nativeCodex === true ? "native" : "history";
+}
+
+/** Preserve the legacy chat path unless the server resolves the native runtime gate. */
+export function resolveClaudeShellMode(settings: AppSettings | null): ClaudeShellMode {
+  return settings?.devHubFeatures?.persistentClaude === true ? "native" : "legacy";
+}
+
+/** Only the most recently issued settings request may change shell state. */
+export function isLatestSettingsResponse(
+  requestVersion: number,
+  latestVersion: number,
+): boolean {
+  return requestVersion === latestVersion;
+}
+
+/** Keep the preserved route id stable while making its presentation truthful. */
+export function codexNavPresentation(
+  mode: CodexShellMode,
+): { label: "Codex" | "History"; icon: "bot" | "history" } {
+  return mode === "native"
+    ? { label: "Codex", icon: "bot" }
+    : { label: "History", icon: "history" };
+}
+
+type NativePaneProvider = "openai" | "anthropic";
+
+/** A provider change must remount the native pane instead of reusing provider-owned state. */
+export function nativePaneRouteKey(provider: NativePaneProvider): string {
+  return `native-provider:${provider}`;
+}
+
+/** Carry the exact legacy Claude session requested by Continue into native selection. */
+export function nativeClaudePreferredTaskId(
+  seed: { readonly sessionId: string } | null,
+): string | undefined {
+  return seed?.sessionId;
+}
+
+/** Navigation destinations use page semantics, not an incomplete tabs pattern. */
+export function navigationAriaCurrent(active: boolean): "page" | undefined {
+  return active ? "page" : undefined;
+}
+
+/** Keep a native chunk failure truthful for the route that requested it. */
+export function nativeLoadFailureMessage(provider: NativePaneProvider): string {
+  return provider === "anthropic"
+    ? "Native Claude could not load. Showing the preserved Claude chat instead."
+    : "Native Codex could not load. Showing read-only Codex history instead.";
+}
+
+/** Secondary utilities yield at the minimum desktop width so primary navigation stays bounded. */
+export const TOP_BAR_SECONDARY_CLASS =
+  "ml-auto hidden items-center gap-3 text-[11px] text-zinc-500 lg:flex";
 
 /**
  * A small "Recent" jump-back dropdown in the header: the last sessions the user
@@ -346,6 +420,24 @@ function CodexHistoryPane() {
   );
 }
 
+/** A failed native chunk stays local to its provider route and preserves its fallback. */
+function CodexNativeLoadFailure({
+  fallback,
+  provider = "openai",
+}: {
+  fallback?: ReactNode;
+  provider?: NativePaneProvider;
+}) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
+      <div role="alert" className="border-b border-amber-900/40 bg-amber-500/5 px-4 py-3 text-xs text-amber-200">
+        {nativeLoadFailureMessage(provider)}
+      </div>
+      {fallback ?? <CodexHistoryPane />}
+    </div>
+  );
+}
+
 /** Icon + label for each perf-mode preference, for the header toggle. */
 const PERF_META: Record<PerfPreference, { label: string; title: string }> = {
   auto: { label: "Motion: auto", title: "Reduced motion follows your OS setting — click to force it on" },
@@ -401,16 +493,15 @@ function TopBar({
         <span className="text-sm font-semibold tracking-tight text-zinc-100">DevHub</span>
       </div>
 
-      <div
-        role="tablist"
+      <nav
         aria-label="Primary views"
         className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
       >
         {(["home", "browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
           <button
             key={t}
-            role="tab"
-            aria-selected={tab === t}
+            type="button"
+            aria-current={navigationAriaCurrent(tab === t)}
             onClick={() => onTab(t)}
             className={cn(
               "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
@@ -422,7 +513,7 @@ function TopBar({
             {t}
           </button>
         ))}
-      </div>
+      </nav>
 
       <button
         onClick={onOpenSearch}
@@ -444,7 +535,7 @@ function TopBar({
         <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
       </button>
 
-      <div className="ml-auto flex items-center gap-3 text-[11px] text-zinc-500">
+      <div className={TOP_BAR_SECONDARY_CLASS}>
         {/* Perf / reduced-motion toggle. Cycles auto → on → off; tinted clay
             while motion is being suppressed so the active state reads at a glance. */}
         <button
@@ -498,9 +589,9 @@ function TopBar({
             (the local default), so it never appears in an un-gated session. */}
         <LogoutButton />
         <button
+          type="button"
           onClick={() => onTab("settings")}
-          role="tab"
-          aria-selected={tab === "settings"}
+          aria-current={navigationAriaCurrent(tab === "settings")}
           className={cn(
             "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
             tab === "settings"
@@ -569,6 +660,40 @@ export default function App() {
   // Server-backed app settings (default model/permission, theme, budget…).
   // Loaded once on mount and updated when the Settings tab saves.
   const [settings, setSettings] = useState<AppSettings | null>(null);
+  const settingsRequestVersionRef = useRef(0);
+  const beginSettingsRequest = useCallback(
+    () => ++settingsRequestVersionRef.current,
+    [],
+  );
+  const acceptSettingsResponse = useCallback(
+    (next: AppSettings, requestVersion?: number) => {
+      const version = requestVersion ?? ++settingsRequestVersionRef.current;
+      if (isLatestSettingsResponse(version, settingsRequestVersionRef.current)) {
+        setSettings(next);
+        return true;
+      }
+      return false;
+    },
+    [],
+  );
+  const refreshSettings = useCallback(async () => {
+    const requestVersion = beginSettingsRequest();
+    try {
+      const next = await api.getSettings();
+      acceptSettingsResponse(next, requestVersion);
+    } catch {
+      // A dropped mutation response can still mean the server committed it.
+      // Re-read once with a newer version; the shared fetch-error surface owns
+      // any persistent retry copy after that bounded reconciliation attempt.
+      const retryVersion = beginSettingsRequest();
+      try {
+        const next = await api.getSettings();
+        acceptSettingsResponse(next, retryVersion);
+      } catch {
+        // Keep the last known-safe shell state.
+      }
+    }
+  }, [acceptSettingsResponse, beginSettingsRequest]);
   // Seeds ChatPane to resume an existing session (--resume) after a handoff
   // from the Browse transcript. Cleared once consumed.
   const [chatSeed, setChatSeed] = useState<{ sessionId: string; projectId: string } | null>(null);
@@ -633,8 +758,8 @@ export default function App() {
   useEffect(() => {
     void refreshProjects();
     api.health().then((h) => setSessionCount(h.sessionCount)).catch(() => {});
-    api.getSettings().then(setSettings).catch(() => {});
-  }, [refreshProjects]);
+    void refreshSettings();
+  }, [refreshProjects, refreshSettings]);
 
   // Decide whether to show first-run onboarding — exactly once, shortly after the
   // initial load settles. We only welcome a genuinely NEW user: the "seen" flag is
@@ -835,11 +960,12 @@ export default function App() {
 
   // Persist a settings patch to the server and update local state on success.
   const saveSettings = useCallback((patch: Partial<AppSettings>) => {
+    const requestVersion = beginSettingsRequest();
     api
       .putSettings(patch)
-      .then(setSettings)
-      .catch(() => {});
-  }, []);
+      .then((next) => acceptSettingsResponse(next, requestVersion))
+      .catch(() => void refreshSettings());
+  }, [acceptSettingsResponse, beginSettingsRequest, refreshSettings]);
 
   // Persist a project's per-project chat defaults (PATCH /api/projects/:id), then
   // refresh the project list so the open ChatPane picks them up. Throws on
@@ -1344,6 +1470,49 @@ export default function App() {
     downloadArchive,
   ]);
 
+  // A single resolved mode drives both nav chrome and route content so the
+  // shell cannot label the legacy parser as native (or vice versa).
+  const codexShellMode = resolveCodexShellMode(settings);
+  const claudeShellMode = resolveClaudeShellMode(settings);
+  const codexNav = codexNavPresentation(codexShellMode);
+  const legacyClaudePane = (
+    <div className="flex min-h-0 flex-1">
+      <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
+      {project ? (
+        <ChatPane
+          key={
+            activeSeed
+              ? `${project.id}:${activeSeed.sessionId}`
+              : `${project.id}:${chatNonce}`
+          }
+          cwd={project.cwd}
+          projectId={project.id}
+          projectName={project.name}
+          initialSessionId={activeSeed?.sessionId}
+          defaultModel={settings?.defaultModel}
+          defaultPermissionMode={
+            settings?.defaultPermissionMode as PermissionMode | undefined
+          }
+          projectDefaultModel={project.defaultModel}
+          projectDefaultPermissionMode={
+            project.defaultPermissionMode as PermissionMode | null | undefined
+          }
+          onSaveProjectDefaults={(m, pm) => saveProjectDefaults(project.id, m, pm)}
+          model={chatModel}
+          onModelChange={setChatModel}
+        />
+      ) : (
+        <div className="flex-1 bg-zinc-950">
+          <EmptyState
+            icon={<MessagesSquare className="h-12 w-12" />}
+            title="Pick a project to chat"
+            hint="Select a project on the left to start a live Claude Code session in its working directory."
+          />
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <AuthGate>
       <div className="flex h-full flex-col">
@@ -1400,14 +1569,14 @@ export default function App() {
             [
               { id: "home" as Tab, icon: <Home className="h-3.5 w-3.5" />, label: "Home" },
               { id: "browse" as Tab, icon: <Folder className="h-3.5 w-3.5" />, label: "Browse" },
-              { id: "chat" as Tab, icon: <Sparkles className="h-3.5 w-3.5" />, label: "New Chat" },
+              { id: "chat" as Tab, icon: <Sparkles className="h-3.5 w-3.5" />, label: claudeShellMode === "native" ? "Claude" : "New Chat" },
               { id: "dashboard" as Tab, icon: <LayoutDashboard className="h-3.5 w-3.5" />, label: "Dashboard" },
             ] as const
           ).map(({ id, icon, label }) => (
             <button
               key={id}
-              role="tab"
-              aria-selected={tab === id}
+              type="button"
+              aria-current={navigationAriaCurrent(tab === id)}
               onClick={() => { setChatSeed(null); setTab(id); }}
               className={cn(
                 "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
@@ -1428,13 +1597,19 @@ export default function App() {
           {(
             [
               { id: "openai-chat" as Tab, icon: <Bot className="h-3.5 w-3.5" />, label: "New Chat" },
-              { id: "codex-history" as Tab, icon: <History className="h-3.5 w-3.5" />, label: "History" },
+              {
+                id: "codex-history" as Tab,
+                icon: codexNav.icon === "bot"
+                  ? <Bot className="h-3.5 w-3.5" />
+                  : <History className="h-3.5 w-3.5" />,
+                label: codexNav.label,
+              },
             ] as const
           ).map(({ id, icon, label }) => (
             <button
               key={id}
-              role="tab"
-              aria-selected={tab === id}
+              type="button"
+              aria-current={navigationAriaCurrent(tab === id)}
               onClick={() => { setChatSeed(null); setTab(id); }}
               className={cn(
                 "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
@@ -1461,8 +1636,8 @@ export default function App() {
           ).map(({ id, icon, label }) => (
             <button
               key={id}
-              role="tab"
-              aria-selected={tab === id}
+              type="button"
+              aria-current={navigationAriaCurrent(tab === id)}
               onClick={() => { setChatSeed(null); setTab(id); }}
               className={cn(
                 "mx-1 flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[12px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
@@ -1485,7 +1660,13 @@ export default function App() {
           </Suspense>
         ) : tab === "settings" ? (
           <Suspense fallback={<PaneFallback />}>
-            <SettingsPane onSettingsSaved={setSettings} projectCwd={project?.cwd} />
+            <SettingsPane
+              authoritativeSettings={settings}
+              onSettingsRequestStart={beginSettingsRequest}
+              onSettingsSaved={acceptSettingsResponse}
+              onSettingsReconcile={refreshSettings}
+              projectCwd={project?.cwd}
+            />
           </Suspense>
         ) : tab === "dashboard" ? (
           <Suspense fallback={<DashboardSkeleton />}>
@@ -1633,44 +1814,26 @@ export default function App() {
             <OpenAIPane />
           </Suspense>
         ) : tab === "codex-history" ? (
-          <CodexHistoryPane />
-        ) : (
-          <div className="flex min-h-0 flex-1">
-            <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
-            {project ? (
-              <ChatPane
-                key={
-                  activeSeed
-                    ? `${project.id}:${activeSeed.sessionId}`
-                    : `${project.id}:${chatNonce}`
-                }
-                cwd={project.cwd}
-                projectId={project.id}
-                projectName={project.name}
-                initialSessionId={activeSeed?.sessionId}
-                defaultModel={settings?.defaultModel}
-                defaultPermissionMode={
-                  settings?.defaultPermissionMode as PermissionMode | undefined
-                }
-                projectDefaultModel={project.defaultModel}
-                projectDefaultPermissionMode={
-                  project.defaultPermissionMode as PermissionMode | null | undefined
-                }
-                onSaveProjectDefaults={(m, pm) => saveProjectDefaults(project.id, m, pm)}
-                model={chatModel}
-                onModelChange={setChatModel}
+          codexShellMode === "native" ? (
+            <Suspense fallback={<PaneFallback />}>
+              <CodexNativePane
+                key={nativePaneRouteKey("openai")}
+                fallback={<CodexHistoryPane />}
               />
-            ) : (
-              <div className="flex-1 bg-zinc-950">
-                <EmptyState
-                  icon={<MessagesSquare className="h-12 w-12" />}
-                  title="Pick a project to chat"
-                  hint="Select a project on the left to start a live Claude Code session in its working directory."
-                />
-              </div>
-            )}
-          </div>
-        )}
+            </Suspense>
+          ) : (
+            <CodexHistoryPane />
+          )
+        ) : claudeShellMode === "native" ? (
+          <Suspense fallback={<PaneFallback />}>
+            <CodexNativePane
+              key={nativePaneRouteKey("anthropic")}
+              provider="anthropic"
+              preferredTaskId={nativeClaudePreferredTaskId(activeSeed)}
+              fallback={legacyClaudePane}
+            />
+          </Suspense>
+        ) : legacyClaudePane}
         </div>{/* end main content area */}
       </div>
       </ErrorBoundary>

@@ -20,6 +20,7 @@ import { projectIdFromCwd } from "../src/paths.js";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), "cui-projoverview-"));
 const jl = (obj: unknown) => JSON.stringify(obj) + "\n";
+const fixtureNow = () => new Date("2026-06-12T12:00:00.000Z");
 
 /** One assistant tool_use block (mirrored as a role="tool" invocation row by indexing). */
 function toolUse(name: string, input: Record<string, unknown>): unknown {
@@ -119,7 +120,7 @@ describe("projectOverview", () => {
     await idx.indexSession(s3);
 
     const projectId = projectIdFromCwd(cwd);
-    const ov = idx.projectOverview(projectId);
+    const ov = idx.projectOverview(projectId, { now: fixtureNow });
 
     // Identity + headline.
     expect(ov.projectId).toBe(projectId);
@@ -173,7 +174,7 @@ describe("projectOverview", () => {
     // Tag cloud: tag two sessions "backend", one "api". counts: backend=2, api=1.
     idx.tags.set("s1", ["backend", "api"]);
     idx.tags.set("s2", ["backend"]);
-    const tagged = idx.projectOverview(projectId);
+    const tagged = idx.projectOverview(projectId, { now: fixtureNow });
     expect(tagged.tagCloud).toEqual([
       { tag: "backend", count: 2 },
       { tag: "api", count: 1 },
@@ -211,7 +212,7 @@ describe("projectOverview", () => {
     await idx.indexSession(a);
     await idx.indexSession(b);
 
-    const ovA = idx.projectOverview(projectIdFromCwd("/home/dev/alpha"));
+    const ovA = idx.projectOverview(projectIdFromCwd("/home/dev/alpha"), { now: fixtureNow });
     expect(ovA.sessionCount).toBe(1);
     expect(ovA.name).toBe("alpha");
     expect(ovA.byModel.map((m) => m.model)).toEqual(["claude-opus-4-8"]);
@@ -271,8 +272,49 @@ describe("projectOverview", () => {
     const viaModule = projectOverview(
       (idx as unknown as { db: import("node:sqlite").DatabaseSync }).db,
       projectId,
+      { now: fixtureNow },
     );
-    expect(idx.projectOverview(projectId)).toEqual(viaModule);
+    expect(idx.projectOverview(projectId, { now: fixtureNow })).toEqual(viaModule);
+
+    idx.close();
+  });
+
+  it("uses one injected UTC clock through the module function and index delegation", async () => {
+    const dir = tmp();
+    const proj = path.join(dir, "-proj");
+    mkdirSync(proj);
+    const dbPath = path.join(dir, "i.db");
+    const cwd = "/home/dev/clocked";
+
+    const s = writeSession(proj, "boundary", {
+      cwd,
+      ts: "2026-06-10T12:00:00.000Z",
+      model: "claude-opus-4-8",
+      inputTokens: 10,
+      outputTokens: 5,
+    });
+
+    const idx = new TranscriptIndex(dbPath);
+    await idx.indexSession(s);
+
+    const projectId = projectIdFromCwd(cwd);
+    let clockReads = 0;
+    const options = {
+      now: () => {
+        clockReads += 1;
+        return new Date("2026-07-09T23:59:59.999Z");
+      },
+    };
+    const viaModule = projectOverview(
+      (idx as unknown as { db: import("node:sqlite").DatabaseSync }).db,
+      projectId,
+      options,
+    );
+    const viaIndex = idx.projectOverview(projectId, options);
+
+    expect(clockReads).toBe(2);
+    expect(viaModule.dailyCost.map((day) => day.day)).toEqual(["2026-06-10"]);
+    expect(viaIndex).toEqual(viaModule);
 
     idx.close();
   });

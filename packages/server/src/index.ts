@@ -28,10 +28,22 @@ app
     process.exit(1);
   });
 
+let shuttingDown = false;
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     stop();
-    engine.close();
-    void app.close().then(() => process.exit(0));
+    void app.close().then(
+      () => {
+        engine.close();
+        process.exit(0);
+      },
+      (error) => {
+        console.error(error);
+        engine.close();
+        process.exit(1);
+      },
+    );
   });
 }

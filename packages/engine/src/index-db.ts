@@ -35,7 +35,7 @@ import type { RelatedOptions, RelatedSession } from "./related.js";
 import { toolStats } from "./tool-stats.js";
 import type { ToolStatsOptions, ToolStatsResult } from "./tool-stats.js";
 import { projectOverview } from "./project-overview.js";
-import type { ProjectOverview } from "./project-overview.js";
+import type { ProjectOverview, ProjectOverviewOptions } from "./project-overview.js";
 import {
   FTS_TABLE,
   createFtsTableSql,
@@ -809,8 +809,8 @@ export class TranscriptIndex {
    * dailyUsage machinery. An unknown projectId yields a well-formed empty overview, never
    * a throw. Delegates to {@link projectOverview} with this index's DB.
    */
-  projectOverview(projectId: string): ProjectOverview {
-    return projectOverview(this.db, projectId);
+  projectOverview(projectId: string, options: ProjectOverviewOptions = {}): ProjectOverview {
+    return projectOverview(this.db, projectId, options);
   }
 
   // -- Sidecar custom data (rename/pin/tags) ---------------------------------

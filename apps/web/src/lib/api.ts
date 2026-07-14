@@ -474,19 +474,46 @@ export const codexApi = {
  */
 export interface OpenAISession {
   /** Server-assigned session id used to open the WebSocket. */
-  id: string;
+  sessionId: string;
+  localToolsEnabled: false;
 }
 
 export interface OpenAIModelList {
+  enabled: boolean;
+  authConfigured: boolean;
   models: string[];
+  reason?: string;
 }
 
 export const openaiApi = {
-  /** POST /api/openai/sessions → { id } */
-  createSession: () => sendMaybe<OpenAISession>("/api/openai/sessions", "POST"),
-  /** GET /api/openai/models → { models: string[] } */
+  /** POST /api/openai/sessions → { sessionId, localToolsEnabled: false } */
+  createSession: (input: { model: string; cwd: string }) =>
+    sendMaybe<OpenAISession>("/api/openai/sessions", "POST", input),
+  /** GET /api/openai/models → availability + canonical models envelope. */
   models: () => getMaybe<OpenAIModelList>("/api/openai/models"),
+  /** Abort the provider request without destroying its local conversation. */
+  stopSession: (sessionId: string) =>
+    sendMaybe<{ ok: boolean; sessionId: string }>(
+      `/api/openai/sessions/${encodeURIComponent(sessionId)}/stop`,
+      "POST",
+    ),
 };
+
+// Settings writes are merge operations over shared state (header theme + full
+// Preferences editor). Serialize them in intent order so out-of-order network
+// responses cannot commit an older full form after a newer partial patch.
+let settingsWriteTail: Promise<void> = Promise.resolve();
+
+function putSettingsSerialized(patch: Partial<AppSettings>): Promise<AppSettings> {
+  const result = settingsWriteTail.then(() =>
+    send<AppSettings>("/api/settings", "PUT", patch));
+  settingsWriteTail = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+function getSettingsAfterWrites(): Promise<AppSettings> {
+  return settingsWriteTail.then(() => get<AppSettings>("/api/settings"));
+}
 
 export const api = {
   health: () => get<Health>("/api/health"),
@@ -762,10 +789,9 @@ export const api = {
   // button degrades to a quiet "unavailable" state instead of erroring.
   open: (cwd: string, file?: string, target: "editor" | "finder" | "terminal" = "editor") =>
     sendMaybe<{ ok: boolean }>("/api/open", "POST", { cwd, target, ...(file ? { file } : {}) }),
-  getSettings: () => get<AppSettings>("/api/settings"),
+  getSettings: getSettingsAfterWrites,
   // PUT merges a partial update server-side and returns the full merged settings.
-  putSettings: (patch: Partial<AppSettings>) =>
-    send<AppSettings>("/api/settings", "PUT", patch),
+  putSettings: putSettingsSerialized,
   // Monthly spend budget status + config (GET /api/budget): the live BudgetStatus
   // (month-to-date, projected, alert level) plus the editable BudgetConfig (cap,
   // warn threshold, enforce). Backs BudgetSettings and the CostForecast widget.

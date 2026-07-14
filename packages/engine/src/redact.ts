@@ -44,6 +44,11 @@ const SECRET_KEY_WORDS = [
   "credentials",
 ];
 
+const isSecretAssignmentKey = (value: string): boolean => {
+  const normalized = value.toLowerCase();
+  return SECRET_KEY_WORDS.some((word) => normalized.endsWith(word));
+};
+
 /**
  * One redaction rule. Rules run in array order; each replaces every match of its
  * regex. A `replace` function lets a rule keep a structural prefix (e.g. the
@@ -54,33 +59,14 @@ interface Rule {
   replace: (match: string, ...groups: string[]) => string;
 }
 
-const keyWordAlt = SECRET_KEY_WORDS.join("|");
-
-const RULES: Rule[] = [
-  // ---- Structural rules first (mask the secret WITHIN a larger token) ----
-
+const CONNECTION_STRING_RULE: Rule = {
   // DB / service connection strings with inline credentials:
   //   scheme://user:password@host  ->  scheme://user:[REDACTED]@host
-  // Covers postgres/postgresql/mysql/mongodb(+srv)/redis/amqp/etc. Only the
-  // password segment between `:` and `@` is masked; the rest of the URL stays.
-  {
-    re: /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s:/@]+)@/gi,
-    replace: (_m, prefix: string) => `${prefix}:${MASK}@`,
-  },
+  re: /\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s:/@]+)@/gi,
+  replace: (_m, prefix: string) => `${prefix}:${MASK}@`,
+};
 
-  // `KEY = value` / `KEY: value` / `"key": "value"` where KEY names a secret.
-  // Keeps the key + separator, masks the (optionally quoted) value. Stops at
-  // whitespace, comma, or closing quote/brace so we don't swallow trailing JSON.
-  {
-    re: new RegExp(
-      String.raw`(["']?[\w.-]*(?:${keyWordAlt})["']?\s*[:=]\s*)(["']?)([^\s"',}{)]+)(\2)`,
-      "gi",
-    ),
-    replace: (_m, prefix: string, openQuote: string, _val: string, closeQuote: string) =>
-      `${prefix}${openQuote}${MASK}${closeQuote}`,
-  },
-
-  // ---- Provider-specific token shapes ----
+const TOKEN_RULES: Rule[] = [
 
   // OpenAI-style keys: `sk-…`, `sk-proj-…`, `rk-…` (>= 16 chars of body).
   { re: /\b(?:sk|rk)-(?:proj-)?[A-Za-z0-9_-]{16,}/g, replace: () => MASK },
@@ -110,6 +96,137 @@ const RULES: Rule[] = [
   },
 ];
 
+interface AssignmentRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+interface AssignmentScan {
+  readonly ranges: readonly AssignmentRange[];
+  readonly hasUnclosedQuotedValue: boolean;
+}
+
+interface ParsedSensitiveAssignment extends AssignmentRange {
+  readonly nextIndex: number;
+  readonly unclosedQuotedValue: boolean;
+}
+
+const isAssignmentKeyCharacter = (value: string): boolean =>
+  value === "." || value === "-" || value === "_" ||
+  (value >= "0" && value <= "9") ||
+  (value >= "A" && value <= "Z") ||
+  (value >= "a" && value <= "z");
+
+const isQuote = (value: string | undefined): value is "\"" | "'" =>
+  value === "\"" || value === "'";
+
+const isWhitespace = (value: string | undefined): boolean =>
+  value !== undefined && /\s/u.test(value);
+
+const isUnquotedValueTerminator = (value: string): boolean =>
+  isWhitespace(value) || value === "\"" || value === "'" || value === "," ||
+  value === "}" || value === "{" || value === ")";
+
+/** Parse one sensitive assignment at an exact token boundary in linear time. */
+function parseSensitiveAssignmentAt(
+  value: string,
+  start: number,
+): ParsedSensitiveAssignment | null {
+  if (start > 0 && isAssignmentKeyCharacter(value[start - 1]!)) return null;
+  let index = start;
+  if (isQuote(value[index])) index += 1;
+  const keyStart = index;
+  while (index < value.length && isAssignmentKeyCharacter(value[index]!)) index += 1;
+  if (index === keyStart) return null;
+  const key = value.slice(keyStart, index);
+  if (!isSecretAssignmentKey(key)) return null;
+
+  // Accept either key quote conservatively. Malformed provider text such as
+  // `"password': value` must mask rather than regain visibility.
+  if (isQuote(value[index])) index += 1;
+  while (index < value.length && isWhitespace(value[index])) index += 1;
+  if (value[index] !== ":" && value[index] !== "=") return null;
+  index += 1;
+  while (index < value.length && isWhitespace(value[index])) index += 1;
+
+  const quote = isQuote(value[index]) ? value[index] : null;
+  if (quote !== null) {
+    index += 1;
+    // Preserve whitespace immediately inside the opening quote for stable copy,
+    // but redact every subsequent character through the matching close quote.
+    while (index < value.length && isWhitespace(value[index])) index += 1;
+    const secretStart = index;
+    let escaped = false;
+    while (index < value.length) {
+      const character = value[index]!;
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === quote) {
+        return {
+          start: secretStart,
+          end: index,
+          nextIndex: index + 1,
+          unclosedQuotedValue: false,
+        };
+      }
+      index += 1;
+    }
+    return {
+      start: secretStart,
+      end: value.length,
+      nextIndex: value.length,
+      unclosedQuotedValue: true,
+    };
+  }
+
+  const secretStart = index;
+  while (index < value.length && !isUnquotedValueTerminator(value[index]!)) index += 1;
+  if (index === secretStart) return null;
+  return {
+    start: secretStart,
+    end: index,
+    nextIndex: index,
+    unclosedQuotedValue: false,
+  };
+}
+
+function scanSensitiveAssignments(value: string): AssignmentScan {
+  const ranges: AssignmentRange[] = [];
+  let hasUnclosedQuotedValue = false;
+  let index = 0;
+  while (index < value.length) {
+    const parsed = parseSensitiveAssignmentAt(value, index);
+    if (!parsed) {
+      index += 1;
+      continue;
+    }
+    ranges.push({ start: parsed.start, end: parsed.end });
+    hasUnclosedQuotedValue ||= parsed.unclosedQuotedValue;
+    index = Math.max(index + 1, parsed.nextIndex);
+  }
+  return { ranges, hasUnclosedQuotedValue };
+}
+
+function redactSensitiveAssignments(value: string): string {
+  const { ranges } = scanSensitiveAssignments(value);
+  if (ranges.length === 0) return value;
+  let output = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    output += value.slice(cursor, range.start);
+    output += MASK;
+    cursor = range.end;
+  }
+  return output + value.slice(cursor);
+}
+
+/** True when a sensitive quoted assignment has no matching close quote yet. */
+export function hasUnclosedSensitiveQuotedAssignment(value: string): boolean {
+  return scanSensitiveAssignments(value).hasUnclosedQuotedValue;
+}
+
 /**
  * Mask credential-shaped substrings in `text`, returning a redacted copy. Pure and
  * side-effect free. A non-string input (or empty/blank string) is returned as-is
@@ -120,9 +237,16 @@ export function redactSecrets(text: string | null | undefined): string {
   if (text == null) return "";
   let out = String(text);
   if (!out) return out;
-  for (const rule of RULES) {
+  out = out.replace(
+    CONNECTION_STRING_RULE.re,
+    CONNECTION_STRING_RULE.replace as (substring: string, ...args: unknown[]) => string,
+  );
+  for (const rule of TOKEN_RULES) {
     out = out.replace(rule.re, rule.replace as (substring: string, ...args: unknown[]) => string);
   }
+  // Assignment parsing runs after standalone token shapes so a value such as
+  // `auth: Bearer <token>` cannot lose its scheme before the token is masked.
+  out = redactSensitiveAssignments(out);
   return out;
 }
 
