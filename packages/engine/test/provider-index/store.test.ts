@@ -670,6 +670,96 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     expect(rawReconciliationRow(db, target)).toEqual(persisted);
   });
 
+  it("supersedes the historical reviewed fingerprint with the fresh native fingerprint", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(100, 200) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-drift-ack");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 13,
+      reason: "NATIVE_REVISION_MISMATCH",
+    });
+
+    const acknowledged = store.acknowledgeReconciliation(
+      target,
+      1,
+      NATIVE_FINGERPRINT,
+      NATIVE_FINGERPRINT,
+    );
+
+    expect(acknowledged).toEqual({
+      locator: target,
+      required: false,
+      latchRevision: 1,
+      reviewedFingerprint: NATIVE_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 13,
+      reason: null,
+      updatedAt: 200,
+    });
+    expect(store.getReconciliation(target)).toEqual(acknowledged);
+  });
+
+  it("supersedes a null historical reviewed fingerprint when native state is fresh", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(100, 200) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-null-reviewed-ack");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: null,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 14,
+      reason: "NATIVE_TASK_MISSING",
+    });
+
+    const acknowledged = store.acknowledgeReconciliation(
+      target,
+      1,
+      NATIVE_FINGERPRINT,
+      NATIVE_FINGERPRINT,
+    );
+
+    expect(acknowledged).toMatchObject({
+      required: false,
+      latchRevision: 1,
+      reviewedFingerprint: NATIVE_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 14,
+      reason: null,
+      updatedAt: 200,
+    });
+  });
+
+  it("refuses acknowledgement when the latched native fingerprint is null", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(100, 200) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-null-native-ack");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: null,
+      writerEpoch: 15,
+      reason: "NATIVE_TASK_MISSING",
+    });
+    const before = rawReconciliationRow(db, target);
+
+    expectStoreError(
+      () => store.acknowledgeReconciliation(
+        target,
+        1,
+        NATIVE_FINGERPRINT,
+        NATIVE_FINGERPRINT,
+      ),
+      "RECONCILIATION_CAS_MISMATCH",
+    );
+    expect(rawReconciliationRow(db, target)).toEqual(before);
+  });
+
   it("refuses missing, stale, mismatched, and supplied-unequal acknowledgements without writes", () => {
     const home = tempDirectory();
     const db = openDatabase();

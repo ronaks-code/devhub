@@ -121,3 +121,8 @@
 - A pre-BEGIN callback can invalidate an earlier authority read. When dependent state intentionally has no foreign key, recheck the exact bounded authority tuple after acquiring the writer transaction and before the first mutation.
 - Do not re-run `realpath` merely to decode an idempotent or conflicting row while holding a SQLite writer lock. Exact equality inherits the prevalidated input; inequality is a conflict, not an invitation to perform filesystem work.
 - Prove callback ordering with a delegated-real instrumented boundary that records transaction state. This catches accidental filesystem, clock, or token callbacks under the writer lock without replacing the real SQLite behavior.
+
+## 2026-07-14 - Separate reconciliation history from acknowledgement truth
+
+- A historical reviewed fingerprint is the baseline that detected drift, not the target an acknowledgement must reproduce. Clear only when the caller's new reviewed value equals freshly observed native state and that fresh value still equals the latch's stored native fingerprint.
+- Preserve exact CAS without freezing the stale baseline semantically: fence the previously read nullable reviewed value, native value, required bit, and latch revision in SQL, then replace both fingerprints with the acknowledged fresh native value.

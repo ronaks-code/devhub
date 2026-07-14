@@ -522,7 +522,6 @@ function acknowledgeInsideOwnedTransaction(
   const current = decodeReconciliationRow(currentRow, target);
   if (!current.required || current.latchRevision !== expectedLatchRevision ||
     reviewedFingerprint !== observedNativeFingerprint ||
-    current.reviewedFingerprint !== reviewedFingerprint ||
     current.nativeFingerprint !== observedNativeFingerprint) {
     return fail("RECONCILIATION_CAS_MISMATCH");
   }
@@ -537,7 +536,7 @@ function acknowledgeInsideOwnedTransaction(
       updated_at = ?
     WHERE provider = ? AND home_fingerprint = ? AND native_task_id = ?
       AND required = 1 AND latch_revision = ?
-      AND reviewed_fingerprint = ? AND native_fingerprint = ?
+      AND reviewed_fingerprint IS ? AND native_fingerprint IS ?
     RETURNING
       provider, home_fingerprint, native_task_id, required, latch_revision,
       reviewed_fingerprint, native_fingerprint, writer_epoch, reason, updated_at`)
@@ -549,8 +548,8 @@ function acknowledgeInsideOwnedTransaction(
         target.locator.homeFingerprint,
         target.locator.nativeTaskId,
         expectedLatchRevision,
-        reviewedFingerprint,
-        observedNativeFingerprint,
+        current.reviewedFingerprint,
+        current.nativeFingerprint,
       ) as ReconciliationRow | undefined;
   } catch {
     return fail("DATABASE_UNAVAILABLE");
