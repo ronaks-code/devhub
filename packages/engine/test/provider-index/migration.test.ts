@@ -6,11 +6,13 @@ import path from "node:path";
 import { TranscriptIndex } from "../../src/index-db.js";
 import { runMigrations } from "../../src/migrations.js";
 import {
+  addProviderIndexGenerationEpoch,
   createProviderIndexSchema,
+  PROVIDER_INDEX_LATEST_SCHEMA_VERSION,
   PROVIDER_INDEX_SCHEMA_VERSION,
 } from "../../src/provider-index/schema.js";
 
-const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+const { DatabaseSync, constants } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 type TestDatabase = InstanceType<typeof DatabaseSync>;
 
 const PROVIDER_TABLES = [
@@ -54,6 +56,7 @@ const GOLDEN_TABLE_INFO: Record<ProviderTableName, readonly TableInfoField[]> = 
     ["state", "TEXT", 1, "'idle'", 0],
     ["provider_version", "TEXT", 0, null, 0],
     ["last_completed_at", "INTEGER", 0, null, 0],
+    ["generation_epoch", "INTEGER", 1, "0", 0],
   ],
   provider_task_cache: [
     ["provider", "TEXT", 1, null, 1],
@@ -363,6 +366,21 @@ function migrateV13(db: TestDatabase): void {
   runMigrations(db);
 }
 
+function createV14(db: TestDatabase): void {
+  createProviderIndexSchema(db);
+  db.exec(`PRAGMA user_version = ${PROVIDER_INDEX_SCHEMA_VERSION}`);
+}
+
+function existingV14Rows(db: TestDatabase): Readonly<Record<ProviderTableName, readonly unknown[]>> {
+  return Object.fromEntries(PROVIDER_TABLES.map((table) => {
+    const columns = GOLDEN_TABLE_INFO[table]
+      .filter(([name]) => name !== "generation_epoch")
+      .map(([name]) => name)
+      .join(", ");
+    return [table, db.prepare(`SELECT ${columns} FROM ${table}`).all()];
+  })) as Record<ProviderTableName, readonly unknown[]>;
+}
+
 function registerHome(
   db: TestDatabase,
   provider = "openai",
@@ -575,8 +593,8 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe("provider index v14 migration", () => {
-  it("pins the provider schema step at v14 while allowing future migration appends", async () => {
+describe("provider index v14 + v15 migrations", () => {
+  it("pins the historical v14 and additive v15 steps while allowing future appends", async () => {
     const migrations = await import("../../src/migrations.js") as unknown as {
       assertProviderIndexMigrationLayout?: (steps: readonly unknown[]) => void;
     };
@@ -584,32 +602,39 @@ describe("provider index v14 migration", () => {
     expect(typeof check).toBe("function");
 
     const placeholder = (): void => {};
-    const v14: unknown[] = Array.from(
-      { length: PROVIDER_INDEX_SCHEMA_VERSION },
+    const v15: unknown[] = Array.from(
+      { length: PROVIDER_INDEX_LATEST_SCHEMA_VERSION },
       () => placeholder,
     );
-    v14[PROVIDER_INDEX_SCHEMA_VERSION - 1] = createProviderIndexSchema;
-    expect(() => check!(v14)).not.toThrow();
-    expect(() => check!([...v14, placeholder])).not.toThrow();
-    expect(() => check!([...v14, placeholder, placeholder])).not.toThrow();
+    v15[PROVIDER_INDEX_SCHEMA_VERSION - 1] = createProviderIndexSchema;
+    v15[PROVIDER_INDEX_LATEST_SCHEMA_VERSION - 1] = addProviderIndexGenerationEpoch;
+    expect(() => check!(v15)).not.toThrow();
+    expect(() => check!([...v15, placeholder])).not.toThrow();
+    expect(() => check!([...v15, placeholder, placeholder])).not.toThrow();
 
-    expect(() => check!(v14.slice(0, -1))).toThrow(
+    expect(() => check!(v15.slice(0, -1))).toThrow(
       "provider index migration version is inconsistent",
     );
-    const misplaced = [...v14];
+    const misplaced = [...v15];
     misplaced[PROVIDER_INDEX_SCHEMA_VERSION - 2] = createProviderIndexSchema;
     misplaced[PROVIDER_INDEX_SCHEMA_VERSION - 1] = placeholder;
     expect(() => check!(misplaced)).toThrow(
       "provider index migration version is inconsistent",
     );
+    const misplacedV15 = [...v15];
+    misplacedV15[PROVIDER_INDEX_LATEST_SCHEMA_VERSION - 1] = placeholder;
+    expect(() => check!(misplacedV15)).toThrow(
+      "provider index migration version is inconsistent",
+    );
   });
 
-  it("upgrades a v13 database additively and advances user_version to 14", () => {
+  it("upgrades a v13 database additively through v14 to current v15", () => {
     const db = openDatabase();
     migrateV13(db);
 
     expect(PROVIDER_INDEX_SCHEMA_VERSION).toBe(14);
-    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(PROVIDER_INDEX_LATEST_SCHEMA_VERSION).toBe(15);
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
     const tables = db
       .prepare(`SELECT name FROM sqlite_master
         WHERE type = 'table'
@@ -618,6 +643,227 @@ describe("provider index v14 migration", () => {
         ORDER BY name`)
       .all() as Array<{ name: string }>;
     expect(tables.map((row) => row.name)).toEqual([...PROVIDER_TABLES].sort());
+    db.close();
+  });
+
+  it("upgrades v14 idle and live stages with monotonic generation epochs", () => {
+    const db = openDatabase();
+    createV14(db);
+    registerHome(db, "openai", HOME_FINGERPRINT, "/tmp/v14-idle-home");
+    registerHome(db, "anthropic", TARGET_HOME_FINGERPRINT, "/tmp/v14-live-home");
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, state, last_completed_at
+    ) VALUES (?, ?, ?, ?, ?)`).run("openai", HOME_FINGERPRINT, 7, "idle", 700);
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at, state
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "anthropic", TARGET_HOME_FINGERPRINT, 4, 9, "owner-v14", 800, 900, "staging",
+    );
+
+    runMigrations(db);
+
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
+    expect(db.prepare(`SELECT provider, active_generation, staging_generation,
+      generation_epoch, typeof(generation_epoch) AS epoch_type
+      FROM provider_sync_state ORDER BY provider`).all()).toEqual([
+      {
+        provider: "anthropic",
+        active_generation: 4,
+        staging_generation: 9,
+        generation_epoch: 9,
+        epoch_type: "integer",
+      },
+      {
+        provider: "openai",
+        active_generation: 7,
+        staging_generation: null,
+        generation_epoch: 7,
+        epoch_type: "integer",
+      },
+    ]);
+    db.close();
+  });
+
+  it("preserves every v14 cache and durable row byte-for-byte except the added epoch", () => {
+    const db = openDatabase();
+    createV14(db);
+    registerHome(db);
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, state, provider_version,
+      last_completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?)`).run(
+      "openai", HOME_FINGERPRINT, 3, "idle", "v14-provider", 9_001,
+    );
+    insertTask(db, { cacheGeneration: 3 });
+    insertTurn(db, { cacheGeneration: 3 });
+    insertEvent(db, { cacheGeneration: 3 });
+    insertReceipt(db, { cacheGeneration: 3 });
+    db.prepare(`INSERT INTO provider_task_meta (
+      provider, home_fingerprint, native_task_id, favorite, pinned, local_label,
+      tags_json, notes, local_archived, ui_state_json, unsupported_local_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "openai", HOME_FINGERPRINT, "task-1", 1, 1, "v14-label",
+      '["v14"]', "v14-notes", 0, '{"panel":"open"}', '{"local":true}', 9_002,
+    );
+    db.prepare(`INSERT INTO provider_fork_links (
+      source_provider, source_home_fingerprint, source_native_task_id,
+      target_provider, target_home_fingerprint, target_native_task_id,
+      created_at, transfer_digest
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "openai", HOME_FINGERPRINT, "task-1",
+      "anthropic", TARGET_HOME_FINGERPRINT, "task-2", 9_003, TRANSFER_DIGEST,
+    );
+    db.prepare(`INSERT INTO legacy_session_task_map (
+      legacy_session_id, provider, home_fingerprint, native_task_id,
+      mapping_source, verified_at
+    ) VALUES (?, ?, ?, ?, ?, ?)`).run(
+      "legacy-v14", "openai", HOME_FINGERPRINT, "task-1", "v14-observation", 9_004,
+    );
+    db.prepare(`INSERT INTO legacy_session_provenance (
+      legacy_session_id, provenance, observed_at
+    ) VALUES (?, ?, ?)`).run("legacy-v14", "archive-v1-import", 9_005);
+    db.prepare(`INSERT INTO provider_reconciliation_state (
+      provider, home_fingerprint, native_task_id, required, latch_revision,
+      reviewed_fingerprint, native_fingerprint, writer_epoch, reason, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "openai", HOME_FINGERPRINT, "task-1", 1, 2,
+      "reviewed-v14", "native-v14", 3, "EXTERNAL_REVISION_CHANGED", 9_006,
+    );
+    const before = existingV14Rows(db);
+
+    runMigrations(db);
+
+    expect(existingV14Rows(db)).toEqual(before);
+    expect(db.prepare(`SELECT generation_epoch FROM provider_sync_state`).all())
+      .toEqual([{ generation_epoch: 3 }]);
+    db.close();
+  });
+
+  it("pins the exact v15 epoch DDL and rejects non-safe-integer storage", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    const object = db.prepare(`SELECT sql FROM sqlite_master
+      WHERE type = 'table' AND name = 'provider_sync_state'`).get() as { sql: string };
+    expect(normalizedSql(object.sql)).toContain(
+      "generation_epoch INTEGER NOT NULL DEFAULT 0 CHECK (typeof(generation_epoch) = 'integer' AND generation_epoch BETWEEN 0 AND 9007199254740991)",
+    );
+    registerHome(db);
+    db.prepare(`INSERT INTO provider_sync_state (provider, home_fingerprint)
+      VALUES (?, ?)`).run("openai", HOME_FINGERPRINT);
+    const update = db.prepare(`UPDATE provider_sync_state SET generation_epoch = ?`);
+    for (const invalid of [-1, Number.MAX_SAFE_INTEGER + 1, 1.5, "epoch", null]) {
+      expect(() => update.run(invalid)).toThrow();
+    }
+    expect(db.prepare(`SELECT generation_epoch, typeof(generation_epoch) AS epoch_type
+      FROM provider_sync_state`).get()).toEqual({ generation_epoch: 0, epoch_type: "integer" });
+    db.close();
+  });
+
+  it("rolls back the v15 column and version when injected backfill authorization fails", () => {
+    const db = openDatabase();
+    createV14(db);
+    registerHome(db);
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, state
+    ) VALUES (?, ?, ?, ?)`).run("openai", HOME_FINGERPRINT, 5, "idle");
+    const authorizable = db as TestDatabase & {
+      setAuthorizer(callback: ((actionCode: number, arg1: string | null) => number) | null): void;
+    };
+    authorizable.setAuthorizer((actionCode, arg1) => (
+      actionCode === constants.SQLITE_UPDATE && arg1 === "provider_sync_state"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK
+    ));
+    try {
+      expect(() => runMigrations(db)).toThrow();
+    } finally {
+      authorizable.setAuthorizer(null);
+    }
+
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(db.prepare(`PRAGMA table_info(provider_sync_state)`).all())
+      .toEqual(expectedTableInfo("provider_sync_state").slice(0, -1));
+    expect(db.prepare(`SELECT active_generation FROM provider_sync_state`).all())
+      .toEqual([{ active_generation: 5 }]);
+    db.close();
+  });
+
+  it("rejects claimed v15 schemas with a missing or lax epoch without healing or leaking values", () => {
+    for (const shape of ["missing", "lax"] as const) {
+      const db = openDatabase();
+      createV14(db);
+      registerHome(db, "openai", HOME_FINGERPRINT, `/tmp/value-must-not-leak-${shape}`);
+      if (shape === "lax") {
+        db.exec(`ALTER TABLE provider_sync_state ADD COLUMN generation_epoch INTEGER`);
+      }
+      db.exec(`PRAGMA user_version = ${PROVIDER_INDEX_LATEST_SCHEMA_VERSION}`);
+
+      let message: string | null = null;
+      try {
+        runMigrations(db);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message).toBe("provider index schema validation failed");
+      expect(message).not.toContain("value-must-not-leak");
+      expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
+      const epochColumns = (db.prepare(`PRAGMA table_info(provider_sync_state)`).all() as Array<{
+        name: string;
+      }>).filter((column) => column.name === "generation_epoch");
+      expect(epochColumns).toHaveLength(shape === "missing" ? 0 : 1);
+      db.close();
+    }
+  });
+
+  it("rejects a claimed-v15 live stage whose epoch no longer matches its allocation", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db, "openai", HOME_FINGERPRINT, "/tmp/semantic-value-must-not-leak");
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, generation_epoch
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      "openai", HOME_FINGERPRINT, 4, 9, "owner-v15", 800, 900, "staging", 9,
+    );
+    db.prepare(`UPDATE provider_sync_state SET generation_epoch = 8`).run();
+
+    let message: string | null = null;
+    try {
+      runMigrations(db);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toBe("provider index schema validation failed");
+    expect(message).not.toContain("semantic-value-must-not-leak");
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
+    expect(db.prepare(`SELECT staging_generation, generation_epoch
+      FROM provider_sync_state`).get()).toEqual({
+      staging_generation: 9,
+      generation_epoch: 8,
+    });
+    db.close();
+  });
+
+  it("converges without mutation when a valid v15 database is reset to user_version 14", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+    db.prepare(`INSERT INTO provider_sync_state (
+      provider, home_fingerprint, active_generation, generation_epoch, state
+    ) VALUES (?, ?, ?, ?, ?)`).run("openai", HOME_FINGERPRINT, 6, 11, "idle");
+    const before = providerSchema(db);
+    const rows = db.prepare(`SELECT * FROM provider_sync_state`).all();
+    db.exec(`PRAGMA user_version = ${PROVIDER_INDEX_SCHEMA_VERSION}`);
+
+    runMigrations(db);
+
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
+    expect(providerSchema(db)).toEqual(before);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).all()).toEqual(rows);
     db.close();
   });
 
@@ -684,8 +930,8 @@ describe("provider index v14 migration", () => {
     const upgraded = openDatabase(upgradedFile);
     migrateV13(upgraded);
 
-    expect(userVersion(fresh)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
-    expect(userVersion(upgraded)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(userVersion(fresh)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
+    expect(userVersion(upgraded)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
     expect(providerSchema(fresh)).toEqual(providerSchema(upgraded));
     fresh.close();
     upgraded.close();
@@ -701,7 +947,7 @@ describe("provider index v14 migration", () => {
 
     db.exec(`PRAGMA user_version = ${PRE_PROVIDER_INDEX_SCHEMA_VERSION}`);
     runMigrations(db);
-    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
     expect(providerSchema(db)).toEqual(firstSchema);
     db.close();
   });
@@ -779,7 +1025,7 @@ describe("provider index v14 migration", () => {
     db.close();
   });
 
-  it("rejects user_version 14 with a missing unique index without healing or leaking values", () => {
+  it("rejects user_version 15 with a missing unique index without healing or leaking values", () => {
     const db = openDatabase();
     migrateV13(db);
     registerHome(db, "openai", HOME_FINGERPRINT, "/tmp/keep-v14-index-sentinel");
@@ -796,7 +1042,7 @@ describe("provider index v14 migration", () => {
     }
 
     expect(failureMessage).toBe("provider index schema validation failed");
-    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_LATEST_SCHEMA_VERSION);
     expect(db.prepare(`SELECT provider, home_fingerprint, canonical_home, registered_at
       FROM provider_homes`).all()).toEqual(sentinel);
     expect(db.prepare(`SELECT name FROM sqlite_master
@@ -872,7 +1118,7 @@ describe("provider index v14 migration", () => {
     db.prepare("INSERT INTO future_sentinel VALUES (?)").run("preserved");
     db.prepare("INSERT INTO provider_future_extension VALUES (?)").run("future-preserved");
     const before = providerSchema(db);
-    const futureVersion = PROVIDER_INDEX_SCHEMA_VERSION + 1;
+    const futureVersion = PROVIDER_INDEX_LATEST_SCHEMA_VERSION + 1;
     db.exec(`PRAGMA user_version = ${futureVersion}`);
 
     runMigrations(db);
