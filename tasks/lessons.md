@@ -131,3 +131,9 @@
 
 - A successful SQLite statement execution does not prove its intended row survives: `RAISE(IGNORE)` can suppress an insert and AFTER triggers can delete or rewrite it. Treat the exact post-write row as the authority, not the attempted statement or change count.
 - Reread and bounded-decode the full intended authority tuple before commit. A missing or mismatched row must abort the owned transaction so trigger side effects cannot escape with a false-success response.
+
+## 2026-07-14 - Reconcile implementation against the current frozen contract
+
+- A previously reviewed checkpoint can still encode an older plan revision. Before extending it, compare every existing public signature and lifecycle assumption with the current frozen source of truth rather than inheriting prior review prose.
+- Provider locators are durable path-free metadata identities, so reconciliation must remain readable and mutable after a home is removed; home registration is optional validation context, not reconciliation authority.
+- Return the exact post-write reconciliation row for require/ack CAS operations, and reread it inside the owned transaction. Nullable equal acknowledgement pairs represent authoritative deletion/invalid state and must not be rejected merely because an older latch stored a non-null native fingerprint.

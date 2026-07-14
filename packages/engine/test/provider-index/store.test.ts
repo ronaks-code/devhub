@@ -25,6 +25,7 @@ type TestDatabase = InstanceType<typeof DatabaseSync>;
 const PRE_PROVIDER_INDEX_SCHEMA_VERSION = 13;
 const REVIEWED_FINGERPRINT = `openai:v1:${"a".repeat(64)}`;
 const NATIVE_FINGERPRINT = `openai:v1:${"b".repeat(64)}`;
+const AUTHORITATIVE_FINGERPRINT = `openai:v1:${"c".repeat(64)}`;
 const RECONCILIATION_REASON: ProviderReconciliationReason = "NATIVE_REVISION_MISMATCH";
 
 const databases: TestDatabase[] = [];
@@ -397,35 +398,53 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     expect(JSON.stringify(state)).not.toContain(home);
   });
 
-  it("rejects an unknown home across get, require, and acknowledge", () => {
+  it("keeps reconciliation usable as orphan metadata after home removal", () => {
     const home = tempDirectory();
     const db = openDatabase();
-    const store = new ProviderTaskIndexStore(db);
-    register(store, "openai", home);
-    const unknown = Object.freeze({
-      ...locator("openai", home, "task-unknown-home"),
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(10, 11) });
+    const target = Object.freeze({
+      version: 1 as const,
+      provider: "openai" as const,
       homeFingerprint: "f".repeat(64),
+      nativeTaskId: "task-orphan",
     });
 
-    expectStoreError(() => store.getReconciliation(unknown), "UNKNOWN_HOME");
-    expectStoreError(
-      () => store.requireReconciliation(unknown, {
-        reviewedFingerprint: null,
-        nativeFingerprint: null,
-        writerEpoch: 0,
-        reason: "NATIVE_TASK_MISSING",
-      }),
-      "UNKNOWN_HOME",
-    );
-    expectStoreError(
-      () => store.acknowledgeReconciliation(
-        unknown,
-        0,
-        REVIEWED_FINGERPRINT,
-        REVIEWED_FINGERPRINT,
-      ),
-      "UNKNOWN_HOME",
-    );
+    expect(store.getReconciliation(target)).toEqual({
+      locator: target,
+      required: false,
+      latchRevision: 0,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 0,
+      reason: null,
+      updatedAt: null,
+    });
+    const required = store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 2,
+      reason: "NATIVE_TASK_MISSING",
+    });
+    expect(required).toMatchObject({
+      locator: target,
+      required: true,
+      latchRevision: 1,
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 2,
+      reason: "NATIVE_TASK_MISSING",
+      updatedAt: 10,
+    });
+    expect(store.acknowledgeReconciliation(target, 1, null, null)).toEqual({
+      locator: target,
+      required: false,
+      latchRevision: 1,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 2,
+      reason: null,
+      updatedAt: 11,
+    });
   });
 
   it("creates the initial latch and increments every repeated relatch", () => {
@@ -441,8 +460,8 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       reason: RECONCILIATION_REASON,
     } as const;
 
-    expect(store.requireReconciliation(target, input)).toBeUndefined();
-    expect(store.getReconciliation(target)).toMatchObject({
+    const initial = store.requireReconciliation(target, input);
+    expect(initial).toMatchObject({
       required: true,
       latchRevision: 1,
       reviewedFingerprint: REVIEWED_FINGERPRINT,
@@ -451,9 +470,9 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       reason: RECONCILIATION_REASON,
       updatedAt: 100,
     });
+    expect(store.getReconciliation(target)).toEqual(initial);
 
-    store.requireReconciliation(target, input);
-    const repeated = store.getReconciliation(target);
+    const repeated = store.requireReconciliation(target, input);
     expect(repeated).toMatchObject({
       required: true,
       latchRevision: 2,
@@ -466,6 +485,70 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     expect(Object.isFrozen(repeated)).toBe(true);
     expect(Object.isFrozen(repeated.locator)).toBe(true);
     expect(JSON.stringify(repeated)).not.toContain(home);
+  });
+
+  it("rolls back a require when an AFTER trigger changes the committed CAS row", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(150) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-require-trigger");
+    db.exec(`CREATE TRIGGER corrupt_required_reconciliation
+      AFTER INSERT ON provider_reconciliation_state
+      BEGIN
+        UPDATE provider_reconciliation_state
+        SET writer_epoch = writer_epoch + 1
+        WHERE provider = NEW.provider
+          AND home_fingerprint = NEW.home_fingerprint
+          AND native_task_id = NEW.native_task_id;
+      END`);
+
+    expectStoreError(
+      () => store.requireReconciliation(target, {
+        reviewedFingerprint: REVIEWED_FINGERPRINT,
+        nativeFingerprint: NATIVE_FINGERPRINT,
+        writerEpoch: 4,
+        reason: "NATIVE_REVISION_MISMATCH",
+      }),
+      "CORRUPT_ROW",
+    );
+    expect(rawReconciliationRow(db, target)).toBeUndefined();
+  });
+
+  it("rolls back an acknowledgement when an AFTER trigger changes the committed row", () => {
+    const home = tempDirectory();
+    const db = openDatabase();
+    const store = new ProviderTaskIndexStore(db, { now: queuedClock(160, 170) });
+    register(store, "openai", home);
+    const target = locator("openai", home, "task-ack-trigger");
+    store.requireReconciliation(target, {
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 5,
+      reason: "NATIVE_REVISION_MISMATCH",
+    });
+    const before = rawReconciliationRow(db, target);
+    db.exec(`CREATE TRIGGER corrupt_acknowledged_reconciliation
+      AFTER UPDATE ON provider_reconciliation_state
+      WHEN OLD.required = 1 AND NEW.required = 0
+      BEGIN
+        UPDATE provider_reconciliation_state
+        SET writer_epoch = writer_epoch + 1
+        WHERE provider = NEW.provider
+          AND home_fingerprint = NEW.home_fingerprint
+          AND native_task_id = NEW.native_task_id;
+      END`);
+
+    expectStoreError(
+      () => store.acknowledgeReconciliation(
+        target,
+        1,
+        AUTHORITATIVE_FINGERPRINT,
+        AUTHORITATIVE_FINGERPRINT,
+      ),
+      "CORRUPT_ROW",
+    );
+    expect(rawReconciliationRow(db, target)).toEqual(before);
   });
 
   it("snapshots every reconciliation input before one pre-BEGIN clock sample", () => {
@@ -514,7 +597,7 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       .toBe(false);
   });
 
-  it("refuses a require when another connection deletes the home during the clock", () => {
+  it("commits a require when another connection removes its optional home authority", () => {
     const root = tempDirectory();
     const databaseFile = path.join(root, "require-home-race.db");
     const home = tempDirectory();
@@ -535,23 +618,24 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     registration = register(store, "openai", home);
     const target = locator("openai", home, "task-require-home-race");
 
-    const error = expectStoreError(
-      () => store.requireReconciliation(target, {
-        reviewedFingerprint: null,
-        nativeFingerprint: NATIVE_FINGERPRINT,
-        writerEpoch: 1,
-        reason: "NATIVE_TASK_MISSING",
-      }),
-      "UNKNOWN_HOME",
-    );
+    const required = store.requireReconciliation(target, {
+      reviewedFingerprint: null,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      writerEpoch: 1,
+      reason: "NATIVE_TASK_MISSING",
+    });
 
     expect(clockCalls).toBe(1);
-    expect(error.message).toBe("provider index home is unknown");
-    expect(error.message).not.toContain(home);
-    expect(rawReconciliationRow(db, target)).toBeUndefined();
+    expect(required).toMatchObject({
+      required: true,
+      latchRevision: 1,
+      nativeFingerprint: NATIVE_FINGERPRINT,
+      updatedAt: 600,
+    });
+    expect(store.getReconciliation(target)).toEqual(required);
   });
 
-  it("refuses an acknowledgement when another connection deletes the home during the clock", () => {
+  it("commits an acknowledgement when another connection removes its optional home authority", () => {
     const root = tempDirectory();
     const databaseFile = path.join(root, "ack-home-race.db");
     const home = tempDirectory();
@@ -580,23 +664,25 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       writerEpoch: 2,
       reason: "MUTATION_OUTCOME_UNCERTAIN",
     });
-    const before = rawReconciliationRow(db, target);
     deleteOnClock = true;
 
-    const error = expectStoreError(
-      () => store.acknowledgeReconciliation(
-        target,
-        1,
-        REVIEWED_FINGERPRINT,
-        REVIEWED_FINGERPRINT,
-      ),
-      "UNKNOWN_HOME",
+    const acknowledged = store.acknowledgeReconciliation(
+      target,
+      1,
+      REVIEWED_FINGERPRINT,
+      REVIEWED_FINGERPRINT,
     );
 
     expect(clockCalls).toBe(2);
-    expect(error.message).toBe("provider index home is unknown");
-    expect(error.message).not.toContain(home);
-    expect(rawReconciliationRow(db, target)).toEqual(before);
+    expect(acknowledged).toMatchObject({
+      required: false,
+      latchRevision: 1,
+      reviewedFingerprint: REVIEWED_FINGERPRINT,
+      nativeFingerprint: REVIEWED_FINGERPRINT,
+      writerEpoch: 2,
+      updatedAt: 800,
+    });
+    expect(store.getReconciliation(target)).toEqual(acknowledged);
   });
 
   it("persists latches across restart and isolates provider, home, and task scopes", () => {
@@ -732,16 +818,16 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     const acknowledged = store.acknowledgeReconciliation(
       target,
       1,
-      NATIVE_FINGERPRINT,
-      NATIVE_FINGERPRINT,
+      AUTHORITATIVE_FINGERPRINT,
+      AUTHORITATIVE_FINGERPRINT,
     );
 
     expect(acknowledged).toEqual({
       locator: target,
       required: false,
       latchRevision: 1,
-      reviewedFingerprint: NATIVE_FINGERPRINT,
-      nativeFingerprint: NATIVE_FINGERPRINT,
+      reviewedFingerprint: AUTHORITATIVE_FINGERPRINT,
+      nativeFingerprint: AUTHORITATIVE_FINGERPRINT,
       writerEpoch: 13,
       reason: null,
       updatedAt: 200,
@@ -780,7 +866,7 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
     });
   });
 
-  it("refuses acknowledgement when the latched native fingerprint is null", () => {
+  it("acknowledges an authoritative deletion with an exact nullable pair", () => {
     const home = tempDirectory();
     const db = openDatabase();
     const store = new ProviderTaskIndexStore(db, { now: queuedClock(100, 200) });
@@ -792,18 +878,17 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
       writerEpoch: 15,
       reason: "NATIVE_TASK_MISSING",
     });
-    const before = rawReconciliationRow(db, target);
-
-    expectStoreError(
-      () => store.acknowledgeReconciliation(
-        target,
-        1,
-        NATIVE_FINGERPRINT,
-        NATIVE_FINGERPRINT,
-      ),
-      "RECONCILIATION_CAS_MISMATCH",
-    );
-    expect(rawReconciliationRow(db, target)).toEqual(before);
+    const acknowledged = store.acknowledgeReconciliation(target, 1, null, null);
+    expect(acknowledged).toMatchObject({
+      required: false,
+      latchRevision: 1,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 15,
+      reason: null,
+      updatedAt: 200,
+    });
+    expect(store.getReconciliation(target)).toEqual(acknowledged);
   });
 
   it("refuses missing, stale, mismatched, and supplied-unequal acknowledgements without writes", () => {
@@ -839,17 +924,6 @@ describe("ProviderTaskIndexStore durable reconciliation", () => {
         0,
         REVIEWED_FINGERPRINT,
         NATIVE_FINGERPRINT,
-      ),
-      "RECONCILIATION_CAS_MISMATCH",
-    );
-    expect(rawReconciliationRow(db, target)).toEqual(initial);
-
-    expectStoreError(
-      () => store.acknowledgeReconciliation(
-        target,
-        1,
-        REVIEWED_FINGERPRINT,
-        REVIEWED_FINGERPRINT,
       ),
       "RECONCILIATION_CAS_MISMATCH",
     );

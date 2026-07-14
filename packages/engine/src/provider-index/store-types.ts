@@ -113,6 +113,79 @@ export interface ProviderHomeRegistration extends ProviderHomeScope {
   readonly registeredAt: number;
 }
 
+export interface ProviderIndexPage<T> {
+  readonly items: readonly T[];
+  readonly nextCursor: string | null;
+}
+
+/** Null fingerprint selects every home for the required provider. */
+export interface ProviderIndexScope {
+  readonly provider: ProviderId;
+  readonly homeFingerprint: string | null;
+}
+
+export interface ProviderCacheClearResult {
+  readonly taskCount: number;
+  readonly turnCount: number;
+  readonly eventCount: number;
+  readonly receiptCount: number;
+}
+
+export type ProviderMetadataJson =
+  | null
+  | boolean
+  | number
+  | string
+  | readonly ProviderMetadataJson[]
+  | ProviderMetadataObject;
+
+export interface ProviderMetadataObject {
+  readonly [key: string]: ProviderMetadataJson;
+}
+
+export interface ProviderTaskMeta {
+  readonly locator: ProviderTaskLocator;
+  readonly favorite: boolean;
+  readonly pinned: boolean;
+  readonly localLabel: string | null;
+  readonly tags: readonly string[];
+  readonly notes: string | null;
+  readonly localArchived: boolean;
+  readonly uiState: ProviderMetadataObject;
+  readonly unsupportedLocal: ProviderMetadataObject;
+  readonly updatedAt: number | null;
+}
+
+export interface ProviderTaskMetaPatch {
+  readonly favorite?: boolean;
+  readonly pinned?: boolean;
+  readonly localLabel?: string | null;
+  readonly tags?: readonly string[];
+  readonly notes?: string | null;
+  readonly localArchived?: boolean;
+  readonly uiState?: ProviderMetadataObject;
+  readonly unsupportedLocal?: ProviderMetadataObject;
+}
+
+export interface ProviderForkLink {
+  readonly source: ProviderTaskLocator;
+  readonly target: ProviderTaskLocator;
+  readonly createdAt: number;
+  readonly transferDigest: string;
+}
+
+export type LegacySessionProvenance =
+  | "imported"
+  | "missing"
+  | "ambiguous"
+  | "foreign-machine"
+  | "archive-v1-import";
+
+export interface VerifiedLegacyMapping {
+  readonly mappingSource: "live-provider-observation";
+  readonly verifiedAt: number;
+}
+
 export type ProviderReconciliationReason =
   | "REPLAY_CONFLICT"
   | "NATIVE_REVISION_MISMATCH"
@@ -142,12 +215,15 @@ export interface ProviderReconciliationState {
 
 export interface ProviderReconciliationStore {
   getReconciliation(locator: ProviderTaskLocator): ProviderReconciliationState;
-  requireReconciliation(locator: ProviderTaskLocator, input: ReconciliationLatchInput): void;
+  requireReconciliation(
+    locator: ProviderTaskLocator,
+    input: ReconciliationLatchInput,
+  ): ProviderReconciliationState;
   acknowledgeReconciliation(
     locator: ProviderTaskLocator,
     expectedLatchRevision: number,
-    reviewedFingerprint: string,
-    observedNativeFingerprint: string,
+    reviewedFingerprint: string | null,
+    observedNativeFingerprint: string | null,
   ): ProviderReconciliationState;
 }
 

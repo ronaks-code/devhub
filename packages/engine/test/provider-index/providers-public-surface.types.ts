@@ -10,14 +10,24 @@ import type {
   ProviderHomeScope,
   ProviderHomeRegistration,
   ProviderIndexCompletion,
+  ProviderIndexPage,
   ProviderIndexPromotion,
+  ProviderIndexScope,
   ProviderIndexStage,
   ProviderIndexStoreErrorCode,
   ProviderIndexStoreOptions,
+  ProviderCacheClearResult,
+  ProviderForkLink,
+  ProviderMetadataJson,
+  ProviderMetadataObject,
   ProviderReconciliationReason,
   ProviderReconciliationState,
   ProviderReconciliationStore,
+  ProviderTaskMeta,
+  ProviderTaskMetaPatch,
+  LegacySessionProvenance,
   ReconciliationLatchInput,
+  VerifiedLegacyMapping,
 } from "../../src/providers/index.js";
 import { ProviderTaskIndexStore as RootProviderTaskIndexStore } from "../../src/index.js";
 
@@ -31,14 +41,24 @@ type PublicProviderIndexTypes =
   | ProviderHomeScope
   | ProviderHomeRegistration
   | ProviderIndexCompletion
+  | ProviderIndexPage<IndexedProviderTaskSummary>
   | ProviderIndexPromotion
+  | ProviderIndexScope
   | ProviderIndexStage
   | ProviderIndexStoreErrorCode
   | ProviderIndexStoreOptions
+  | ProviderCacheClearResult
+  | ProviderForkLink
+  | ProviderMetadataJson
+  | ProviderMetadataObject
   | ProviderReconciliationReason
   | ProviderReconciliationState
   | ProviderReconciliationStore
-  | ReconciliationLatchInput;
+  | ProviderTaskMeta
+  | ProviderTaskMetaPatch
+  | LegacySessionProvenance
+  | ReconciliationLatchInput
+  | VerifiedLegacyMapping;
 declare const publicProviderIndexType: PublicProviderIndexTypes;
 void publicProviderIndexType;
 void RootProviderTaskIndexStore;
