@@ -1,5 +1,11 @@
 # Reusable Lessons
 
+## 2026-07-14 - Bootstrap the durable status board before implementation
+
+- A fresh goal chat must create and commit `tasks/STATUS.md` plus the root `AGENTS.md` before starting milestone work when the restart playbook requires them.
+- Treat `tasks/STATUS.md` as the skimmable source of truth: keep the frozen denominator, tag every remaining item by blocker type, register active worktrees, and update it in the same commit as the work it describes.
+- When a newer explicit instruction makes a formerly protected untracked coordination file commit-owned, limit that override to the named file and keep all other protected user paths untouched.
+
 ## 2026-07-14 - Keep blocked proof lanes parked and report one fixed denominator
 
 - When the user parks a provider-budget-blocked proof lane, remove it from the active queue instead of repeatedly polling or spending turns restating the blocker; redirect all available work to the named unblocked milestone.
