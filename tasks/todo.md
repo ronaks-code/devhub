@@ -437,6 +437,7 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - [x] Implement only `beginStage`, `heartbeatStage`, and `abortStage` over the shared connection and existing top-level transaction owner.
 - [x] Run focused stage/store/migration/wiring tests with at most two workers, engine typecheck/public-surface fixture, and diff hygiene.
 - [x] Record exact RED/GREEN evidence, self-review scope, and commit the tested checkpoint without pushing.
+- [x] Obtain independent exact-tip SPEC and QUALITY/SECURITY GO before promotion.
 
 #### Checkpoint C implementation evidence
 
@@ -473,3 +474,4 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The module-private `WeakMap` now binds one guard state to each exact SQLite object. All store instances on that connection share the state; `finally` releases it after every return or throw, while distinct database handles receive independent states.
 - Clock and token regressions preserve exact sync/cache/meta/reconciliation rows and return `CLOCK_FAILURE` and `TOKEN_FAILURE` with callback counts `1/0` and `1/1`. A post-failure abort proves release, and a different-database callback mutation succeeds. Existing same-instance and closed-database cases remain green.
 - Focused lifecycle passes `39/39`; combined lifecycle/store/migration/wiring passes `117/117`; engine typecheck and its negative public-surface fixture pass; diff hygiene is clean.
+- Exact implementation tip `6c7e76d65e62568c4f80a4e08a2e0a8226b838fd` received independent SPEC GO and QUALITY GO with zero P0-P3. The initial two P3 proof gaps were closed by seven cross-scope/UPDATE-trigger cases; the later P1 cross-instance callback mutation was closed by the per-connection guard and two-store RED regressions.
