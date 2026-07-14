@@ -137,6 +137,23 @@ function cacheIds(db: TestDatabase, scope: ProviderHomeScope): readonly string[]
     }>).map((row) => row.native_task_id);
 }
 
+function scopeRows(
+  db: TestDatabase,
+  scope: ProviderHomeScope,
+): Readonly<Record<string, readonly Record<string, unknown>[] | Record<string, unknown> | undefined>> {
+  const scopedRows = (table: string): readonly Record<string, unknown>[] =>
+    db.prepare(`SELECT * FROM ${table}
+      WHERE provider = ? AND home_fingerprint = ?
+      ORDER BY native_task_id`)
+      .all(scope.provider, scope.homeFingerprint) as Record<string, unknown>[];
+  return Object.freeze({
+    sync: rawSync(db, scope),
+    cache: scopedRows("provider_task_cache"),
+    meta: scopedRows("provider_task_meta"),
+    reconciliation: scopedRows("provider_reconciliation_state"),
+  });
+}
+
 afterEach(() => {
   for (const db of databases.splice(0)) closeDatabase(db);
   for (const directory of directories.splice(0)) {
@@ -322,6 +339,59 @@ describe("ProviderTaskIndexStore stage lifecycle", () => {
     expect(db.prepare("SELECT reason FROM provider_reconciliation_state").get()).toEqual({
       reason: "WRITER_LEASE_LOST",
     });
+  });
+
+  it("isolates expired takeover and abort from an identical generation and task in another scope", () => {
+    const db = openDatabase();
+    let now = 100;
+    const store = new ProviderTaskIndexStore(db, {
+      stageLeaseMs: 1_000,
+      now: () => now,
+      tokenFactory: () => "same-owner-token",
+    });
+    const scopeA = registerScope(store, tempDirectory("devhub-stage-scope-a-")).scope;
+    const scopeB = registerScope(store, tempDirectory("devhub-stage-scope-b-")).scope;
+    const stageA = store.beginStage(scopeA);
+    const stageB = store.beginStage(scopeB);
+    expect(stageA.generation).toBe(1);
+    expect(stageB.generation).toBe(1);
+    seedCache(db, scopeA, stageA.generation, "same-native-task");
+    seedCache(db, scopeB, stageB.generation, "same-native-task");
+    db.prepare(`INSERT INTO provider_task_meta (
+      provider, home_fingerprint, native_task_id, favorite, local_label, updated_at
+    ) VALUES (?, ?, ?, 1, ?, ?)`)
+      .run(scopeB.provider, scopeB.homeFingerprint, "same-native-task", "scope-b", 101);
+    db.prepare(`INSERT INTO provider_reconciliation_state (
+      provider, home_fingerprint, native_task_id, required, latch_revision,
+      reviewed_fingerprint, native_fingerprint, writer_epoch, reason, updated_at
+    ) VALUES (?, ?, ?, 1, 1, ?, ?, 4, ?, ?)`)
+      .run(
+        scopeB.provider,
+        scopeB.homeFingerprint,
+        "same-native-task",
+        "scope-b-reviewed",
+        "scope-b-native",
+        "WRITER_LEASE_LOST",
+        102,
+      );
+    const scopeBBefore = scopeRows(db, scopeB);
+    now = 1_100;
+
+    const successorA = store.beginStage(scopeA);
+
+    expect(successorA).toEqual({
+      ...scopeA,
+      generation: 2,
+      ownerToken: "same-owner-token",
+    });
+    expect(scopeRows(db, scopeB)).toEqual(scopeBBefore);
+    expect(cacheIds(db, scopeA)).toEqual([]);
+    seedCache(db, scopeA, successorA.generation, "same-native-task");
+
+    store.abortStage(successorA);
+
+    expect(scopeRows(db, scopeB)).toEqual(scopeBBefore);
+    expect(cacheIds(db, scopeA)).toEqual([]);
   });
 
   it("fails epoch capacity without changing state or over-sampling callbacks", () => {
@@ -722,6 +792,58 @@ describe("ProviderTaskIndexStore stage lifecycle", () => {
     expectStoreError(() => store.beginStage(scope), "CORRUPT_ROW");
     expect(rawSync(db, scope)).toBeUndefined();
   });
+
+  it.each([
+    { path: "idle", failure: "suppressed" },
+    { path: "idle", failure: "deleted" },
+    { path: "idle", failure: "rewritten" },
+    { path: "expired", failure: "suppressed" },
+    { path: "expired", failure: "deleted" },
+    { path: "expired", failure: "rewritten" },
+  ] as const)(
+    "rolls back a $failure begin UPDATE on the $path path",
+    ({ path: updatePath, failure }) => {
+      const db = openDatabase();
+      let now = 100;
+      const store = new ProviderTaskIndexStore(db, {
+        stageLeaseMs: 1_000,
+        now: () => now,
+        tokenFactory: () => "owner-update-path",
+      });
+      const { scope } = registerScope(store);
+      if (updatePath === "idle") {
+        seedIdle(db, scope, 3);
+        seedCache(db, scope, 3, "active-update-task");
+      } else {
+        const abandoned = store.beginStage(scope);
+        seedCache(db, scope, abandoned.generation, "abandoned-update-task");
+        now = 1_100;
+      }
+      const beforeSync = rawSync(db, scope);
+      const beforeCache = scopeRows(db, scope).cache;
+      const condition = updatePath === "idle"
+        ? "OLD.state = 'idle' AND NEW.state = 'staging'"
+        : `OLD.state = 'staging' AND NEW.state = 'staging'
+            AND NEW.generation_epoch = OLD.generation_epoch + 1`;
+      const timing = failure === "suppressed" ? "BEFORE" : "AFTER";
+      const body = failure === "suppressed"
+        ? "SELECT RAISE(IGNORE);"
+        : failure === "deleted"
+          ? `DELETE FROM provider_sync_state
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint;`
+          : `UPDATE provider_sync_state SET staging_owner_token = 'trigger-owner'
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint;`;
+      db.exec(`CREATE TRIGGER stage_begin_update_failure
+        ${timing} UPDATE ON provider_sync_state
+        WHEN ${condition}
+        BEGIN ${body} END`);
+
+      expectStoreError(() => store.beginStage(scope), "CORRUPT_ROW");
+
+      expect(rawSync(db, scope)).toEqual(beforeSync);
+      expect(scopeRows(db, scope).cache).toEqual(beforeCache);
+    },
+  );
 
   it.each([
     {
