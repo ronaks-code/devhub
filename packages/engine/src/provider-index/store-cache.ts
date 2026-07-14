@@ -67,6 +67,45 @@ export function generationCensus(
   });
 }
 
+export function taskGenerationCensus(
+  db: SqliteDatabase,
+  scope: ProviderHomeScope,
+  nativeTaskId: string,
+  generation: number,
+): Readonly<GenerationCensus> {
+  let row: Readonly<Record<keyof GenerationCensus, unknown>> | undefined;
+  try {
+    row = db.prepare(`SELECT
+      (SELECT COUNT(*) FROM provider_task_cache
+        WHERE provider = ? AND home_fingerprint = ?
+          AND native_task_id = ? AND cache_generation = ?) AS taskCount,
+      (SELECT COUNT(*) FROM provider_turn_cache
+        WHERE provider = ? AND home_fingerprint = ?
+          AND native_task_id = ? AND cache_generation = ?) AS turnCount,
+      (SELECT COUNT(*) FROM provider_event_cache
+        WHERE provider = ? AND home_fingerprint = ?
+          AND native_task_id = ? AND cache_generation = ?) AS eventCount,
+      (SELECT COUNT(*) FROM provider_replay_receipts
+        WHERE provider = ? AND home_fingerprint = ?
+          AND native_task_id = ? AND cache_generation = ?) AS receiptCount`)
+      .get(
+        scope.provider, scope.homeFingerprint, nativeTaskId, generation,
+        scope.provider, scope.homeFingerprint, nativeTaskId, generation,
+        scope.provider, scope.homeFingerprint, nativeTaskId, generation,
+        scope.provider, scope.homeFingerprint, nativeTaskId, generation,
+      ) as Readonly<Record<keyof GenerationCensus, unknown>> | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  return Object.freeze({
+    taskCount: storedCount(row.taskCount),
+    turnCount: storedCount(row.turnCount),
+    eventCount: storedCount(row.eventCount),
+    receiptCount: storedCount(row.receiptCount),
+  });
+}
+
 export function requireGenerationCensus(
   db: SqliteDatabase,
   scope: ProviderHomeScope,
@@ -190,6 +229,7 @@ export function generationHasStructuralGap(
         GROUP BY turn.native_task_id
         HAVING MIN(turn.ordinal) <> 0
           OR MAX(turn.ordinal) + 1 <> COUNT(*)
+          OR COUNT(DISTINCT turn.ordinal) <> COUNT(*)
       ) OR EXISTS (
         SELECT 1 FROM provider_event_cache AS event
         WHERE event.provider = ? AND event.home_fingerprint = ?
@@ -197,6 +237,7 @@ export function generationHasStructuralGap(
         GROUP BY event.native_task_id
         HAVING MIN(event.ordinal) <> 0
           OR MAX(event.ordinal) + 1 <> COUNT(*)
+          OR COUNT(DISTINCT event.ordinal) <> COUNT(*)
       ) OR EXISTS (
         SELECT 1 FROM provider_event_cache AS event
         WHERE event.provider = ? AND event.home_fingerprint = ?
@@ -223,14 +264,14 @@ export function generationHasStructuralGap(
   return row !== undefined;
 }
 
-export function retireOlderGenerationRows(
+export function retireOtherGenerationRows(
   db: SqliteDatabase,
   scope: ProviderHomeScope,
   generation: number,
 ): void {
   try {
     db.prepare(`DELETE FROM provider_task_cache
-      WHERE provider = ? AND home_fingerprint = ? AND cache_generation < ?`)
+      WHERE provider = ? AND home_fingerprint = ? AND cache_generation <> ?`)
       .run(scope.provider, scope.homeFingerprint, generation);
   } catch {
     return fail("DATABASE_UNAVAILABLE");
@@ -238,7 +279,7 @@ export function retireOlderGenerationRows(
   let row: Readonly<Record<string, unknown>> | undefined;
   try {
     row = db.prepare(`SELECT 1 AS remaining FROM provider_task_cache
-      WHERE provider = ? AND home_fingerprint = ? AND cache_generation < ?
+      WHERE provider = ? AND home_fingerprint = ? AND cache_generation <> ?
       LIMIT 1`).get(scope.provider, scope.homeFingerprint, generation) as
         Readonly<Record<string, unknown>> | undefined;
   } catch {

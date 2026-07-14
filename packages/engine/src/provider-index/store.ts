@@ -18,8 +18,8 @@ import {
 import {
   createProviderIndexOwnerToken,
   normalizeProviderIndexStoreOptions,
-  prepareProviderTaskSnapshot,
-  prepareProviderTaskSummary,
+  prepareProviderTaskSnapshotForStore,
+  prepareProviderTaskSummaryForStore,
   readProviderIndexNow,
 } from "./store-codec.js";
 import {
@@ -30,7 +30,8 @@ import {
   generationCensus,
   generationHasStructuralGap,
   requireGenerationCensus,
-  retireOlderGenerationRows,
+  retireOtherGenerationRows,
+  taskGenerationCensus,
   type GenerationCensus,
 } from "./store-cache.js";
 import {
@@ -1327,17 +1328,20 @@ function queryTaskChildRows(
   stage: ProviderIndexStage,
   prepared: PreparedProviderTaskSummary,
   orderBy: string,
+  limit: number,
 ): readonly CacheRow[] {
   try {
     return db.prepare(`SELECT * FROM ${table}
       WHERE provider = ? AND home_fingerprint = ?
         AND native_task_id = ? AND cache_generation = ?
-      ORDER BY ${orderBy}`)
+      ORDER BY ${orderBy}
+      LIMIT ?`)
       .all(
         prepared.locator.provider,
         prepared.locator.homeFingerprint,
         prepared.locator.nativeTaskId,
         stage.generation,
+        limit,
       ) as unknown as CacheRow[];
   } catch {
     return fail("DATABASE_UNAVAILABLE");
@@ -1396,10 +1400,14 @@ function deletePreparedTaskRows(
   } catch {
     return fail("DATABASE_UNAVAILABLE");
   }
-  if (queryTaskRow(db, stage, prepared) !== null ||
-    queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length !== 0 ||
-    queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length !== 0 ||
-    queryTaskChildRows(db, "provider_replay_receipts", stage, prepared, "replay_key").length !== 0) {
+  const remaining = taskGenerationCensus(
+    db,
+    prepared.locator,
+    prepared.locator.nativeTaskId,
+    stage.generation,
+  );
+  if (remaining.taskCount !== 0 || remaining.turnCount !== 0 ||
+    remaining.eventCount !== 0 || remaining.receiptCount !== 0) {
     fail("CORRUPT_ROW");
   }
 }
@@ -1411,36 +1419,28 @@ function stagePreparedSummaryInsideOwnedTransaction(
   observedAt: number,
 ): void {
   const taskRow = queryTaskRow(db, stage, prepared);
-  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
-  const events = queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal");
-  const receipts = queryTaskChildRows(
+  const census = taskGenerationCensus(
     db,
-    "provider_replay_receipts",
-    stage,
-    prepared,
-    "replay_key",
+    prepared.locator,
+    prepared.locator.nativeTaskId,
+    stage.generation,
   );
   if (taskRow === null) {
-    if (turns.length !== 0 || events.length !== 0 || receipts.length !== 0) fail("CORRUPT_ROW");
-  } else if (receipts.length === 0) {
-    if (turns.length !== 0 || events.length !== 0) fail("CORRUPT_ROW");
+    if (census.taskCount !== 0 || census.turnCount !== 0 || census.eventCount !== 0 ||
+      census.receiptCount !== 0) fail("CORRUPT_ROW");
+  } else if (census.taskCount !== 1) {
+    fail("CORRUPT_ROW");
+  } else if (census.receiptCount === 0) {
+    if (census.turnCount !== 0 || census.eventCount !== 0) fail("CORRUPT_ROW");
   } else {
-    if (receipts.length !== 1) fail("CORRUPT_ROW");
-    if (!taskRowMatchesPrepared(taskRow, stage, prepared, null)) {
-      deletePreparedTaskRows(db, stage, prepared);
-    }
+    if (census.receiptCount !== 1) fail("CORRUPT_ROW");
+    if (taskRowMatchesPrepared(taskRow, stage, prepared, null)) return;
+    deletePreparedTaskRows(db, stage, prepared);
   }
   writePreparedTaskRow(db, stage, prepared, observedAt);
   const persisted = queryTaskRow(db, stage, prepared);
   if (persisted === null || !taskRowMatchesPrepared(persisted, stage, prepared, observedAt)) {
     fail("CORRUPT_ROW");
-  }
-  if (receipts.length !== 0 && !taskRowMatchesPrepared(taskRow!, stage, prepared, null)) {
-    if (queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length !== 0 ||
-      queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length !== 0 ||
-      queryTaskChildRows(db, "provider_replay_receipts", stage, prepared, "replay_key").length !== 0) {
-      fail("CORRUPT_ROW");
-    }
   }
 }
 
@@ -1470,7 +1470,14 @@ function writePreparedSnapshotChildren(
   } catch {
     return fail("DATABASE_UNAVAILABLE");
   }
-  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
+  const turns = queryTaskChildRows(
+    db,
+    "provider_turn_cache",
+    stage,
+    prepared,
+    "ordinal",
+    prepared.turns.length + 1,
+  );
   const expectedTurns = prepared.turns.map((turn) => ({
     provider: prepared.locator.provider,
     home_fingerprint: prepared.locator.homeFingerprint,
@@ -1518,7 +1525,14 @@ function snapshotRowsMatchPrepared(
 ): boolean {
   const task = queryTaskRow(db, stage, prepared);
   if (task === null || !taskRowMatchesPrepared(task, stage, prepared, observedAt)) return false;
-  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
+  const turns = queryTaskChildRows(
+    db,
+    "provider_turn_cache",
+    stage,
+    prepared,
+    "ordinal",
+    prepared.turns.length + 1,
+  );
   const expectedTurns = prepared.turns.map((turn) => ({
     provider: prepared.locator.provider,
     home_fingerprint: prepared.locator.homeFingerprint,
@@ -1531,7 +1545,14 @@ function snapshotRowsMatchPrepared(
     ordinal: turn.ordinal,
   }));
   if (JSON.stringify(turns) !== JSON.stringify(expectedTurns)) return false;
-  const events = queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal");
+  const events = queryTaskChildRows(
+    db,
+    "provider_event_cache",
+    stage,
+    prepared,
+    "ordinal",
+    prepared.eventCount + 1,
+  );
   const expectedEvents = prepared.turns.flatMap((turn) => turn.events.map((event) => ({
     provider: prepared.locator.provider,
     home_fingerprint: prepared.locator.homeFingerprint,
@@ -1551,6 +1572,7 @@ function snapshotRowsMatchPrepared(
     stage,
     prepared,
     "replay_key",
+    2,
   );
   return JSON.stringify(receipts) === JSON.stringify([{
     provider: prepared.locator.provider,
@@ -1576,6 +1598,7 @@ function stagePreparedSnapshotInsideOwnedTransaction(
     stage,
     prepared,
     "replay_key",
+    2,
   );
   if (receipts.length > 1) fail("CORRUPT_ROW");
   const existingReceipt = receipts[0];
@@ -1647,28 +1670,12 @@ function requiredUnexpiredStageInsideOwnedTransaction(
   const current = decodeSyncState(row, known.scope);
   if (current.state !== "staging" || current.stagingGeneration !== stage.generation ||
     current.stagingOwnerToken !== stage.ownerToken) fail("STAGE_LOST");
-  if (current.stagingExpiresAt === null) fail("CORRUPT_ROW");
+  if (current.stagingHeartbeatAt === null || current.stagingExpiresAt === null) {
+    fail("CORRUPT_ROW");
+  }
+  if (now < current.stagingHeartbeatAt) fail("CLOCK_FAILURE");
   if (now >= current.stagingExpiresAt) fail("STAGE_EXPIRED");
   return current;
-}
-
-function taskGenerationCensus(
-  db: SqliteDatabase,
-  stage: ProviderIndexStage,
-  prepared: PreparedProviderTaskSummary,
-): Readonly<GenerationCensus> {
-  return Object.freeze({
-    taskCount: queryTaskRow(db, stage, prepared) === null ? 0 : 1,
-    turnCount: queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length,
-    eventCount: queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length,
-    receiptCount: queryTaskChildRows(
-      db,
-      "provider_replay_receipts",
-      stage,
-      prepared,
-      "replay_key",
-    ).length,
-  });
 }
 
 function replacementGenerationCensus(
@@ -1754,7 +1761,7 @@ function promoteStageInsideOwnedTransaction(
     return fail("DATABASE_UNAVAILABLE");
   }
   if (row === undefined) fail("CORRUPT_ROW");
-  retireOlderGenerationRows(db, known.scope, stage.generation);
+  retireOtherGenerationRows(db, known.scope, stage.generation);
   requiredSyncState(db, expected);
   if (countGenerationRows(db, "provider_task_cache", known.scope, stage.generation) !== taskCount ||
     countGenerationRows(db, "provider_turn_cache", known.scope, stage.generation) !== turnCount ||
@@ -1920,16 +1927,23 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
         provider: stage.provider,
         homeFingerprint: stage.homeFingerprint,
       });
-      const prepared = prepareProviderTaskSummary(
+      const preparation = prepareProviderTaskSummaryForStore(
         registeredHomeForKnown(known),
         keyValue,
         summaryValue,
       );
+      if (preparation.status === "failed") fail(preparation.code);
+      const prepared = preparation.value;
       const now = sampleNow(this.config);
       const expiresAt = leaseExpiry(now, this.config);
       withOwnedImmediateTransaction(this.db, () => {
         const before = generationCensus(this.db, known.scope, stage.generation);
-        const priorTask = taskGenerationCensus(this.db, stage, prepared);
+        const priorTask = taskGenerationCensus(
+          this.db,
+          known.scope,
+          prepared.locator.nativeTaskId,
+          stage.generation,
+        );
         const existing = queryTaskRow(this.db, stage, prepared);
         const preservesSnapshot = existing !== null && priorTask.receiptCount === 1 &&
           taskRowMatchesPrepared(existing, stage, prepared, null);
@@ -1959,18 +1973,25 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
         provider: stage.provider,
         homeFingerprint: stage.homeFingerprint,
       });
-      const prepared = prepareProviderTaskSnapshot(
+      const preparation = prepareProviderTaskSnapshotForStore(
         registeredHomeForKnown(known),
         keyValue,
         taskValue,
         this.config,
       );
+      if (preparation.status === "failed") fail(preparation.code);
+      const prepared = preparation.value;
       const now = sampleNow(this.config);
       const expiresAt = leaseExpiry(now, this.config);
       let replayConflict = false;
       withOwnedImmediateTransaction(this.db, () => {
         const before = generationCensus(this.db, known.scope, stage.generation);
-        const priorTask = taskGenerationCensus(this.db, stage, prepared);
+        const priorTask = taskGenerationCensus(
+          this.db,
+          known.scope,
+          prepared.locator.nativeTaskId,
+          stage.generation,
+        );
         const expected = replacementGenerationCensus(before, priorTask, {
           taskCount: 1,
           turnCount: prepared.turns.length,

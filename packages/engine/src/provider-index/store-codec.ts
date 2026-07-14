@@ -873,24 +873,49 @@ export function createProviderIndexOwnerToken(
   }
 }
 
+export type ProviderIndexStorePreparationResult<T> = Readonly<
+  | { status: "prepared"; value: Readonly<T> }
+  | { status: "failed"; code: "CAPACITY" | "INVALID_INPUT" }
+>;
+
+function preparedForStore<T>(value: Readonly<T>): ProviderIndexStorePreparationResult<T> {
+  return Object.freeze({ status: "prepared", value });
+}
+
+function preparationFailedForStore(
+  code: "CAPACITY" | "INVALID_INPUT",
+): ProviderIndexStorePreparationResult<never> {
+  return Object.freeze({ status: "failed", code });
+}
+
+export function prepareProviderTaskSummaryForStore(
+  registration: ProviderIndexRegisteredHome,
+  methodKey: NativeTaskKey,
+  summary: NativeTaskSummary,
+): ProviderIndexStorePreparationResult<PreparedProviderTaskSummary> {
+  try {
+    return preparedForStore(normalizedSummary(registration, methodKey, summary, false).summary);
+  } catch {
+    return preparationFailedForStore("INVALID_INPUT");
+  }
+}
+
 export function prepareProviderTaskSummary(
   registration: ProviderIndexRegisteredHome,
   methodKey: NativeTaskKey,
   summary: NativeTaskSummary,
 ): Readonly<PreparedProviderTaskSummary> {
-  try {
-    return normalizedSummary(registration, methodKey, summary, false).summary;
-  } catch {
-    throw new ProviderIndexStoreError("INVALID_INPUT");
-  }
+  const result = prepareProviderTaskSummaryForStore(registration, methodKey, summary);
+  if (result.status === "failed") throw new ProviderIndexStoreError(result.code);
+  return result.value;
 }
 
-export function prepareProviderTaskSnapshot(
+function prepareProviderTaskSnapshotResult(
   registration: ProviderIndexRegisteredHome,
   methodKey: NativeTaskKey,
   task: NativeTask,
   config: NormalizedProviderIndexStoreConfig = normalizeProviderIndexStoreOptions(),
-): Readonly<PreparedProviderTaskSnapshot> {
+): ProviderIndexStorePreparationResult<PreparedProviderTaskSnapshot> {
   try {
     const normalized = normalizedSummary(registration, methodKey, task, true);
     if (normalized.summary.source === "native" && normalized.summary.revision === null) {
@@ -978,17 +1003,36 @@ export function prepareProviderTaskSnapshot(
     }
     const frozenTurns = Object.freeze(turns);
     const fingerprint = providerTaskSnapshotFingerprintUnsafe(normalized.summary, frozenTurns);
-    return Object.freeze({
+    return preparedForStore(Object.freeze({
       ...normalized.summary,
       turns: frozenTurns,
       eventCount: eventOrdinal,
       snapshotFingerprint: fingerprint,
       receiptKey: providerTaskSnapshotReceiptKeyUnsafe(normalized.summary, fingerprint),
-    });
+    }));
   } catch (error) {
-    if (error === CAPACITY_SENTINEL) throw new ProviderIndexStoreError("CAPACITY");
-    throw new ProviderIndexStoreError("INVALID_INPUT");
+    return preparationFailedForStore(error === CAPACITY_SENTINEL ? "CAPACITY" : "INVALID_INPUT");
   }
+}
+
+export function prepareProviderTaskSnapshotForStore(
+  registration: ProviderIndexRegisteredHome,
+  methodKey: NativeTaskKey,
+  task: NativeTask,
+  config: NormalizedProviderIndexStoreConfig = normalizeProviderIndexStoreOptions(),
+): ProviderIndexStorePreparationResult<PreparedProviderTaskSnapshot> {
+  return prepareProviderTaskSnapshotResult(registration, methodKey, task, config);
+}
+
+export function prepareProviderTaskSnapshot(
+  registration: ProviderIndexRegisteredHome,
+  methodKey: NativeTaskKey,
+  task: NativeTask,
+  config: NormalizedProviderIndexStoreConfig = normalizeProviderIndexStoreOptions(),
+): Readonly<PreparedProviderTaskSnapshot> {
+  const result = prepareProviderTaskSnapshotResult(registration, methodKey, task, config);
+  if (result.status === "failed") throw new ProviderIndexStoreError(result.code);
+  return result.value;
 }
 
 function indexedEventText(

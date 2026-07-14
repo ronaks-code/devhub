@@ -104,6 +104,7 @@ function snapshot(
     title?: string;
     revisionFingerprint?: string;
     eventTexts?: readonly string[];
+    turnEventTexts?: readonly (readonly string[])[];
   }> = {},
 ): NativeTask {
   const base = summary(key);
@@ -112,26 +113,36 @@ function snapshot(
     ...base.revision!,
     fingerprint: options.revisionFingerprint ?? base.revision!.fingerprint,
   });
-  const eventTexts = options.eventTexts ?? [];
-  const turns = eventTexts.length === 0 ? [] : [
-    Object.freeze({
-      id: "turn-1",
+  const turnEventTexts = options.turnEventTexts ?? (
+    options.eventTexts === undefined || options.eventTexts.length === 0
+      ? []
+      : [options.eventTexts]
+  );
+  let globalEventIndex = 0;
+  const turns = turnEventTexts.map((eventTexts, turnIndex) => {
+    const turnId = `turn-${String(turnIndex + 1)}`;
+    return Object.freeze({
+      id: turnId,
       status: "complete",
       startedAt: "2026-07-14T00:00:00.000Z",
       completedAt: "2026-07-14T00:01:00.000Z",
-      events: Object.freeze(eventTexts.map((text, index) => normalizeProviderEvent({
-        type: "message",
-        role: "assistant",
-        text,
-        turnId: "turn-1",
-        itemId: `item-${String(index)}`,
-      }, {
-        provider: key.provider,
-        key,
-        occurredAt: `2026-07-14T00:00:0${String(index)}.000Z`,
-      }))),
-    }),
-  ];
+      events: Object.freeze(eventTexts.map((text) => {
+        const eventIndex = globalEventIndex;
+        globalEventIndex += 1;
+        return normalizeProviderEvent({
+          type: "message",
+          role: "assistant",
+          text,
+          turnId,
+          itemId: `item-${String(eventIndex)}`,
+        }, {
+          provider: key.provider,
+          key,
+          occurredAt: "2026-07-14T00:00:00.000Z",
+        });
+      })),
+    });
+  });
   return Object.freeze({ ...base, title, revision, turns: Object.freeze(turns) });
 }
 
@@ -148,6 +159,20 @@ function cacheRows(db: TestDatabase): Readonly<Record<string, readonly Record<st
     turns: rows("provider_turn_cache", "native_task_id, cache_generation, ordinal"),
     events: rows("provider_event_cache", "native_task_id, cache_generation, ordinal"),
     receipts: rows("provider_replay_receipts", "native_task_id, cache_generation"),
+  });
+}
+
+function forbidUnboundedChildEnumeration(db: TestDatabase): void {
+  const originalPrepare = db.prepare.bind(db);
+  Object.defineProperty(db, "prepare", {
+    configurable: true,
+    value: (sql: string) => {
+      if (/SELECT \* FROM provider_(?:turn_cache|event_cache|replay_receipts)/u.test(sql) &&
+        !/\bLIMIT\b/u.test(sql)) {
+        throw new Error("unbounded child enumeration");
+      }
+      return originalPrepare(sql);
+    },
   });
 }
 
@@ -210,6 +235,27 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
       .toEqual({ event_count: 2 });
   });
 
+  it("persists task-global event ordinals across real native turns", () => {
+    const { db, store, key, stage } = fixture();
+
+    store.stageSnapshot(stage, key, snapshot(key, {
+      turnEventTexts: [["one", "two"], ["three"]],
+    }));
+
+    const turns = db.prepare(`SELECT native_turn_key, ordinal
+      FROM provider_turn_cache ORDER BY ordinal`).all() as Array<{
+      native_turn_key: string;
+      ordinal: number;
+    }>;
+    expect(turns.map(({ ordinal }) => ordinal)).toEqual([0, 1]);
+    expect(db.prepare(`SELECT native_turn_key, ordinal
+      FROM provider_event_cache ORDER BY ordinal`).all()).toEqual([
+      { native_turn_key: turns[0]!.native_turn_key, ordinal: 0 },
+      { native_turn_key: turns[0]!.native_turn_key, ordinal: 1 },
+      { native_turn_key: turns[1]!.native_turn_key, ordinal: 2 },
+    ]);
+  });
+
   it("preserves a snapshot for an unchanged summary and demotes it when hash fields change", () => {
     const { db, store, key, stage } = fixture();
     const task = snapshot(key, { eventTexts: ["preserved"] });
@@ -234,6 +280,19 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
       .toEqual({ count: 0 });
   });
 
+  it("preserves an unchanged snapshot subtree across summary then snapshot replay", () => {
+    const { db, store, key, stage } = fixture();
+    const task = snapshot(key, { eventTexts: ["preserved"] });
+    store.stageSnapshot(stage, key, task);
+    const snapshotted = cacheRows(db);
+
+    store.stageSummary(stage, key, summaryFrom(task));
+    expect(cacheRows(db)).toEqual(snapshotted);
+
+    store.stageSnapshot(stage, key, task);
+    expect(cacheRows(db)).toEqual(snapshotted);
+  });
+
   it("makes exact snapshot replay byte-idempotent and replaces a changed receipt key", () => {
     const { db, store, key, stage } = fixture();
     const original = snapshot(key, { eventTexts: ["old"] });
@@ -254,6 +313,20 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
       .not.toEqual(first.events.map((row) => ({ event_json: row.event_json })));
     expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_replay_receipts`).get())
       .toEqual({ count: 1 });
+  });
+
+  it("rejects same-key same-fingerprint replay after a stored child row is tampered", () => {
+    const { db, store, key, stage } = fixture();
+    const task = snapshot(key, { eventTexts: ["trusted"] });
+    store.stageSnapshot(stage, key, task);
+    db.exec(`UPDATE provider_event_cache SET event_json = '{}'`);
+    const beforeRows = cacheRows(db);
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+
+    expectStoreError(() => store.stageSnapshot(stage, key, task), "CORRUPT_ROW");
+
+    expect(cacheRows(db)).toEqual(beforeRows);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
   });
 
   it("commits a whole-stage abort and durable latch before reporting replay conflict", () => {
@@ -310,6 +383,23 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
     );
 
     expect(cacheRows(db)).toEqual(beforeRows);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+  });
+
+  it("preserves codec CAPACITY provenance for an over-limit incoming snapshot", () => {
+    const { db, store, key, stage, nowCalls } = fixture({
+      maxEventsPerTask: 1,
+      maxEventsPerGeneration: 1,
+    });
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+
+    expectStoreError(
+      () => store.stageSnapshot(stage, key, snapshot(key, { eventTexts: ["one", "two"] })),
+      "CAPACITY",
+    );
+
+    expect(nowCalls()).toBe(1);
+    expect(cacheRows(db)).toEqual({ tasks: [], turns: [], events: [], receipts: [] });
     expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
   });
 
@@ -390,6 +480,96 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
     expect(db.prepare(`SELECT * FROM provider_sync_state`).all()).toEqual(beforeSync);
   });
 
+  it("fails closed on cross-instance same-database clock reentrancy", () => {
+    const db = openDatabase();
+    const home = tempDirectory();
+    let reenter = false;
+    let stage: ProviderIndexStage;
+    const key = Object.freeze({ provider: "openai", home, nativeTaskId: "task-reentrant" } as const);
+    const passive = new ProviderTaskIndexStore(db, { now: () => 200 });
+    const outer = new ProviderTaskIndexStore(db, {
+      now: () => {
+        if (reenter) passive.stageSummary(stage, key, summary(key));
+        return reenter ? 200 : 100;
+      },
+      tokenFactory: () => "reentrant-owner",
+    });
+    const registration = outer.registerHome({ provider: "openai", home }, 1);
+    stage = outer.beginStage({
+      provider: registration.provider,
+      homeFingerprint: registration.homeFingerprint,
+    });
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+    reenter = true;
+
+    expectStoreError(() => outer.stageSummary(stage, key, summary(key)), "CLOCK_FAILURE");
+
+    expect(cacheRows(db)).toEqual({ tasks: [], turns: [], events: [], receipts: [] });
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+    reenter = false;
+    passive.stageSummary(stage, key, summary(key));
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_task_cache`).get())
+      .toEqual({ count: 1 });
+  });
+
+  it("rejects stage writes in caller-owned transactions and on closed databases", () => {
+    const active = fixture();
+    const before = active.db.prepare(`SELECT * FROM provider_sync_state`).get();
+    active.db.exec("BEGIN");
+    try {
+      expectStoreError(
+        () => active.store.stageSummary(active.stage, active.key, summary(active.key)),
+        "DATABASE_UNAVAILABLE",
+      );
+    } finally {
+      active.db.exec("ROLLBACK");
+    }
+    expect(active.nowCalls()).toBe(1);
+    expect(active.db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(before);
+
+    const closed = fixture();
+    closed.db.close();
+    expectStoreError(
+      () => closed.store.stageSummary(closed.stage, closed.key, summary(closed.key)),
+      "DATABASE_UNAVAILABLE",
+    );
+    expect(closed.nowCalls()).toBe(1);
+  });
+
+  it("leaves a stage write unchanged when another connection owns the write lock", () => {
+    const root = tempDirectory();
+    const filename = path.join(root, "stage-busy.db");
+    const home = tempDirectory();
+    const ownerDb = openDatabase(filename);
+    const ownerStore = new ProviderTaskIndexStore(ownerDb, {
+      now: () => 100,
+      tokenFactory: () => "stage-busy-owner",
+    });
+    const registration = ownerStore.registerHome({ provider: "openai", home }, 1);
+    const stage = ownerStore.beginStage({
+      provider: registration.provider,
+      homeFingerprint: registration.homeFingerprint,
+    });
+    const key = Object.freeze({ provider: "openai", home, nativeTaskId: "busy-task" } as const);
+    const before = ownerDb.prepare(`SELECT * FROM provider_sync_state`).get();
+    const contenderDb = reopenDatabase(filename);
+    contenderDb.exec("PRAGMA busy_timeout = 1");
+    const contender = new ProviderTaskIndexStore(contenderDb, { now: () => 200 });
+
+    ownerDb.exec("BEGIN IMMEDIATE");
+    try {
+      expectStoreError(
+        () => contender.stageSummary(stage, key, summary(key)),
+        "DATABASE_UNAVAILABLE",
+      );
+    } finally {
+      ownerDb.exec("ROLLBACK");
+    }
+    expect(ownerDb.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(before);
+    expect(ownerDb.prepare(`SELECT COUNT(*) AS count FROM provider_task_cache`).get())
+      .toEqual({ count: 0 });
+  });
+
   it("rolls back a trigger-injected sibling task and the lease renewal", () => {
     const { db, store, key, stage } = fixture();
     const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
@@ -409,6 +589,34 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
 
     expect(cacheRows(db)).toEqual({ tasks: [], turns: [], events: [], receipts: [] });
     expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+  });
+
+  it("uses aggregate child census when demoting a large unchanged-generation snapshot", () => {
+    const { db, store, key, stage } = fixture();
+    const eventTexts = Array.from({ length: 256 }, (_, index) => `event-${String(index)}`);
+    const task = snapshot(key, { eventTexts });
+    store.stageSnapshot(stage, key, task);
+    forbidUnboundedChildEnumeration(db);
+
+    store.stageSummary(stage, key, { ...summaryFrom(task), title: "demoted" });
+
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_event_cache`).get())
+      .toEqual({ count: 0 });
+  });
+
+  it("uses aggregate prior census before bounded snapshot replacement comparison", () => {
+    const { db, store, key, stage } = fixture();
+    const eventTexts = Array.from({ length: 256 }, (_, index) => `event-${String(index)}`);
+    store.stageSnapshot(stage, key, snapshot(key, { eventTexts }));
+    forbidUnboundedChildEnumeration(db);
+
+    store.stageSnapshot(stage, key, snapshot(key, {
+      revisionFingerprint: "openai:v1:stage-write-replacement",
+      eventTexts: ["replacement"],
+    }));
+
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_event_cache`).get())
+      .toEqual({ count: 1 });
   });
 
   it.each([
@@ -478,6 +686,67 @@ describe("ProviderTaskIndexStore staged cache writes", () => {
       title: "conflicting title",
       eventTexts: ["changed"],
     })), "CORRUPT_ROW");
+
+    expect(cacheRows(db)).toEqual(beforeRows);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_reconciliation_state`).get())
+      .toEqual({ count: 0 });
+  });
+
+  it.each(["ignored", "deleted", "rewritten"] as const)(
+    "rolls back replay conflict when the new latch row is $failure",
+    (failure) => {
+      const { db, store, key, stage } = fixture();
+      store.stageSnapshot(stage, key, snapshot(key, { eventTexts: ["trusted"] }));
+      const beforeRows = cacheRows(db);
+      const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+      const timing = failure === "ignored" ? "BEFORE" : "AFTER";
+      const body = failure === "ignored"
+        ? "SELECT RAISE(IGNORE);"
+        : failure === "deleted"
+          ? `DELETE FROM provider_reconciliation_state
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint
+                AND native_task_id = NEW.native_task_id;`
+          : `UPDATE provider_reconciliation_state
+              SET latch_revision = latch_revision + 1
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint
+                AND native_task_id = NEW.native_task_id;`;
+      db.exec(`CREATE TRIGGER fail_conflict_latch ${timing} INSERT
+        ON provider_reconciliation_state BEGIN ${body} END`);
+
+      expectStoreError(() => store.stageSnapshot(stage, key, snapshot(key, {
+        title: "conflicting title",
+        eventTexts: ["changed"],
+      })), "CORRUPT_ROW");
+
+      expect(cacheRows(db)).toEqual(beforeRows);
+      expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM provider_reconciliation_state`).get())
+        .toEqual({ count: 0 });
+    },
+  );
+
+  it("rolls back replay-conflict abort and latch when COMMIT is denied", () => {
+    const { db, store, key, stage } = fixture();
+    store.stageSnapshot(stage, key, snapshot(key, { eventTexts: ["trusted"] }));
+    const beforeRows = cacheRows(db);
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+    const authorizable = db as TestDatabase & {
+      setAuthorizer(callback: ((actionCode: number, arg1: string | null) => number) | null): void;
+    };
+    authorizable.setAuthorizer((actionCode, arg1) => (
+      actionCode === constants.SQLITE_TRANSACTION && arg1 === "COMMIT"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK
+    ));
+    try {
+      expectStoreError(() => store.stageSnapshot(stage, key, snapshot(key, {
+        title: "conflicting title",
+        eventTexts: ["changed"],
+      })), "DATABASE_UNAVAILABLE");
+    } finally {
+      authorizable.setAuthorizer(null);
+    }
 
     expect(cacheRows(db)).toEqual(beforeRows);
     expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
@@ -696,6 +965,36 @@ describe("ProviderTaskIndexStore atomic promotion", () => {
     }
   });
 
+  it.each([
+    {
+      table: "provider_turn_cache",
+      index: "idx_provider_turn_cache_task_ordinal",
+    },
+    {
+      table: "provider_event_cache",
+      index: "idx_provider_event_cache_task_ordinal",
+    },
+  ] as const)("rejects compensated [0,0,2] ordinals in $table", ({ table, index }) => {
+    const { db, store, key, stage } = fixture();
+    store.stageSnapshot(stage, key, snapshot(key, {
+      turnEventTexts: [["one"], ["two"], ["three"]],
+    }));
+    db.exec(`DROP INDEX ${index};
+      UPDATE ${table} SET ordinal = 0 WHERE ordinal = 1`);
+
+    expectStoreError(() => store.promoteStage(stage, {
+      completedAt: 500,
+      providerVersion: null,
+      taskCount: 1,
+      turnCount: 3,
+      eventCount: 3,
+      snapshotCount: 1,
+      receiptCount: 1,
+    }), "STAGE_INCOMPLETE");
+    expect(db.prepare(`SELECT state FROM provider_sync_state`).get())
+      .toEqual({ state: "staging" });
+  });
+
   it("rejects children attached to a summary-only task even when totals match", () => {
     const { db, store, key, stage } = fixture();
     store.stageSummary(stage, key, summary(key));
@@ -792,6 +1091,40 @@ describe("ProviderTaskIndexStore atomic promotion", () => {
     },
   );
 
+  it.each(["ignored", "deleted", "rewritten"] as const)(
+    "rolls back a promotion sync row that is $failure",
+    (failure) => {
+      const { db, store, key, stage } = fixture();
+      store.stageSummary(stage, key, summary(key));
+      const beforeRows = cacheRows(db);
+      const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+      const timing = failure === "ignored" ? "BEFORE" : "AFTER";
+      const body = failure === "ignored"
+        ? "SELECT RAISE(IGNORE);"
+        : failure === "deleted"
+          ? `DELETE FROM provider_sync_state
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint;`
+          : `UPDATE provider_sync_state SET generation_epoch = generation_epoch + 1
+              WHERE provider = NEW.provider AND home_fingerprint = NEW.home_fingerprint;`;
+      db.exec(`CREATE TRIGGER fail_promotion_sync ${timing} UPDATE ON provider_sync_state
+        WHEN OLD.state = 'staging' AND NEW.state = 'idle'
+        BEGIN ${body} END`);
+
+      expectStoreError(() => store.promoteStage(stage, {
+        completedAt: 500,
+        providerVersion: null,
+        taskCount: 1,
+        turnCount: 0,
+        eventCount: 0,
+        snapshotCount: 0,
+        receiptCount: 0,
+      }), "CORRUPT_ROW");
+
+      expect(cacheRows(db)).toEqual(beforeRows);
+      expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+    },
+  );
+
   it("retires only the promoted home scope", () => {
     const { db, store, key, stage } = fixture();
     const otherHome = tempDirectory();
@@ -820,6 +1153,82 @@ describe("ProviderTaskIndexStore atomic promotion", () => {
     ]);
   });
 
+  it("retires corrupt future generations while preserving another home", () => {
+    const { db, store, key, stage } = fixture();
+    const otherHome = tempDirectory();
+    const other = store.registerHome({ provider: "openai", home: otherHome }, 2);
+    const insert = db.prepare(`INSERT INTO provider_task_cache (
+      provider, home_fingerprint, native_task_id, title, status, source,
+      cache_generation, observed_at
+    ) VALUES ('openai', ?, ?, ?, 'idle', 'degraded-fallback', ?, 1)`);
+    insert.run(stage.homeFingerprint, "future-task", "future", stage.generation + 1);
+    insert.run(other.homeFingerprint, "other-future", "other", stage.generation + 1);
+    store.stageSummary(stage, key, summary(key));
+
+    store.promoteStage(stage, {
+      completedAt: 500,
+      providerVersion: null,
+      taskCount: 1,
+      turnCount: 0,
+      eventCount: 0,
+      snapshotCount: 0,
+      receiptCount: 0,
+    });
+
+    expect(db.prepare(`SELECT home_fingerprint, native_task_id, cache_generation
+      FROM provider_task_cache ORDER BY native_task_id`).all()).toEqual([
+      {
+        home_fingerprint: other.homeFingerprint,
+        native_task_id: "other-future",
+        cache_generation: stage.generation + 1,
+      },
+      {
+        home_fingerprint: stage.homeFingerprint,
+        native_task_id: key.nativeTaskId,
+        cache_generation: stage.generation,
+      },
+    ]);
+  });
+
+  it("rolls back a rewritten future-generation retirement without touching another home", () => {
+    const { db, store, key, stage } = fixture();
+    const otherHome = tempDirectory();
+    const other = store.registerHome({ provider: "openai", home: otherHome }, 2);
+    const insert = db.prepare(`INSERT INTO provider_task_cache (
+      provider, home_fingerprint, native_task_id, title, status, source,
+      cache_generation, observed_at
+    ) VALUES ('openai', ?, ?, ?, 'idle', 'degraded-fallback', ?, 1)`);
+    insert.run(stage.homeFingerprint, "future-task", "future", stage.generation + 1);
+    insert.run(other.homeFingerprint, "other-future", "other", stage.generation + 1);
+    store.stageSummary(stage, key, summary(key));
+    const beforeRows = cacheRows(db);
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+    db.exec(`CREATE TRIGGER rewrite_future_retirement AFTER DELETE ON provider_task_cache
+      WHEN OLD.native_task_id = 'future-task'
+      BEGIN
+        INSERT INTO provider_task_cache (
+          provider, home_fingerprint, native_task_id, title, status, source,
+          cache_generation, observed_at
+        ) VALUES (
+          OLD.provider, OLD.home_fingerprint, OLD.native_task_id, 'rewritten',
+          OLD.status, OLD.source, OLD.cache_generation, OLD.observed_at
+        );
+      END`);
+
+    expectStoreError(() => store.promoteStage(stage, {
+      completedAt: 500,
+      providerVersion: null,
+      taskCount: 1,
+      turnCount: 0,
+      eventCount: 0,
+      snapshotCount: 0,
+      receiptCount: 0,
+    }), "CORRUPT_ROW");
+
+    expect(cacheRows(db)).toEqual(beforeRows);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
+  });
+
   it("validates completion shape and configured bounds before sampling the clock", () => {
     const bounded = fixture({ maxTasksPerGeneration: 1 });
     expectStoreError(() => bounded.store.promoteStage(bounded.stage, {
@@ -844,6 +1253,31 @@ describe("ProviderTaskIndexStore atomic promotion", () => {
       receiptCount: 0,
     }), "STAGE_INCOMPLETE");
     expect(malformed.nowCalls()).toBe(1);
+  });
+
+  it("rejects promotion clock regression without changing stage or old active cache", () => {
+    const { db, store, stage } = fixture();
+    db.prepare(`INSERT INTO provider_task_cache (
+      provider, home_fingerprint, native_task_id, title, status, source,
+      cache_generation, observed_at
+    ) VALUES (?, ?, 'old-active', 'old', 'idle', 'degraded-fallback', 0, 1)`)
+      .run(stage.provider, stage.homeFingerprint);
+    db.exec(`UPDATE provider_sync_state SET staging_heartbeat_at = 300`);
+    const beforeRows = cacheRows(db);
+    const beforeSync = db.prepare(`SELECT * FROM provider_sync_state`).get();
+
+    expectStoreError(() => store.promoteStage(stage, {
+      completedAt: 500,
+      providerVersion: null,
+      taskCount: 0,
+      turnCount: 0,
+      eventCount: 0,
+      snapshotCount: 0,
+      receiptCount: 0,
+    }), "CLOCK_FAILURE");
+
+    expect(cacheRows(db)).toEqual(beforeRows);
+    expect(db.prepare(`SELECT * FROM provider_sync_state`).get()).toEqual(beforeSync);
   });
 
   it("rejects a persisted task above the configured per-task event bound", () => {

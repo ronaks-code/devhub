@@ -494,3 +494,25 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Green-only self-review extracted callback-free census, capacity, structural-verification, and retirement SQL into private non-barrel `store-cache.ts`. The extraction regression (`3 failed / 25 passed`) exposed and closed transaction-layer normalization for the new internal error type without changing public errors.
 - A final self-review RED (`1 failed / 37 passed`) proved promotion had enforced global event capacity but not the configured per-task event bound against persisted rows. The private census helper now checks both before promotion.
 - Final focused D gate passes `38/38`; combined D/lifecycle/store/migration/wiring passes `155/155`. Engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` is clean. No E/F API, schema/migration change, provider process, browser, full suite, heavy queue, Python runtime, main checkout, push, or user-owned path was used.
+
+#### Checkpoint D SPEC NO-GO follow-up
+
+- [x] Preserve internal codec `CAPACITY`/`INVALID_INPUT` provenance without trusting public errors.
+- [x] Make unchanged summary then identical snapshot replay preserve the complete subtree.
+- [x] Reject compensated duplicate turn/event ordinals during promotion.
+- [x] Retire every non-promoted same-scope generation atomically.
+- [x] Replace heap-amplifying census/existence enumeration with aggregate SQL.
+- [x] Reject promotion clock regression without changing stage or active cache.
+- [x] Close the remaining multi-turn, tamper, conflict, reentrancy, database-state, sync-trigger, and latch-trigger proof gaps.
+- [x] Run final D/combined/typecheck/diff gates and commit a follow-up without amend or push.
+
+#### Checkpoint D SPEC NO-GO repair evidence
+
+- Finding 1 RED was exact (`1 failed / 38 passed`): the store flattened codec capacity to `INVALID_INPUT`. A private non-barrel discriminated preparation result now carries only internally produced `CAPACITY`/`INVALID_INPUT`; the public codec API remains unchanged and caller-forged public errors remain untrusted.
+- Finding 2 RED was exact (`1 failed / 39 passed`): unchanged summary rewrote only task `observed_at`, so identical snapshot replay saw a split task/receipt observation and returned corruption. Unchanged hash-bearing summary now renews only the stage lease and preserves the complete subtree byte-for-byte.
+- Finding 3 RED was exact (`2 failed / 40 passed`): compensated `[0,0,2]` turn and event ordinals satisfied min/max/count. Promotion now also requires `COUNT(DISTINCT ordinal) = COUNT(*)` for both child tables.
+- Finding 4 RED was exact (`2 failed / 42 passed`): future same-scope cache generations survived promotion and bypassed retirement-trigger proof. Promotion now deletes and post-verifies every same-scope generation unequal to the promoted generation, while transaction rollback and other-home isolation remain exact.
+- Finding 5 RED was exact (`2 failed / 44 passed`): summary demotion and snapshot replacement enumerated all existing child rows for census/existence. They now use aggregate task COUNT queries and exact census deltas; only incoming-bounded snapshot comparisons enumerate child rows, with a one-row corruption sentinel limit.
+- Finding 6 RED was exact (`1 failed / 46 passed`): promotion accepted a clock behind the stored heartbeat. It now returns `CLOCK_FAILURE` before mutation and preserves stage plus old active cache.
+- The remaining twelve proof cases passed on first execution: real multi-turn global event ordinals, same-fingerprint replay tamper detection, replay-conflict COMMIT rollback, cross-instance same-DB callback rejection/release, stage-write caller transaction/closed/busy failures, and complete promotion-sync/conflict-latch IGNORE/delete/rewrite matrices.
+- Final gates: codec `76/76`, focused D `59/59`, and combined D/lifecycle/store/migration/wiring `176/176`. Engine source typecheck, the negative public-surface compiler fixture, and `git diff --check` all pass; the preparation adapter remains private/non-barrel. No E/F API, schema/migration, provider process, browser, full suite, heavy queue, Python runtime, main checkout, amend, push, or user-owned path was used.
