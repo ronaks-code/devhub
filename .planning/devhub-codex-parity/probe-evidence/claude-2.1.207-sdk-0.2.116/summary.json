@@ -1,0 +1,105 @@
+{
+  "agent_sdk": {
+    "python": "3.11.15",
+    "version": "0.2.116"
+  },
+  "auth": {
+    "api_provider": "firstParty",
+    "auth_method": "api_key",
+    "credential_value_persisted": false,
+    "logged_in": true
+  },
+  "billable_turn_count": 3,
+  "claude": {
+    "path": "/Users/ronak/.local/bin/claude",
+    "sha256": "1397a062c6889675055e3314dd956376ac51262a7734ad9e819c26975d71547a",
+    "version": "2.1.207 (Claude Code)"
+  },
+  "cleanup": {
+    "fork_deleted": true,
+    "remaining_session_ids": [],
+    "source_deleted": true
+  },
+  "extra_turn_justification": "The first resumed SDK turn used safe sleep 30, which Claude auto-approved. One explicitly permitted extra lifecycle turn proved the unresolved real approval and interrupt controls.",
+  "finished_at_unix": 1783908158.735154,
+  "native_fork_id": "36c32267-a82a-4b98-a15e-8e2913a7055d",
+  "native_session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+  "session_helpers": {
+    "fork_messages": 15,
+    "list_discovered_same_id": true,
+    "read_after_extra": 15,
+    "read_before_extra": 9,
+    "rename_persisted": true,
+    "source_messages_after_fork": 15,
+    "source_messages_before_fork": 15
+  },
+  "settings_sources": {
+    "hook_markers": {
+      "local": true,
+      "project": true,
+      "user": true
+    },
+    "requested": [
+      "user",
+      "project",
+      "local"
+    ]
+  },
+  "status": "pass",
+  "turn_1_direct_cli": {
+    "actual_assistant_model": "claude-sonnet-5",
+    "agent_count": 5,
+    "init_model": "claude-haiku-4-5-20251001",
+    "model_selection_match": false,
+    "permission_mode": "plan",
+    "plugin_count": 1,
+    "result_model_usage": [
+      "claude-sonnet-5"
+    ],
+    "result_session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "result_subtype": "success",
+    "slash_command_count": 38,
+    "total_cost_usd": 0.027373949999999998
+  },
+  "turn_2_sdk_resume": {
+    "native_message_count_after_turn": 9,
+    "nonce_continuity_proven_by_mcp_input": true,
+    "safe_bash_auto_approval_observed": true,
+    "same_native_session_id": true,
+    "sdk_mcp_tool_proven": true
+  },
+  "turn_3_justified_extra": {
+    "approved_write_exact": true,
+    "duration_api_ms": 1706,
+    "duration_ms": 2791,
+    "interrupt_acknowledged": true,
+    "interrupt_sent": true,
+    "message_count": 51,
+    "pretool_hook_proven": true,
+    "result_is_error": true,
+    "result_session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "result_stop_reason": "tool_use",
+    "result_subtype": "error_during_execution",
+    "total_cost_usd": 0.01633875,
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 12103
+      },
+      "cache_creation_input_tokens": 12103,
+      "cache_read_input_tokens": 0,
+      "inference_geo": "not_available",
+      "input_tokens": 10,
+      "iterations": [],
+      "output_tokens": 240,
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      },
+      "service_tier": "standard",
+      "speed": "standard"
+    },
+    "write_allow_response_proven": true,
+    "write_permission_request_proven": true
+  }
+}

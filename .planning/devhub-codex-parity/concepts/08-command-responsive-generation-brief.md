@@ -1,0 +1,14 @@
+Use case: ui-mockup
+Asset type: coordinated DevHub command/search/settings and responsive behavior concept sheet
+Governing input: Image 1 is the active-window empty task capture. Preserve its tokens, density, shell proportions, composer language, rail hierarchy, and intentional negative space. Narrow and PWA states are proposed; no first-party mobile behavior was observed.
+Primary request: Produce one restrained product-design presentation containing three clearly separated viewport snapshots of the same DevHub system, not a dashboard: a large desktop Ops/Inbox utility snapshot, a narrow desktop Settings snapshot, and a small mobile PWA task snapshot. Use a plain `#181818` presentation background and simple labels "Desktop", "Narrow", "PWA" outside the snapshots.
+Desktop snapshot: full measured shell branded "DevHub" on the secondary destination "Ops" with an open-list Inbox of task attention items, not metrics or cards. Open the command palette over it. Palette title/field "Search commands and tasks" and rows "New task", "Search tasks", "Toggle inspector", "Open Settings", "Go to Ops", with shortcuts "⌘N", "⌘K", "⌘⇧I", "⌘,". It is a compact Command-inside-Dialog surface with accessible title, not a giant modal.
+Narrow snapshot: "Settings" route at a narrow desktop/browser width; rail is a slim icon strip and may open as a temporary sheet; form uses simple field groups for "Appearance", "Providers", and "Permissions". Inspector is hidden behind one icon button. No horizontal overflow.
+PWA snapshot: task rail is a back-navigation screen, transcript is primary, composer supports read/reply, and a muted disclosure says "Desktop required for terminal and diff". Do not imply native mobile, offline work, push notifications, or full feature parity.
+Visible text (verbatim): "DevHub", "Desktop", "Narrow", "PWA", "Ops", "Inbox", "Search commands and tasks", "New task", "Search tasks", "Toggle inspector", "Open Settings", "Go to Ops", "⌘N", "⌘K", "⌘⇧I", "⌘,", "Settings", "Appearance", "Providers", "Permissions", "Desktop required for terminal and diff".
+Classification: desktop shell/tokens are observed; command palette, utility placement, rail sheet, narrow breakpoint, and PWA limitations are proposed DevHub behavior requiring approval and later responsive testing.
+Style/medium: realistic shippable UI concept sheet, neutral system typography, no device marketing mockups.
+Composition/framing: landscape 1536x1024; desktop snapshot largest on the left/top, narrow and PWA snapshots smaller but fully readable; consistent tokens across all.
+Constraints: no generic dashboard grid inside the product; no native mobile claim; no offline/push claim; no logos; no watermark; accessible titles and visible focus.
+Avoid: glossy device renders, floating cards, marketing annotations, gradients, cream backgrounds, decorative callouts, mobile overflow.
+Quality: high

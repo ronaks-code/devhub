@@ -1,0 +1,202 @@
+[
+  {
+    "blocks": [],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": "DEVHUB_CLAUDE_M1_20260713T015750Z",
+        "type": "text"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": null,
+        "type": "thinking"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": {
+          "text": "DEVHUB_CLAUDE_M1_20260713T015750Z"
+        },
+        "name": "mcp__devhub_probe__echo",
+        "text": null,
+        "type": "tool_use"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": {
+          "command": "sleep 30"
+        },
+        "name": "Bash",
+        "text": null,
+        "type": "tool_use"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": null,
+        "tool_result_present": true,
+        "type": "tool_result"
+      }
+    ],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": null,
+        "type": "thinking"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": "DEVHUB_CLAUDE_M1_20260713T015750Z",
+        "type": "text"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": null,
+        "type": "thinking"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": {
+          "content": "approved\n",
+          "file_path": "/private/tmp/devhub-claude-m1-20260713T015750Z/workspace/approval-probe.txt"
+        },
+        "name": "Write",
+        "text": null,
+        "type": "tool_use"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": {
+          "command": "sleep 60"
+        },
+        "name": "Bash",
+        "text": null,
+        "type": "tool_use"
+      }
+    ],
+    "role": "assistant",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "assistant",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": null,
+        "tool_result_present": true,
+        "type": "tool_result"
+      }
+    ],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  },
+  {
+    "blocks": [
+      {
+        "input": null,
+        "name": null,
+        "text": "[Request interrupted by user for tool use]",
+        "type": "text"
+      }
+    ],
+    "role": "user",
+    "session_id": "df6288da-e4f7-48b1-a7ab-323c1e4c92fe",
+    "type": "user",
+    "uuid_present": true
+  }
+]

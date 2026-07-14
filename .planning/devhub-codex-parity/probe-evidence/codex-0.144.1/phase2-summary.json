@@ -1,0 +1,182 @@
+{
+  "phase": "phase2",
+  "startedAt": "2026-07-13T00:40:33.119Z",
+  "responses": [
+    {
+      "method": "initialize",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/list",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/read",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/resume",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "turn/start",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "turn/interrupt",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/read",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/fork",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/name/set",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/archive",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/list",
+      "ok": true,
+      "error": null
+    },
+    {
+      "method": "thread/unarchive",
+      "ok": true,
+      "error": null
+    }
+  ],
+  "notifications": [
+    "remoteControl/status/changed",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "thread/status/changed",
+    "thread/tokenUsage/updated",
+    "thread/goal/cleared",
+    "thread/status/changed",
+    "turn/started",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "hook/started",
+    "hook/completed",
+    "item/started",
+    "item/completed",
+    "item/started",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "item/agentMessage/delta",
+    "thread/status/changed",
+    "turn/completed",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "thread/tokenUsage/updated",
+    "thread/started",
+    "thread/name/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "thread/status/changed",
+    "thread/archived"
+  ],
+  "serverRequests": [],
+  "unknownNotifications": [
+    "remoteControl/status/changed",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "thread/status/changed",
+    "thread/goal/cleared",
+    "thread/status/changed",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "hook/started",
+    "hook/completed",
+    "thread/status/changed",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "mcpServer/startupStatus/updated",
+    "thread/status/changed"
+  ],
+  "stderrBytes": 0,
+  "result": {
+    "threadId": "019f58e9-8cde-7cb2-9a3a-444e3dc54967",
+    "resumedSameId": true,
+    "persistedTurnsBeforeResume": 1,
+    "turnsAfterInterrupt": 2,
+    "interruptedTurnId": "019f58eb-2686-7671-8912-65901a960135",
+    "interruptedTurnStatus": "interrupted",
+    "forkId": "019f58eb-338b-7953-9c4e-f3913894d29b",
+    "forkedFromId": "019f58e9-8cde-7cb2-9a3a-444e3dc54967",
+    "forkSessionId": "019f58eb-338b-7953-9c4e-f3913894d29b",
+    "forkArchivedAndRestored": true
+  },
+  "completedAt": "2026-07-13T00:40:37.232Z"
+}

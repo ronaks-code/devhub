@@ -1,0 +1,13 @@
+Use case: ui-mockup
+Asset type: DevHub desktop product concept, new-task and empty state
+Governing input: Image 1 is the current ChatGPT/Codex empty native task capture. Preserve its measured geometry, density, active-window treatment, empty canvas, rail hierarchy, header, bottom composer, and compact inspector.
+Primary request: Create a restrained two-state product plate, not a dashboard. The dominant full-window frame remains the observed empty existing task: replace only the wordmark with "DevHub", keep the central canvas completely blank, preserve the disabled send arrow, and do not add onboarding content. Add one smaller, clearly separate inset crop labeled "New task · proposed" that shows the same composer changing to task creation. In that inset only, add one understated line "Start a task" immediately above the composer, not a hero. The placeholder is "Describe the outcome or change…". Its footer contains compact controls for "OpenAI · Codex", "claude-ui", "Code", "Workspace", and "Codex 5.6 · High", followed by a disabled send arrow until text is entered.
+Inspector: Keep the measured 300-wide content-height surface. Show "Environment", then rows "Folder" / "Choose folder" and "Permissions" / "Workspace". No other cards.
+Provider disclosure: One quiet helper line under the provider control says "Provider is fixed after creation. Fork to another provider to continue there."
+Visible text (verbatim): "DevHub", "New task", "New task · proposed", "Scheduled", "Plugins", "Pull requests", "Projects", "Tasks", "Settings", "Start a task", "Describe the outcome or change…", "OpenAI · Codex", "claude-ui", "Code", "Work", "Workspace", "Codex 5.6 · High", "Environment", "Folder", "Choose folder", "Permissions", "Provider is fixed after creation. Fork to another provider to continue there."
+Classification: dominant empty-task shell/geometry is observed; the inset global new-task setup is visually unobserved proposed DevHub behavior and must remain subject to capability checks.
+Style/medium: realistic shippable macOS desktop UI, dark mode, system sans typography, restrained outline icons.
+Composition/framing: dominant 1800x1130 logical shell fills most of the landscape; one small readable composer/setup inset sits outside its content area without covering the rail, inspector, or main composer. No device frame.
+Constraints: keep 273 rail, 46 header, 736x98 composer, 300 inspector, 16 bottom/right gutters, `#181818` canvas, `#2d2d2d` surfaces; text-only provider identity; no logos; no welcome illustration; no suggestion cards; no dashboard; no watermark.
+Avoid: gradients, glows, cream tint, nested cards, large headings, avatars, decorative badges, emoji, default shadcn look, invented navigation.
+Quality: high

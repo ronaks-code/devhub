@@ -1,0 +1,26 @@
+{
+  "capturedAt": "2026-07-13T00:55:22.706Z",
+  "deleted": [
+    {
+      "threadId": "019f58eb-338b-7953-9c4e-f3913894d29b",
+      "deleted": true
+    },
+    {
+      "threadId": "019f58e9-8cde-7cb2-9a3a-444e3dc54967",
+      "deleted": true
+    }
+  ],
+  "verifiedMissing": [
+    {
+      "threadId": "019f58eb-338b-7953-9c4e-f3913894d29b",
+      "missing": true,
+      "error": "-32600:thread not loaded: 019f58eb-338b-7953-9c4e-f3913894d29b"
+    },
+    {
+      "threadId": "019f58e9-8cde-7cb2-9a3a-444e3dc54967",
+      "missing": true,
+      "error": "-32600:thread not loaded: 019f58e9-8cde-7cb2-9a3a-444e3dc54967"
+    }
+  ],
+  "stderrBytes": 0
+}

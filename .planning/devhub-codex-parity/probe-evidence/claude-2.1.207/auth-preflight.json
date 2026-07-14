@@ -1,0 +1,20 @@
+{
+  "capturedAt": "2026-07-13T00:43:00Z",
+  "binary": "/Users/ronak/.local/bin/claude",
+  "version": "2.1.207",
+  "binarySha256": "1397a062c6889675055e3314dd956376ac51262a7734ad9e819c26975d71547a",
+  "defaultConfig": {
+    "loggedIn": true,
+    "authMethod": "claude.ai",
+    "apiProvider": "firstParty"
+  },
+  "syntheticConfig": {
+    "path": "/private/tmp/devhub-claude-m1-20260713T004300Z/config",
+    "loggedIn": false,
+    "authMethod": "none",
+    "apiProvider": "firstParty"
+  },
+  "compliantProviderCredentialPresent": false,
+  "billableTurns": 0,
+  "result": "blocked before live execution by current Anthropic third-party authentication policy"
+}

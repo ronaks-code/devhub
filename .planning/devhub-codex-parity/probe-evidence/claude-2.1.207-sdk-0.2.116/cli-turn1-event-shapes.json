@@ -1,0 +1,15 @@
+{
+  "assistant": 1,
+  "result/success": 1,
+  "stream_event/content_block_delta": 3,
+  "stream_event/content_block_start": 1,
+  "stream_event/content_block_stop": 1,
+  "stream_event/message_delta": 1,
+  "stream_event/message_start": 1,
+  "stream_event/message_stop": 1,
+  "system/hook_response": 3,
+  "system/hook_started": 3,
+  "system/init": 1,
+  "system/status": 1,
+  "user": 1
+}

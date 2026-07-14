@@ -1,0 +1,58 @@
+{
+  "bash_pretool_seen": true,
+  "hook_calls": [
+    {
+      "input_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "tool_input": {
+        "content": "approved\n",
+        "file_path": "/private/tmp/devhub-claude-m1-20260713T015750Z/workspace/approval-probe.txt"
+      },
+      "tool_name": "Write",
+      "tool_use_id_present": true
+    },
+    {
+      "input_keys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt_id",
+        "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_use_id",
+        "transcript_path"
+      ],
+      "tool_input": {
+        "command": "sleep 60"
+      },
+      "tool_name": "Bash",
+      "tool_use_id_present": true
+    }
+  ],
+  "interrupt_acknowledged": true,
+  "interrupt_sent": true,
+  "permission_requests": [
+    {
+      "blocked_path": null,
+      "decision_reason": null,
+      "input": {
+        "content": "approved\n",
+        "file_path": "/private/tmp/devhub-claude-m1-20260713T015750Z/workspace/approval-probe.txt"
+      },
+      "suggestion_count": 1,
+      "tool_name": "Write",
+      "tool_use_id_present": true
+    }
+  ],
+  "write_approval_returned": true
+}

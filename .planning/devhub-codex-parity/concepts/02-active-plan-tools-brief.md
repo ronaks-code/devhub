@@ -1,0 +1,13 @@
+Use case: ui-mockup
+Asset type: DevHub desktop active-task concept
+Governing input: Image 1 is the current active Codex goal capture. Preserve its exact shell, transcript narrative, compact activity rows, selected-task spinner, bottom diff pill, goal card, composer geometry, and stop-button position.
+Primary request: Rebrand only to "DevHub" and show a real OpenAI-backed task named "Implement provider adapter seam". Add quiet header identity "OpenAI · Codex". Keep active work inside the transcript, never in a progress dashboard. Show one earlier completed assistant summary, then "Working for 2m 18s", an expanded "Plan" with four compact rows, two checked, one running, one pending. Follow with unframed commentary and compact native activity rows: "Read 6 files", "Ran pnpm test", "Edited 3 files", "Tests passing". End with a partially streaming assistant sentence and a quiet insertion caret.
+Bottom state: centered pill "3 files changed +186 -24"; narrow goal card "Goal  Implement provider adapter seam  3/4"; stable composer with "OpenAI · Codex", "Goal", "Workspace", "Codex 5.6 · High", and the observed white circular stop control.
+Inspector: retain the measured content-height surface with "Environment", "Changes", "Local", branch "campaign/auto-improve", "Subagents" showing "No active subagents", and "Sources". Do not invent activity that is not represented in the transcript.
+Visible text (verbatim): "DevHub", "Implement provider adapter seam", "OpenAI · Codex", "Working for 2m 18s", "Plan", "Define provider contracts", "Add native IDs", "Stream provider events", "Verify restart", "Read 6 files", "Ran pnpm test", "Edited 3 files", "Tests passing", "3 files changed +186 -24", "Goal", "3/4", "Workspace", "Codex 5.6 · High", "Environment", "Changes", "Local", "campaign/auto-improve", "Subagents", "No active subagents", "Sources".
+Classification: active narrative, compact tools, diff pill, goal card, stable composer, and stop geometry are observed; DevHub branding/provider identity and exact task content are proposed. Stop is shown because native Codex interrupt is verified.
+Style/medium: realistic product UI, not concept art; dark macOS system interface.
+Composition/framing: preserve the 1800x1130 logical wide shell and large open canvas.
+Constraints: assistant content unframed; only user content may use `#242424` bubbles; muted activity rows; sparse green/red diff counts; no full-page progress panels; no watermark.
+Avoid: dashboard cards, timelines with oversized nodes, chat avatars, role labels, pulsing glows, bouncing dots, skeletons, celebratory effects.
+Quality: high

@@ -1,0 +1,14 @@
+{
+  "phase": "phase1",
+  "result": "turn completed; harness failed only on explicit appServer sourceKind assertion",
+  "preInitializeRejected": true,
+  "duplicateInitializeRejected": true,
+  "threadId": "019f58e9-8cde-7cb2-9a3a-444e3dc54967",
+  "turnId": "019f58e9-94c1-7462-8dd4-df2e965af075",
+  "turnStatus": "completed",
+  "persistedTurnCount": 1,
+  "returnedSourceKind": "vscode",
+  "explicitAppServerListCount": 0,
+  "assistantTextMatchedNonce": true,
+  "billableTurns": 1
+}
