@@ -3,7 +3,12 @@ import { types as utilTypes } from "node:util";
 import { redactSecrets } from "../redact.js";
 import { MAX_PROVIDER_HOME_CHARS } from "../providers/native-id.js";
 import { canonicalizeProviderHome } from "../providers/task-key.js";
-import type { NativeTaskKey, ProviderId } from "../providers/types.js";
+import type {
+  NativeTask,
+  NativeTaskKey,
+  NativeTaskSummary,
+  ProviderId,
+} from "../providers/types.js";
 import {
   homeFingerprint,
   parseTaskLocator,
@@ -13,19 +18,37 @@ import {
 import {
   createProviderIndexOwnerToken,
   normalizeProviderIndexStoreOptions,
+  prepareProviderTaskSnapshot,
+  prepareProviderTaskSummary,
   readProviderIndexNow,
 } from "./store-codec.js";
+import {
+  ProviderIndexCacheError,
+  assertGenerationCapacity,
+  countGenerationRows,
+  countGenerationSnapshotTasks,
+  generationCensus,
+  generationHasStructuralGap,
+  requireGenerationCensus,
+  retireOlderGenerationRows,
+  type GenerationCensus,
+} from "./store-cache.js";
 import {
   ProviderIndexStoreError,
   type NormalizedProviderIndexStoreConfig,
   type ProviderHomeRegistration,
   type ProviderHomeScope,
+  type ProviderIndexCompletion,
+  type ProviderIndexPromotion,
+  type ProviderIndexRegisteredHome,
   type ProviderIndexStage,
   type ProviderIndexStoreErrorCode,
   type ProviderIndexStoreOptions,
   type ProviderReconciliationReason,
   type ProviderReconciliationState,
   type ProviderReconciliationStore,
+  type PreparedProviderTaskSnapshot,
+  type PreparedProviderTaskSummary,
   type ReconciliationLatchInput,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
@@ -140,7 +163,9 @@ function fail(code: ProviderIndexStoreErrorCode): never {
 
 function publicFailure(error: unknown, fallback: ProviderIndexStoreErrorCode): ProviderIndexStoreError {
   return new ProviderIndexStoreError(
-    error instanceof InternalStoreFailure ? error.code : fallback,
+    error instanceof InternalStoreFailure || error instanceof ProviderIndexCacheError
+      ? error.code
+      : fallback,
   );
 }
 
@@ -364,7 +389,9 @@ function withOwnedImmediateTransaction<T>(
         fail("DATABASE_UNAVAILABLE");
       }
     }
-    if (error instanceof InternalStoreFailure) throw error;
+    if (error instanceof InternalStoreFailure || error instanceof ProviderIndexCacheError) {
+      throw error;
+    }
     return fail("DATABASE_UNAVAILABLE");
   }
 }
@@ -1116,6 +1143,638 @@ function abortStageInsideOwnedTransaction(
   if (hasCacheGeneration(db, known.scope, stage.generation)) fail("CORRUPT_ROW");
 }
 
+function registeredHomeForKnown(
+  known: KnownHomeScope,
+): Readonly<ProviderIndexRegisteredHome> {
+  return Object.freeze({
+    provider: known.scope.provider,
+    homeFingerprint: known.scope.homeFingerprint,
+    canonicalHome: known.canonicalHome,
+  });
+}
+
+function renewRequiredStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  stage: ProviderIndexStage,
+  now: number,
+  expiresAt: number,
+): Readonly<ProviderSyncState> {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const currentRow = querySyncState(db, known.scope);
+  if (currentRow === null) fail("STAGE_LOST");
+  const current = decodeSyncState(currentRow, known.scope);
+  if (current.state !== "staging" || current.stagingGeneration !== stage.generation ||
+    current.stagingOwnerToken !== stage.ownerToken) fail("STAGE_LOST");
+  if (current.stagingHeartbeatAt === null || current.stagingExpiresAt === null) {
+    fail("CORRUPT_ROW");
+  }
+  if (now >= current.stagingExpiresAt) fail("STAGE_EXPIRED");
+  if (now < current.stagingHeartbeatAt) fail("CLOCK_FAILURE");
+  const renewedExpiresAt = Math.max(expiresAt, current.stagingExpiresAt);
+  const expected = Object.freeze({
+    ...current,
+    stagingHeartbeatAt: now,
+    stagingExpiresAt: renewedExpiresAt,
+  });
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    row = db.prepare(`UPDATE provider_sync_state SET
+      staging_heartbeat_at = ?, staging_expires_at = ?
+    WHERE provider = ? AND home_fingerprint = ?
+      AND active_generation = ? AND generation_epoch = ? AND state = 'staging'
+      AND staging_generation = ? AND staging_owner_token = ?
+      AND staging_heartbeat_at = ? AND staging_expires_at = ?
+      AND provider_version IS ? AND last_completed_at IS ?
+    RETURNING
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, provider_version, last_completed_at, generation_epoch`)
+      .get(
+        now,
+        renewedExpiresAt,
+        current.provider,
+        current.homeFingerprint,
+        current.activeGeneration,
+        current.generationEpoch,
+        current.stagingGeneration,
+        current.stagingOwnerToken,
+        current.stagingHeartbeatAt,
+        current.stagingExpiresAt,
+        current.providerVersion,
+        current.lastCompletedAt,
+      ) as ProviderSyncStateRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  return requiredSyncState(db, expected);
+}
+
+function writePreparedTaskRow(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+  observedAt: number,
+): void {
+  const revision = prepared.revision;
+  try {
+    db.prepare(`INSERT INTO provider_task_cache (
+      provider, home_fingerprint, native_task_id,
+      title, cwd, cwd_redacted, model, status, created_at, updated_at, archived, source,
+      revision_updated_at, revision_status, revision_last_turn_id,
+      revision_last_turn_status, revision_last_item_id, revision_fingerprint,
+      cache_generation, observed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (provider, home_fingerprint, native_task_id, cache_generation)
+    DO UPDATE SET
+      title = excluded.title,
+      cwd = excluded.cwd,
+      cwd_redacted = excluded.cwd_redacted,
+      model = excluded.model,
+      status = excluded.status,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      archived = excluded.archived,
+      source = excluded.source,
+      revision_updated_at = excluded.revision_updated_at,
+      revision_status = excluded.revision_status,
+      revision_last_turn_id = excluded.revision_last_turn_id,
+      revision_last_turn_status = excluded.revision_last_turn_status,
+      revision_last_item_id = excluded.revision_last_item_id,
+      revision_fingerprint = excluded.revision_fingerprint,
+      observed_at = excluded.observed_at`)
+      .run(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        prepared.title,
+        prepared.cwd,
+        prepared.cwdRedacted ? 1 : 0,
+        prepared.model,
+        prepared.status,
+        prepared.createdAt,
+        prepared.updatedAt,
+        prepared.archived === null ? null : prepared.archived ? 1 : 0,
+        prepared.source,
+        revision?.updatedAt ?? null,
+        revision?.status ?? null,
+        revision?.lastTurnId ?? null,
+        revision?.lastTurnStatus ?? null,
+        revision?.lastItemId ?? null,
+        revision?.fingerprint ?? null,
+        stage.generation,
+        observedAt,
+      );
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+}
+
+function writePreparedSnapshotReceipt(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSnapshot,
+  observedAt: number,
+): void {
+  try {
+    db.prepare(`INSERT INTO provider_replay_receipts (
+      provider, home_fingerprint, native_task_id, cache_generation,
+      replay_key, snapshot_fingerprint, event_count, observed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        stage.generation,
+        prepared.receiptKey,
+        prepared.snapshotFingerprint,
+        prepared.eventCount,
+        observedAt,
+      );
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+}
+
+type CacheRow = Readonly<Record<string, unknown>>;
+
+function queryTaskRow(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+): CacheRow | null {
+  let row: CacheRow | undefined;
+  try {
+    row = db.prepare(`SELECT * FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ?
+        AND native_task_id = ? AND cache_generation = ?`)
+      .get(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        stage.generation,
+      ) as CacheRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  return row ?? null;
+}
+
+function queryTaskChildRows(
+  db: SqliteDatabase,
+  table: "provider_turn_cache" | "provider_event_cache" | "provider_replay_receipts",
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+  orderBy: string,
+): readonly CacheRow[] {
+  try {
+    return db.prepare(`SELECT * FROM ${table}
+      WHERE provider = ? AND home_fingerprint = ?
+        AND native_task_id = ? AND cache_generation = ?
+      ORDER BY ${orderBy}`)
+      .all(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        stage.generation,
+      ) as unknown as CacheRow[];
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+}
+
+function taskRowMatchesPrepared(
+  row: CacheRow,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+  observedAt: number | null,
+): boolean {
+  const revision = prepared.revision;
+  const expected: CacheRow = {
+    provider: prepared.locator.provider,
+    home_fingerprint: prepared.locator.homeFingerprint,
+    native_task_id: prepared.locator.nativeTaskId,
+    title: prepared.title,
+    cwd: prepared.cwd,
+    cwd_redacted: prepared.cwdRedacted ? 1 : 0,
+    model: prepared.model,
+    status: prepared.status,
+    created_at: prepared.createdAt,
+    updated_at: prepared.updatedAt,
+    archived: prepared.archived === null ? null : prepared.archived ? 1 : 0,
+    source: prepared.source,
+    revision_updated_at: revision?.updatedAt ?? null,
+    revision_status: revision?.status ?? null,
+    revision_last_turn_id: revision?.lastTurnId ?? null,
+    revision_last_turn_status: revision?.lastTurnStatus ?? null,
+    revision_last_item_id: revision?.lastItemId ?? null,
+    revision_fingerprint: revision?.fingerprint ?? null,
+    cache_generation: stage.generation,
+    observed_at: observedAt,
+  };
+  return Object.entries(expected).every(([key, value]) => (
+    key === "observed_at" && observedAt === null ? true : row[key] === value
+  )) && Reflect.ownKeys(row).length === Reflect.ownKeys(expected).length;
+}
+
+function deletePreparedTaskRows(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+): void {
+  try {
+    db.prepare(`DELETE FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ?
+        AND native_task_id = ? AND cache_generation = ?`)
+      .run(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        stage.generation,
+      );
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (queryTaskRow(db, stage, prepared) !== null ||
+    queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length !== 0 ||
+    queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length !== 0 ||
+    queryTaskChildRows(db, "provider_replay_receipts", stage, prepared, "replay_key").length !== 0) {
+    fail("CORRUPT_ROW");
+  }
+}
+
+function stagePreparedSummaryInsideOwnedTransaction(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+  observedAt: number,
+): void {
+  const taskRow = queryTaskRow(db, stage, prepared);
+  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
+  const events = queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal");
+  const receipts = queryTaskChildRows(
+    db,
+    "provider_replay_receipts",
+    stage,
+    prepared,
+    "replay_key",
+  );
+  if (taskRow === null) {
+    if (turns.length !== 0 || events.length !== 0 || receipts.length !== 0) fail("CORRUPT_ROW");
+  } else if (receipts.length === 0) {
+    if (turns.length !== 0 || events.length !== 0) fail("CORRUPT_ROW");
+  } else {
+    if (receipts.length !== 1) fail("CORRUPT_ROW");
+    if (!taskRowMatchesPrepared(taskRow, stage, prepared, null)) {
+      deletePreparedTaskRows(db, stage, prepared);
+    }
+  }
+  writePreparedTaskRow(db, stage, prepared, observedAt);
+  const persisted = queryTaskRow(db, stage, prepared);
+  if (persisted === null || !taskRowMatchesPrepared(persisted, stage, prepared, observedAt)) {
+    fail("CORRUPT_ROW");
+  }
+  if (receipts.length !== 0 && !taskRowMatchesPrepared(taskRow!, stage, prepared, null)) {
+    if (queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length !== 0 ||
+      queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length !== 0 ||
+      queryTaskChildRows(db, "provider_replay_receipts", stage, prepared, "replay_key").length !== 0) {
+      fail("CORRUPT_ROW");
+    }
+  }
+}
+
+function writePreparedSnapshotChildren(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSnapshot,
+): void {
+  try {
+    const turnStatement = db.prepare(`INSERT INTO provider_turn_cache (
+      provider, home_fingerprint, native_task_id, cache_generation,
+      native_turn_key, status, started_at, completed_at, ordinal
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const turn of prepared.turns) {
+      turnStatement.run(
+        prepared.locator.provider,
+        prepared.locator.homeFingerprint,
+        prepared.locator.nativeTaskId,
+        stage.generation,
+        turn.nativeTurnKey,
+        turn.status,
+        turn.startedAt,
+        turn.completedAt,
+        turn.ordinal,
+      );
+    }
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
+  const expectedTurns = prepared.turns.map((turn) => ({
+    provider: prepared.locator.provider,
+    home_fingerprint: prepared.locator.homeFingerprint,
+    native_task_id: prepared.locator.nativeTaskId,
+    cache_generation: stage.generation,
+    native_turn_key: turn.nativeTurnKey,
+    status: turn.status,
+    started_at: turn.startedAt,
+    completed_at: turn.completedAt,
+    ordinal: turn.ordinal,
+  }));
+  if (JSON.stringify(turns) !== JSON.stringify(expectedTurns)) fail("CORRUPT_ROW");
+  try {
+    const eventStatement = db.prepare(`INSERT INTO provider_event_cache (
+      provider, home_fingerprint, native_task_id, cache_generation,
+      native_turn_key, native_item_key, replay_key, ordinal,
+      event_fingerprint, event_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    for (const turn of prepared.turns) {
+      for (const event of turn.events) {
+        eventStatement.run(
+          prepared.locator.provider,
+          prepared.locator.homeFingerprint,
+          prepared.locator.nativeTaskId,
+          stage.generation,
+          turn.nativeTurnKey,
+          event.nativeItemKey,
+          event.replayKey,
+          event.ordinal,
+          event.eventFingerprint,
+          event.eventJson,
+        );
+      }
+    }
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+}
+
+function snapshotRowsMatchPrepared(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSnapshot,
+  observedAt: number,
+): boolean {
+  const task = queryTaskRow(db, stage, prepared);
+  if (task === null || !taskRowMatchesPrepared(task, stage, prepared, observedAt)) return false;
+  const turns = queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal");
+  const expectedTurns = prepared.turns.map((turn) => ({
+    provider: prepared.locator.provider,
+    home_fingerprint: prepared.locator.homeFingerprint,
+    native_task_id: prepared.locator.nativeTaskId,
+    cache_generation: stage.generation,
+    native_turn_key: turn.nativeTurnKey,
+    status: turn.status,
+    started_at: turn.startedAt,
+    completed_at: turn.completedAt,
+    ordinal: turn.ordinal,
+  }));
+  if (JSON.stringify(turns) !== JSON.stringify(expectedTurns)) return false;
+  const events = queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal");
+  const expectedEvents = prepared.turns.flatMap((turn) => turn.events.map((event) => ({
+    provider: prepared.locator.provider,
+    home_fingerprint: prepared.locator.homeFingerprint,
+    native_task_id: prepared.locator.nativeTaskId,
+    cache_generation: stage.generation,
+    native_turn_key: turn.nativeTurnKey,
+    native_item_key: event.nativeItemKey,
+    replay_key: event.replayKey,
+    ordinal: event.ordinal,
+    event_fingerprint: event.eventFingerprint,
+    event_json: event.eventJson,
+  })));
+  if (JSON.stringify(events) !== JSON.stringify(expectedEvents)) return false;
+  const receipts = queryTaskChildRows(
+    db,
+    "provider_replay_receipts",
+    stage,
+    prepared,
+    "replay_key",
+  );
+  return JSON.stringify(receipts) === JSON.stringify([{
+    provider: prepared.locator.provider,
+    home_fingerprint: prepared.locator.homeFingerprint,
+    native_task_id: prepared.locator.nativeTaskId,
+    cache_generation: stage.generation,
+    replay_key: prepared.receiptKey,
+    snapshot_fingerprint: prepared.snapshotFingerprint,
+    event_count: prepared.eventCount,
+    observed_at: observedAt,
+  }]);
+}
+
+function stagePreparedSnapshotInsideOwnedTransaction(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSnapshot,
+  observedAt: number,
+): Readonly<{ existingFingerprint: string; incomingFingerprint: string }> | null {
+  const receipts = queryTaskChildRows(
+    db,
+    "provider_replay_receipts",
+    stage,
+    prepared,
+    "replay_key",
+  );
+  if (receipts.length > 1) fail("CORRUPT_ROW");
+  const existingReceipt = receipts[0];
+  if (existingReceipt !== undefined &&
+    existingReceipt.replay_key === prepared.receiptKey &&
+    existingReceipt.snapshot_fingerprint === prepared.snapshotFingerprint) {
+    const existingObservedAt = safeInteger(existingReceipt.observed_at);
+    if (!snapshotRowsMatchPrepared(db, stage, prepared, existingObservedAt)) fail("CORRUPT_ROW");
+    return null;
+  }
+  if (existingReceipt !== undefined && existingReceipt.replay_key === prepared.receiptKey) {
+    return Object.freeze({
+      existingFingerprint: homeFingerprintValue(existingReceipt.snapshot_fingerprint),
+      incomingFingerprint: prepared.snapshotFingerprint,
+    });
+  }
+  if (queryTaskRow(db, stage, prepared) !== null) {
+    deletePreparedTaskRows(db, stage, prepared);
+  }
+  writePreparedTaskRow(db, stage, prepared, observedAt);
+  writePreparedSnapshotChildren(db, stage, prepared);
+  writePreparedSnapshotReceipt(db, stage, prepared, observedAt);
+  if (!snapshotRowsMatchPrepared(db, stage, prepared, observedAt)) fail("CORRUPT_ROW");
+  return null;
+}
+
+interface NormalizedCompletion extends ProviderIndexCompletion {}
+
+function normalizedCompletion(
+  value: ProviderIndexCompletion,
+  canonicalHome: string,
+  config: NormalizedProviderIndexStoreConfig,
+): Readonly<NormalizedCompletion> {
+  const input = exactOwnData(value, [
+    "completedAt",
+    "providerVersion",
+    "taskCount",
+    "turnCount",
+    "eventCount",
+    "snapshotCount",
+    "receiptCount",
+  ]);
+  const completion = Object.freeze({
+    completedAt: safeInteger(input.completedAt),
+    providerVersion: optionalSemanticFingerprint(input.providerVersion, canonicalHome),
+    taskCount: safeInteger(input.taskCount),
+    turnCount: safeInteger(input.turnCount),
+    eventCount: safeInteger(input.eventCount),
+    snapshotCount: safeInteger(input.snapshotCount),
+    receiptCount: safeInteger(input.receiptCount),
+  });
+  if (completion.taskCount > config.maxTasksPerGeneration ||
+    completion.turnCount > config.maxTurnsPerGeneration ||
+    completion.eventCount > config.maxEventsPerGeneration) fail("CAPACITY");
+  if (completion.snapshotCount > completion.taskCount ||
+    completion.receiptCount !== completion.snapshotCount) fail("STAGE_INCOMPLETE");
+  return completion;
+}
+
+function requiredUnexpiredStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  stage: ProviderIndexStage,
+  now: number,
+): Readonly<ProviderSyncState> {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const row = querySyncState(db, known.scope);
+  if (row === null) fail("STAGE_LOST");
+  const current = decodeSyncState(row, known.scope);
+  if (current.state !== "staging" || current.stagingGeneration !== stage.generation ||
+    current.stagingOwnerToken !== stage.ownerToken) fail("STAGE_LOST");
+  if (current.stagingExpiresAt === null) fail("CORRUPT_ROW");
+  if (now >= current.stagingExpiresAt) fail("STAGE_EXPIRED");
+  return current;
+}
+
+function taskGenerationCensus(
+  db: SqliteDatabase,
+  stage: ProviderIndexStage,
+  prepared: PreparedProviderTaskSummary,
+): Readonly<GenerationCensus> {
+  return Object.freeze({
+    taskCount: queryTaskRow(db, stage, prepared) === null ? 0 : 1,
+    turnCount: queryTaskChildRows(db, "provider_turn_cache", stage, prepared, "ordinal").length,
+    eventCount: queryTaskChildRows(db, "provider_event_cache", stage, prepared, "ordinal").length,
+    receiptCount: queryTaskChildRows(
+      db,
+      "provider_replay_receipts",
+      stage,
+      prepared,
+      "replay_key",
+    ).length,
+  });
+}
+
+function replacementGenerationCensus(
+  before: GenerationCensus,
+  priorTask: GenerationCensus,
+  nextTask: GenerationCensus,
+): Readonly<GenerationCensus> {
+  return Object.freeze({
+    taskCount: safeInteger(before.taskCount - priorTask.taskCount + nextTask.taskCount),
+    turnCount: safeInteger(before.turnCount - priorTask.turnCount + nextTask.turnCount),
+    eventCount: safeInteger(before.eventCount - priorTask.eventCount + nextTask.eventCount),
+    receiptCount: safeInteger(before.receiptCount - priorTask.receiptCount + nextTask.receiptCount),
+  });
+}
+
+function promoteStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  stage: ProviderIndexStage,
+  completion: NormalizedCompletion,
+  now: number,
+  config: NormalizedProviderIndexStoreConfig,
+): Readonly<ProviderIndexPromotion> {
+  const current = requiredUnexpiredStageInsideOwnedTransaction(db, known, stage, now);
+  const taskCount = countGenerationRows(db, "provider_task_cache", known.scope, stage.generation);
+  const turnCount = countGenerationRows(db, "provider_turn_cache", known.scope, stage.generation);
+  const eventCount = countGenerationRows(db, "provider_event_cache", known.scope, stage.generation);
+  const receiptCount = countGenerationRows(
+    db,
+    "provider_replay_receipts",
+    known.scope,
+    stage.generation,
+  );
+  const snapshotCount = countGenerationSnapshotTasks(db, known.scope, stage.generation);
+  assertGenerationCapacity(db, known.scope, stage.generation, config);
+  if (taskCount !== completion.taskCount || turnCount !== completion.turnCount ||
+    eventCount !== completion.eventCount || receiptCount !== completion.receiptCount ||
+    snapshotCount !== completion.snapshotCount || receiptCount !== snapshotCount ||
+    generationHasStructuralGap(db, known.scope, stage.generation)) fail("STAGE_INCOMPLETE");
+
+  const expected = Object.freeze({
+    ...current,
+    activeGeneration: stage.generation,
+    stagingGeneration: null,
+    stagingOwnerToken: null,
+    stagingHeartbeatAt: null,
+    stagingExpiresAt: null,
+    state: "idle" as const,
+    providerVersion: completion.providerVersion,
+    lastCompletedAt: completion.completedAt,
+  });
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    row = db.prepare(`UPDATE provider_sync_state SET
+      active_generation = ?, staging_generation = NULL, staging_owner_token = NULL,
+      staging_heartbeat_at = NULL, staging_expires_at = NULL, state = 'idle',
+      provider_version = ?, last_completed_at = ?
+    WHERE provider = ? AND home_fingerprint = ?
+      AND active_generation = ? AND generation_epoch = ? AND state = 'staging'
+      AND staging_generation = ? AND staging_owner_token = ?
+      AND staging_heartbeat_at = ? AND staging_expires_at = ?
+      AND provider_version IS ? AND last_completed_at IS ?
+    RETURNING
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, provider_version, last_completed_at, generation_epoch`)
+      .get(
+        stage.generation,
+        completion.providerVersion,
+        completion.completedAt,
+        current.provider,
+        current.homeFingerprint,
+        current.activeGeneration,
+        current.generationEpoch,
+        current.stagingGeneration,
+        current.stagingOwnerToken,
+        current.stagingHeartbeatAt,
+        current.stagingExpiresAt,
+        current.providerVersion,
+        current.lastCompletedAt,
+      ) as ProviderSyncStateRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  retireOlderGenerationRows(db, known.scope, stage.generation);
+  requiredSyncState(db, expected);
+  if (countGenerationRows(db, "provider_task_cache", known.scope, stage.generation) !== taskCount ||
+    countGenerationRows(db, "provider_turn_cache", known.scope, stage.generation) !== turnCount ||
+    countGenerationRows(db, "provider_event_cache", known.scope, stage.generation) !== eventCount ||
+    countGenerationRows(db, "provider_replay_receipts", known.scope, stage.generation) !== receiptCount ||
+    countGenerationSnapshotTasks(db, known.scope, stage.generation) !== snapshotCount ||
+    generationHasStructuralGap(db, known.scope, stage.generation)) fail("CORRUPT_ROW");
+  return Object.freeze({
+    provider: current.provider,
+    homeFingerprint: current.homeFingerprint,
+    previousGeneration: current.activeGeneration,
+    activeGeneration: stage.generation,
+    completedAt: completion.completedAt,
+    taskCount,
+    turnCount,
+    eventCount,
+    snapshotCount,
+  });
+}
+
 export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   private readonly db: SqliteDatabase;
   private readonly config: Readonly<NormalizedProviderIndexStoreConfig>;
@@ -1246,6 +1905,130 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
       });
       withOwnedImmediateTransaction(this.db, () =>
         abortStageInsideOwnedTransaction(this.db, known, stage));
+    });
+  }
+
+  stageSummary(
+    stageValue: ProviderIndexStage,
+    keyValue: NativeTaskKey,
+    summaryValue: NativeTaskSummary,
+  ): void {
+    this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const stage = normalizedStage(stageValue);
+      const known = knownHomeScope(this.db, {
+        provider: stage.provider,
+        homeFingerprint: stage.homeFingerprint,
+      });
+      const prepared = prepareProviderTaskSummary(
+        registeredHomeForKnown(known),
+        keyValue,
+        summaryValue,
+      );
+      const now = sampleNow(this.config);
+      const expiresAt = leaseExpiry(now, this.config);
+      withOwnedImmediateTransaction(this.db, () => {
+        const before = generationCensus(this.db, known.scope, stage.generation);
+        const priorTask = taskGenerationCensus(this.db, stage, prepared);
+        const existing = queryTaskRow(this.db, stage, prepared);
+        const preservesSnapshot = existing !== null && priorTask.receiptCount === 1 &&
+          taskRowMatchesPrepared(existing, stage, prepared, null);
+        const expected = replacementGenerationCensus(before, priorTask, {
+          taskCount: 1,
+          turnCount: preservesSnapshot ? priorTask.turnCount : 0,
+          eventCount: preservesSnapshot ? priorTask.eventCount : 0,
+          receiptCount: preservesSnapshot ? 1 : 0,
+        });
+        renewRequiredStageInsideOwnedTransaction(this.db, known, stage, now, expiresAt);
+        stagePreparedSummaryInsideOwnedTransaction(this.db, stage, prepared, now);
+        requireGenerationCensus(this.db, known.scope, stage.generation, expected);
+        assertGenerationCapacity(this.db, known.scope, stage.generation, this.config);
+      });
+    });
+  }
+
+  stageSnapshot(
+    stageValue: ProviderIndexStage,
+    keyValue: NativeTaskKey,
+    taskValue: NativeTask,
+  ): void {
+    this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const stage = normalizedStage(stageValue);
+      const known = knownHomeScope(this.db, {
+        provider: stage.provider,
+        homeFingerprint: stage.homeFingerprint,
+      });
+      const prepared = prepareProviderTaskSnapshot(
+        registeredHomeForKnown(known),
+        keyValue,
+        taskValue,
+        this.config,
+      );
+      const now = sampleNow(this.config);
+      const expiresAt = leaseExpiry(now, this.config);
+      let replayConflict = false;
+      withOwnedImmediateTransaction(this.db, () => {
+        const before = generationCensus(this.db, known.scope, stage.generation);
+        const priorTask = taskGenerationCensus(this.db, stage, prepared);
+        const expected = replacementGenerationCensus(before, priorTask, {
+          taskCount: 1,
+          turnCount: prepared.turns.length,
+          eventCount: prepared.eventCount,
+          receiptCount: 1,
+        });
+        renewRequiredStageInsideOwnedTransaction(this.db, known, stage, now, expiresAt);
+        const conflict = stagePreparedSnapshotInsideOwnedTransaction(
+          this.db,
+          stage,
+          prepared,
+          now,
+        );
+        if (conflict === null) {
+          requireGenerationCensus(this.db, known.scope, stage.generation, expected);
+          assertGenerationCapacity(this.db, known.scope, stage.generation, this.config);
+          return;
+        }
+        abortStageInsideOwnedTransaction(this.db, known, stage);
+        const target: ReconciliationTarget = Object.freeze({
+          locator: prepared.locator,
+          canonicalHome: known.canonicalHome,
+        });
+        const input = normalizeReconciliationInput({
+          reviewedFingerprint: `provider-index-snapshot:v1:${conflict.existingFingerprint}`,
+          nativeFingerprint: `provider-index-snapshot:v1:${conflict.incomingFingerprint}`,
+          writerEpoch: 0,
+          reason: "REPLAY_CONFLICT",
+        }, known.canonicalHome);
+        writeRequiredReconciliationInsideOwnedTransaction(this.db, target, input, now);
+        replayConflict = true;
+      });
+      if (replayConflict) fail("REPLAY_CONFLICT");
+    });
+  }
+
+  promoteStage(
+    stageValue: ProviderIndexStage,
+    completionValue: ProviderIndexCompletion,
+  ): Readonly<ProviderIndexPromotion> {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const stage = normalizedStage(stageValue);
+      const known = knownHomeScope(this.db, {
+        provider: stage.provider,
+        homeFingerprint: stage.homeFingerprint,
+      });
+      const completion = normalizedCompletion(completionValue, known.canonicalHome, this.config);
+      const now = sampleNow(this.config);
+      return withOwnedImmediateTransaction(this.db, () =>
+        promoteStageInsideOwnedTransaction(
+          this.db,
+          known,
+          stage,
+          completion,
+          now,
+          this.config,
+        ));
     });
   }
 
