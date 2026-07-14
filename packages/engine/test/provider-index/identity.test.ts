@@ -1,12 +1,39 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+const contentTransformCalls = vi.hoisted(() => ({ readable: 0, injective: 0 }));
+
+vi.mock("../../src/provider-index/content-transform.js", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../src/provider-index/content-transform.js")
+  >();
+  return {
+    ...actual,
+    readableContentString(value: string, providerHome: string): string {
+      contentTransformCalls.readable += 1;
+      return actual.readableContentString(value, providerHome);
+    },
+    injectiveContentString(value: string, providerHome: string): string {
+      contentTransformCalls.injective += 1;
+      return actual.injectiveContentString(value, providerHome);
+    },
+  };
+});
+
 import {
   assertLocatorMatchesKey,
+  canonicalProviderIndexJson,
   cachedEventItemId,
   cachedTurnKey,
   homeFingerprint,
+  indexedProviderEventItemId,
+  indexedProviderEventTurnId,
+  parseCachedEventItemKey,
+  parseCachedTurnKey,
+  parseProviderEventReplayKey,
   parseTaskLocator,
   projectIndexedProviderEvent,
   providerEventReplayKey,
@@ -85,6 +112,40 @@ const diagnosticEvent = (
 };
 
 describe("provider task locators", () => {
+  it("rejects locator and task-key proxies before invoking any trap", () => {
+    let trapCalls = 0;
+    const handler: ProxyHandler<object> = {
+      get() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-get");
+      },
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-prototype");
+      },
+      ownKeys() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-keys");
+      },
+      getOwnPropertyDescriptor() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-descriptor");
+      },
+    };
+    const keyProxy = new Proxy(key, handler) as typeof key;
+    const locator = taskLocator(key);
+    const locatorProxy = new Proxy(locator, handler) as typeof locator;
+    for (const action of [
+      () => taskLocator(keyProxy),
+      () => serializeTaskLocator(locatorProxy),
+      () => assertLocatorMatchesKey(locatorProxy, key),
+      () => assertLocatorMatchesKey(locator, keyProxy),
+    ]) {
+      expect(action).toThrow(TypeError);
+    }
+    expect(trapCalls).toBe(0);
+  });
+
   it("uses an exact stable provider-isolated home fingerprint", () => {
     expect(homeFingerprint("openai", CANONICAL_HOME)).toBe(
       "7066394e4c1edb1a19490232746f70a5bf046ff5d22b50e7b45e678bb9083416",
@@ -441,6 +502,241 @@ describe("cache identity keys", () => {
     );
   });
 
+  it("bounds encoded multibyte native turn and item cache keys", () => {
+    const withinBound = "界".repeat(253);
+    const beyondBound = "界".repeat(254);
+    const acceptedTurnKey = cachedTurnKey(withinBound);
+    expect(acceptedTurnKey).toHaveLength(1_022);
+    expect(() => cachedTurnKey(beyondBound)).toThrow("cached turn key is invalid");
+
+    const acceptedItemKey = cachedEventItemId(messageDelta("bounded", withinBound), 0);
+    expect(acceptedItemKey).toHaveLength(1_022);
+    expect(() => cachedEventItemId(messageDelta("oversized", beyondBound), 0))
+      .toThrow("cached event item key is invalid");
+  });
+
+  it("strictly parses cached turn keys with a fixed Unicode vector", () => {
+    const vector = "native:v1:6L2u5qyhL_Cfp6o";
+    expect(cachedTurnKey("轮次/🧪")).toBe(vector);
+    expect(parseCachedTurnKey("none:v1")).toBeNull();
+    expect(parseCachedTurnKey(vector)).toBe("轮次/🧪");
+
+    for (const malformed of [
+      "",
+      "none:v1:extra",
+      "native:v1:",
+      "native:v1:dHVybg==",
+      "native:v1:***",
+      "native:v1:_w",
+      "native:v1:IA",
+      `native:v1:${"e".repeat(1_025)}`,
+    ]) {
+      expect(() => parseCachedTurnKey(malformed)).toThrow("cached turn key is invalid");
+    }
+  });
+
+  it("exports canonical JSON and strict event cache identity helpers", () => {
+    const api = providersIndex as unknown as Record<string, unknown>;
+    for (const name of [
+      "assertLocatorMatchesKey",
+      "cachedEventItemId",
+      "cachedTurnKey",
+      "canonicalProviderIndexJson",
+      "homeFingerprint",
+      "indexedProviderEventItemId",
+      "indexedProviderEventTurnId",
+      "parseCachedEventItemKey",
+      "parseCachedTurnKey",
+      "parseProviderEventReplayKey",
+      "parseTaskLocator",
+      "projectIndexedProviderEvent",
+      "providerEventReplayKey",
+      "serializeTaskLocator",
+      "taskLocator",
+    ]) {
+      expect(api[name], name).toBeTypeOf("function");
+    }
+    expect(api.projectProviderEventCacheBundleFromSnapshot).toBeUndefined();
+  });
+
+  it("canonicalizes dense finite JSON with lexicographic record keys", () => {
+    expect(canonicalProviderIndexJson({
+      z: [1, true, null],
+      a: { y: "界", x: -0 },
+    })).toBe('{"a":{"x":0,"y":"界"},"z":[1,true,null]}');
+    expect(canonicalProviderIndexJson(Object.assign(Object.create(null), {
+      b: 2,
+      a: 1,
+    }))).toBe('{"a":1,"b":2}');
+  });
+
+  it("rejects hostile or non-JSON canonicalization inputs with one value-free error", () => {
+    const sparse = Array(1);
+    const accessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        throw new Error("must-never-leak-canonical-accessor");
+      },
+    });
+    let proxyTrapCalls = 0;
+    const proxy = new Proxy({}, {
+      ownKeys() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-canonical-proxy");
+      },
+    });
+    for (const value of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      undefined,
+      1n,
+      sparse,
+      new Date(0),
+      { [Symbol("hidden")]: 1 },
+      accessor,
+      proxy,
+    ]) {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(value),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+    }
+    expect(proxyTrapCalls).toBe(0);
+  });
+
+  it("accepts exactly one million array items and rejects one more before key enumeration", () => {
+    const maximum = Array(1_000_000).fill(null);
+    const canonical = canonicalProviderIndexJson(maximum);
+    expect(canonical).toHaveLength(5_000_001);
+    expect(createHash("sha256").update(canonical, "utf8").digest("hex"))
+      .toBe("cb6de8b9c9a77e11b64b829ec767c4aa407ac87dd10a14812044a5ff25346ec0");
+
+    const oversized = Array(1_000_001);
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    try {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(oversized),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+      expect(ownKeys).not.toHaveBeenCalled();
+    } finally {
+      ownKeys.mockRestore();
+    }
+  });
+
+  it("bounds canonical JSON depth, visits, cycles, DAG expansion, and escaped output", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    let deep: Record<string, unknown> = { leaf: true };
+    for (let index = 0; index < 80; index += 1) deep = { deep };
+    let aliasDag: Record<string, unknown> = { leaf: "x" };
+    for (let index = 0; index < 31; index += 1) {
+      aliasDag = { left: aliasDag, right: aliasDag };
+    }
+    const escapedExpansion = "\u0001".repeat(11_200_000);
+    for (const value of [cycle, deep, aliasDag, escapedExpansion]) {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(value),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+    }
+    expect(canonicalProviderIndexJson({ bounded: ["\u0001", "🪐", true] }))
+      .toBe('{"bounded":["\\u0001","🪐",true]}');
+  });
+
+  it("accepts canonical JSON at depth 32 and rejects depth 33", () => {
+    let depth32: unknown = true;
+    for (let index = 0; index < 32; index += 1) depth32 = { child: depth32 };
+    expect(canonicalProviderIndexJson(depth32)).toContain('"child"');
+    expectValueFreeTypeError(
+      () => canonicalProviderIndexJson({ child: depth32 }),
+      "provider index canonical JSON is invalid",
+      "must-never-leak",
+    );
+  });
+
+  it("strictly parses native and synthetic event item keys", () => {
+    const native = `native:v1:${Buffer.from("项目/🧪", "utf8").toString("base64url")}`;
+    expect(parseCachedEventItemKey(native, 7)).toEqual({
+      kind: "native",
+      nativeItemId: "项目/🧪",
+    });
+    const synthetic = `synthetic:v1:7:${"a".repeat(64)}`;
+    const parsedSynthetic = parseCachedEventItemKey(synthetic, 7);
+    expect(parsedSynthetic).toEqual({ kind: "synthetic", nativeItemId: null });
+    expect(Object.isFrozen(parsedSynthetic)).toBe(true);
+
+    for (const malformed of [
+      "none:v1",
+      "native:v1:",
+      "native:v1:_w",
+      `synthetic:v1:07:${"a".repeat(64)}`,
+      `synthetic:v1:8:${"a".repeat(64)}`,
+      `synthetic:v1:7:${"A".repeat(64)}`,
+      `synthetic:v1:7:${"a".repeat(63)}`,
+    ]) {
+      expect(() => parseCachedEventItemKey(malformed, 7))
+        .toThrow("cached event item key is invalid");
+    }
+  });
+
+  it("strictly parses replay keys against the exact canonical ordinal", () => {
+    const replay = `replay:v1:23:${"b".repeat(64)}`;
+    expect(parseProviderEventReplayKey(replay, 23)).toBe(replay);
+    for (const malformed of [
+      `replay:v1:023:${"b".repeat(64)}`,
+      `replay:v1:24:${"b".repeat(64)}`,
+      `replay:v1:23:${"B".repeat(64)}`,
+      `replay:v1:23:${"b".repeat(63)}`,
+      `synthetic:v1:23:${"b".repeat(64)}`,
+    ]) {
+      expect(() => parseProviderEventReplayKey(malformed, 23))
+        .toThrow("provider event replay key is invalid");
+    }
+  });
+
+  it("extracts readable item and turn ownership from indexed event variants", () => {
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "command-approval", identity },
+    }));
+    const resolved = projectIndexedProviderEvent(providerEvent({
+      type: "request-resolved",
+      identity,
+    }));
+    const turnStatus = projectIndexedProviderEvent(providerEvent({
+      type: "status",
+      scope: "turn",
+      status: "running",
+      nativeId: "turn-status",
+    }));
+    const itemStatus = projectIndexedProviderEvent(providerEvent({
+      type: "status",
+      scope: "item",
+      status: "running",
+      nativeId: "item-status",
+    }));
+    const delta = projectIndexedProviderEvent(messageDelta("owned", "item-α"));
+    const diagnostic = projectIndexedProviderEvent(diagnosticEvent());
+
+    expect(indexedProviderEventItemId(delta)).toBe("item-α");
+    expect(indexedProviderEventItemId(request)).toBe("request-item-1");
+    expect(indexedProviderEventItemId(resolved)).toBe("request-item-1");
+    expect(indexedProviderEventItemId(itemStatus)).toBe("item-status");
+    expect(indexedProviderEventItemId(turnStatus)).toBeNull();
+    expect(indexedProviderEventItemId(diagnostic)).toBeNull();
+
+    expect(indexedProviderEventTurnId(delta)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(request)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(resolved)).toBe("turn-1");
+    expect(indexedProviderEventTurnId(turnStatus)).toBe("turn-status");
+    expect(indexedProviderEventTurnId(itemStatus)).toBeNull();
+    expect(indexedProviderEventTurnId(diagnostic)).toBeNull();
+  });
+
   it.each(["   ", "turn\ncontrol", "sk-proj-0123456789abcdefghijklmnop", "x".repeat(513)])(
     "rejects an invalid supplied turn id %#",
     (nativeTurnId) => {
@@ -565,6 +861,294 @@ describe("cache identity keys", () => {
 });
 
 describe("indexed provider event projection", () => {
+  it("extracts item and turn identity through proxy-safe data descriptors", () => {
+    const message = projectIndexedProviderEvent(providerEvent({
+      type: "message",
+      role: "assistant",
+      text: "extractor",
+      turnId: "turn-extractor",
+      itemId: "item-extractor",
+    }));
+    let trapCalls = 0;
+    const proxy = new Proxy(message, {
+      get() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-extractor-proxy");
+      },
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-extractor-prototype");
+      },
+    });
+    for (const action of [
+      () => indexedProviderEventItemId(proxy),
+      () => indexedProviderEventTurnId(proxy),
+    ]) {
+      const error = captureError(action);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).not.toContain("must-never-leak");
+    }
+    expect(trapCalls).toBe(0);
+
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "permission", identity },
+    }));
+    if (request.type !== "request") throw new Error("expected request");
+    let getterCalls = 0;
+    const hostileRequest = Object.defineProperty({ ...request.request }, "identity", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-extractor-accessor");
+      },
+    });
+    const hostileEvent = { ...request, request: hostileRequest } as typeof request;
+    for (const action of [
+      () => indexedProviderEventItemId(hostileEvent),
+      () => indexedProviderEventTurnId(hostileEvent),
+    ]) {
+      const error = captureError(action);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).not.toContain("must-never-leak");
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects request identities whose nested locator differs from the event locator", () => {
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "permission", identity },
+    }));
+    if (request.type !== "request") throw new Error("expected request");
+    const hostile = {
+      ...request,
+      request: {
+        ...request.request,
+        identity: {
+          ...request.request.identity,
+          locator: {
+            ...request.request.identity.locator,
+            nativeTaskId: "different-task",
+          },
+        },
+      },
+    } as typeof request;
+    expect(() => indexedProviderEventItemId(hostile)).toThrow(TypeError);
+    expect(() => indexedProviderEventTurnId(hostile)).toThrow(TypeError);
+  });
+
+  it("snapshots every public projection graph through bounded data descriptors", () => {
+    let getterCalls = 0;
+    let proxyTrapCalls = 0;
+    const base = {
+      provider: "openai" as const,
+      key,
+      occurredAt: OCCURRED_AT,
+      type: "message" as const,
+      role: "assistant" as const,
+      text: "safe public projection",
+      turnId: "turn-public-snapshot",
+      itemId: "item-public-snapshot",
+    };
+    const nestedAccessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-nested-accessor");
+      },
+    });
+    const ignoredAccessor = Object.defineProperty({ ...base }, "ignored", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-ignored-accessor");
+      },
+    });
+    const requestWithIdentityAccessor = {
+      provider: "openai" as const,
+      key,
+      occurredAt: OCCURRED_AT,
+      type: "request" as const,
+      request: Object.defineProperty({ kind: "permission" }, "identity", {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("must-never-leak-identity-accessor");
+        },
+      }),
+    };
+    const nestedProxy = new Proxy({ safe: true }, {
+      get() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-get");
+      },
+      getPrototypeOf() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-prototype");
+      },
+      ownKeys() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-keys");
+      },
+    });
+    const revocable = Proxy.revocable({ safe: true }, {});
+    revocable.revoke();
+    let deepAlias: Record<string, unknown> = { leaf: true };
+    for (let index = 0; index < 18; index += 1) {
+      deepAlias = { left: deepAlias, right: deepAlias };
+    }
+    const oversizedIgnored = Array(65).fill(null);
+    const tooManyLocalKeys = Object.fromEntries(
+      Array.from({ length: 33 }, (_, index) => [`key${index}`, index]),
+    );
+    const tooManyNodes = {
+      left: Array.from({ length: 64 }, () => ({})),
+      right: Array.from({ length: 64 }, () => ({})),
+    };
+    const tooManyAggregateKeys = Object.fromEntries(
+      Array.from({ length: 8 }, (_, group) => [
+        `group${group}`,
+        Object.fromEntries(Array.from(
+          { length: 32 },
+          (_, index) => [`key${group}-${index}`, index],
+        )),
+      ]),
+    );
+    const tooManyAggregateStringChars = {
+      left: "x".repeat(4_300_000),
+      right: "y".repeat(4_300_000),
+    };
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const symbolKey = { [Symbol("hidden")]: true };
+    const exotic = new Date(0);
+    const hostileEvents: readonly ProviderEvent[] = [
+      { ...base, ignored: { nestedAccessor } } as ProviderEvent,
+      ignoredAccessor as ProviderEvent,
+      requestWithIdentityAccessor as unknown as ProviderEvent,
+      { ...base, ignored: nestedProxy } as ProviderEvent,
+      { ...base, ignored: revocable.proxy } as ProviderEvent,
+      { ...base, ignored: deepAlias } as ProviderEvent,
+      { ...base, ignored: oversizedIgnored } as ProviderEvent,
+      { ...base, ignored: tooManyLocalKeys } as ProviderEvent,
+      { ...base, ignored: tooManyNodes } as ProviderEvent,
+      { ...base, ignored: tooManyAggregateKeys } as ProviderEvent,
+      { ...base, ignored: tooManyAggregateStringChars } as ProviderEvent,
+      { ...base, ignored: cycle } as ProviderEvent,
+      { ...base, ignored: symbolKey } as ProviderEvent,
+      { ...base, ignored: exotic } as ProviderEvent,
+    ];
+
+    for (const event of hostileEvents) {
+      for (const [action, message] of [
+        [() => projectIndexedProviderEvent(event), "provider event could not be safely projected"],
+        [() => cachedEventItemId(event, 0), "cached event item key is invalid"],
+        [() => providerEventReplayKey(event, 0), "provider event could not be safely projected"],
+      ] as const) {
+        expectValueFreeTypeError(action, message, "must-never-leak");
+      }
+    }
+    expect(getterCalls).toBe(0);
+    expect(proxyTrapCalls).toBe(0);
+
+    const shared = Object.freeze({ safe: "alias" });
+    const safeAliasEvent = {
+      ...base,
+      ignored: { left: shared, right: shared },
+    } as ProviderEvent;
+    expect(projectIndexedProviderEvent(safeAliasEvent))
+      .toEqual(projectIndexedProviderEvent(base as ProviderEvent));
+    expect(cachedEventItemId(safeAliasEvent, 0)).toBe(cachedEventItemId(base as ProviderEvent, 0));
+    expect(providerEventReplayKey(safeAliasEvent, 0))
+      .toBe(providerEventReplayKey(base as ProviderEvent, 0));
+  });
+
+  it("rejects readable or injective expansion before either content transform", () => {
+    const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
+    const readableExpansion = normalizeProviderEvent({
+      type: "message",
+      role: "assistant",
+      text: "/".repeat(8_388_608),
+      turnId: "turn-expansion",
+      itemId: null,
+    }, {
+      provider: "openai",
+      key: rootKey,
+      occurredAt: OCCURRED_AT,
+    });
+    const injectiveExpansion = providerEvent({
+      type: "message",
+      role: "assistant",
+      text: "\ue000".repeat(Math.floor(8_388_608 / 2) + 1),
+      turnId: "turn-expansion",
+      itemId: null,
+    });
+
+    contentTransformCalls.readable = 0;
+    contentTransformCalls.injective = 0;
+    expect(projectIndexedProviderEvent(messageDelta("benign transform probe")))
+      .toMatchObject({ type: "message-delta", delta: "benign transform probe" });
+    expect(contentTransformCalls).toEqual({ readable: 1, injective: 0 });
+
+    for (const event of [readableExpansion, injectiveExpansion]) {
+      contentTransformCalls.readable = 0;
+      contentTransformCalls.injective = 0;
+      expectValueFreeTypeError(
+        () => projectIndexedProviderEvent(event),
+        "provider event could not be safely projected",
+        rootKey.home,
+      );
+      expect(contentTransformCalls).toEqual({ readable: 0, injective: 0 });
+    }
+  });
+
+  it("counts diagnostic bounds with SQLite Unicode semantics", () => {
+    const astral = "🪐".repeat(512);
+    const combining = "\u0301".repeat(512);
+    for (const message of [astral, combining]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent({ message }));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("SAFE_DIAGNOSTIC");
+      expect(projected.message).toBe(message);
+    }
+    for (const overrides of [
+      { code: "🪐".repeat(128) },
+      { method: "🪐".repeat(256) },
+      { shapeKeys: Object.freeze(["🪐".repeat(64)]) },
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent(overrides));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).not.toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+    for (const message of [
+      `${astral}🪐`,
+      `${combining}\u0301`,
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent({ message }));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+    expectValueFreeTypeError(
+      () => projectIndexedProviderEvent(diagnosticEvent({ message: "\ud800" })),
+      "provider event could not be safely projected",
+      CANONICAL_HOME,
+    );
+    for (const overrides of [
+      { code: "🪐".repeat(129) },
+      { method: "🪐".repeat(257) },
+      { shapeKeys: Object.freeze(["🪐".repeat(65)]) },
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent(overrides));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+  });
+
   it("preserves normalized redacted fields without exposing a raw home", () => {
     const secret = "abcdefghijklmnop";
     const normalized = providerEvent({
@@ -938,26 +1522,23 @@ describe("indexed provider event projection", () => {
     }
   });
 
-  it("rejects sparse diagnostic shape keys and always projects a dense frozen array", () => {
+  it("rejects sparse diagnostic shape keys and preserves dense frozen arrays", () => {
     const sparseShapeKeys = Array(1) as string[];
     Object.freeze(sparseShapeKeys);
     const dense = diagnosticEvent({ shapeKeys: Object.freeze([]) });
     const sparse = diagnosticEvent({ shapeKeys: sparseShapeKeys });
     const denseProjection = projectIndexedProviderEvent(dense);
-    const sparseProjection = projectIndexedProviderEvent(sparse);
     expect(denseProjection.type).toBe("diagnostic");
-    expect(sparseProjection.type).toBe("diagnostic");
-    if (denseProjection.type !== "diagnostic" || sparseProjection.type !== "diagnostic") {
-      throw new Error("expected diagnostic projections");
-    }
+    if (denseProjection.type !== "diagnostic") throw new Error("expected diagnostic projection");
 
     expect(denseProjection.code).toBe("SAFE_DIAGNOSTIC");
-    expect(sparseProjection.code).toBe("UNKNOWN_PROVIDER_EVENT");
-    expect(sparseProjection).not.toEqual(denseProjection);
-    expect(Object.isFrozen(sparseProjection.shapeKeys)).toBe(true);
-    for (let index = 0; index < sparseProjection.shapeKeys.length; index += 1) {
-      expect(Object.prototype.hasOwnProperty.call(sparseProjection.shapeKeys, index)).toBe(true);
+    expect(Object.isFrozen(denseProjection.shapeKeys)).toBe(true);
+    for (const [action, message] of [
+      [() => projectIndexedProviderEvent(sparse), "provider event could not be safely projected"],
+      [() => cachedEventItemId(sparse, 51), "cached event item key is invalid"],
+      [() => providerEventReplayKey(sparse, 51), "provider event could not be safely projected"],
+    ] as const) {
+      expectValueFreeTypeError(action, message, "must-never-leak");
     }
-    expect(providerEventReplayKey(sparse, 51)).not.toBe(providerEventReplayKey(dense, 51));
   });
 });

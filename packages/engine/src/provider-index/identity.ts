@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 import { redactSecrets } from "../redact.js";
 import {
   normalizeProviderEvent,
@@ -15,10 +16,24 @@ import type {
   ProviderId,
   ProviderRequestIdentity,
 } from "../providers/types.js";
+import {
+  hasCanonicalUnicode,
+  MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+  sqliteTextLengthAtMost,
+} from "./text-boundary.js";
+import {
+  contentEscapeSentinel,
+  EVENT_PROJECTION_ERROR,
+  HOME_REPLACEMENT,
+  injectiveContentString,
+  readableContentString,
+  type ContentTransform,
+} from "./content-transform.js";
 
 const LOCATOR_VERSION = 1 as const;
 const LOCATOR_PREFIX = "pt1";
 const MAX_SERIALIZED_LOCATOR_CHARS = 1_024;
+const MAX_CACHED_KEY_CHARS = 1_024;
 const MAX_EVENT_ORDINAL = 1_000_000;
 const MAX_OCCURRED_AT_CHARS = 32;
 const MAX_DIAGNOSTIC_CODE_CHARS = 128;
@@ -26,15 +41,29 @@ const MAX_DIAGNOSTIC_MESSAGE_CHARS = 512;
 const MAX_DIAGNOSTIC_METHOD_CHARS = 256;
 const MAX_DIAGNOSTIC_SHAPE_KEY_CHARS = 64;
 const MAX_DIAGNOSTIC_SHAPE_KEYS = 32;
+const MAX_CANONICAL_JSON_ARRAY_ITEMS = 1_000_000;
+const MAX_CANONICAL_JSON_DEPTH = 32;
+const MAX_CANONICAL_JSON_VISITS = MAX_CANONICAL_JSON_ARRAY_ITEMS + 1;
+const MAX_CANONICAL_JSON_OBJECT_KEYS = 100_000;
+const MAX_CANONICAL_JSON_OUTPUT_CODE_POINTS = 64 * 1024 * 1024;
+const MAX_CANONICAL_JSON_OUTPUT_BYTES = 64 * 1024 * 1024;
+const MAX_PROJECTION_GRAPH_DEPTH = 16;
+const MAX_PROJECTION_GRAPH_NODES = 128;
+const MAX_PROJECTION_GRAPH_KEYS = 256;
+const MAX_PROJECTION_GRAPH_ARRAY_ITEMS = 64;
+const MAX_PROJECTION_GRAPH_KEY_CHARS = 512;
+const MAX_PROJECTION_GRAPH_STRING_CHARS = MAX_PROVIDER_INDEX_EVENT_JSON_CHARS;
+const MAX_PROJECTION_GRAPH_AGGREGATE_STRING_CHARS =
+  MAX_PROVIDER_INDEX_EVENT_JSON_CHARS + 131_072;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HIDDEN_PROVIDER_MARKER =
   /(?:hidden|private|internal)[-_ ]?(?:reasoning|thought)|chain[-_ ]?of[-_ ]?thought/iu;
 const LOCATOR_ERROR = "provider task locator is invalid";
-const EVENT_PROJECTION_ERROR = "provider event could not be safely projected";
 const TASK_KEY_ERROR = "native task key is unsafe for provider indexing";
 const HOME_ERROR = "provider home must be canonical exact UTF-8";
-const HOME_REPLACEMENT = "[PROVIDER_HOME]";
+const CACHED_TURN_KEY_ERROR = "cached turn key is invalid";
+const CACHED_EVENT_ITEM_KEY_ERROR = "cached event item key is invalid";
 
 export interface ProviderTaskLocator {
   readonly version: 1;
@@ -143,7 +172,7 @@ function sha256(value: string): string {
 }
 
 function hasExactUtf8Encoding(value: string): boolean {
-  return Buffer.from(value, "utf8").toString("utf8") === value;
+  return hasCanonicalUnicode(value);
 }
 
 function canonicalNativeId(value: unknown, label: string): string {
@@ -164,7 +193,8 @@ function assertProvider(provider: unknown): asserts provider is ProviderId {
 
 function validatedLocator(value: unknown): ProviderTaskLocator {
   try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError();
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+      Array.isArray(value)) throw new TypeError();
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
 
@@ -225,7 +255,8 @@ export function homeFingerprint(provider: ProviderId, canonicalHome: string): st
 
 function snapshotTaskKeyBoundary(value: unknown): Readonly<NativeTaskKey> {
   try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError();
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+      Array.isArray(value)) throw new TypeError();
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
 
@@ -342,11 +373,44 @@ export function assertLocatorMatchesKey(
 
 function nativeCacheKey(value: unknown, label: string): string {
   const nativeId = canonicalNativeId(value, label);
-  return `native:v1:${Buffer.from(nativeId, "utf8").toString("base64url")}`;
+  const cacheKey = `native:v1:${Buffer.from(nativeId, "utf8").toString("base64url")}`;
+  if (cacheKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
+  return cacheKey;
+}
+
+function parseNativeCacheKey(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 ||
+    value.length > MAX_CACHED_KEY_CHARS || !value.startsWith("native:v1:")) {
+    throw new TypeError();
+  }
+  const encoded = value.slice("native:v1:".length);
+  if (!BASE64URL.test(encoded)) throw new TypeError();
+  const bytes = Buffer.from(encoded, "base64url");
+  const nativeId = bytes.toString("utf8");
+  if (!Buffer.from(nativeId, "utf8").equals(bytes) ||
+    Buffer.from(nativeId, "utf8").toString("base64url") !== encoded) {
+    throw new TypeError();
+  }
+  canonicalNativeId(nativeId, label);
+  if (nativeCacheKey(nativeId, label) !== value) throw new TypeError();
+  return nativeId;
 }
 
 export function cachedTurnKey(nativeTurnId: string | null): string {
-  return nativeTurnId === null ? "none:v1" : nativeCacheKey(nativeTurnId, "native turn id");
+  try {
+    return nativeTurnId === null ? "none:v1" : nativeCacheKey(nativeTurnId, "native turn id");
+  } catch {
+    throw new TypeError(CACHED_TURN_KEY_ERROR);
+  }
+}
+
+export function parseCachedTurnKey(value: unknown): string | null {
+  try {
+    if (value === "none:v1") return null;
+    return parseNativeCacheKey(value, "native turn id");
+  } catch {
+    throw new TypeError(CACHED_TURN_KEY_ERROR);
+  }
 }
 
 function indexedIdentity(
@@ -393,63 +457,271 @@ function indexedJsonRpcId(
   return indexedNativeId(value, providerHome, label);
 }
 
-function contentEscapeSentinel(providerHome: string): string {
-  const unavailable = new Set<string>();
-  for (let index = 0; index < providerHome.length; index += 1) {
-    unavailable.add(providerHome[index]!);
-  }
-  for (let index = 0; index < HOME_REPLACEMENT.length; index += 1) {
-    unavailable.add(HOME_REPLACEMENT[index]!);
-  }
-  const ranges = [
-    [0xe000, 0xf8ff],
-    [0x00a1, 0xd7ff],
-    [0xf900, 0xfffd],
-  ] as const;
-  for (const [start, end] of ranges) {
-    for (let codeUnit = start; codeUnit <= end; codeUnit += 1) {
-      const candidate = String.fromCharCode(codeUnit);
-      if (!unavailable.has(candidate)) return candidate;
-    }
-  }
-  throw new TypeError(EVENT_PROJECTION_ERROR);
-}
-
-type ContentTransform = (value: string, providerHome: string) => string;
-
-function readableContentString(value: string, providerHome: string): string {
-  return value.split(providerHome).join(HOME_REPLACEMENT);
-}
-
-function injectiveContentString(value: string, providerHome: string): string {
-  const sentinel = contentEscapeSentinel(providerHome);
-  // Prefix-decodable tokens: home -> marker, literal marker -> S1, literal S -> S0.
-  let projected = "";
-  let index = 0;
-  while (index < value.length) {
-    if (value.startsWith(providerHome, index)) {
-      projected += HOME_REPLACEMENT;
-      index += providerHome.length;
-    } else if (value.startsWith(HOME_REPLACEMENT, index)) {
-      projected += `${sentinel}1`;
-      index += HOME_REPLACEMENT.length;
-    } else if (value[index] === sentinel) {
-      projected += `${sentinel}0`;
-      index += 1;
-    } else {
-      projected += value[index]!;
-      index += 1;
-    }
-  }
-  return projected;
-}
-
 function nullableContentString(
   value: string | null,
   providerHome: string,
   transform: ContentTransform,
 ): string | null {
   return value === null ? null : transform(value, providerHome);
+}
+
+function projectionDataRecord(
+  value: unknown,
+  maximumKeys: number,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+    Array.isArray(value)) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > maximumKeys || keys.some((key) => typeof key !== "string")) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+function projectionDenseArray(
+  value: unknown,
+  maximumItems: number,
+): readonly unknown[] | null {
+  if (value !== null && typeof value === "object" && utilTypes.isProxy(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  if (value === null || typeof value !== "object" || !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype) return null;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+    !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > maximumItems) return null;
+  const length = lengthDescriptor.value;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string") ||
+    keys.length !== length + 1 || !keys.includes("length")) {
+    return null;
+  }
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    snapshot.push(descriptor.value);
+  }
+  return Object.freeze(snapshot);
+}
+
+interface ProjectionGraphBudget {
+  nodes: number;
+  keys: number;
+  stringChars: number;
+}
+
+function accountProjectionGraphString(
+  value: string,
+  budget: ProjectionGraphBudget,
+  perValueMaximum: number,
+): void {
+  const remaining = MAX_PROJECTION_GRAPH_AGGREGATE_STRING_CHARS - budget.stringChars;
+  if (remaining < 0) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const length = sqliteTextLengthAtMost(value, Math.min(perValueMaximum, remaining));
+  if (length === null) throw new TypeError(EVENT_PROJECTION_ERROR);
+  budget.stringChars += length;
+}
+
+function snapshotProjectionGraph(
+  value: unknown,
+  depth: number,
+  budget: ProjectionGraphBudget,
+  ancestors: WeakSet<object>,
+): unknown {
+  if (depth > MAX_PROJECTION_GRAPH_DEPTH) throw new TypeError(EVENT_PROJECTION_ERROR);
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    accountProjectionGraphString(value, budget, MAX_PROJECTION_GRAPH_STRING_CHARS);
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError(EVENT_PROJECTION_ERROR);
+    return value;
+  }
+  if (typeof value !== "object" || utilTypes.isProxy(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  budget.nodes += 1;
+  if (budget.nodes > MAX_PROJECTION_GRAPH_NODES || ancestors.has(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_PROJECTION_GRAPH_ARRAY_ITEMS) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const length = lengthDescriptor.value;
+      const keys = Reflect.ownKeys(value);
+      if (keys.some((key) => typeof key !== "string") ||
+        keys.length !== length + 1 || !keys.includes("length")) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      budget.keys += keys.length;
+      if (budget.keys > MAX_PROJECTION_GRAPH_KEYS) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const result: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(EVENT_PROJECTION_ERROR);
+        }
+        result.push(snapshotProjectionGraph(
+          descriptor.value,
+          depth + 1,
+          budget,
+          ancestors,
+        ));
+      }
+      return Object.freeze(result);
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > 32 || keys.some((key) => typeof key !== "string")) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    budget.keys += keys.length;
+    if (budget.keys > MAX_PROJECTION_GRAPH_KEYS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    const result = Object.create(prototype) as Record<string, unknown>;
+    for (const key of keys as string[]) {
+      accountProjectionGraphString(key, budget, MAX_PROJECTION_GRAPH_KEY_CHARS);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      Object.defineProperty(result, key, {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: snapshotProjectionGraph(
+          descriptor.value,
+          depth + 1,
+          budget,
+          ancestors,
+        ),
+      });
+    }
+    return Object.freeze(result);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function snapshotProjectionEvent(value: unknown): Readonly<ProviderEvent> {
+  const snapshot = snapshotProjectionGraph(
+    value,
+    0,
+    { nodes: 0, keys: 0, stringChars: 0 },
+    new WeakSet<object>(),
+  );
+  if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  return snapshot as Readonly<ProviderEvent>;
+}
+
+function projectedContentLengths(
+  value: string,
+  providerHome: string,
+): Readonly<{ readable: number; injective: number }> {
+  if (sqliteTextLengthAtMost(value, MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) === null) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const sentinel = contentEscapeSentinel(providerHome);
+  let readableLength = 0;
+  let injectiveLength = 0;
+  for (let index = 0; index < value.length;) {
+    if (value.startsWith(providerHome, index)) {
+      readableLength += HOME_REPLACEMENT.length;
+      injectiveLength += HOME_REPLACEMENT.length;
+      index += providerHome.length;
+    } else if (value.startsWith(HOME_REPLACEMENT, index)) {
+      readableLength += HOME_REPLACEMENT.length;
+      injectiveLength += 2;
+      index += HOME_REPLACEMENT.length;
+    } else if (value.startsWith(sentinel, index)) {
+      readableLength += 1;
+      injectiveLength += 2;
+      index += sentinel.length;
+    } else {
+      const codeUnit = value.charCodeAt(index);
+      index += codeUnit >= 0xd800 && codeUnit <= 0xdbff ? 2 : 1;
+      readableLength += 1;
+      injectiveLength += 1;
+    }
+    if (readableLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS ||
+      injectiveLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  }
+  return Object.freeze({ readable: readableLength, injective: injectiveLength });
+}
+
+function preflightProjectionBoundary(eventValue: unknown): void {
+  const event = projectionDataRecord(eventValue, 32);
+  const key = projectionDataRecord(event.key, 3);
+  const providerHome = key.home;
+  if (typeof providerHome !== "string" || providerHome.length === 0 ||
+    !hasCanonicalUnicode(providerHome)) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const values: unknown[] = [];
+  switch (event.type) {
+    case "message": values.push(event.text); break;
+    case "message-delta": values.push(event.delta); break;
+    case "plan": values.push(event.text, event.status); break;
+    case "activity": values.push(event.activity, event.status, event.message); break;
+    case "status": values.push(event.status); break;
+    case "diagnostic": {
+      values.push(event.code, event.message, event.method);
+      const shapeKeys = projectionDenseArray(event.shapeKeys, MAX_DIAGNOSTIC_SHAPE_KEYS);
+      if (shapeKeys !== null) {
+        for (const keyValue of shapeKeys) values.push(keyValue);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  let readableLength = 0;
+  let injectiveLength = 0;
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const lengths = projectedContentLengths(value, providerHome);
+    readableLength += lengths.readable;
+    injectiveLength += lengths.injective;
+    if (readableLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS ||
+      injectiveLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  }
 }
 
 function canonicalOccurredAt(value: unknown): string {
@@ -472,15 +744,44 @@ interface ProjectionContext {
   readonly occurredAt: string;
 }
 
+function diagnosticText(value: unknown, maximum: number, minimum = 1): string | null {
+  if (typeof value !== "string" || value.includes("\u0000")) return null;
+  const length = sqliteTextLengthAtMost(value, maximum);
+  return length === null || length < minimum ? null : value;
+}
+
+function diagnosticShapeKeys(value: unknown): readonly string[] | null {
+  const values = projectionDenseArray(value, MAX_DIAGNOSTIC_SHAPE_KEYS);
+  if (values === null) return null;
+  const result: string[] = [];
+  for (const value of values) {
+    const key = diagnosticText(value, MAX_DIAGNOSTIC_SHAPE_KEY_CHARS, 0);
+    if (key === null) return null;
+    result.push(key);
+  }
+  return Object.freeze(result);
+}
+
 function preservedDiagnostic(event: DiagnosticEvent): DiagnosticEvent | null {
-  if ((event.level !== "warning" && event.level !== "error") ||
-    typeof event.code !== "string" || event.code.length === 0 ||
-    event.code.length > MAX_DIAGNOSTIC_CODE_CHARS ||
-    typeof event.message !== "string" || event.message.length === 0 ||
-    event.message.length > MAX_DIAGNOSTIC_MESSAGE_CHARS ||
-    (event.method !== null && typeof event.method !== "string") ||
-    (event.method !== null && event.method.length > MAX_DIAGNOSTIC_METHOD_CHARS) ||
-    !isDenseDiagnosticShapeKeys(event.shapeKeys)) {
+  const code = diagnosticText(event.code, MAX_DIAGNOSTIC_CODE_CHARS);
+  const message = diagnosticText(event.message, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+  const method = event.method === null
+    ? null
+    : diagnosticText(event.method, MAX_DIAGNOSTIC_METHOD_CHARS, 0);
+  const shapeKeys = diagnosticShapeKeys(event.shapeKeys);
+  if ((event.level !== "warning" && event.level !== "error") || code === null ||
+    message === null || (event.method !== null && method === null) || shapeKeys === null) {
+    return null;
+  }
+  const redactedCode = diagnosticText(redactSecrets(code), MAX_DIAGNOSTIC_CODE_CHARS);
+  const redactedMessage = diagnosticText(redactSecrets(message), MAX_DIAGNOSTIC_MESSAGE_CHARS);
+  const redactedMethod = method === null
+    ? null
+    : diagnosticText(redactSecrets(method), MAX_DIAGNOSTIC_METHOD_CHARS, 0);
+  const redactedShapeKeys = shapeKeys.map((key) =>
+    diagnosticText(redactSecrets(key), MAX_DIAGNOSTIC_SHAPE_KEY_CHARS, 0));
+  if (redactedCode === null || redactedMessage === null ||
+    (method !== null && redactedMethod === null) || redactedShapeKeys.includes(null)) {
     return null;
   }
   return {
@@ -489,27 +790,11 @@ function preservedDiagnostic(event: DiagnosticEvent): DiagnosticEvent | null {
     occurredAt: canonicalOccurredAt(event.occurredAt),
     type: "diagnostic",
     level: event.level,
-    code: redactSecrets(event.code),
-    message: redactSecrets(event.message),
-    method: event.method === null
-      ? null
-      : redactSecrets(event.method).slice(0, MAX_DIAGNOSTIC_METHOD_CHARS),
-    shapeKeys: Object.freeze(
-      event.shapeKeys.map((key) => redactSecrets(key).slice(0, MAX_DIAGNOSTIC_SHAPE_KEY_CHARS)),
-    ),
+    code: redactedCode,
+    message: redactedMessage,
+    method: redactedMethod,
+    shapeKeys: Object.freeze(redactedShapeKeys as string[]),
   };
-}
-
-function isDenseDiagnosticShapeKeys(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value) || value.length > MAX_DIAGNOSTIC_SHAPE_KEYS) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value, index) ||
-      typeof value[index] !== "string" ||
-      value[index].length > MAX_DIAGNOSTIC_SHAPE_KEY_CHARS) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function hasHiddenDiagnosticMarker(event: DiagnosticEvent): boolean {
@@ -528,9 +813,10 @@ function hiddenDiagnostic(context: ProjectionContext): ProviderEvent {
   return normalizeProviderEvent({ hiddenReasoning: true }, context);
 }
 
-function normalizeProjectionBoundary(event: ProviderEvent): ProviderEvent {
+function normalizeProjectionBoundary(event: ProviderEvent, trustedSnapshot = false): ProviderEvent {
   try {
-    const snapshot = structuredClone(event);
+    const snapshot = trustedSnapshot ? event : snapshotProjectionEvent(event);
+    preflightProjectionBoundary(snapshot);
     if (snapshot === null || typeof snapshot !== "object") throw new TypeError();
     const context: ProjectionContext = {
       provider: snapshot.provider,
@@ -540,8 +826,11 @@ function normalizeProjectionBoundary(event: ProviderEvent): ProviderEvent {
     const boundary = normalizeProviderEvent(snapshot, context);
     if (snapshot.type !== "diagnostic") return boundary;
     if (!isExpectedUnknownDiagnostic(boundary)) return boundary;
-    if (hasHiddenDiagnosticMarker(snapshot)) return hiddenDiagnostic(context);
-    return preservedDiagnostic(snapshot) ?? boundary;
+    const preserved = preservedDiagnostic(snapshot);
+    if (preserved !== null && hasHiddenDiagnosticMarker(preserved)) {
+      return hiddenDiagnostic(context);
+    }
+    return preserved ?? boundary;
   } catch {
     throw new TypeError(EVENT_PROJECTION_ERROR);
   }
@@ -705,18 +994,30 @@ function projectNormalizedEvent(
 
 export function projectIndexedProviderEvent(event: ProviderEvent): IndexedProviderEvent {
   try {
-    return projectNormalizedEvent(normalizeProjectionBoundary(event), readableContentString);
+    return projectNormalizedEvent(
+      normalizedEventForProjection(event, false),
+      readableContentString,
+    );
   } catch {
     throw new TypeError(EVENT_PROJECTION_ERROR);
   }
 }
 
-function eventProjectionsForHash(event: ProviderEvent): {
+function normalizedEventForProjection(
+  event: ProviderEvent,
+  trustedSnapshot: boolean,
+): ProviderEvent {
+  const normalized = normalizeProjectionBoundary(event, trustedSnapshot);
+  preflightProjectionBoundary(normalized);
+  return normalized;
+}
+
+function eventProjectionsForHash(event: ProviderEvent, trustedSnapshot: boolean): {
   readonly publicEvent: IndexedProviderEvent;
   readonly hashEvent: IndexedProviderEvent;
 } {
   try {
-    const normalized = normalizeProjectionBoundary(event);
+    const normalized = normalizedEventForProjection(event, trustedSnapshot);
     return Object.freeze({
       publicEvent: projectNormalizedEvent(normalized, readableContentString),
       hashEvent: projectNormalizedEvent(normalized, injectiveContentString),
@@ -733,69 +1034,468 @@ function eventOrdinal(value: number): number {
   return value;
 }
 
-function actualItemId(event: IndexedProviderEvent): string | null {
-  switch (event.type) {
-    case "message":
-    case "message-delta":
-    case "plan":
-    case "activity":
-      return event.itemId;
-    case "request":
-      return event.request.identity.itemId;
-    case "request-resolved":
-      return event.identity.itemId;
-    case "status":
-      return event.scope === "item" ? event.nativeId : null;
-    case "diff-summary":
-    case "usage":
-    case "diagnostic":
-      return null;
-    default:
-      return assertNever(event);
+export function indexedProviderEventItemId(event: IndexedProviderEvent): string | null {
+  try {
+    const { raw, locator } = indexedExtractorBoundary(event);
+    switch (raw.type) {
+      case "message":
+      case "message-delta":
+      case "plan":
+      case "activity":
+        return extractedNullableNativeId(raw.itemId);
+      case "request": {
+        const request = projectionDataRecord(raw.request, 3);
+        return extractedNullableNativeId(indexedExtractorIdentity(request.identity, locator).itemId);
+      }
+      case "request-resolved":
+        return extractedNullableNativeId(indexedExtractorIdentity(raw.identity, locator).itemId);
+      case "status":
+        return raw.scope === "item" ? extractedNullableNativeId(raw.nativeId) : null;
+      case "diff-summary":
+      case "usage":
+      case "diagnostic":
+        return null;
+      default:
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  } catch {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
   }
 }
 
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return JSON.stringify(value);
+function indexedExtractorBoundary(event: IndexedProviderEvent): {
+  readonly raw: Readonly<Record<string, unknown>>;
+  readonly locator: ProviderTaskLocator;
+} {
+  const raw = projectionDataRecord(event, 32);
+  const locator = validatedLocator(raw.locator);
+  if (raw.provider !== locator.provider) throw new TypeError(EVENT_PROJECTION_ERROR);
+  return Object.freeze({ raw, locator });
+}
+
+function indexedExtractorIdentity(
+  value: unknown,
+  expectedLocator: ProviderTaskLocator,
+): Readonly<Record<string, unknown>> {
+  const identity = projectionDataRecord(value, 6);
+  const locator = validatedLocator(identity.locator);
+  if (locator.version !== expectedLocator.version || locator.provider !== expectedLocator.provider ||
+    locator.homeFingerprint !== expectedLocator.homeFingerprint ||
+    locator.nativeTaskId !== expectedLocator.nativeTaskId) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  return identity;
+}
+
+function extractedNullableNativeId(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new TypeError(EVENT_PROJECTION_ERROR);
+  return value;
+}
+
+interface CanonicalJsonState {
+  sqliteCodePoints: number;
+  utf8Bytes: number;
+  visits: number;
+  readonly maximumCodePoints: number;
+  readonly maximumUtf8Bytes: number;
+  readonly chunks: string[] | null;
+}
+
+function appendCanonicalJson(
+  state: CanonicalJsonState,
+  value: string,
+  sqliteCodePoints = value.length,
+  utf8Bytes = value.length,
+): void {
+  if (sqliteCodePoints > state.maximumCodePoints - state.sqliteCodePoints ||
+    utf8Bytes > state.maximumUtf8Bytes - state.utf8Bytes) throw new TypeError();
+  state.sqliteCodePoints += sqliteCodePoints;
+  state.utf8Bytes += utf8Bytes;
+  if (state.chunks !== null) {
+    const lastIndex = state.chunks.length - 1;
+    const last = state.chunks[lastIndex];
+    if (last !== undefined && last.length + value.length <= 8_192) {
+      state.chunks[lastIndex] = last + value;
+    } else {
+      state.chunks.push(value);
+    }
+  }
+}
+
+function encodeCanonicalJsonString(state: CanonicalJsonState, value: string): void {
+  appendCanonicalJson(state, '"');
+  let rawStart = 0;
+  let rawCodePoints = 0;
+  let rawUtf8Bytes = 0;
+  let index = 0;
+  while (index < value.length) {
+    const codeUnit = value.charCodeAt(index);
+    let escaped: string | null = null;
+    let width = 1;
+    switch (codeUnit) {
+      case 0x08: escaped = "\\b"; break;
+      case 0x09: escaped = "\\t"; break;
+      case 0x0a: escaped = "\\n"; break;
+      case 0x0c: escaped = "\\f"; break;
+      case 0x0d: escaped = "\\r"; break;
+      case 0x22: escaped = '\\"'; break;
+      case 0x5c: escaped = "\\\\"; break;
+      default:
+        if (codeUnit < 0x20) {
+          escaped = `\\u${codeUnit.toString(16).padStart(4, "0")}`;
+        } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+          if (index + 1 >= value.length) throw new TypeError();
+          const next = value.charCodeAt(index + 1);
+          if (next < 0xdc00 || next > 0xdfff) throw new TypeError();
+          width = 2;
+        } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+          throw new TypeError();
+        }
+        break;
+    }
+    if (escaped === null) {
+      rawCodePoints += 1;
+      if (width === 2) {
+        rawUtf8Bytes += 4;
+      } else if (codeUnit <= 0x7f) {
+        rawUtf8Bytes += 1;
+      } else if (codeUnit <= 0x7ff) {
+        rawUtf8Bytes += 2;
+      } else {
+        rawUtf8Bytes += 3;
+      }
+      index += width;
+      continue;
+    }
+    if (rawCodePoints > 0) {
+      appendCanonicalJson(
+        state,
+        state.chunks === null ? "" : value.slice(rawStart, index),
+        rawCodePoints,
+        rawUtf8Bytes,
+      );
+    }
+    appendCanonicalJson(state, escaped);
+    index += 1;
+    rawStart = index;
+    rawCodePoints = 0;
+    rawUtf8Bytes = 0;
+  }
+  if (rawCodePoints > 0) {
+    appendCanonicalJson(
+      state,
+      state.chunks === null ? "" : value.slice(rawStart),
+      rawCodePoints,
+      rawUtf8Bytes,
+    );
+  }
+  appendCanonicalJson(state, '"');
+}
+
+function encodeCanonicalProviderIndexJson(
+  value: unknown,
+  state: CanonicalJsonState,
+  depth: number,
+  ancestors: WeakSet<object>,
+): void {
+  if (depth > MAX_CANONICAL_JSON_DEPTH) throw new TypeError();
+  state.visits += 1;
+  if (state.visits > MAX_CANONICAL_JSON_VISITS) throw new TypeError();
+  if (value === null) {
+    appendCanonicalJson(state, "null");
+    return;
+  }
+  if (typeof value === "string") {
+    encodeCanonicalJsonString(state, value);
+    return;
+  }
+  if (typeof value === "boolean") {
+    appendCanonicalJson(state, value ? "true" : "false");
+    return;
   }
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new TypeError("canonical JSON contains a non-finite number");
-    return JSON.stringify(value);
+    if (!Number.isFinite(value)) throw new TypeError();
+    appendCanonicalJson(state, JSON.stringify(value));
+    return;
   }
-  if (Array.isArray(value)) {
-    const items: string[] = [];
-    for (let index = 0; index < value.length; index += 1) {
-      if (!Object.prototype.hasOwnProperty.call(value, index)) {
-        throw new TypeError("canonical JSON contains a sparse array");
+  if (typeof value !== "object" || utilTypes.isProxy(value)) throw new TypeError();
+  if (ancestors.has(value)) throw new TypeError();
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_CANONICAL_JSON_ARRAY_ITEMS) throw new TypeError();
+      const length = lengthDescriptor.value;
+      const ownKeys = Reflect.ownKeys(value);
+      if (ownKeys.some((key) => typeof key !== "string") ||
+        ownKeys.length !== length + 1 || !ownKeys.includes("length")) {
+        throw new TypeError();
       }
-      items.push(canonicalJson(value[index]));
+      appendCanonicalJson(state, "[");
+      for (let index = 0; index < length; index += 1) {
+        if (index > 0) appendCanonicalJson(state, ",");
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+        encodeCanonicalProviderIndexJson(descriptor.value, state, depth + 1, ancestors);
+      }
+      appendCanonicalJson(state, "]");
+      return;
     }
-    return `[${items.join(",")}]`;
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > MAX_CANONICAL_JSON_OBJECT_KEYS || keys.some(
+      (key) => typeof key !== "string" || !hasExactUtf8Encoding(key),
+    )) throw new TypeError();
+    const sortedKeys = (keys as string[]).sort();
+    appendCanonicalJson(state, "{");
+    for (let index = 0; index < sortedKeys.length; index += 1) {
+      if (index > 0) appendCanonicalJson(state, ",");
+      const key = sortedKeys[index]!;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+      encodeCanonicalJsonString(state, key);
+      appendCanonicalJson(state, ":");
+      encodeCanonicalProviderIndexJson(descriptor.value, state, depth + 1, ancestors);
+    }
+    appendCanonicalJson(state, "}");
+  } finally {
+    ancestors.delete(value);
   }
-  if (typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
-      .join(",")}}`;
+}
+
+interface CanonicalJsonMetrics {
+  readonly sqliteCodePoints: number;
+  readonly utf8Bytes: number;
+}
+
+function canonicalProviderIndexJsonMetrics(
+  value: unknown,
+  maximumCodePoints: number,
+  maximumUtf8Bytes: number,
+): CanonicalJsonMetrics | null {
+  try {
+    if (!Number.isSafeInteger(maximumCodePoints) || maximumCodePoints < 0 ||
+      !Number.isSafeInteger(maximumUtf8Bytes) || maximumUtf8Bytes < 0) throw new TypeError();
+    const state: CanonicalJsonState = {
+      sqliteCodePoints: 0,
+      utf8Bytes: 0,
+      visits: 0,
+      maximumCodePoints,
+      maximumUtf8Bytes,
+      chunks: null,
+    };
+    encodeCanonicalProviderIndexJson(value, state, 0, new WeakSet<object>());
+    return Object.freeze({
+      sqliteCodePoints: state.sqliteCodePoints,
+      utf8Bytes: state.utf8Bytes,
+    });
+  } catch {
+    return null;
   }
-  throw new TypeError("canonical JSON contains an unsupported value");
+}
+
+export function canonicalProviderIndexJson(value: unknown): string {
+  try {
+    const metrics = canonicalProviderIndexJsonMetrics(
+      value,
+      MAX_CANONICAL_JSON_OUTPUT_CODE_POINTS,
+      MAX_CANONICAL_JSON_OUTPUT_BYTES,
+    );
+    if (metrics === null) throw new TypeError();
+    const chunks: string[] = [];
+    const state: CanonicalJsonState = {
+      sqliteCodePoints: 0,
+      utf8Bytes: 0,
+      visits: 0,
+      maximumCodePoints: metrics.sqliteCodePoints,
+      maximumUtf8Bytes: metrics.utf8Bytes,
+      chunks,
+    };
+    encodeCanonicalProviderIndexJson(value, state, 0, new WeakSet<object>());
+    if (state.sqliteCodePoints !== metrics.sqliteCodePoints ||
+      state.utf8Bytes !== metrics.utf8Bytes) throw new TypeError();
+    return chunks.join("");
+  } catch {
+    throw new TypeError("provider index canonical JSON is invalid");
+  }
 }
 
 function projectedEventDigest(event: IndexedProviderEvent, ordinal: number): string {
-  return sha256(canonicalJson({ event, ordinal }));
+  return sha256(canonicalProviderIndexJson({ event, ordinal }));
 }
 
 export function cachedEventItemId(event: ProviderEvent, ordinalValue: number): string {
-  const ordinal = eventOrdinal(ordinalValue);
-  const projections = eventProjectionsForHash(event);
-  const nativeItemId = actualItemId(projections.publicEvent);
-  if (nativeItemId !== null) return nativeCacheKey(nativeItemId, "native item id");
-  return `synthetic:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
+  try {
+    const bundle = providerEventCacheBundle(
+      event,
+      ordinalValue,
+      false,
+      MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+      MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+    );
+    if (!bundle.ok) throw new TypeError();
+    return bundle.nativeItemKey;
+  } catch {
+    throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
+  }
 }
 
 export function providerEventReplayKey(event: ProviderEvent, ordinalValue: number): string {
+  const bundle = providerEventCacheBundle(
+    event,
+    ordinalValue,
+    false,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+  );
+  if (!bundle.ok) throw new TypeError(EVENT_PROJECTION_ERROR);
+  return bundle.replayKey;
+}
+
+type ProviderEventCacheBundle =
+  | Readonly<{ ok: false; limit: "PER_EVENT" | "AGGREGATE" }>
+  | Readonly<{
+      ok: true;
+      event: IndexedProviderEvent;
+      nativeItemKey: string;
+      replayKey: string;
+      canonicalEventJsonChars: number;
+      canonicalEventJsonBytes: number;
+    }>;
+
+function providerEventCacheBundle(
+  event: ProviderEvent,
+  ordinalValue: number,
+  trustedSnapshot: boolean,
+  remainingCanonicalEventJsonChars: number,
+  remainingCanonicalEventJsonBytes: number,
+): ProviderEventCacheBundle {
   const ordinal = eventOrdinal(ordinalValue);
-  const projections = eventProjectionsForHash(event);
-  return `replay:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
+  const projections = eventProjectionsForHash(event, trustedSnapshot);
+  const canonicalEventJsonMetrics = canonicalProviderIndexJsonMetrics(
+    projections.publicEvent,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+  );
+  if (canonicalEventJsonMetrics === null) {
+    return Object.freeze({ ok: false as const, limit: "PER_EVENT" as const });
+  }
+  const canonicalEventJsonChars = canonicalEventJsonMetrics.sqliteCodePoints;
+  const canonicalEventJsonBytes = canonicalEventJsonMetrics.utf8Bytes;
+  if (!Number.isSafeInteger(remainingCanonicalEventJsonChars) ||
+    !Number.isSafeInteger(remainingCanonicalEventJsonBytes) ||
+    remainingCanonicalEventJsonChars < canonicalEventJsonChars ||
+    remainingCanonicalEventJsonBytes < canonicalEventJsonBytes) {
+    return Object.freeze({ ok: false as const, limit: "AGGREGATE" as const });
+  }
+  const digest = projectedEventDigest(projections.hashEvent, ordinal);
+  const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
+  const nativeItemKey = nativeItemId === null
+    ? `synthetic:v1:${ordinal}:${digest}`
+    : nativeCacheKey(nativeItemId, "native item id");
+  if (nativeItemKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
+  return Object.freeze({
+    ok: true as const,
+    event: projections.publicEvent,
+    nativeItemKey,
+    replayKey: `replay:v1:${ordinal}:${digest}`,
+    canonicalEventJsonChars,
+    canonicalEventJsonBytes,
+  });
+}
+
+/** Internal persistence path: caller must supply the already bounded deep-frozen event snapshot. */
+export function projectProviderEventCacheBundleFromSnapshot(
+  event: Readonly<ProviderEvent>,
+  ordinalValue: number,
+  remainingCanonicalEventJsonChars: number,
+  remainingCanonicalEventJsonBytes: number,
+): ProviderEventCacheBundle {
+  return providerEventCacheBundle(
+    event,
+    ordinalValue,
+    true,
+    remainingCanonicalEventJsonChars,
+    remainingCanonicalEventJsonBytes,
+  );
+}
+
+export type ParsedCachedEventItemKey =
+  | Readonly<{ kind: "native"; nativeItemId: string }>
+  | Readonly<{ kind: "synthetic"; nativeItemId: null }>;
+
+export function parseCachedEventItemKey(
+  value: unknown,
+  expectedOrdinalValue: number,
+): ParsedCachedEventItemKey {
+  try {
+    const expectedOrdinal = eventOrdinal(expectedOrdinalValue);
+    if (typeof value === "string" && value.startsWith("native:v1:")) {
+      return Object.freeze({
+        kind: "native" as const,
+        nativeItemId: parseNativeCacheKey(value, "native item id"),
+      });
+    }
+    if (typeof value !== "string" || value.length > MAX_CACHED_KEY_CHARS ||
+      value !== `synthetic:v1:${expectedOrdinal}:${value.slice(-64)}`) {
+      throw new TypeError();
+    }
+    const digest = value.slice(-64);
+    if (!FINGERPRINT.test(digest)) throw new TypeError();
+    return Object.freeze({ kind: "synthetic" as const, nativeItemId: null });
+  } catch {
+    throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
+  }
+}
+
+export function parseProviderEventReplayKey(
+  value: unknown,
+  expectedOrdinalValue: number,
+): string {
+  try {
+    const expectedOrdinal = eventOrdinal(expectedOrdinalValue);
+    if (typeof value !== "string" || value.length > MAX_CACHED_KEY_CHARS ||
+      value !== `replay:v1:${expectedOrdinal}:${value.slice(-64)}` ||
+      !FINGERPRINT.test(value.slice(-64))) {
+      throw new TypeError();
+    }
+    return value;
+  } catch {
+    throw new TypeError("provider event replay key is invalid");
+  }
+}
+
+export function indexedProviderEventTurnId(event: IndexedProviderEvent): string | null {
+  try {
+    const { raw, locator } = indexedExtractorBoundary(event);
+    switch (raw.type) {
+      case "message":
+      case "message-delta":
+      case "plan":
+      case "activity":
+      case "diff-summary":
+      case "usage":
+        return extractedNullableNativeId(raw.turnId);
+      case "request": {
+        const request = projectionDataRecord(raw.request, 3);
+        return extractedNullableNativeId(indexedExtractorIdentity(request.identity, locator).turnId);
+      }
+      case "request-resolved":
+        return extractedNullableNativeId(indexedExtractorIdentity(raw.identity, locator).turnId);
+      case "status":
+        return raw.scope === "turn" ? extractedNullableNativeId(raw.nativeId) : null;
+      case "diagnostic":
+        return null;
+      default:
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  } catch {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
 }

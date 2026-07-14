@@ -8,8 +8,46 @@ export * from "./events.js";
 export * from "./feature-flags.js";
 export * from "./registry.js";
 export * from "./writer-lease.js";
-export * from "../provider-index/identity.js";
+export {
+  assertLocatorMatchesKey,
+  cachedEventItemId,
+  cachedTurnKey,
+  canonicalProviderIndexJson,
+  homeFingerprint,
+  indexedProviderEventItemId,
+  indexedProviderEventTurnId,
+  parseCachedEventItemKey,
+  parseCachedTurnKey,
+  parseProviderEventReplayKey,
+  parseTaskLocator,
+  projectIndexedProviderEvent,
+  providerEventReplayKey,
+  serializeTaskLocator,
+  taskLocator,
+} from "../provider-index/identity.js";
+export type {
+  IndexedProviderEvent,
+  IndexedProviderRequestIdentity,
+  ParsedCachedEventItemKey,
+  ProviderTaskLocator,
+} from "../provider-index/identity.js";
 export * from "../provider-index/cursor.js";
+export {
+  PROVIDER_INDEX_STORE_DEFAULTS,
+  PROVIDER_INDEX_STORE_HARD_LIMITS,
+  ProviderIndexStoreError,
+} from "../provider-index/store-types.js";
+export type {
+  IndexedProviderTask,
+  IndexedProviderTaskSummary,
+  IndexedProviderTurn,
+  ProviderHomeScope,
+  ProviderIndexCompletion,
+  ProviderIndexPromotion,
+  ProviderIndexStage,
+  ProviderIndexStoreErrorCode,
+  ProviderIndexStoreOptions,
+} from "../provider-index/store-types.js";
 export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";
 export * from "./claude/native-adapter.js";

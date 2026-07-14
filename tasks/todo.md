@@ -241,4 +241,125 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 
 ### Store-boundary follow-up
 
-- [ ] Reject caller-supplied numeric strings such as `"0"` and `"1"` before SQL binding; SQLite affinity coercion is not an API validation boundary.
+- [x] Reject caller-supplied numeric strings such as `"0"` and `"1"` before SQL binding; SQLite affinity coercion is not an API validation boundary.
+
+## M5 store slice 1: pure types, config, and snapshot codecs (complete)
+
+- [x] Add a strict reciprocal `parseCachedTurnKey` with canonical UTF-8/base64url tests and a fixed Unicode vector.
+- [x] Define the exact store error union/class, public store shapes, default/hard constants, and frozen hostile-safe normalized config.
+- [x] Prove clock/token wrappers, explicit-undefined defaults, numeric-string rejection, individual bounds, and cross-bound validation.
+- [x] Prepare summaries/snapshots only when method key, payload key, and registered provider/home agree; preserve the three CWD/redaction states.
+- [x] Enforce dense turn/event arrays, global ordinals, native/synthetic identities, canonical persisted event JSON, event fingerprints, snapshot fingerprints, and source-driven receipt bases.
+- [x] Strictly decode every `IndexedProviderEvent` variant and reject independent row/JSON/fingerprint/ordinal/turn/item/replay mutations with value-free `CORRUPT_ROW`.
+- [x] Prove hostile accessor/proxy handling, Unicode and canonical UTF-8 behavior, deep immutability, and absence of raw provider-home leakage.
+- [x] Re-export the public slice, run focused identity+codec tests with two workers, engine typecheck, and diff hygiene, then commit one coherent slice.
+
+### Review
+
+- TDD red checkpoints were diagnostic and isolated: reciprocal parser `1 failed / 87 passed`; identity-owned helpers `4 / 90`; config `32 / 2`; summary/snapshot preparation `10 / 35`; strict decoder `5 / 45`; exported snapshot binding helper `1 / 51`.
+- Frozen contract details are explicit: snapshot preimage is `[1, serializeTaskLocator(locator), summary, turns]`; native receipt basis is `native:<revision fingerprint>` while both fallback sources always use `fallback:<snapshot fingerprint>`.
+- Raw top-level event ownership and nested request/request-resolved identity ownership are checked before projection; no normalization path can convert a cross-task write into persisted diagnostic data.
+- CWD redaction resolves the deepest existing ancestor before component-boundary containment, including root, symlink, and missing-leaf cases. Fixed raw-home/literal-marker snapshot goldens remain distinct and path-free.
+- Strict read decoding covers all ten event variants and five request kinds, exact canonical JSON/UTF-8, immutable reconstruction, readable ownership, ordinal tags, and independent row/JSON/key/fingerprint mutations.
+- Fresh focused gate: identity plus codec tests `146/146`; engine typecheck and `git diff --check` pass. No SQL, migration, `store.ts`, `index-db`, full suite, provider call, Python process, or user-owned path was touched.
+
+### Independent-review repairs
+
+- [x] Replace the providers-barrel wildcard exports with an explicit path-free store API; keep the raw-home registration carrier, normalized callbacks, prepared persistence shapes, row decoder, and all preparation codecs backend-only.
+- [x] Add a dedicated TypeScript public-surface contract so accidental re-export of any backend-only symbol fails compilation, in addition to the runtime export regression.
+- [x] Preserve negative safe-integer JSON-RPC request and approval IDs through project, canonical persistence, and strict decode round trips.
+- [x] Reject a final canonical persisted-event envelope above `8_388_608` characters before any SQL boundary, while accepting the exact limit. This is `INVALID_INPUT` because the fixed per-value schema/input constraint is violated; `CAPACITY` remains reserved in this slice for configurable aggregate turn/event-count limits.
+- [x] Bound every emitted native turn/item cache key to `1_024` characters after UTF-8/base64url expansion, expose only the fixed caller-specific errors, and cover accepted/rejected multibyte boundaries both directly and through snapshot preparation.
+
+### Security-review repairs
+
+- [x] Fail closed when the registered canonical home appears in any persisted summary, revision, or turn scalar; retain only the component-aware cwd redaction exception and prove accepted prepared output is path-free.
+- [x] Deep-snapshot each raw provider event exactly once through bounded data descriptors, reject proxies/accessors/symbols/exotics/sparse arrays/cycles/unbounded graphs before projection, and reuse that immutable snapshot for ownership, projection, item identity, and replay identity.
+- [x] Validate every write projection through the same exact `IndexedProviderEvent` union decoder used on reads, including write rejection for NUL text and oversized plan/activity/status/diagnostic fields.
+- [x] Match SQLite `length()` with an early-exit Unicode-code-point counter at persisted text boundaries, while retaining canonical UTF-8 and NUL rejection; cover ASCII, combining-mark, and astral boundaries.
+- [x] Stream the exact frozen fixed-array snapshot preimage into SHA-256 without materializing the aggregate canonical JSON, preserving the established canonical-reference and raw-home/literal-marker goldens.
+- [x] Add all prepared summary/turn/event carriers to the negative TypeScript surface fixture and run that fixture from the normal engine `typecheck` script; an induced backend-type export fails with TS2578.
+
+### Security-repair review
+
+- TDD RED was exact and isolated: focused codec tests reported `5 failed / 56 passed`, covering raw-home scalars, SQLite astral length, write/read asymmetry, hostile nested descriptors, and pre-allocation bounds.
+- Fresh final gate: identity plus codec tests `157/157` in `14.06s` (`12.82s` test execution); normal engine typecheck ran both the source compiler and the dedicated negative surface fixture; `git diff --check` passed.
+- A temporary induced export of `PreparedProviderTaskSummary` made normal engine typecheck fail with TS2578 (`Unused '@ts-expect-error' directive`), proving the fixture is live; the export was removed before the final green gate.
+- The repair remains pure codec/types/test/documentation work: no SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned file was touched.
+
+### Recertification repairs
+
+- [x] Preflight exact readable and private-injective content projection sizes with SQLite code-point semantics before clone or materialization; reject the exact root-home `/` plus `8,388,608`-slash amplification case and injective sentinel amplification without allocating expanded output.
+- [x] Replace split/join redaction with bounded single-pass replacement and add one internal direct-module cache projection bundle so persistence normalizes once, derives one digest, and never reclones the deep-frozen store snapshot.
+- [x] Share one allocation-free surrogate-validating SQLite text counter across identity and store; round-trip exact astral diagnostic code/message/method/shape-key limits and reject first-over, combining-over, NUL, and lone-surrogate inputs.
+- [x] Reject proxies before traps at exact-object, dense-array, canonical-JSON, and event-graph boundaries; capture one array length descriptor and enforce turn/remaining-event capacity before key enumeration or element descriptors.
+- [x] Replace exported-error passthrough with a lexical capacity sentinel so all sixteen caller-forged public error codes normalize to `INVALID_INPUT` and only internal cardinality overflow becomes `CAPACITY`.
+- [x] Make snapshot fingerprint and receipt derivation private over trusted prepared carriers; preserve their canonical-reference and raw-home/literal-marker goldens through end-to-end snapshot preparation.
+- [x] Preserve the exact provider identity barrel explicitly while runtime and compiler fixtures prove the internal cache bundle and trusted hashing helpers remain unavailable.
+
+### Recertification review
+
+- TDD RED was isolated and diagnostic: identity plus codec reported `9 failed / 156 passed`; normal engine typecheck independently failed both direct trusted-helper privacy assertions with TS2578 before the exports were removed.
+- The exact full-size projection tests prove both readable and injective amplification fail before `structuredClone`; a valid persisted event now records zero clone calls instead of three.
+- Fresh final gate: identity plus codec tests `166/166` in `16.56s` (`16.64s` test execution); normal engine typecheck ran source plus the negative public fixture, and `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
+
+### Final adversarial recertification repairs
+
+- [x] Cap aggregate canonical event JSON for one prepared task at fixed `64 MiB` UTF-8 bytes and `64 MiB` SQLite code points, with a backend-only byte-limit seam and alias-aware rejection before rematerializing the crossing copy.
+- [x] Replace recursive aggregate canonicalization with exact two-pass metrics/emission bounded to depth 32, 1,000,000 visits, 64 MiB output bytes/code points, fixed dense arrays, ancestor cycles, and proxy-free data descriptors.
+- [x] Make task-key, locator, event-item, and event-turn extractors proxy-first and descriptor-safe; require top provider/locator and nested request locator identity to agree.
+- [x] Require registered-home context while decoding cache rows and manually enforce the writer's home/redaction/native-ID/nonempty-status/diagnostic invariants without reconstructing a native provider event.
+- [x] Complete independent adversarial review, rerun the final focused identity/codec gate plus engine typecheck/diff hygiene, and commit the coherent repair checkpoint.
+
+### Final adversarial recertification review
+
+- TDD RED was isolated: identity plus codec reported `6 failed / 165 passed`, covering proxy-first locator/extractor handling, canonical expansion bounds, aggregate budget enforcement, and registered-home decode equivalence.
+- The aggregate gate measures the final canonical representation in both SQLite code points and UTF-8 bytes. Exact-boundary ASCII and astral cases pass, first-over fails with `CAPACITY`, and the third repeated alias is rejected after exactly two source-text descriptor reads.
+- The canonical encoder preflights exact escaped output before emission, preserves the established lexical JSON output, rejects a 31-level alias DAG at the visit cap, and rejects control-character expansion above 64 MiB without constructing that result.
+- Independent adversarial review and the test-only boundary rereview both returned GO with no P0-P2 findings. The follow-up proves exact depth-32 acceptance/depth-33 rejection and multibyte repeated-alias first-byte-over rejection.
+- Fresh final gate: identity plus codec tests `174/174` in `16.78s` (`17.46s` test execution); normal engine typecheck ran source plus the negative public fixture; `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
+
+### Canonical array visit-cap follow-up
+
+- [x] Prove a dense 1,000,000-null array is accepted with exact canonical length and SHA-256 while a 1,000,001-slot array rejects before key enumeration.
+- [x] Derive the canonical visit cap from the array-item cap plus the root visit, preserving the deliberate complexity ceiling without an off-by-one.
+- [x] Rerun focused identity/codec tests, engine typecheck/public-surface fixture, and diff hygiene; record the repair as a new commit without rewriting the prior checkpoint.
+
+### Canonical array visit-cap review
+
+- TDD RED reproduced the defect exactly: the declared maximum dense array failed because root plus 1,000,000 primitive elements requires 1,000,001 visits.
+- The minimal fix defines `MAX_CANONICAL_JSON_VISITS` as `MAX_CANONICAL_JSON_ARRAY_ITEMS + 1`; the fixed maximum produces 5,000,001 canonical characters with SHA-256 `cb6de8b9c9a77e11b64b829ec767c4aa407ac87dd10a14812044a5ff25346ec0`.
+- Independent follow-up review returned GO: the cap grows by exactly one root visit, the fixed hash was independently verified, and first-over rejection remains pre-enumeration.
+- Fresh focused gate: identity plus codec tests `174/174` in `18.04s` (`19.72s` test execution).
+
+## M5 store slice 1: fourth adversarial repair
+
+- [x] Add RED regressions proving all three public event projection APIs reject nested/ignored accessors, request-identity accessors, revoked proxies, deep alias expansion, and oversized ignored graphs without invoking getters or traps.
+- [x] Replace the public `structuredClone` boundary with one bounded recursive data-descriptor snapshot; retain the trusted store snapshot path without a second snapshot.
+- [x] Enforce diagnostic `shapeKeys` cardinality 32 before key enumeration or numeric descriptors on both writer and decoder paths.
+- [x] Run focused identity/codec tests, engine typecheck/public-surface fixture, diff hygiene, and independent adversarial review.
+- [x] Commit the repair as a new checkpoint without rewriting prior commits or pushing/integrating.
+
+### Fourth adversarial repair review
+
+- TDD RED isolated the public shallow-clone gap and decoder post-enumeration overflow. A test-fixture scope typo in the first writer RED was corrected before production work; the corrected writer counter then proved the original graph was enumerated too early.
+- The public snapshot rejects proxies before every trap and recursively bounds depth, nodes, local/aggregate keys, dense arrays, individual/aggregate strings, cycles, symbols, exotics, and accessors. Benign aliases remain legal and are cloned within the same fixed budget.
+- The direct trusted-seam regression proves the already-deep-frozen store snapshot is not recursively resnapshotted; its ignored nested object receives zero descriptor reads.
+- Writer and decoder both reject 33 diagnostic shape keys before `Reflect.ownKeys` or numeric element descriptors, producing `INVALID_INPUT` and `CORRUPT_ROW` respectively.
+- Initial independent review returned P3-only for missing cycle/symbol/exotic cases and an obsolete `structuredClone` spy. After exact test repairs, independent rereview returned GO with no P0-P3 findings.
+- Fresh final gate: identity plus codec tests `177/177` in `16.00s` (`17.68s` test execution); engine typecheck and the negative public-surface fixture pass; `git diff --check` passes.
+
+## M5 store slice 1: final persistence-boundary repair
+
+- [x] Add RED regressions for credential-shaped title redaction and fixed-point rejection in every semantic summary/revision/turn scalar.
+- [x] Replace the three obsolete `structuredClone` spies with direct internal readable/injective transform-boundary instrumentation and prove overflow rejects before either transform runs.
+- [x] Implement the narrow writer policy while preserving raw-home rejection, Unicode/bounds, value-free errors, deep freezing, and benign exact values.
+- [x] Run focused identity/codec tests, engine typecheck/public-surface fixture, and diff hygiene.
+- [x] Record exact RED/GREEN evidence and commit a new checkpoint without amending or pushing.
+
+### Final persistence-boundary repair review
+
+- TDD RED was exact: the focused scalar regressions reported `2 failed / 1 passed`; title retained the credential verbatim and the first semantic field returned normally instead of `INVALID_INPUT`.
+- Title is the sole display/free-text scalar in this boundary: it rejects raw home first, redacts credential shapes, then revalidates the final Unicode/NUL/SQLite bound. Model, task/revision/last-turn/turn statuses, and revision fingerprint reject unless already secret-redaction fixed points.
+- The obsolete clone spies are gone. The real readable and injective transforms now live in one pure internal non-barrel module; Vitest wraps those imports, a benign control proves the counters are live, and both overflow classes record zero transform/materialization calls.
+- The focused identity/codec gate passes `180/180`; engine source typecheck and the negative provider-surface fixture pass; `git diff --check` passes. No SQL, migration, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
