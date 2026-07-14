@@ -416,7 +416,7 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - [x] Freeze staged/active summary demotion and replay-conflict latch payload semantics without implementing the later lifecycle methods.
 - [x] Classify suppressed reconciliation writes as `CORRUPT_ROW` after capacity/CAS preconditions were already proven.
 - [x] Run the fresh focused store/codec/wiring regression, typecheck/public-surface, and diff-hygiene gate.
-- [ ] Obtain independent specification then quality/security GO on the exact checkpoint.
+- [x] Obtain independent specification then quality/security GO on the exact checkpoint.
 
 #### Checkpoint C0 implementation evidence
 
@@ -425,4 +425,5 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - A separate persisted-authority RED removed the new reread and made both real AFTER-trigger require/ack regressions fail (`2 failed / 30 skipped`); restoring the reread makes both mutations fail closed and roll back trigger changes.
 - The additive v15 migration gate passes `39/39`, including active/live backfill, injected rollback, byte-preservation, claimed-v15 tamper refusal, reset/idempotency, and future-append coverage; wiring now observes latest version 15.
 - BEFORE `RAISE(IGNORE)` regressions were exact RED (`2 failed / 32 passed`): require misreported `CAPACITY` and acknowledgement misreported `RECONCILIATION_CAS_MISMATCH`; both now return `CORRUPT_ROW` with no mutation.
-- Fresh combined exact-tip gate: store `34/34` plus migration `39/39` plus codec `76/76` plus wiring `5/5` = `154/154`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes. Independent rereview remains pending.
+- Fresh combined exact-tip gate: store `34/34` plus migration `39/39` plus codec `76/76` plus wiring `5/5` = `154/154`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes.
+- Exact implementation tip `5d0ba77b262b6e62140f708352673cbd74ebab58` received independent SPEC GO and QUALITY GO with zero P0-P3. The initial v15-plan P1 and trigger-classification P3 are closed; the orphan-path candidate was reclassified as a nonfinding because `require` is internal, public acknowledgement needs an existing latch plus authoritative reread, and forbidden path heuristics would violate the frozen slash/Unicode orphan-locator contract.
