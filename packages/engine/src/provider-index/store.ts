@@ -51,6 +51,17 @@ import {
   listActiveProviderTasks,
   readActiveProviderTask,
 } from "./store-active-read.js";
+import {
+  classifyLegacySession as classifyLegacySessionLocal,
+  linkProviderFork,
+  listProviderForkLinks,
+  mapVerifiedLegacySession as mapVerifiedLegacySessionLocal,
+  normalizeProviderTaskMetaPatch,
+  patchProviderTaskMeta,
+  providerLocalStateFailureCode,
+  readProviderTaskMeta,
+  type ProviderRegisteredHomeAuthority,
+} from "./store-local-state.js";
 import { hashPersistedProviderHome } from "./home-fingerprint.js";
 import {
   ProviderIndexStoreError,
@@ -68,12 +79,17 @@ import {
   type ProviderIndexStage,
   type ProviderIndexStoreErrorCode,
   type ProviderIndexStoreOptions,
+  type LegacySessionProvenance,
+  type ProviderForkLink,
+  type ProviderTaskMeta,
+  type ProviderTaskMetaPatch,
   type ProviderReconciliationReason,
   type ProviderReconciliationState,
   type ProviderReconciliationStore,
   type PreparedProviderTaskSnapshot,
   type PreparedProviderTaskSummary,
   type ReconciliationLatchInput,
+  type VerifiedLegacyMapping,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
@@ -170,6 +186,27 @@ function publicFailure(error: unknown, fallback: ProviderIndexStoreErrorCode): P
       ? error.code
       : fallback,
   );
+}
+
+function runProviderLocalState<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    const code = providerLocalStateFailureCode(error);
+    if (code !== null) fail(code);
+    throw error;
+  }
+}
+
+function runVerifiedMappingLocalState(operation: () => void): void {
+  try {
+    operation();
+  } catch (error) {
+    const code = providerLocalStateFailureCode(error);
+    if (code === "UNKNOWN_HOME") fail("CORRUPT_ROW");
+    if (code !== null) fail(code);
+    throw error;
+  }
 }
 
 function exactOwnData(
@@ -481,6 +518,57 @@ function resolveRegisteredHome(
   }
   if (expected !== fingerprint) return fail("CORRUPT_ROW");
   return canonicalHome;
+}
+
+function verifiedMappingAuthority(
+  db: SqliteDatabase,
+  locator: ProviderTaskLocator,
+): ProviderRegisteredHomeAuthority {
+  const row = queryRegisteredHomeByFingerprint(
+    db,
+    locator.provider,
+    locator.homeFingerprint,
+  );
+  if (row === null) fail("UNKNOWN_HOME");
+  const decoded = decodeRegisteredHomeRow(row);
+  let canonicalHome: string;
+  let expectedFingerprint: string;
+  try {
+    canonicalHome = exactCanonicalHome(decoded.canonicalHome);
+    expectedFingerprint = homeFingerprint(decoded.provider, canonicalHome);
+  } catch {
+    return fail("CORRUPT_ROW");
+  }
+  if (decoded.provider !== locator.provider ||
+    decoded.homeFingerprint !== locator.homeFingerprint ||
+    expectedFingerprint !== locator.homeFingerprint) fail("CORRUPT_ROW");
+  return Object.freeze({
+    provider: decoded.provider,
+    homeFingerprint: decoded.homeFingerprint,
+    canonicalHome,
+    registeredAt: decoded.registeredAt,
+  });
+}
+
+function rawVerifiedMappingAuthority(
+  db: SqliteDatabase,
+  locator: ProviderTaskLocator,
+): ProviderRegisteredHomeAuthority | null {
+  let row: RegisteredHomeRow | undefined;
+  try {
+    row = db.prepare(`SELECT provider, home_fingerprint, canonical_home, registered_at
+      FROM provider_homes WHERE provider = ? AND home_fingerprint = ?`)
+      .get(locator.provider, locator.homeFingerprint) as RegisteredHomeRow | undefined;
+  } catch {
+    throw new Error("provider index authority reread failed");
+  }
+  if (row === undefined) return null;
+  return Object.freeze({
+    provider: row.provider,
+    homeFingerprint: row.home_fingerprint,
+    canonicalHome: row.canonical_home,
+    registeredAt: row.registered_at,
+  }) as unknown as ProviderRegisteredHomeAuthority;
 }
 
 function validatePersistedRegisteredHomeAuthority(
@@ -2627,6 +2715,86 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
           validatePersistedRegisteredHomeAuthority(this.db, decoded);
           return decoded;
         }));
+    });
+  }
+
+  getMeta(locatorValue: ProviderTaskLocator): Readonly<ProviderTaskMeta> {
+    return this.runMutation(() => runProviderLocalState(() =>
+      readProviderTaskMeta(
+        this.db,
+        normalizeLocator(locatorValue),
+        this.config.maxMetadataDepth,
+      )));
+  }
+
+  patchMeta(
+    locatorValue: ProviderTaskLocator,
+    patchValue: ProviderTaskMetaPatch,
+  ): Readonly<ProviderTaskMeta> {
+    return this.runMutation(() => {
+      const locator = normalizeLocator(locatorValue);
+      const patch = runProviderLocalState(() =>
+        normalizeProviderTaskMetaPatch(patchValue, this.config.maxMetadataDepth));
+      const updatedAt = sampleNow(this.config);
+      return runProviderLocalState(() => patchProviderTaskMeta(
+        this.db,
+        locator,
+        patch,
+        updatedAt,
+        this.config.maxMetadataDepth,
+      ));
+    });
+  }
+
+  linkFork(
+    sourceValue: ProviderTaskLocator,
+    targetValue: ProviderTaskLocator,
+    digestValue: string,
+    createdAtValue: number,
+  ): Readonly<ProviderForkLink> {
+    return this.runMutation(() => runProviderLocalState(() => linkProviderFork(
+      this.db,
+      sourceValue,
+      targetValue,
+      digestValue,
+      createdAtValue,
+    )));
+  }
+
+  listForkLinks(locatorValue: ProviderTaskLocator): readonly ProviderForkLink[] {
+    return this.runMutation(() => runProviderLocalState(() =>
+      listProviderForkLinks(this.db, locatorValue)));
+  }
+
+  classifyLegacySession(
+    sessionIdValue: string,
+    provenanceValue: LegacySessionProvenance,
+    observedAtValue: number,
+  ): void {
+    this.runMutation(() => runProviderLocalState(() => classifyLegacySessionLocal(
+      this.db,
+      sessionIdValue,
+      provenanceValue,
+      observedAtValue,
+    )));
+  }
+
+  mapVerifiedLegacySession(
+    sessionIdValue: string,
+    locatorValue: ProviderTaskLocator,
+    evidenceValue: VerifiedLegacyMapping,
+  ): void {
+    this.runMutation(() => {
+      const locator = normalizeLocator(locatorValue);
+      const authority = verifiedMappingAuthority(this.db, locator);
+      runVerifiedMappingLocalState(() => mapVerifiedLegacySessionLocal(
+        this.db,
+        sessionIdValue,
+        locator,
+        evidenceValue,
+        authority,
+        () => rawVerifiedMappingAuthority(this.db, locator),
+      ));
     });
   }
 

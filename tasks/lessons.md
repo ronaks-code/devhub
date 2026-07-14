@@ -201,3 +201,8 @@
 - Stable cache pagination belongs in parameterized SQL: join only the current active generation, order timestamps NULL-last, bind the complete deterministic identity tuple, and fetch only `limit + 1` rows before issuing the next cursor.
 - Invalidation and rebuildable-cache clearing are all-generation operations. Count before mutation, postcheck every affected cache table and sync row inside the owned transaction, preserve the monotonic generation epoch and durable tables, and keep callback-free read/keyset SQL in a private non-barrel module.
 - A non-null preflight token remains mandatory authority even if concurrent state changes remove the active sync or recompute a different mutation branch inside the writer. Reject sync-null drift before any early return, then validate version, sync, census, and raw-row witnesses before branch selection or any write; never let control-flow drift bypass the fence.
+
+## 2026-07-14 - Reclassify authority loss after a successful preflight
+
+- The same low-level missing-authority result has different meaning across a preflight boundary: initial absence is `UNKNOWN_HOME`, but absence or mismatch after the facade captured valid authority is concurrent drift and must fail `CORRUPT_ROW`.
+- Keep the translation at the facade context that owns the preflight, and accept only the primitive's private tagged failure provenance. Do not weaken the primitive's direct semantics or trust caller-shaped error codes.

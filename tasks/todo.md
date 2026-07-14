@@ -566,3 +566,26 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Fresh repair gates: focused E `74/74`; required E+D `133/133`; engine source plus negative public-surface typecheck pass; `git diff --check` passes.
 - Exact source tip `3808d219e07603cb400428d9ac82bb262f6d83ea` received independent SPEC GO, QUALITY GO, and SECURITY GO with zero P0-P3 findings. Only the reviewed E chain was applied to tested main; the duplicate board commit and `wip/devhub` were excluded.
 - The post-application mainline provider-index gate passed `387/387` across all eight required files (the handoff's `348` was the pre-repair count). Engine source and negative public-surface typecheck, reviewed-source equality for every E-touched engine file, diff hygiene, and the three protected-file hashes all pass. This commit is the M5 E promotion checkpoint; milestone progress remains `3/9 = 33%`.
+
+### Checkpoint F: local-state facade integration
+
+- [x] Add a bounded facade RED for metadata, fork links, legacy classification/mapping, caller transactions, immutable outputs, clock ordering, shared-connection reentrancy, authority drift, and stable error translation.
+- [x] Add only the six frozen `ProviderTaskIndexStore` facade methods over the reviewed local-state primitives.
+- [x] Keep orphan-local operations composable through savepoints; normalize and snapshot metadata before one clock sample; snapshot mapping authority outside the savepoint and recheck it with raw SQL inside.
+- [x] Run facade plus foundation, the complete provider-index integration set, engine source/public-surface typecheck, and diff hygiene.
+- [x] Obtain independent exact-tip SPEC and QUALITY/SECURITY GO, then promote only the reviewed source after the tested-main gate passes.
+
+#### Checkpoint F implementation evidence
+
+- The first test-only run reported `7 failed / 7`; two cases exposed fixture defects rather than product behavior (`/tmp` was not canonical on macOS and a CHECK constraint prevented the intended corrupt-row fixture). Both fixtures were corrected before production edits. The authoritative RED then reported `7 failed / 7`, each at an absent facade method.
+- The smallest facade delegates to the reviewed metadata/fork/legacy primitives and translates only their private tagged failure provenance. Every method uses the existing connection-scoped mutation guard. Local savepoints remain legal inside caller transactions; metadata input is normalized before the sole clock sample and before its savepoint.
+- Verified mapping normalizes the locator, snapshots and filesystem-validates the exact registered authority before the savepoint, then supplies a fresh raw-SQL tuple reread from inside the savepoint. Missing authority is `UNKNOWN_HOME`; changed/malformed authority is `CORRUPT_ROW`; SQL failure is `DATABASE_UNAVAILABLE`.
+- The first implementation run passed `6/7`; its only failure was an overstrong test assertion that confused a caller-owned transaction with the facade's not-yet-open savepoint. The corrected spy proves the clock precedes `SAVEPOINT` without denying legal caller composition.
+- Fresh focused facade plus foundation passes `33/33`. The queued complete provider-index integration gate passes `524/524` across 11 test files. Engine source typecheck and the negative public-surface fixture pass; `git diff --check` passes. No schema, migration, foundation, provider barrel, flags, provider process, browser, Python runtime, amend, push, or protected main-checkout file was touched.
+
+#### Checkpoint F QUALITY P2 authority-drift repair
+
+- Strict interposition RED was exact: facade tests reported `2 failed / 7 passed`. A registered-home timestamp rewrite and deletion between the facade's valid preflight snapshot and the primitive's `SAVEPOINT` both escaped as `UNKNOWN_HOME` instead of the required post-snapshot `CORRUPT_ROW`.
+- The facade now reclassifies only a privately tagged local-state `UNKNOWN_HOME` raised during verified mapping as `CORRUPT_ROW`. Initial preflight absence still fails `UNKNOWN_HOME`; direct primitive semantics and all other tagged failures remain unchanged, and caller-shaped errors are never trusted.
+- Both interpositions preserve the externally committed authority rewrite/deletion and create no mapping. Fresh facade plus foundation passes `35/35`; the queued 11-file provider-index gate passes `526/526`; engine source/public-surface typecheck and `git diff --check` pass.
+- Exact source tip `6e1804cbe27823011534579489148ec46660996e` received independent SPEC GO, QUALITY GO, and SECURITY GO with zero P0-P3 findings. The reviewed two-commit F chain alone was applied to tested main; its queued mainline provider-index gate passed `526/526` across all 11 files, followed by engine source/negative public-surface typecheck, reviewed-source equality, diff hygiene, and protected-file hash verification. This commit is the M5 F promotion checkpoint; milestone progress remains `3/9 = 33%`.
