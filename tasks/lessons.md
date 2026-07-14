@@ -97,3 +97,8 @@
 - A recursive alias DAG can remain acyclic while causing exponential work. Enforce depth and total visit caps independently, and track only the current ancestor set so benign aliases remain legal without enabling unbounded expansion.
 - For an aggregate persistence budget, cache final representation metrics by original object identity. A repeated alias that would cross the remaining budget can then fail before snapshotting, projection, hashing, or materializing another copy.
 - A canonical fingerprint proves bytes have not changed; it does not prove those bytes still satisfy the writer's security projection. Read decoding must receive the registered-home context and recheck home exclusion, redaction fixed points, native identifiers, and semantic nonempty fields manually.
+
+## 2026-07-14 - Derive traversal caps from declared container maxima
+
+- A traversal budget counts the root as well as its children. If an API declares a maximum dense array length, its visit cap must allow at least `maximum items + 1` or the advertised boundary is unreachable.
+- Prove coupled limits at their exact intersection, not only independently: accept the declared maximum with a fixed output length/hash, then reject the first-over input before expensive enumeration.

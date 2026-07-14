@@ -318,3 +318,16 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The canonical encoder preflights exact escaped output before emission, preserves the established lexical JSON output, rejects a 31-level alias DAG at the visit cap, and rejects control-character expansion above 64 MiB without constructing that result.
 - Independent adversarial review and the test-only boundary rereview both returned GO with no P0-P2 findings. The follow-up proves exact depth-32 acceptance/depth-33 rejection and multibyte repeated-alias first-byte-over rejection.
 - Fresh final gate: identity plus codec tests `174/174` in `16.78s` (`17.46s` test execution); normal engine typecheck ran source plus the negative public fixture; `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
+
+### Canonical array visit-cap follow-up
+
+- [x] Prove a dense 1,000,000-null array is accepted with exact canonical length and SHA-256 while a 1,000,001-slot array rejects before key enumeration.
+- [x] Derive the canonical visit cap from the array-item cap plus the root visit, preserving the deliberate complexity ceiling without an off-by-one.
+- [x] Rerun focused identity/codec tests, engine typecheck/public-surface fixture, and diff hygiene; record the repair as a new commit without rewriting the prior checkpoint.
+
+### Canonical array visit-cap review
+
+- TDD RED reproduced the defect exactly: the declared maximum dense array failed because root plus 1,000,000 primitive elements requires 1,000,001 visits.
+- The minimal fix defines `MAX_CANONICAL_JSON_VISITS` as `MAX_CANONICAL_JSON_ARRAY_ITEMS + 1`; the fixed maximum produces 5,000,001 canonical characters with SHA-256 `cb6de8b9c9a77e11b64b829ec767c4aa407ac87dd10a14812044a5ff25346ec0`.
+- Independent follow-up review returned GO: the cap grows by exactly one root visit, the fixed hash was independently verified, and first-over rejection remains pre-enumeration.
+- Fresh focused gate: identity plus codec tests `174/174` in `18.04s` (`19.72s` test execution).

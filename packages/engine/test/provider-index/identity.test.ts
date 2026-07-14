@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -584,7 +585,13 @@ describe("cache identity keys", () => {
     expect(proxyTrapCalls).toBe(0);
   });
 
-  it("rejects an oversized canonical array before enumerating its keys", () => {
+  it("accepts exactly one million array items and rejects one more before key enumeration", () => {
+    const maximum = Array(1_000_000).fill(null);
+    const canonical = canonicalProviderIndexJson(maximum);
+    expect(canonical).toHaveLength(5_000_001);
+    expect(createHash("sha256").update(canonical, "utf8").digest("hex"))
+      .toBe("cb6de8b9c9a77e11b64b829ec767c4aa407ac87dd10a14812044a5ff25346ec0");
+
     const oversized = Array(1_000_001);
     const ownKeys = vi.spyOn(Reflect, "ownKeys");
     try {
