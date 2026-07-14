@@ -34,6 +34,20 @@ const MAX_FINGERPRINT_CHARS = 1_024;
 const HOME_FINGERPRINT = /^[0-9a-f]{64}$/u;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
+interface MutationGuardState {
+  inProgress: boolean;
+}
+
+const mutationGuards = new WeakMap<SqliteDatabase, MutationGuardState>();
+
+function mutationGuardFor(db: SqliteDatabase): MutationGuardState {
+  const existing = mutationGuards.get(db);
+  if (existing !== undefined) return existing;
+  const created: MutationGuardState = { inProgress: false };
+  mutationGuards.set(db, created);
+  return created;
+}
+
 const RECONCILIATION_REASONS = new Set<ProviderReconciliationReason>([
   "REPLAY_CONFLICT",
   "NATIVE_REVISION_MISMATCH",
@@ -1105,11 +1119,12 @@ function abortStageInsideOwnedTransaction(
 export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   private readonly db: SqliteDatabase;
   private readonly config: Readonly<NormalizedProviderIndexStoreConfig>;
-  private mutationInProgress = false;
+  private readonly mutationGuard: MutationGuardState;
 
   constructor(db: SqliteDatabase, options?: ProviderIndexStoreOptions) {
     this.db = db;
     this.config = normalizeProviderIndexStoreOptions(options);
+    this.mutationGuard = mutationGuardFor(db);
   }
 
   registerHome(
@@ -1297,16 +1312,16 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   }
 
   private runMutation<T>(mutation: () => T): T {
-    if (this.mutationInProgress) {
+    if (this.mutationGuard.inProgress) {
       throw new ProviderIndexStoreError("DATABASE_UNAVAILABLE");
     }
-    this.mutationInProgress = true;
+    this.mutationGuard.inProgress = true;
     try {
       return mutation();
     } catch (error) {
       throw publicFailure(error, "INVALID_INPUT");
     } finally {
-      this.mutationInProgress = false;
+      this.mutationGuard.inProgress = false;
     }
   }
 }

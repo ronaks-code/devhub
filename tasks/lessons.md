@@ -160,3 +160,9 @@
 - Composite-key SQL is not fully certified by single-scope tests. Reuse the same generation, token, and native task ID in two homes, snapshot the untouched scope's sync/cache/durable rows, and compare them byte-for-byte after destructive recovery operations.
 - An INSERT trigger matrix does not certify an UPSERT/UPDATE branch. Exercise idle allocation and expired takeover separately with BEFORE-ignore, AFTER-delete, and AFTER-rewrite triggers.
 - When recovery deletes staged cache before updating ownership, every induced UPDATE failure must prove transaction rollback restores both the exact sync row and the abandoned cache rows.
+
+## 2026-07-14 - Scope reentrancy guards to the shared mutable connection
+
+- An instance-local guard does not protect a shared SQLite handle: a callback can construct or retain a second store over the same object and mutate while the outer store believes it has exclusive sequencing.
+- Key mutation guard state by the exact connection object in a module-private `WeakMap`, and release it in `finally`. This shares authority without retaining closed connections or coupling independent handles.
+- Reentrancy tests must use two store instances, snapshot cache and durable state as well as sync authority, assert exact callback counts and stable outer error mapping, then prove both post-failure release and cross-database independence.
