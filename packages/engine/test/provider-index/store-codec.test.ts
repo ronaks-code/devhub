@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalProviderIndexJson,
   parseCachedEventItemKey,
@@ -16,8 +16,6 @@ import {
   normalizeProviderIndexStoreOptions,
   prepareProviderTaskSnapshot,
   prepareProviderTaskSummary,
-  providerTaskSnapshotFingerprint,
-  providerTaskSnapshotReceiptKey,
   readProviderIndexNow,
 } from "../../src/provider-index/store-codec.js";
 import {
@@ -198,6 +196,7 @@ describe("provider index store codec public surface", () => {
       "providerTaskSnapshotFingerprint",
       "providerTaskSnapshotReceiptKey",
       "decodeCachedProviderEvent",
+      "projectProviderEventCacheBundleFromSnapshot",
     ]) {
       expect(api[name], name).toBeUndefined();
     }
@@ -367,8 +366,10 @@ describe("provider index store configuration", () => {
         throw new Error("must-never-leak-accessor");
       },
     }) as ProviderIndexStoreOptions;
+    let proxyTrapCalls = 0;
     const proxy = new Proxy({}, {
       ownKeys() {
+        proxyTrapCalls += 1;
         throw new Error("must-never-leak-proxy");
       },
     }) as ProviderIndexStoreOptions;
@@ -382,6 +383,7 @@ describe("provider index store configuration", () => {
     ]) {
       expectStoreError(() => normalizeProviderIndexStoreOptions(value), "INVALID_INPUT");
     }
+    expect(proxyTrapCalls).toBe(0);
   });
 
   it("maps hostile clock and token failures to fixed value-free codes", () => {
@@ -432,6 +434,93 @@ describe("provider index store configuration", () => {
 });
 
 describe("provider task snapshot preparation", () => {
+  it("rejects provider-home projection expansion before clone or materialization", () => {
+    const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
+    const event = normalizeProviderEvent({
+      type: "message",
+      role: "assistant",
+      text: "/".repeat(8_388_608),
+      turnId: "turn-expansion",
+      itemId: null,
+    }, {
+      provider: "openai",
+      key: rootKey,
+      occurredAt: OCCURRED_AT,
+    });
+    const task = nativeTask({
+      key: rootKey,
+      revision: revision({ lastTurnId: "turn-expansion", lastItemId: null }),
+      turns: [{
+        id: "turn-expansion",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [event],
+      }],
+    });
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(rootKey), rootKey, task),
+        "INVALID_INPUT",
+      );
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+
+    const injectiveTask = nativeTask({
+      turns: [{
+        id: "turn-injective-expansion",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "message",
+          role: "assistant",
+          text: "\ue000".repeat(Math.floor(8_388_608 / 2) + 1),
+          turnId: "turn-injective-expansion",
+          itemId: null,
+        })],
+      }],
+    });
+    const injectiveClone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, injectiveTask),
+        "INVALID_INPUT",
+      );
+      expect(injectiveClone).not.toHaveBeenCalled();
+    } finally {
+      injectiveClone.mockRestore();
+    }
+  });
+
+  it("projects each persistence event bundle once without cloning its trusted snapshot", () => {
+    const task = nativeTask({
+      turns: [{
+        id: "turn-single-projection",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "message",
+          role: "assistant",
+          text: "single projection",
+          turnId: "turn-single-projection",
+          itemId: null,
+        })],
+      }],
+    });
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    try {
+      prepareProviderTaskSnapshot(registrationFor(), key, task);
+      expect(clone).not.toHaveBeenCalled();
+    } finally {
+      clone.mockRestore();
+    }
+  });
+
   it("validates method, payload, and registered home ownership before projection", () => {
     const otherTaskKey = createNativeTaskKey("openai", HOME, "task-2");
     const otherHomeKey = createNativeTaskKey("openai", `${HOME}-other`, "task-1");
@@ -551,6 +640,178 @@ describe("provider task snapshot preparation", () => {
       () => prepareProviderTaskSnapshot(registrationFor(), key, taskWithSparseEvents),
     ]) {
       expectStoreError(action, "INVALID_INPUT", "must-never-leak");
+    }
+  });
+
+  it("rejects changing-length array proxies before invoking any proxy trap", () => {
+    let trapCalls = 0;
+    const turns = new Proxy([], {
+      get() {
+        trapCalls += 1;
+        return trapCalls % 2;
+      },
+      getPrototypeOf() {
+        trapCalls += 1;
+        return Array.prototype;
+      },
+      ownKeys() {
+        trapCalls += 1;
+        return ["length"];
+      },
+      getOwnPropertyDescriptor(target, property) {
+        trapCalls += 1;
+        return Reflect.getOwnPropertyDescriptor(target, property);
+      },
+    }) as unknown as NativeTask["turns"];
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        nativeTask({ turns }),
+      ),
+      "INVALID_INPUT",
+    );
+    expect(trapCalls).toBe(0);
+  });
+
+  it("checks turn and remaining-event capacity before any element descriptor", () => {
+    const original = Object.getOwnPropertyDescriptor;
+    const oversizedTurns = Array(1_000_001) as unknown as NativeTask["turns"];
+    let oversizedTurnElementDescriptors = 0;
+    const turnOwnKeys = vi.spyOn(Reflect, "ownKeys");
+    const turnSpy = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (target === oversizedTurns && property !== "length") {
+          oversizedTurnElementDescriptors += 1;
+        }
+        return original(target, property);
+      },
+    );
+    try {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(
+          registrationFor(),
+          key,
+          nativeTask({ turns: oversizedTurns }),
+          normalizeProviderIndexStoreOptions({ maxTurnsPerGeneration: 1 }),
+        ),
+        "CAPACITY",
+      );
+      expect(oversizedTurnElementDescriptors).toBe(0);
+      expect(turnOwnKeys.mock.calls.some(([target]) => target === oversizedTurns)).toBe(false);
+    } finally {
+      turnSpy.mockRestore();
+      turnOwnKeys.mockRestore();
+    }
+
+    const oversizedEvents = Array(1) as unknown as readonly ProviderEvent[];
+    const task = nativeTask({
+      turns: [{
+        id: "turn-capacity-first",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "message",
+          role: "assistant",
+          text: "first",
+          turnId: "turn-capacity-first",
+          itemId: null,
+        })],
+      }, {
+        id: "turn-capacity-overflow",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: oversizedEvents,
+      }],
+    });
+    let oversizedEventElementDescriptors = 0;
+    const eventOwnKeys = vi.spyOn(Reflect, "ownKeys");
+    const eventSpy = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (target === oversizedEvents && property !== "length") {
+          oversizedEventElementDescriptors += 1;
+        }
+        return original(target, property);
+      },
+    );
+    try {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(
+          registrationFor(),
+          key,
+          task,
+          normalizeProviderIndexStoreOptions({ maxEventsPerTask: 1 }),
+        ),
+        "CAPACITY",
+      );
+      expect(oversizedEventElementDescriptors).toBe(0);
+      expect(eventOwnKeys.mock.calls.some(([target]) => target === oversizedEvents)).toBe(false);
+    } finally {
+      eventSpy.mockRestore();
+      eventOwnKeys.mockRestore();
+    }
+  });
+
+  it("maps every forged public store error from input getters to INVALID_INPUT", () => {
+    const codes: readonly ProviderIndexStoreErrorCode[] = [
+      "INVALID_INPUT",
+      "CORRUPT_ROW",
+      "DATABASE_UNAVAILABLE",
+      "CLOCK_FAILURE",
+      "TOKEN_FAILURE",
+      "CAPACITY",
+      "UNKNOWN_HOME",
+      "HOME_CONFLICT",
+      "STAGE_BUSY",
+      "STAGE_LOST",
+      "STAGE_EXPIRED",
+      "STAGE_INCOMPLETE",
+      "REPLAY_CONFLICT",
+      "FORK_CONFLICT",
+      "LEGACY_MAPPING_CONFLICT",
+      "RECONCILIATION_CAS_MISMATCH",
+    ];
+    for (const code of codes) {
+      const summary = Object.defineProperty(nativeSummary(), "title", {
+        enumerable: true,
+        get() {
+          throw new ProviderIndexStoreError(code);
+        },
+      });
+      const task = Object.defineProperty(nativeTask(), "title", {
+        enumerable: true,
+        get() {
+          throw new ProviderIndexStoreError(code);
+        },
+      });
+      const summaryProxy = new Proxy(nativeSummary(), {
+        getPrototypeOf() {
+          throw new ProviderIndexStoreError(code);
+        },
+      });
+      const taskProxy = new Proxy(nativeTask(), {
+        getPrototypeOf() {
+          throw new ProviderIndexStoreError(code);
+        },
+      });
+      expectStoreError(
+        () => prepareProviderTaskSummary(registrationFor(), key, summary),
+        "INVALID_INPUT",
+      );
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, task),
+        "INVALID_INPUT",
+      );
+      expectStoreError(
+        () => prepareProviderTaskSummary(registrationFor(), key, summaryProxy),
+        "INVALID_INPUT",
+      );
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, taskProxy),
+        "INVALID_INPUT",
+      );
     }
   });
 
@@ -952,6 +1213,70 @@ describe("provider task snapshot preparation", () => {
     }
   });
 
+  it("round-trips diagnostic limits with SQLite code-point semantics", () => {
+    type Diagnostic = Extract<ProviderEvent, { type: "diagnostic" }>;
+    const diagnosticTask = (overrides: Partial<Diagnostic>): NativeTask => nativeTask({
+      turns: [{
+        id: "turn-diagnostic-unicode",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [{
+          provider: "openai",
+          key,
+          occurredAt: OCCURRED_AT,
+          type: "diagnostic",
+          level: "warning",
+          code: "DIAGNOSTIC_UNICODE",
+          message: "diagnostic unicode",
+          method: null,
+          shapeKeys: [],
+          ...overrides,
+        }],
+      }],
+    });
+    const validCases: readonly Partial<Diagnostic>[] = [
+      { message: "🪐".repeat(512) },
+      { message: "\u0301".repeat(512) },
+      { code: "🪐".repeat(128) },
+      { method: "🪐".repeat(256) },
+      { shapeKeys: ["🪐".repeat(64)] },
+    ];
+    for (const overrides of validCases) {
+      const prepared = prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        diagnosticTask(overrides),
+      );
+      const turn = prepared.turns[0]!;
+      const cached = turn.events[0]!;
+      const decoded = decodeCachedProviderEvent(
+        rowFor(cached),
+        prepared.locator,
+        turn.nativeTurnKey,
+      );
+      expect(decoded.type).toBe("diagnostic");
+      if (decoded.type !== "diagnostic") throw new Error("expected diagnostic");
+      for (const [field, value] of Object.entries(overrides)) {
+        expect(decoded[field as keyof typeof decoded]).toEqual(value);
+      }
+    }
+    const invalidCases: readonly Partial<Diagnostic>[] = [
+      { message: `${"🪐".repeat(512)}🪐` },
+      { message: `${"\u0301".repeat(512)}\u0301` },
+      { message: "\ud800" },
+      { code: "🪐".repeat(129) },
+      { method: "🪐".repeat(257) },
+      { shapeKeys: ["🪐".repeat(65)] },
+    ];
+    for (const overrides of invalidCases) {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, diagnosticTask(overrides)),
+        "INVALID_INPUT",
+      );
+    }
+  });
+
   it("snapshots nested event data descriptors without invoking getters or proxy gets", () => {
     const identity = createProviderRequestIdentity({
       key,
@@ -1230,46 +1555,27 @@ describe("provider task snapshot preparation", () => {
     expect(Object.isFrozen(prepared.turns[0]!.events[0]!.event)).toBe(true);
   });
 
-  it("binds opaque replay digests through the snapshot hash with value-free helpers", () => {
+  it("binds opaque replay digests through prepared snapshot hashing", () => {
     const prepared = prepareProviderTaskSnapshot(registrationFor(), key, nativeTask());
-    expect(providerTaskSnapshotFingerprint(prepared, prepared.turns))
-      .toBe(prepared.snapshotFingerprint);
-    expect(providerTaskSnapshotReceiptKey(prepared, prepared.snapshotFingerprint))
-      .toBe(prepared.receiptKey);
-
-    const firstTurn = prepared.turns[0]!;
-    const firstEvent = firstTurn.events[0]!;
-    const replayKey = `replay:v1:0:${"f".repeat(64)}`;
-    const eventFingerprintValue = eventFingerprint(replayKey, firstEvent.eventJson);
-    const changedTurns = [
-      {
-        ...firstTurn,
-        events: [{
-          ...firstEvent,
-          replayKey,
-          eventFingerprint: eventFingerprintValue,
-        }, ...firstTurn.events.slice(1)],
-      },
-      ...prepared.turns.slice(1),
-    ];
-    expect(providerTaskSnapshotFingerprint(prepared, changedTurns))
-      .not.toBe(prepared.snapshotFingerprint);
-
-    const secret = "must-never-leak-snapshot-helper";
-    const hostile = new Proxy(prepared, {
-      get() {
-        throw new Error(secret);
-      },
-    });
-    expectStoreError(
-      () => providerTaskSnapshotFingerprint(hostile, prepared.turns),
-      "INVALID_INPUT",
-      secret,
-    );
-    expectStoreError(
-      () => providerTaskSnapshotReceiptKey(prepared, "not-a-snapshot-fingerprint"),
-      "INVALID_INPUT",
-    );
+    const changed = prepareProviderTaskSnapshot(registrationFor(), key, nativeTask({
+      turns: [{
+        id: "turn-1",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "message",
+          role: "assistant",
+          text: "changed replay projection",
+          turnId: "turn-1",
+          itemId: null,
+        })],
+      }],
+    }));
+    expect(changed.turns[0]!.events[0]!.replayKey)
+      .not.toBe(prepared.turns[0]!.events[0]!.replayKey);
+    expect(changed.snapshotFingerprint).not.toBe(prepared.snapshotFingerprint);
+    expect(changed.receiptKey).toBe(prepared.receiptKey);
   });
 });
 

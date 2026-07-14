@@ -61,6 +61,12 @@ import { providerTaskSnapshotFingerprint } from "../../src/providers/index.js";
 import { providerTaskSnapshotReceiptKey } from "../../src/providers/index.js";
 // @ts-expect-error backend cache-row decoding is not public provider API
 import { decodeCachedProviderEvent } from "../../src/providers/index.js";
+// @ts-expect-error internal one-pass cache projection is not public provider API
+import { projectProviderEventCacheBundleFromSnapshot } from "../../src/providers/index.js";
+// @ts-expect-error trusted snapshot hashing is module-private even on the backend module
+import { providerTaskSnapshotFingerprint as privateSnapshotFingerprint } from "../../src/provider-index/store-codec.js";
+// @ts-expect-error trusted receipt derivation is module-private even on the backend module
+import { providerTaskSnapshotReceiptKey as privateSnapshotReceiptKey } from "../../src/provider-index/store-codec.js";
 
 type BackendOnly =
   | ProviderIndexRegisteredHome
@@ -80,3 +86,6 @@ void prepareProviderTaskSnapshot;
 void providerTaskSnapshotFingerprint;
 void providerTaskSnapshotReceiptKey;
 void decodeCachedProviderEvent;
+void projectProviderEventCacheBundleFromSnapshot;
+void privateSnapshotFingerprint;
+void privateSnapshotReceiptKey;

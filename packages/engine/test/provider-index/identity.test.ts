@@ -1,7 +1,7 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assertLocatorMatchesKey,
   canonicalProviderIndexJson,
@@ -483,15 +483,25 @@ describe("cache identity keys", () => {
   it("exports canonical JSON and strict event cache identity helpers", () => {
     const api = providersIndex as unknown as Record<string, unknown>;
     for (const name of [
+      "assertLocatorMatchesKey",
+      "cachedEventItemId",
+      "cachedTurnKey",
       "canonicalProviderIndexJson",
-      "parseCachedTurnKey",
-      "parseCachedEventItemKey",
-      "parseProviderEventReplayKey",
+      "homeFingerprint",
       "indexedProviderEventItemId",
       "indexedProviderEventTurnId",
+      "parseCachedEventItemKey",
+      "parseCachedTurnKey",
+      "parseProviderEventReplayKey",
+      "parseTaskLocator",
+      "projectIndexedProviderEvent",
+      "providerEventReplayKey",
+      "serializeTaskLocator",
+      "taskLocator",
     ]) {
       expect(api[name], name).toBeTypeOf("function");
     }
+    expect(api.projectProviderEventCacheBundleFromSnapshot).toBeUndefined();
   });
 
   it("canonicalizes dense finite JSON with lexicographic record keys", () => {
@@ -513,8 +523,10 @@ describe("cache identity keys", () => {
         throw new Error("must-never-leak-canonical-accessor");
       },
     });
+    let proxyTrapCalls = 0;
     const proxy = new Proxy({}, {
       ownKeys() {
+        proxyTrapCalls += 1;
         throw new Error("must-never-leak-canonical-proxy");
       },
     });
@@ -534,6 +546,22 @@ describe("cache identity keys", () => {
         "provider index canonical JSON is invalid",
         "must-never-leak",
       );
+    }
+    expect(proxyTrapCalls).toBe(0);
+  });
+
+  it("rejects an oversized canonical array before enumerating its keys", () => {
+    const oversized = Array(1_000_001);
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    try {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(oversized),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+      expect(ownKeys).not.toHaveBeenCalled();
+    } finally {
+      ownKeys.mockRestore();
     }
   });
 
@@ -740,6 +768,88 @@ describe("cache identity keys", () => {
 });
 
 describe("indexed provider event projection", () => {
+  it("rejects readable or injective projection expansion before structured cloning", () => {
+    const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
+    const readableExpansion = normalizeProviderEvent({
+      type: "message",
+      role: "assistant",
+      text: "/".repeat(8_388_608),
+      turnId: "turn-expansion",
+      itemId: null,
+    }, {
+      provider: "openai",
+      key: rootKey,
+      occurredAt: OCCURRED_AT,
+    });
+    const injectiveExpansion = providerEvent({
+      type: "message",
+      role: "assistant",
+      text: "\ue000".repeat(Math.floor(8_388_608 / 2) + 1),
+      turnId: "turn-expansion",
+      itemId: null,
+    });
+
+    for (const event of [readableExpansion, injectiveExpansion]) {
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      try {
+        expectValueFreeTypeError(
+          () => projectIndexedProviderEvent(event),
+          "provider event could not be safely projected",
+          rootKey.home,
+        );
+        expect(clone).not.toHaveBeenCalled();
+      } finally {
+        clone.mockRestore();
+      }
+    }
+  });
+
+  it("counts diagnostic bounds with SQLite Unicode semantics", () => {
+    const astral = "🪐".repeat(512);
+    const combining = "\u0301".repeat(512);
+    for (const message of [astral, combining]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent({ message }));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("SAFE_DIAGNOSTIC");
+      expect(projected.message).toBe(message);
+    }
+    for (const overrides of [
+      { code: "🪐".repeat(128) },
+      { method: "🪐".repeat(256) },
+      { shapeKeys: Object.freeze(["🪐".repeat(64)]) },
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent(overrides));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).not.toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+    for (const message of [
+      `${astral}🪐`,
+      `${combining}\u0301`,
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent({ message }));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+    expectValueFreeTypeError(
+      () => projectIndexedProviderEvent(diagnosticEvent({ message: "\ud800" })),
+      "provider event could not be safely projected",
+      CANONICAL_HOME,
+    );
+    for (const overrides of [
+      { code: "🪐".repeat(129) },
+      { method: "🪐".repeat(257) },
+      { shapeKeys: Object.freeze(["🪐".repeat(65)]) },
+    ]) {
+      const projected = projectIndexedProviderEvent(diagnosticEvent(overrides));
+      expect(projected.type).toBe("diagnostic");
+      if (projected.type !== "diagnostic") throw new Error("expected diagnostic");
+      expect(projected.code).toBe("UNKNOWN_PROVIDER_EVENT");
+    }
+  });
+
   it("preserves normalized redacted fields without exposing a raw home", () => {
     const secret = "abcdefghijklmnop";
     const normalized = providerEvent({

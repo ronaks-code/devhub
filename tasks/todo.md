@@ -286,3 +286,19 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Fresh final gate: identity plus codec tests `157/157` in `14.06s` (`12.82s` test execution); normal engine typecheck ran both the source compiler and the dedicated negative surface fixture; `git diff --check` passed.
 - A temporary induced export of `PreparedProviderTaskSummary` made normal engine typecheck fail with TS2578 (`Unused '@ts-expect-error' directive`), proving the fixture is live; the export was removed before the final green gate.
 - The repair remains pure codec/types/test/documentation work: no SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned file was touched.
+
+### Recertification repairs
+
+- [x] Preflight exact readable and private-injective content projection sizes with SQLite code-point semantics before clone or materialization; reject the exact root-home `/` plus `8,388,608`-slash amplification case and injective sentinel amplification without allocating expanded output.
+- [x] Replace split/join redaction with bounded single-pass replacement and add one internal direct-module cache projection bundle so persistence normalizes once, derives one digest, and never reclones the deep-frozen store snapshot.
+- [x] Share one allocation-free surrogate-validating SQLite text counter across identity and store; round-trip exact astral diagnostic code/message/method/shape-key limits and reject first-over, combining-over, NUL, and lone-surrogate inputs.
+- [x] Reject proxies before traps at exact-object, dense-array, canonical-JSON, and event-graph boundaries; capture one array length descriptor and enforce turn/remaining-event capacity before key enumeration or element descriptors.
+- [x] Replace exported-error passthrough with a lexical capacity sentinel so all sixteen caller-forged public error codes normalize to `INVALID_INPUT` and only internal cardinality overflow becomes `CAPACITY`.
+- [x] Make snapshot fingerprint and receipt derivation private over trusted prepared carriers; preserve their canonical-reference and raw-home/literal-marker goldens through end-to-end snapshot preparation.
+- [x] Preserve the exact provider identity barrel explicitly while runtime and compiler fixtures prove the internal cache bundle and trusted hashing helpers remain unavailable.
+
+### Recertification review
+
+- TDD RED was isolated and diagnostic: identity plus codec reported `9 failed / 156 passed`; normal engine typecheck independently failed both direct trusted-helper privacy assertions with TS2578 before the exports were removed.
+- The exact full-size projection tests prove both readable and injective amplification fail before `structuredClone`; a valid persisted event now records zero clone calls instead of three.
+- Fresh final gate: identity plus codec tests `166/166` in `16.56s` (`16.64s` test execution); normal engine typecheck ran source plus the negative public fixture, and `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.

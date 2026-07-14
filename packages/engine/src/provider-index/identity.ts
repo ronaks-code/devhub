@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { types as utilTypes } from "node:util";
 import { redactSecrets } from "../redact.js";
 import {
   normalizeProviderEvent,
@@ -15,6 +16,11 @@ import type {
   ProviderId,
   ProviderRequestIdentity,
 } from "../providers/types.js";
+import {
+  hasCanonicalUnicode,
+  MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+  sqliteTextLengthAtMost,
+} from "./text-boundary.js";
 
 const LOCATOR_VERSION = 1 as const;
 const LOCATOR_PREFIX = "pt1";
@@ -27,6 +33,7 @@ const MAX_DIAGNOSTIC_MESSAGE_CHARS = 512;
 const MAX_DIAGNOSTIC_METHOD_CHARS = 256;
 const MAX_DIAGNOSTIC_SHAPE_KEY_CHARS = 64;
 const MAX_DIAGNOSTIC_SHAPE_KEYS = 32;
+const MAX_CANONICAL_JSON_ARRAY_ITEMS = 1_000_000;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HIDDEN_PROVIDER_MARKER =
@@ -146,7 +153,7 @@ function sha256(value: string): string {
 }
 
 function hasExactUtf8Encoding(value: string): boolean {
-  return Buffer.from(value, "utf8").toString("utf8") === value;
+  return hasCanonicalUnicode(value);
 }
 
 function canonicalNativeId(value: unknown, label: string): string {
@@ -454,7 +461,17 @@ function contentEscapeSentinel(providerHome: string): string {
 type ContentTransform = (value: string, providerHome: string) => string;
 
 function readableContentString(value: string, providerHome: string): string {
-  return value.split(providerHome).join(HOME_REPLACEMENT);
+  const first = value.indexOf(providerHome);
+  if (first < 0) return value;
+  let projected = "";
+  let cursor = 0;
+  let match = first;
+  while (match >= 0) {
+    projected += `${value.slice(cursor, match)}${HOME_REPLACEMENT}`;
+    cursor = match + providerHome.length;
+    match = value.indexOf(providerHome, cursor);
+  }
+  return `${projected}${value.slice(cursor)}`;
 }
 
 function injectiveContentString(value: string, providerHome: string): string {
@@ -488,6 +505,136 @@ function nullableContentString(
   return value === null ? null : transform(value, providerHome);
 }
 
+function projectionDataRecord(
+  value: unknown,
+  maximumKeys: number,
+): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+    Array.isArray(value)) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length > maximumKeys || keys.some((key) => typeof key !== "string")) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const snapshot: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of keys as string[]) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    snapshot[key] = descriptor.value;
+  }
+  return Object.freeze(snapshot);
+}
+
+function projectionDenseArray(
+  value: unknown,
+  maximumItems: number,
+): readonly unknown[] | null {
+  if (value !== null && typeof value === "object" && utilTypes.isProxy(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  if (value === null || typeof value !== "object" || !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype) return null;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+    !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > maximumItems) return null;
+  const length = lengthDescriptor.value;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== "string") ||
+    keys.length !== length + 1 || !keys.includes("length")) {
+    return null;
+  }
+  const snapshot: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    snapshot.push(descriptor.value);
+  }
+  return Object.freeze(snapshot);
+}
+
+function projectedContentLengths(
+  value: string,
+  providerHome: string,
+): Readonly<{ readable: number; injective: number }> {
+  if (sqliteTextLengthAtMost(value, MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) === null) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  const sentinel = contentEscapeSentinel(providerHome);
+  let readableLength = 0;
+  let injectiveLength = 0;
+  for (let index = 0; index < value.length;) {
+    if (value.startsWith(providerHome, index)) {
+      readableLength += HOME_REPLACEMENT.length;
+      injectiveLength += HOME_REPLACEMENT.length;
+      index += providerHome.length;
+    } else if (value.startsWith(HOME_REPLACEMENT, index)) {
+      readableLength += HOME_REPLACEMENT.length;
+      injectiveLength += 2;
+      index += HOME_REPLACEMENT.length;
+    } else if (value.startsWith(sentinel, index)) {
+      readableLength += 1;
+      injectiveLength += 2;
+      index += sentinel.length;
+    } else {
+      const codeUnit = value.charCodeAt(index);
+      index += codeUnit >= 0xd800 && codeUnit <= 0xdbff ? 2 : 1;
+      readableLength += 1;
+      injectiveLength += 1;
+    }
+    if (readableLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS ||
+      injectiveLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  }
+  return Object.freeze({ readable: readableLength, injective: injectiveLength });
+}
+
+function preflightProjectionBoundary(eventValue: unknown): void {
+  const event = projectionDataRecord(eventValue, 32);
+  const key = projectionDataRecord(event.key, 3);
+  const providerHome = key.home;
+  if (typeof providerHome !== "string" || providerHome.length === 0 ||
+    !hasCanonicalUnicode(providerHome)) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const values: unknown[] = [];
+  switch (event.type) {
+    case "message": values.push(event.text); break;
+    case "message-delta": values.push(event.delta); break;
+    case "plan": values.push(event.text, event.status); break;
+    case "activity": values.push(event.activity, event.status, event.message); break;
+    case "status": values.push(event.status); break;
+    case "diagnostic": {
+      values.push(event.code, event.message, event.method);
+      const shapeKeys = projectionDenseArray(event.shapeKeys, MAX_DIAGNOSTIC_SHAPE_KEYS);
+      if (shapeKeys !== null) {
+        for (const keyValue of shapeKeys) values.push(keyValue);
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  let readableLength = 0;
+  let injectiveLength = 0;
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const lengths = projectedContentLengths(value, providerHome);
+    readableLength += lengths.readable;
+    injectiveLength += lengths.injective;
+    if (readableLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS ||
+      injectiveLength > MAX_PROVIDER_INDEX_EVENT_JSON_CHARS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  }
+}
+
 function canonicalOccurredAt(value: unknown): string {
   if (typeof value !== "string" || value.length === 0 || value.length > MAX_OCCURRED_AT_CHARS) {
     throw new TypeError(EVENT_PROJECTION_ERROR);
@@ -508,15 +655,44 @@ interface ProjectionContext {
   readonly occurredAt: string;
 }
 
+function diagnosticText(value: unknown, maximum: number, minimum = 1): string | null {
+  if (typeof value !== "string" || value.includes("\u0000")) return null;
+  const length = sqliteTextLengthAtMost(value, maximum);
+  return length === null || length < minimum ? null : value;
+}
+
+function diagnosticShapeKeys(value: unknown): readonly string[] | null {
+  const values = projectionDenseArray(value, MAX_DIAGNOSTIC_SHAPE_KEYS);
+  if (values === null) return null;
+  const result: string[] = [];
+  for (const value of values) {
+    const key = diagnosticText(value, MAX_DIAGNOSTIC_SHAPE_KEY_CHARS, 0);
+    if (key === null) return null;
+    result.push(key);
+  }
+  return Object.freeze(result);
+}
+
 function preservedDiagnostic(event: DiagnosticEvent): DiagnosticEvent | null {
-  if ((event.level !== "warning" && event.level !== "error") ||
-    typeof event.code !== "string" || event.code.length === 0 ||
-    event.code.length > MAX_DIAGNOSTIC_CODE_CHARS ||
-    typeof event.message !== "string" || event.message.length === 0 ||
-    event.message.length > MAX_DIAGNOSTIC_MESSAGE_CHARS ||
-    (event.method !== null && typeof event.method !== "string") ||
-    (event.method !== null && event.method.length > MAX_DIAGNOSTIC_METHOD_CHARS) ||
-    !isDenseDiagnosticShapeKeys(event.shapeKeys)) {
+  const code = diagnosticText(event.code, MAX_DIAGNOSTIC_CODE_CHARS);
+  const message = diagnosticText(event.message, MAX_DIAGNOSTIC_MESSAGE_CHARS);
+  const method = event.method === null
+    ? null
+    : diagnosticText(event.method, MAX_DIAGNOSTIC_METHOD_CHARS, 0);
+  const shapeKeys = diagnosticShapeKeys(event.shapeKeys);
+  if ((event.level !== "warning" && event.level !== "error") || code === null ||
+    message === null || (event.method !== null && method === null) || shapeKeys === null) {
+    return null;
+  }
+  const redactedCode = diagnosticText(redactSecrets(code), MAX_DIAGNOSTIC_CODE_CHARS);
+  const redactedMessage = diagnosticText(redactSecrets(message), MAX_DIAGNOSTIC_MESSAGE_CHARS);
+  const redactedMethod = method === null
+    ? null
+    : diagnosticText(redactSecrets(method), MAX_DIAGNOSTIC_METHOD_CHARS, 0);
+  const redactedShapeKeys = shapeKeys.map((key) =>
+    diagnosticText(redactSecrets(key), MAX_DIAGNOSTIC_SHAPE_KEY_CHARS, 0));
+  if (redactedCode === null || redactedMessage === null ||
+    (method !== null && redactedMethod === null) || redactedShapeKeys.includes(null)) {
     return null;
   }
   return {
@@ -525,27 +701,11 @@ function preservedDiagnostic(event: DiagnosticEvent): DiagnosticEvent | null {
     occurredAt: canonicalOccurredAt(event.occurredAt),
     type: "diagnostic",
     level: event.level,
-    code: redactSecrets(event.code),
-    message: redactSecrets(event.message),
-    method: event.method === null
-      ? null
-      : redactSecrets(event.method).slice(0, MAX_DIAGNOSTIC_METHOD_CHARS),
-    shapeKeys: Object.freeze(
-      event.shapeKeys.map((key) => redactSecrets(key).slice(0, MAX_DIAGNOSTIC_SHAPE_KEY_CHARS)),
-    ),
+    code: redactedCode,
+    message: redactedMessage,
+    method: redactedMethod,
+    shapeKeys: Object.freeze(redactedShapeKeys as string[]),
   };
-}
-
-function isDenseDiagnosticShapeKeys(value: unknown): value is readonly string[] {
-  if (!Array.isArray(value) || value.length > MAX_DIAGNOSTIC_SHAPE_KEYS) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value, index) ||
-      typeof value[index] !== "string" ||
-      value[index].length > MAX_DIAGNOSTIC_SHAPE_KEY_CHARS) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function hasHiddenDiagnosticMarker(event: DiagnosticEvent): boolean {
@@ -564,9 +724,10 @@ function hiddenDiagnostic(context: ProjectionContext): ProviderEvent {
   return normalizeProviderEvent({ hiddenReasoning: true }, context);
 }
 
-function normalizeProjectionBoundary(event: ProviderEvent): ProviderEvent {
+function normalizeProjectionBoundary(event: ProviderEvent, trustedSnapshot = false): ProviderEvent {
   try {
-    const snapshot = structuredClone(event);
+    preflightProjectionBoundary(event);
+    const snapshot = trustedSnapshot ? event : structuredClone(event);
     if (snapshot === null || typeof snapshot !== "object") throw new TypeError();
     const context: ProjectionContext = {
       provider: snapshot.provider,
@@ -576,8 +737,11 @@ function normalizeProjectionBoundary(event: ProviderEvent): ProviderEvent {
     const boundary = normalizeProviderEvent(snapshot, context);
     if (snapshot.type !== "diagnostic") return boundary;
     if (!isExpectedUnknownDiagnostic(boundary)) return boundary;
-    if (hasHiddenDiagnosticMarker(snapshot)) return hiddenDiagnostic(context);
-    return preservedDiagnostic(snapshot) ?? boundary;
+    const preserved = preservedDiagnostic(snapshot);
+    if (preserved !== null && hasHiddenDiagnosticMarker(preserved)) {
+      return hiddenDiagnostic(context);
+    }
+    return preserved ?? boundary;
   } catch {
     throw new TypeError(EVENT_PROJECTION_ERROR);
   }
@@ -741,18 +905,30 @@ function projectNormalizedEvent(
 
 export function projectIndexedProviderEvent(event: ProviderEvent): IndexedProviderEvent {
   try {
-    return projectNormalizedEvent(normalizeProjectionBoundary(event), readableContentString);
+    return projectNormalizedEvent(
+      normalizedEventForProjection(event, false),
+      readableContentString,
+    );
   } catch {
     throw new TypeError(EVENT_PROJECTION_ERROR);
   }
 }
 
-function eventProjectionsForHash(event: ProviderEvent): {
+function normalizedEventForProjection(
+  event: ProviderEvent,
+  trustedSnapshot: boolean,
+): ProviderEvent {
+  const normalized = normalizeProjectionBoundary(event, trustedSnapshot);
+  preflightProjectionBoundary(normalized);
+  return normalized;
+}
+
+function eventProjectionsForHash(event: ProviderEvent, trustedSnapshot: boolean): {
   readonly publicEvent: IndexedProviderEvent;
   readonly hashEvent: IndexedProviderEvent;
 } {
   try {
-    const normalized = normalizeProjectionBoundary(event);
+    const normalized = normalizedEventForProjection(event, trustedSnapshot);
     return Object.freeze({
       publicEvent: projectNormalizedEvent(normalized, readableContentString),
       hashEvent: projectNormalizedEvent(normalized, injectiveContentString),
@@ -800,15 +976,23 @@ function canonicalProviderIndexJsonUnsafe(value: unknown): string {
     if (!Number.isFinite(value)) throw new TypeError();
     return JSON.stringify(value);
   }
+  if (value !== null && typeof value === "object" && utilTypes.isProxy(value)) {
+    throw new TypeError();
+  }
   if (Array.isArray(value)) {
     if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_CANONICAL_JSON_ARRAY_ITEMS) throw new TypeError();
+    const length = lengthDescriptor.value;
     const ownKeys = Reflect.ownKeys(value);
     if (ownKeys.some((key) => typeof key !== "string") ||
-      ownKeys.length !== value.length + 1 || !ownKeys.includes("length")) {
+      ownKeys.length !== length + 1 || !ownKeys.includes("length")) {
       throw new TypeError();
     }
     const items: string[] = [];
-    for (let index = 0; index < value.length; index += 1) {
+    for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
       if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
       items.push(canonicalProviderIndexJsonUnsafe(descriptor.value));
@@ -847,23 +1031,50 @@ function projectedEventDigest(event: IndexedProviderEvent, ordinal: number): str
 
 export function cachedEventItemId(event: ProviderEvent, ordinalValue: number): string {
   try {
-    const ordinal = eventOrdinal(ordinalValue);
-    const projections = eventProjectionsForHash(event);
-    const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
-    const cacheKey = nativeItemId === null
-      ? `synthetic:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`
-      : nativeCacheKey(nativeItemId, "native item id");
-    if (cacheKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
-    return cacheKey;
+    return providerEventCacheBundle(event, ordinalValue, false).nativeItemKey;
   } catch {
     throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
   }
 }
 
 export function providerEventReplayKey(event: ProviderEvent, ordinalValue: number): string {
+  return providerEventCacheBundle(event, ordinalValue, false).replayKey;
+}
+
+function providerEventCacheBundle(
+  event: ProviderEvent,
+  ordinalValue: number,
+  trustedSnapshot: boolean,
+): Readonly<{
+  event: IndexedProviderEvent;
+  nativeItemKey: string;
+  replayKey: string;
+}> {
   const ordinal = eventOrdinal(ordinalValue);
-  const projections = eventProjectionsForHash(event);
-  return `replay:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
+  const projections = eventProjectionsForHash(event, trustedSnapshot);
+  const digest = projectedEventDigest(projections.hashEvent, ordinal);
+  const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
+  const nativeItemKey = nativeItemId === null
+    ? `synthetic:v1:${ordinal}:${digest}`
+    : nativeCacheKey(nativeItemId, "native item id");
+  if (nativeItemKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
+  return Object.freeze({
+    event: projections.publicEvent,
+    nativeItemKey,
+    replayKey: `replay:v1:${ordinal}:${digest}`,
+  });
+}
+
+/** Internal persistence path: caller must supply the already bounded deep-frozen event snapshot. */
+export function projectProviderEventCacheBundleFromSnapshot(
+  event: Readonly<ProviderEvent>,
+  ordinalValue: number,
+): Readonly<{
+  event: IndexedProviderEvent;
+  nativeItemKey: string;
+  replayKey: string;
+}> {
+  return providerEventCacheBundle(event, ordinalValue, true);
 }
 
 export type ParsedCachedEventItemKey =

@@ -8,7 +8,29 @@ export * from "./events.js";
 export * from "./feature-flags.js";
 export * from "./registry.js";
 export * from "./writer-lease.js";
-export * from "../provider-index/identity.js";
+export {
+  assertLocatorMatchesKey,
+  cachedEventItemId,
+  cachedTurnKey,
+  canonicalProviderIndexJson,
+  homeFingerprint,
+  indexedProviderEventItemId,
+  indexedProviderEventTurnId,
+  parseCachedEventItemKey,
+  parseCachedTurnKey,
+  parseProviderEventReplayKey,
+  parseTaskLocator,
+  projectIndexedProviderEvent,
+  providerEventReplayKey,
+  serializeTaskLocator,
+  taskLocator,
+} from "../provider-index/identity.js";
+export type {
+  IndexedProviderEvent,
+  IndexedProviderRequestIdentity,
+  ParsedCachedEventItemKey,
+  ProviderTaskLocator,
+} from "../provider-index/identity.js";
 export * from "../provider-index/cursor.js";
 export {
   PROVIDER_INDEX_STORE_DEFAULTS,

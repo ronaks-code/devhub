@@ -78,3 +78,15 @@
 
 - SQLite `length(TEXT)` counts Unicode code points, while JavaScript `string.length` counts UTF-16 code units. Validate surrogate pairing and count with an early-exit scan before any UTF-8 allocation; use final ASCII/base64 length only where the persisted representation is guaranteed ASCII.
 - Snapshot fingerprints can preserve an exact canonical fixed-array contract without constructing one aggregate JSON string. Stream delimiters and canonical scalar encodings into the hash, including `event_json` as an outer quoted/escaped JSON string, and keep a bounded aggregate-reference golden to prove byte equivalence.
+
+## 2026-07-13 - Bound projection expansion before cloning or replacement
+
+- An input-size bound is not an output-size bound: a root provider home such as `/` can turn one input character into the full redaction marker, and the private injective escape can double sentinel content. Compute exact readable and injective Unicode-code-point lengths before clone or materialization, cap their aggregate, then use a bounded single-pass replacement.
+- Persistence should consume one internal projection bundle from the same deep-frozen raw event snapshot. Re-running public projection, item-key, and replay-key helpers repeats normalization/cloning and creates both amplification and time-of-check/time-of-use risk.
+- Keep the internal bundle out of the provider barrel with an explicit identity export list plus runtime and negative TypeScript assertions; internal-by-comment is not an API boundary.
+
+## 2026-07-13 - Capacity and error provenance must be unforgeable
+
+- Read a dense array's own data length descriptor once, enforce its configured cap before `Reflect.ownKeys` or element descriptors, and reuse that captured value. This makes huge sparse inputs cheap and prevents changing-length proxy tricks when combined with proxy-first rejection.
+- Never use `instanceof` to passthrough an exported error class across an untrusted input boundary. A caller can throw any public code from a proxy trap; map all such failures to `INVALID_INPUT` and reserve `CAPACITY` for an unexported lexical sentinel raised only by internal cardinality checks.
+- Hash/receipt helpers that accept trusted prepared carriers should stay module-private. Exposing them creates a second hostile-input API that must otherwise duplicate every descriptor, depth, and capacity defense.
