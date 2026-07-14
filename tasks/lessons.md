@@ -35,3 +35,15 @@
 - Split work by real file/schema/resource dependencies. Read-only architecture, staging-scope audit, and independent review can run concurrently while one lane owns the current worktree and heavy-job queue.
 - Keep same-revision certification serial when its order matters: integration gate, interactive evidence capture, then checkpoint. A single global heavy slot is a resource dependency, not a reason to serialize unrelated lightweight work.
 - Use separate worktrees and narrowly scoped agents for independent writers; match agent count and reasoning effort to the work instead of fanning out by default.
+
+## 2026-07-13 - Preserve append-only coordination history across wrapper upgrades
+
+- An audit-schema migration must never rewrite or normalize the existing JSONL in place, even when old events used the wrong keys. Preserve historical bytes and make only future events conform to the exact schema.
+- Freeze admission first, hold every old/new coordination lock continuously through migration, and prove the original audit prefix byte-for-byte before releasing the new implementation.
+- Treat a successful cutover command as provisional until an independent post-release witness verifies canonical status, one lifecycle smoke, exact appended events, ledgers, locks, and zero active residue.
+
+## 2026-07-13 - Keep resource coordination quiet and executable-path explicit
+
+- Routine resource polling should write the requested status artifact without generating frequent UI cards. Keep the hourly snapshot and delete noisy heartbeat automations when the user asks.
+- A hardened wrapper may intentionally replace `PATH`; commands run through it must use reviewed absolute tool paths or an explicit minimal PATH rather than assuming the interactive shell environment.
+- If a queued launch fails before doing work, release the slot, record the failure honestly, diagnose once, and retry only with the root cause corrected.

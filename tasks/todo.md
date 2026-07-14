@@ -76,10 +76,12 @@ M1 gate result: both native provider lifecycles pass. Persistent installed Claud
 ### Post-approval delivery
 
 - [x] Write and verify `design-lock.md`, `design-system.md`, `component-state-matrix.md`, and `surface-inventory.md` before production edits.
-- [ ] Restore the shared heavy-job queue to an upgrade-safe state before further Browser/Computer Use or full-gate work.
-  - [ ] Replace the mutable canonical script with a stable launcher plus atomically selected immutable implementation files.
-  - [ ] Prove that a waiter pinned to implementation A survives a pointer swap to B, runs, releases, and emits exact append-only `waiting`/`running`/`done` events while the next invocation uses B.
-  - [ ] Re-run FIFO, exit propagation, cancellation, owner-crash recovery, admission, duplicate-pair, path-safety, cleanup, and exact-schema drills; obtain independent read-only review.
+- [x] Restore the shared heavy-job queue to an upgrade-safe state before further Browser/Computer Use or full-gate work.
+  - [x] Replace the mutable canonical script with a stable launcher plus atomically selected immutable implementation files.
+  - [x] Prove that a waiter pinned to implementation A survives a pointer swap to B, runs, releases, and emits exact append-only `waiting`/`running`/`done` events while the next invocation uses B.
+  - [x] Re-run FIFO, exit propagation, cancellation, owner-crash recovery, admission, duplicate-pair, path-safety, cleanup, and exact-schema drills; obtain independent read-only review.
+
+Shared-wrapper result: immutable D is canonical and independently GO; exact hashes, continuous-lock migration, append-only prefix proof, smoke lifecycle, and the disclosed historical H rewrite incident are recorded in `.planning/devhub-codex-parity/evidence/shared-heavy-wrapper-cutover.md`.
 - [x] M2 provider adapter seam.
 - [ ] M3 native Codex vertical slice.
   - [x] Bounded JSONL/RPC protocol, exact fallback shapes, request correlation, backpressure, physical stderr bounds, secret redaction, and no-drop EOF drain.
