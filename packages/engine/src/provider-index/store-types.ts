@@ -88,6 +88,8 @@ export interface NormalizedProviderIndexStoreConfig {
   readonly maxEventsPerTask: number;
   readonly maxEventsPerGeneration: number;
   readonly maxMetadataDepth: number;
+  /** Fixed internal safety reserve; not caller-configurable through ProviderIndexStoreOptions. */
+  readonly maxEventJsonBytesPerTask: number;
   readonly now: () => number;
   readonly tokenFactory: () => string;
 }

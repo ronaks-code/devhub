@@ -91,6 +91,40 @@ const diagnosticEvent = (
 };
 
 describe("provider task locators", () => {
+  it("rejects locator and task-key proxies before invoking any trap", () => {
+    let trapCalls = 0;
+    const handler: ProxyHandler<object> = {
+      get() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-get");
+      },
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-prototype");
+      },
+      ownKeys() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-keys");
+      },
+      getOwnPropertyDescriptor() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-locator-descriptor");
+      },
+    };
+    const keyProxy = new Proxy(key, handler) as typeof key;
+    const locator = taskLocator(key);
+    const locatorProxy = new Proxy(locator, handler) as typeof locator;
+    for (const action of [
+      () => taskLocator(keyProxy),
+      () => serializeTaskLocator(locatorProxy),
+      () => assertLocatorMatchesKey(locatorProxy, key),
+      () => assertLocatorMatchesKey(locator, keyProxy),
+    ]) {
+      expect(action).toThrow(TypeError);
+    }
+    expect(trapCalls).toBe(0);
+  });
+
   it("uses an exact stable provider-isolated home fingerprint", () => {
     expect(homeFingerprint("openai", CANONICAL_HOME)).toBe(
       "7066394e4c1edb1a19490232746f70a5bf046ff5d22b50e7b45e678bb9083416",
@@ -565,6 +599,38 @@ describe("cache identity keys", () => {
     }
   });
 
+  it("bounds canonical JSON depth, visits, cycles, DAG expansion, and escaped output", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    let deep: Record<string, unknown> = { leaf: true };
+    for (let index = 0; index < 80; index += 1) deep = { deep };
+    let aliasDag: Record<string, unknown> = { leaf: "x" };
+    for (let index = 0; index < 31; index += 1) {
+      aliasDag = { left: aliasDag, right: aliasDag };
+    }
+    const escapedExpansion = "\u0001".repeat(11_200_000);
+    for (const value of [cycle, deep, aliasDag, escapedExpansion]) {
+      expectValueFreeTypeError(
+        () => canonicalProviderIndexJson(value),
+        "provider index canonical JSON is invalid",
+        "must-never-leak",
+      );
+    }
+    expect(canonicalProviderIndexJson({ bounded: ["\u0001", "🪐", true] }))
+      .toBe('{"bounded":["\\u0001","🪐",true]}');
+  });
+
+  it("accepts canonical JSON at depth 32 and rejects depth 33", () => {
+    let depth32: unknown = true;
+    for (let index = 0; index < 32; index += 1) depth32 = { child: depth32 };
+    expect(canonicalProviderIndexJson(depth32)).toContain('"child"');
+    expectValueFreeTypeError(
+      () => canonicalProviderIndexJson({ child: depth32 }),
+      "provider index canonical JSON is invalid",
+      "must-never-leak",
+    );
+  });
+
   it("strictly parses native and synthetic event item keys", () => {
     const native = `native:v1:${Buffer.from("项目/🧪", "utf8").toString("base64url")}`;
     expect(parseCachedEventItemKey(native, 7)).toEqual({
@@ -768,6 +834,83 @@ describe("cache identity keys", () => {
 });
 
 describe("indexed provider event projection", () => {
+  it("extracts item and turn identity through proxy-safe data descriptors", () => {
+    const message = projectIndexedProviderEvent(providerEvent({
+      type: "message",
+      role: "assistant",
+      text: "extractor",
+      turnId: "turn-extractor",
+      itemId: "item-extractor",
+    }));
+    let trapCalls = 0;
+    const proxy = new Proxy(message, {
+      get() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-extractor-proxy");
+      },
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("must-never-leak-extractor-prototype");
+      },
+    });
+    for (const action of [
+      () => indexedProviderEventItemId(proxy),
+      () => indexedProviderEventTurnId(proxy),
+    ]) {
+      const error = captureError(action);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).not.toContain("must-never-leak");
+    }
+    expect(trapCalls).toBe(0);
+
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "permission", identity },
+    }));
+    if (request.type !== "request") throw new Error("expected request");
+    let getterCalls = 0;
+    const hostileRequest = Object.defineProperty({ ...request.request }, "identity", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-extractor-accessor");
+      },
+    });
+    const hostileEvent = { ...request, request: hostileRequest } as typeof request;
+    for (const action of [
+      () => indexedProviderEventItemId(hostileEvent),
+      () => indexedProviderEventTurnId(hostileEvent),
+    ]) {
+      const error = captureError(action);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(String(error)).not.toContain("must-never-leak");
+    }
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects request identities whose nested locator differs from the event locator", () => {
+    const request = projectIndexedProviderEvent(providerEvent({
+      type: "request",
+      request: { kind: "permission", identity },
+    }));
+    if (request.type !== "request") throw new Error("expected request");
+    const hostile = {
+      ...request,
+      request: {
+        ...request.request,
+        identity: {
+          ...request.request.identity,
+          locator: {
+            ...request.request.identity.locator,
+            nativeTaskId: "different-task",
+          },
+        },
+      },
+    } as typeof request;
+    expect(() => indexedProviderEventItemId(hostile)).toThrow(TypeError);
+    expect(() => indexedProviderEventTurnId(hostile)).toThrow(TypeError);
+  });
+
   it("rejects readable or injective projection expansion before structured cloning", () => {
     const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
     const readableExpansion = normalizeProviderEvent({

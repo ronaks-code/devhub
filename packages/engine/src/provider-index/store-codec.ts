@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { types as utilTypes } from "node:util";
+import { redactSecrets } from "../redact.js";
 import { normalizeProviderNativeId } from "../providers/native-id.js";
 import type { ProviderEvent } from "../providers/events.js";
 import type {
@@ -54,6 +55,9 @@ const MAX_TIMESTAMP_CHARS = 64;
 const MAX_FINGERPRINT_CHARS = 1_024;
 const MAX_PATH_CHARS = 16_384;
 const MAX_EVENT_JSON_CHARS = MAX_PROVIDER_INDEX_EVENT_JSON_CHARS;
+// Fixed aggregate canonical event-json reserves for one prepared task snapshot.
+const MAX_EVENT_JSON_CODE_POINTS_PER_TASK = 64 * 1024 * 1024;
+const MAX_EVENT_JSON_BYTES_PER_TASK = 64 * 1024 * 1024;
 const MAX_EVENT_GRAPH_DEPTH = 16;
 const MAX_EVENT_GRAPH_NODES = 128;
 const MAX_EVENT_GRAPH_KEYS = 256;
@@ -510,11 +514,26 @@ function preparedEvent(
   containingTurnId: string,
   nativeTurnKey: string,
   ordinal: number,
-): Readonly<PreparedProviderEvent> {
+  remainingEventJsonChars: number,
+  remainingEventJsonBytes: number,
+): Readonly<{
+  prepared: Readonly<PreparedProviderEvent>;
+  eventJsonChars: number;
+  eventJsonBytes: number;
+}> {
   const rawEvent = snapshotProviderEvent(eventValue);
   assertRawEventOwnership(rawEvent, locator);
   assertRawDiagnosticBounds(rawEvent);
-  const projection = projectProviderEventCacheBundleFromSnapshot(rawEvent, ordinal);
+  const projection = projectProviderEventCacheBundleFromSnapshot(
+    rawEvent,
+    ordinal,
+    remainingEventJsonChars,
+    remainingEventJsonBytes,
+  );
+  if (!projection.ok) {
+    if (projection.limit === "AGGREGATE") throw CAPACITY_SENTINEL;
+    throw new TypeError();
+  }
   const event = normalizedIndexedEvent(projection.event, locator);
   if (event.provider !== locator.provider || !sameLocator(event.locator, locator)) {
     throw new TypeError();
@@ -524,20 +543,27 @@ function preparedEvent(
   const nativeItemKey = projection.nativeItemKey;
   const replayKey = projection.replayKey;
   const eventJson = canonicalProviderIndexJson(event);
-  if (sqliteTextLengthAtMost(eventJson, MAX_EVENT_JSON_CHARS) === null) {
+  const eventJsonChars = sqliteTextLengthAtMost(eventJson, MAX_EVENT_JSON_CHARS);
+  const eventJsonBytes = Buffer.byteLength(eventJson, "utf8");
+  if (eventJsonChars === null || eventJsonChars !== projection.canonicalEventJsonChars ||
+    eventJsonBytes !== projection.canonicalEventJsonBytes) {
     throw new ProviderIndexStoreError("INVALID_INPUT");
   }
   const eventFingerprint = sha256(
     `devhub-provider-event-cache:v1\u0000${replayKey}\u0000${eventJson}`,
   );
   return Object.freeze({
-    nativeTurnKey,
-    nativeItemKey,
-    replayKey,
-    ordinal,
-    eventFingerprint,
-    eventJson,
-    event,
+    prepared: Object.freeze({
+      nativeTurnKey,
+      nativeItemKey,
+      replayKey,
+      ordinal,
+      eventFingerprint,
+      eventJson,
+      event,
+    }),
+    eventJsonChars,
+    eventJsonBytes,
   });
 }
 
@@ -755,6 +781,7 @@ export function normalizeProviderIndexStoreOptions(
       maxEventsPerTask,
       maxEventsPerGeneration,
       maxMetadataDepth,
+      maxEventJsonBytesPerTask: MAX_EVENT_JSON_BYTES_PER_TASK,
       now: now as () => number,
       tokenFactory: tokenFactory as () => string,
     });
@@ -818,7 +845,17 @@ export function prepareProviderTaskSnapshot(
       config.maxTurnsPerGeneration,
       true,
     );
+    const aggregateEventJsonByteLimit = config.maxEventJsonBytesPerTask;
+    if (!Number.isSafeInteger(aggregateEventJsonByteLimit) ||
+      aggregateEventJsonByteLimit < 1 ||
+      aggregateEventJsonByteLimit > MAX_EVENT_JSON_BYTES_PER_TASK) throw new TypeError();
     const turns: PreparedProviderTurn[] = [];
+    const eventJsonMetricsByIdentity = new WeakMap<object, Readonly<{
+      chars: number;
+      bytes: number;
+    }>>();
+    let remainingEventJsonChars = MAX_EVENT_JSON_CODE_POINTS_PER_TASK;
+    let remainingEventJsonBytes = aggregateEventJsonByteLimit;
     let eventOrdinal = 0;
     for (let turnOrdinal = 0; turnOrdinal < rawTurns.length; turnOrdinal += 1) {
       const rawTurn = exactOwnData(rawTurns[turnOrdinal], [
@@ -839,11 +876,36 @@ export function prepareProviderTaskSnapshot(
         config.maxEventsPerTask - eventOrdinal,
         true,
       );
-      const events = rawEvents.map((event) => {
-        const prepared = preparedEvent(event, normalized.summary.locator, id, nativeTurnKey, eventOrdinal);
+      const events: PreparedProviderEvent[] = [];
+      for (const event of rawEvents) {
+        if (event !== null && typeof event === "object") {
+          const knownEventJsonMetrics = eventJsonMetricsByIdentity.get(event);
+          if (knownEventJsonMetrics !== undefined &&
+            (knownEventJsonMetrics.chars > remainingEventJsonChars ||
+              knownEventJsonMetrics.bytes > remainingEventJsonBytes)) {
+            throw CAPACITY_SENTINEL;
+          }
+        }
+        const result = preparedEvent(
+          event,
+          normalized.summary.locator,
+          id,
+          nativeTurnKey,
+          eventOrdinal,
+          remainingEventJsonChars,
+          remainingEventJsonBytes,
+        );
+        if (event !== null && typeof event === "object") {
+          eventJsonMetricsByIdentity.set(event, Object.freeze({
+            chars: result.eventJsonChars,
+            bytes: result.eventJsonBytes,
+          }));
+        }
+        remainingEventJsonChars -= result.eventJsonChars;
+        remainingEventJsonBytes -= result.eventJsonBytes;
         eventOrdinal += 1;
-        return prepared;
-      });
+        events.push(result.prepared);
+      }
       turns.push(Object.freeze({
         nativeTurnKey,
         id,
@@ -873,26 +935,51 @@ export function prepareProviderTaskSnapshot(
   }
 }
 
-function requiredEventText(value: unknown, maximum = MAX_EVENT_JSON_CHARS): string {
-  return boundedText(value, maximum, 0);
+function indexedEventText(
+  value: unknown,
+  maximum = MAX_EVENT_JSON_CHARS,
+  minimum = 0,
+  trimNonEmpty = false,
+  canonicalHome: string | null = null,
+): string {
+  const text = boundedText(value, maximum, minimum);
+  if ((trimNonEmpty && text.trim().length === 0) ||
+    (canonicalHome !== null && (
+      text.includes(canonicalHome) || redactSecrets(text) !== text
+    ))) throw new TypeError();
+  return text;
 }
 
-function nullableNativeId(value: unknown, label: string): string | null {
-  return value === null ? null : canonicalNativeId(value, label);
+function nullableNativeId(
+  value: unknown,
+  label: string,
+  canonicalHome: string | null = null,
+): string | null {
+  if (value === null) return null;
+  const id = canonicalNativeId(value, label);
+  if (canonicalHome !== null && id.includes(canonicalHome)) throw new TypeError();
+  return id;
 }
 
-function jsonRpcId(value: unknown, nullable: boolean): string | number | null {
+function jsonRpcId(
+  value: unknown,
+  nullable: boolean,
+  canonicalHome: string | null,
+): string | number | null {
   if (value === null && nullable) return null;
   if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) throw new TypeError();
     return value;
   }
-  return canonicalNativeId(value, "JSON-RPC request id");
+  const id = canonicalNativeId(value, "JSON-RPC request id");
+  if (canonicalHome !== null && id.includes(canonicalHome)) throw new TypeError();
+  return id;
 }
 
 function normalizedIndexedIdentity(
   value: unknown,
   expectedLocator: ProviderTaskLocator,
+  canonicalHome: string | null,
 ): Readonly<IndexedProviderRequestIdentity> {
   const raw = exactOwnData(value, [
     "locator",
@@ -907,10 +994,10 @@ function normalizedIndexedIdentity(
   return Object.freeze({
     locator,
     generation: raw.generation === null ? null : safeInteger(raw.generation),
-    turnId: nullableNativeId(raw.turnId, "request turn id"),
-    requestId: jsonRpcId(raw.requestId, false)!,
-    itemId: nullableNativeId(raw.itemId, "request item id"),
-    approvalId: jsonRpcId(raw.approvalId, true),
+    turnId: nullableNativeId(raw.turnId, "request turn id", canonicalHome),
+    requestId: jsonRpcId(raw.requestId, false, canonicalHome)!,
+    itemId: nullableNativeId(raw.itemId, "request item id", canonicalHome),
+    approvalId: jsonRpcId(raw.approvalId, true, canonicalHome),
   });
 }
 
@@ -919,6 +1006,7 @@ type IndexedProviderRequest = Extract<IndexedProviderEvent, { type: "request" }>
 function normalizedIndexedRequest(
   value: unknown,
   expectedLocator: ProviderTaskLocator,
+  canonicalHome: string | null,
 ): IndexedProviderRequest {
   const boundary = ownDataRecord(value);
   const kind = boundary.kind;
@@ -931,7 +1019,7 @@ function normalizedIndexedRequest(
     )) throw new TypeError();
     return Object.freeze({
       kind,
-      identity: normalizedIndexedIdentity(raw.identity, expectedLocator),
+      identity: normalizedIndexedIdentity(raw.identity, expectedLocator, canonicalHome),
       autoResolutionMs,
     });
   }
@@ -940,13 +1028,14 @@ function normalizedIndexedRequest(
   const raw = exactOwnData(value, ["kind", "identity"]);
   return Object.freeze({
     kind,
-    identity: normalizedIndexedIdentity(raw.identity, expectedLocator),
+    identity: normalizedIndexedIdentity(raw.identity, expectedLocator, canonicalHome),
   });
 }
 
 function commonIndexedEvent(
   raw: Readonly<Record<string, unknown>>,
   expectedLocator: ProviderTaskLocator,
+  canonicalHome: string | null,
 ): {
   readonly provider: ProviderId;
   readonly locator: ProviderTaskLocator;
@@ -956,7 +1045,9 @@ function commonIndexedEvent(
   const locator = parseTaskLocator(serializeTaskLocator(raw.locator as ProviderTaskLocator));
   const occurredAt = canonicalTimestamp(raw.occurredAt);
   if (provider !== expectedLocator.provider || !sameLocator(locator, expectedLocator) ||
-    occurredAt === null) throw new TypeError();
+    occurredAt === null || (canonicalHome !== null && locator.nativeTaskId.includes(canonicalHome))) {
+    throw new TypeError();
+  }
   return Object.freeze({ provider, locator, occurredAt });
 }
 
@@ -970,6 +1061,7 @@ function role(value: unknown): "user" | "assistant" | "system" {
 function normalizedIndexedEvent(
   value: unknown,
   expectedLocator: ProviderTaskLocator,
+  canonicalHome: string | null = null,
 ): IndexedProviderEvent {
   const boundary = ownDataRecord(value);
   const type = boundary.type;
@@ -979,12 +1071,12 @@ function normalizedIndexedEvent(
         "provider", "locator", "occurredAt", "type", "role", "text", "turnId", "itemId",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
         role: role(raw.role),
-        text: requiredEventText(raw.text),
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
-        itemId: nullableNativeId(raw.itemId, "event item id"),
+        text: indexedEventText(raw.text, MAX_EVENT_JSON_CHARS, 0, false, canonicalHome),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
+        itemId: nullableNativeId(raw.itemId, "event item id", canonicalHome),
       });
     }
     case "message-delta": {
@@ -992,12 +1084,12 @@ function normalizedIndexedEvent(
         "provider", "locator", "occurredAt", "type", "role", "delta", "turnId", "itemId",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
         role: role(raw.role),
-        delta: requiredEventText(raw.delta),
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
-        itemId: nullableNativeId(raw.itemId, "event item id"),
+        delta: indexedEventText(raw.delta, MAX_EVENT_JSON_CHARS, 0, false, canonicalHome),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
+        itemId: nullableNativeId(raw.itemId, "event item id", canonicalHome),
       });
     }
     case "plan": {
@@ -1006,13 +1098,13 @@ function normalizedIndexedEvent(
         "text", "status",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
-        itemId: nullableNativeId(raw.itemId, "event item id"),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
+        itemId: nullableNativeId(raw.itemId, "event item id", canonicalHome),
         stepIndex: raw.stepIndex === null ? null : safeInteger(raw.stepIndex),
-        text: requiredEventText(raw.text),
-        status: requiredEventText(raw.status, MAX_SHORT_TEXT_CHARS),
+        text: indexedEventText(raw.text, MAX_EVENT_JSON_CHARS, 0, false, canonicalHome),
+        status: indexedEventText(raw.status, MAX_SHORT_TEXT_CHARS, 0, true, canonicalHome),
       });
     }
     case "activity": {
@@ -1021,13 +1113,15 @@ function normalizedIndexedEvent(
         "status", "message",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
-        itemId: nullableNativeId(raw.itemId, "event item id"),
-        activity: requiredEventText(raw.activity, MAX_SHORT_TEXT_CHARS),
-        status: requiredEventText(raw.status, MAX_SHORT_TEXT_CHARS),
-        message: raw.message === null ? null : requiredEventText(raw.message),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
+        itemId: nullableNativeId(raw.itemId, "event item id", canonicalHome),
+        activity: indexedEventText(raw.activity, MAX_SHORT_TEXT_CHARS, 0, true, canonicalHome),
+        status: indexedEventText(raw.status, MAX_SHORT_TEXT_CHARS, 0, true, canonicalHome),
+        message: raw.message === null
+          ? null
+          : indexedEventText(raw.message, MAX_EVENT_JSON_CHARS, 0, false, canonicalHome),
       });
     }
     case "diff-summary": {
@@ -1036,9 +1130,9 @@ function normalizedIndexedEvent(
         "deletions",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
         changedFiles: safeInteger(raw.changedFiles),
         additions: safeInteger(raw.additions),
         deletions: safeInteger(raw.deletions),
@@ -1050,9 +1144,9 @@ function normalizedIndexedEvent(
         "cachedInputTokens", "totalTokens",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        turnId: nullableNativeId(raw.turnId, "event turn id"),
+        turnId: nullableNativeId(raw.turnId, "event turn id", canonicalHome),
         inputTokens: safeInteger(raw.inputTokens),
         outputTokens: safeInteger(raw.outputTokens),
         cachedInputTokens: safeInteger(raw.cachedInputTokens),
@@ -1067,11 +1161,11 @@ function normalizedIndexedEvent(
         throw new TypeError();
       }
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
         scope: raw.scope,
-        status: requiredEventText(raw.status, MAX_SHORT_TEXT_CHARS),
-        nativeId: nullableNativeId(raw.nativeId, "event native id"),
+        status: indexedEventText(raw.status, MAX_SHORT_TEXT_CHARS, 0, true, canonicalHome),
+        nativeId: nullableNativeId(raw.nativeId, "event native id", canonicalHome),
       });
     }
     case "request": {
@@ -1079,9 +1173,9 @@ function normalizedIndexedEvent(
         "provider", "locator", "occurredAt", "type", "request",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        request: normalizedIndexedRequest(raw.request, expectedLocator),
+        request: normalizedIndexedRequest(raw.request, expectedLocator, canonicalHome),
       });
     }
     case "request-resolved": {
@@ -1089,9 +1183,9 @@ function normalizedIndexedEvent(
         "provider", "locator", "occurredAt", "type", "identity",
       ]);
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
-        identity: normalizedIndexedIdentity(raw.identity, expectedLocator),
+        identity: normalizedIndexedIdentity(raw.identity, expectedLocator, canonicalHome),
       });
     }
     case "diagnostic": {
@@ -1103,13 +1197,16 @@ function normalizedIndexedEvent(
       const shapeKeys = denseDataArray(raw.shapeKeys);
       if (shapeKeys.length > 32) throw new TypeError();
       return Object.freeze({
-        ...commonIndexedEvent(raw, expectedLocator),
+        ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
         level: raw.level,
-        code: boundedText(raw.code, 128),
-        message: boundedText(raw.message, 512),
-        method: raw.method === null ? null : boundedText(raw.method, 256),
-        shapeKeys: Object.freeze(shapeKeys.map((key) => boundedText(key, 64, 0))),
+        code: indexedEventText(raw.code, 128, 1, false, canonicalHome),
+        message: indexedEventText(raw.message, 512, 1, false, canonicalHome),
+        method: raw.method === null
+          ? null
+          : indexedEventText(raw.method, 256, 0, false, canonicalHome),
+        shapeKeys: Object.freeze(shapeKeys.map((key) =>
+          indexedEventText(key, 64, 0, false, canonicalHome))),
       });
     }
     default:
@@ -1121,6 +1218,7 @@ export function decodeCachedProviderEvent(
   rowValue: ProviderEventCacheRow,
   locatorValue: ProviderTaskLocator,
   containingTurnKeyValue: string,
+  registrationValue: ProviderIndexRegisteredHome,
 ): IndexedProviderEvent {
   try {
     const row = exactOwnData(rowValue, [
@@ -1134,12 +1232,18 @@ export function decodeCachedProviderEvent(
       "event_fingerprint",
       "event_json",
     ]);
+    const registration = canonicalRegisteredHome(registrationValue);
     const locator = parseTaskLocator(serializeTaskLocator(locatorValue));
+    if (registration.provider !== locator.provider ||
+      registration.homeFingerprint !== locator.homeFingerprint ||
+      locator.nativeTaskId.includes(registration.canonicalHome)) throw new TypeError();
     if (row.provider !== locator.provider || row.home_fingerprint !== locator.homeFingerprint ||
       row.native_task_id !== locator.nativeTaskId ||
       row.native_turn_key !== containingTurnKeyValue) throw new TypeError();
     const containingTurnId = parseCachedTurnKey(containingTurnKeyValue);
-    if (containingTurnId === null) throw new TypeError();
+    if (containingTurnId === null || containingTurnId.includes(registration.canonicalHome)) {
+      throw new TypeError();
+    }
     const ordinal = safeInteger(row.ordinal);
     const replayKey = parseProviderEventReplayKey(row.replay_key, ordinal);
     const itemKey = parseCachedEventItemKey(row.native_item_key, ordinal);
@@ -1147,11 +1251,13 @@ export function decodeCachedProviderEvent(
     const receivedFingerprint = boundedText(row.event_fingerprint, 64);
     if (!LOWER_HEX_64.test(receivedFingerprint)) throw new TypeError();
     const parsed = JSON.parse(eventJson) as unknown;
-    const event = normalizedIndexedEvent(parsed, locator);
+    const event = normalizedIndexedEvent(parsed, locator, registration.canonicalHome);
     if (canonicalProviderIndexJson(event) !== eventJson) throw new TypeError();
     const eventTurnId = indexedProviderEventTurnId(event);
     if (eventTurnId !== null && eventTurnId !== containingTurnId) throw new TypeError();
     const eventItemId = indexedProviderEventItemId(event);
+    if (itemKey.kind === "native" &&
+      itemKey.nativeItemId.includes(registration.canonicalHome)) throw new TypeError();
     if ((itemKey.kind === "native" && itemKey.nativeItemId !== eventItemId) ||
       (itemKey.kind === "synthetic" && eventItemId !== null)) throw new TypeError();
     if (sha256(`devhub-provider-event-cache:v1\u0000${replayKey}\u0000${eventJson}`) !==

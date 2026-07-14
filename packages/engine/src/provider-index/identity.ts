@@ -34,6 +34,11 @@ const MAX_DIAGNOSTIC_METHOD_CHARS = 256;
 const MAX_DIAGNOSTIC_SHAPE_KEY_CHARS = 64;
 const MAX_DIAGNOSTIC_SHAPE_KEYS = 32;
 const MAX_CANONICAL_JSON_ARRAY_ITEMS = 1_000_000;
+const MAX_CANONICAL_JSON_DEPTH = 32;
+const MAX_CANONICAL_JSON_VISITS = 1_000_000;
+const MAX_CANONICAL_JSON_OBJECT_KEYS = 100_000;
+const MAX_CANONICAL_JSON_OUTPUT_CODE_POINTS = 64 * 1024 * 1024;
+const MAX_CANONICAL_JSON_OUTPUT_BYTES = 64 * 1024 * 1024;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HIDDEN_PROVIDER_MARKER =
@@ -174,7 +179,8 @@ function assertProvider(provider: unknown): asserts provider is ProviderId {
 
 function validatedLocator(value: unknown): ProviderTaskLocator {
   try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError();
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+      Array.isArray(value)) throw new TypeError();
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
 
@@ -235,7 +241,8 @@ export function homeFingerprint(provider: ProviderId, canonicalHome: string): st
 
 function snapshotTaskKeyBoundary(value: unknown): Readonly<NativeTaskKey> {
   try {
-    if (value === null || typeof value !== "object" || Array.isArray(value)) throw new TypeError();
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+      Array.isArray(value)) throw new TypeError();
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
 
@@ -946,80 +953,292 @@ function eventOrdinal(value: number): number {
 }
 
 export function indexedProviderEventItemId(event: IndexedProviderEvent): string | null {
-  switch (event.type) {
-    case "message":
-    case "message-delta":
-    case "plan":
-    case "activity":
-      return event.itemId;
-    case "request":
-      return event.request.identity.itemId;
-    case "request-resolved":
-      return event.identity.itemId;
-    case "status":
-      return event.scope === "item" ? event.nativeId : null;
-    case "diff-summary":
-    case "usage":
-    case "diagnostic":
-      return null;
-    default:
-      return assertNever(event);
+  try {
+    const { raw, locator } = indexedExtractorBoundary(event);
+    switch (raw.type) {
+      case "message":
+      case "message-delta":
+      case "plan":
+      case "activity":
+        return extractedNullableNativeId(raw.itemId);
+      case "request": {
+        const request = projectionDataRecord(raw.request, 3);
+        return extractedNullableNativeId(indexedExtractorIdentity(request.identity, locator).itemId);
+      }
+      case "request-resolved":
+        return extractedNullableNativeId(indexedExtractorIdentity(raw.identity, locator).itemId);
+      case "status":
+        return raw.scope === "item" ? extractedNullableNativeId(raw.nativeId) : null;
+      case "diff-summary":
+      case "usage":
+      case "diagnostic":
+        return null;
+      default:
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  } catch {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
   }
 }
 
-function canonicalProviderIndexJsonUnsafe(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    if (typeof value === "string" && !hasExactUtf8Encoding(value)) throw new TypeError();
-    return JSON.stringify(value);
+function indexedExtractorBoundary(event: IndexedProviderEvent): {
+  readonly raw: Readonly<Record<string, unknown>>;
+  readonly locator: ProviderTaskLocator;
+} {
+  const raw = projectionDataRecord(event, 32);
+  const locator = validatedLocator(raw.locator);
+  if (raw.provider !== locator.provider) throw new TypeError(EVENT_PROJECTION_ERROR);
+  return Object.freeze({ raw, locator });
+}
+
+function indexedExtractorIdentity(
+  value: unknown,
+  expectedLocator: ProviderTaskLocator,
+): Readonly<Record<string, unknown>> {
+  const identity = projectionDataRecord(value, 6);
+  const locator = validatedLocator(identity.locator);
+  if (locator.version !== expectedLocator.version || locator.provider !== expectedLocator.provider ||
+    locator.homeFingerprint !== expectedLocator.homeFingerprint ||
+    locator.nativeTaskId !== expectedLocator.nativeTaskId) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  return identity;
+}
+
+function extractedNullableNativeId(value: unknown): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string") throw new TypeError(EVENT_PROJECTION_ERROR);
+  return value;
+}
+
+interface CanonicalJsonState {
+  sqliteCodePoints: number;
+  utf8Bytes: number;
+  visits: number;
+  readonly maximumCodePoints: number;
+  readonly maximumUtf8Bytes: number;
+  readonly chunks: string[] | null;
+}
+
+function appendCanonicalJson(
+  state: CanonicalJsonState,
+  value: string,
+  sqliteCodePoints = value.length,
+  utf8Bytes = value.length,
+): void {
+  if (sqliteCodePoints > state.maximumCodePoints - state.sqliteCodePoints ||
+    utf8Bytes > state.maximumUtf8Bytes - state.utf8Bytes) throw new TypeError();
+  state.sqliteCodePoints += sqliteCodePoints;
+  state.utf8Bytes += utf8Bytes;
+  if (state.chunks !== null) {
+    const lastIndex = state.chunks.length - 1;
+    const last = state.chunks[lastIndex];
+    if (last !== undefined && last.length + value.length <= 8_192) {
+      state.chunks[lastIndex] = last + value;
+    } else {
+      state.chunks.push(value);
+    }
+  }
+}
+
+function encodeCanonicalJsonString(state: CanonicalJsonState, value: string): void {
+  appendCanonicalJson(state, '"');
+  let rawStart = 0;
+  let rawCodePoints = 0;
+  let rawUtf8Bytes = 0;
+  let index = 0;
+  while (index < value.length) {
+    const codeUnit = value.charCodeAt(index);
+    let escaped: string | null = null;
+    let width = 1;
+    switch (codeUnit) {
+      case 0x08: escaped = "\\b"; break;
+      case 0x09: escaped = "\\t"; break;
+      case 0x0a: escaped = "\\n"; break;
+      case 0x0c: escaped = "\\f"; break;
+      case 0x0d: escaped = "\\r"; break;
+      case 0x22: escaped = '\\"'; break;
+      case 0x5c: escaped = "\\\\"; break;
+      default:
+        if (codeUnit < 0x20) {
+          escaped = `\\u${codeUnit.toString(16).padStart(4, "0")}`;
+        } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+          if (index + 1 >= value.length) throw new TypeError();
+          const next = value.charCodeAt(index + 1);
+          if (next < 0xdc00 || next > 0xdfff) throw new TypeError();
+          width = 2;
+        } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+          throw new TypeError();
+        }
+        break;
+    }
+    if (escaped === null) {
+      rawCodePoints += 1;
+      if (width === 2) {
+        rawUtf8Bytes += 4;
+      } else if (codeUnit <= 0x7f) {
+        rawUtf8Bytes += 1;
+      } else if (codeUnit <= 0x7ff) {
+        rawUtf8Bytes += 2;
+      } else {
+        rawUtf8Bytes += 3;
+      }
+      index += width;
+      continue;
+    }
+    if (rawCodePoints > 0) {
+      appendCanonicalJson(
+        state,
+        state.chunks === null ? "" : value.slice(rawStart, index),
+        rawCodePoints,
+        rawUtf8Bytes,
+      );
+    }
+    appendCanonicalJson(state, escaped);
+    index += 1;
+    rawStart = index;
+    rawCodePoints = 0;
+    rawUtf8Bytes = 0;
+  }
+  if (rawCodePoints > 0) {
+    appendCanonicalJson(
+      state,
+      state.chunks === null ? "" : value.slice(rawStart),
+      rawCodePoints,
+      rawUtf8Bytes,
+    );
+  }
+  appendCanonicalJson(state, '"');
+}
+
+function encodeCanonicalProviderIndexJson(
+  value: unknown,
+  state: CanonicalJsonState,
+  depth: number,
+  ancestors: WeakSet<object>,
+): void {
+  if (depth > MAX_CANONICAL_JSON_DEPTH) throw new TypeError();
+  state.visits += 1;
+  if (state.visits > MAX_CANONICAL_JSON_VISITS) throw new TypeError();
+  if (value === null) {
+    appendCanonicalJson(state, "null");
+    return;
+  }
+  if (typeof value === "string") {
+    encodeCanonicalJsonString(state, value);
+    return;
+  }
+  if (typeof value === "boolean") {
+    appendCanonicalJson(state, value ? "true" : "false");
+    return;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new TypeError();
-    return JSON.stringify(value);
+    appendCanonicalJson(state, JSON.stringify(value));
+    return;
   }
-  if (value !== null && typeof value === "object" && utilTypes.isProxy(value)) {
-    throw new TypeError();
-  }
-  if (Array.isArray(value)) {
-    if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
-    if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
-      !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
-      lengthDescriptor.value > MAX_CANONICAL_JSON_ARRAY_ITEMS) throw new TypeError();
-    const length = lengthDescriptor.value;
-    const ownKeys = Reflect.ownKeys(value);
-    if (ownKeys.some((key) => typeof key !== "string") ||
-      ownKeys.length !== length + 1 || !ownKeys.includes("length")) {
-      throw new TypeError();
+  if (typeof value !== "object" || utilTypes.isProxy(value)) throw new TypeError();
+  if (ancestors.has(value)) throw new TypeError();
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError();
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_CANONICAL_JSON_ARRAY_ITEMS) throw new TypeError();
+      const length = lengthDescriptor.value;
+      const ownKeys = Reflect.ownKeys(value);
+      if (ownKeys.some((key) => typeof key !== "string") ||
+        ownKeys.length !== length + 1 || !ownKeys.includes("length")) {
+        throw new TypeError();
+      }
+      appendCanonicalJson(state, "[");
+      for (let index = 0; index < length; index += 1) {
+        if (index > 0) appendCanonicalJson(state, ",");
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
+        encodeCanonicalProviderIndexJson(descriptor.value, state, depth + 1, ancestors);
+      }
+      appendCanonicalJson(state, "]");
+      return;
     }
-    const items: string[] = [];
-    for (let index = 0; index < length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
-      items.push(canonicalProviderIndexJsonUnsafe(descriptor.value));
-    }
-    return `[${items.join(",")}]`;
-  }
-  if (typeof value === "object") {
+
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
     const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== "string" || !hasExactUtf8Encoding(key))) {
-      throw new TypeError();
-    }
-    const pairs: string[] = [];
-    for (const key of (keys as string[]).sort()) {
+    if (keys.length > MAX_CANONICAL_JSON_OBJECT_KEYS || keys.some(
+      (key) => typeof key !== "string" || !hasExactUtf8Encoding(key),
+    )) throw new TypeError();
+    const sortedKeys = (keys as string[]).sort();
+    appendCanonicalJson(state, "{");
+    for (let index = 0; index < sortedKeys.length; index += 1) {
+      if (index > 0) appendCanonicalJson(state, ",");
+      const key = sortedKeys[index]!;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (descriptor === undefined || !("value" in descriptor)) throw new TypeError();
-      pairs.push(`${JSON.stringify(key)}:${canonicalProviderIndexJsonUnsafe(descriptor.value)}`);
+      encodeCanonicalJsonString(state, key);
+      appendCanonicalJson(state, ":");
+      encodeCanonicalProviderIndexJson(descriptor.value, state, depth + 1, ancestors);
     }
-    return `{${pairs.join(",")}}`;
+    appendCanonicalJson(state, "}");
+  } finally {
+    ancestors.delete(value);
   }
-  throw new TypeError();
+}
+
+interface CanonicalJsonMetrics {
+  readonly sqliteCodePoints: number;
+  readonly utf8Bytes: number;
+}
+
+function canonicalProviderIndexJsonMetrics(
+  value: unknown,
+  maximumCodePoints: number,
+  maximumUtf8Bytes: number,
+): CanonicalJsonMetrics | null {
+  try {
+    if (!Number.isSafeInteger(maximumCodePoints) || maximumCodePoints < 0 ||
+      !Number.isSafeInteger(maximumUtf8Bytes) || maximumUtf8Bytes < 0) throw new TypeError();
+    const state: CanonicalJsonState = {
+      sqliteCodePoints: 0,
+      utf8Bytes: 0,
+      visits: 0,
+      maximumCodePoints,
+      maximumUtf8Bytes,
+      chunks: null,
+    };
+    encodeCanonicalProviderIndexJson(value, state, 0, new WeakSet<object>());
+    return Object.freeze({
+      sqliteCodePoints: state.sqliteCodePoints,
+      utf8Bytes: state.utf8Bytes,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function canonicalProviderIndexJson(value: unknown): string {
   try {
-    return canonicalProviderIndexJsonUnsafe(value);
+    const metrics = canonicalProviderIndexJsonMetrics(
+      value,
+      MAX_CANONICAL_JSON_OUTPUT_CODE_POINTS,
+      MAX_CANONICAL_JSON_OUTPUT_BYTES,
+    );
+    if (metrics === null) throw new TypeError();
+    const chunks: string[] = [];
+    const state: CanonicalJsonState = {
+      sqliteCodePoints: 0,
+      utf8Bytes: 0,
+      visits: 0,
+      maximumCodePoints: metrics.sqliteCodePoints,
+      maximumUtf8Bytes: metrics.utf8Bytes,
+      chunks,
+    };
+    encodeCanonicalProviderIndexJson(value, state, 0, new WeakSet<object>());
+    if (state.sqliteCodePoints !== metrics.sqliteCodePoints ||
+      state.utf8Bytes !== metrics.utf8Bytes) throw new TypeError();
+    return chunks.join("");
   } catch {
     throw new TypeError("provider index canonical JSON is invalid");
   }
@@ -1031,27 +1250,68 @@ function projectedEventDigest(event: IndexedProviderEvent, ordinal: number): str
 
 export function cachedEventItemId(event: ProviderEvent, ordinalValue: number): string {
   try {
-    return providerEventCacheBundle(event, ordinalValue, false).nativeItemKey;
+    const bundle = providerEventCacheBundle(
+      event,
+      ordinalValue,
+      false,
+      MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+      MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+    );
+    if (!bundle.ok) throw new TypeError();
+    return bundle.nativeItemKey;
   } catch {
     throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
   }
 }
 
 export function providerEventReplayKey(event: ProviderEvent, ordinalValue: number): string {
-  return providerEventCacheBundle(event, ordinalValue, false).replayKey;
+  const bundle = providerEventCacheBundle(
+    event,
+    ordinalValue,
+    false,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+  );
+  if (!bundle.ok) throw new TypeError(EVENT_PROJECTION_ERROR);
+  return bundle.replayKey;
 }
+
+type ProviderEventCacheBundle =
+  | Readonly<{ ok: false; limit: "PER_EVENT" | "AGGREGATE" }>
+  | Readonly<{
+      ok: true;
+      event: IndexedProviderEvent;
+      nativeItemKey: string;
+      replayKey: string;
+      canonicalEventJsonChars: number;
+      canonicalEventJsonBytes: number;
+    }>;
 
 function providerEventCacheBundle(
   event: ProviderEvent,
   ordinalValue: number,
   trustedSnapshot: boolean,
-): Readonly<{
-  event: IndexedProviderEvent;
-  nativeItemKey: string;
-  replayKey: string;
-}> {
+  remainingCanonicalEventJsonChars: number,
+  remainingCanonicalEventJsonBytes: number,
+): ProviderEventCacheBundle {
   const ordinal = eventOrdinal(ordinalValue);
   const projections = eventProjectionsForHash(event, trustedSnapshot);
+  const canonicalEventJsonMetrics = canonicalProviderIndexJsonMetrics(
+    projections.publicEvent,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS,
+    MAX_PROVIDER_INDEX_EVENT_JSON_CHARS * 4,
+  );
+  if (canonicalEventJsonMetrics === null) {
+    return Object.freeze({ ok: false as const, limit: "PER_EVENT" as const });
+  }
+  const canonicalEventJsonChars = canonicalEventJsonMetrics.sqliteCodePoints;
+  const canonicalEventJsonBytes = canonicalEventJsonMetrics.utf8Bytes;
+  if (!Number.isSafeInteger(remainingCanonicalEventJsonChars) ||
+    !Number.isSafeInteger(remainingCanonicalEventJsonBytes) ||
+    remainingCanonicalEventJsonChars < canonicalEventJsonChars ||
+    remainingCanonicalEventJsonBytes < canonicalEventJsonBytes) {
+    return Object.freeze({ ok: false as const, limit: "AGGREGATE" as const });
+  }
   const digest = projectedEventDigest(projections.hashEvent, ordinal);
   const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
   const nativeItemKey = nativeItemId === null
@@ -1059,9 +1319,12 @@ function providerEventCacheBundle(
     : nativeCacheKey(nativeItemId, "native item id");
   if (nativeItemKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
   return Object.freeze({
+    ok: true as const,
     event: projections.publicEvent,
     nativeItemKey,
     replayKey: `replay:v1:${ordinal}:${digest}`,
+    canonicalEventJsonChars,
+    canonicalEventJsonBytes,
   });
 }
 
@@ -1069,12 +1332,16 @@ function providerEventCacheBundle(
 export function projectProviderEventCacheBundleFromSnapshot(
   event: Readonly<ProviderEvent>,
   ordinalValue: number,
-): Readonly<{
-  event: IndexedProviderEvent;
-  nativeItemKey: string;
-  replayKey: string;
-}> {
-  return providerEventCacheBundle(event, ordinalValue, true);
+  remainingCanonicalEventJsonChars: number,
+  remainingCanonicalEventJsonBytes: number,
+): ProviderEventCacheBundle {
+  return providerEventCacheBundle(
+    event,
+    ordinalValue,
+    true,
+    remainingCanonicalEventJsonChars,
+    remainingCanonicalEventJsonBytes,
+  );
 }
 
 export type ParsedCachedEventItemKey =
@@ -1123,23 +1390,30 @@ export function parseProviderEventReplayKey(
 }
 
 export function indexedProviderEventTurnId(event: IndexedProviderEvent): string | null {
-  switch (event.type) {
-    case "message":
-    case "message-delta":
-    case "plan":
-    case "activity":
-    case "diff-summary":
-    case "usage":
-      return event.turnId;
-    case "request":
-      return event.request.identity.turnId;
-    case "request-resolved":
-      return event.identity.turnId;
-    case "status":
-      return event.scope === "turn" ? event.nativeId : null;
-    case "diagnostic":
-      return null;
-    default:
-      return assertNever(event);
+  try {
+    const { raw, locator } = indexedExtractorBoundary(event);
+    switch (raw.type) {
+      case "message":
+      case "message-delta":
+      case "plan":
+      case "activity":
+      case "diff-summary":
+      case "usage":
+        return extractedNullableNativeId(raw.turnId);
+      case "request": {
+        const request = projectionDataRecord(raw.request, 3);
+        return extractedNullableNativeId(indexedExtractorIdentity(request.identity, locator).turnId);
+      }
+      case "request-resolved":
+        return extractedNullableNativeId(indexedExtractorIdentity(raw.identity, locator).turnId);
+      case "status":
+        return raw.scope === "turn" ? extractedNullableNativeId(raw.nativeId) : null;
+      case "diagnostic":
+        return null;
+      default:
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+  } catch {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
   }
 }

@@ -90,3 +90,10 @@
 - Read a dense array's own data length descriptor once, enforce its configured cap before `Reflect.ownKeys` or element descriptors, and reuse that captured value. This makes huge sparse inputs cheap and prevents changing-length proxy tricks when combined with proxy-first rejection.
 - Never use `instanceof` to passthrough an exported error class across an untrusted input boundary. A caller can throw any public code from a proxy trap; map all such failures to `INVALID_INPUT` and reserve `CAPACITY` for an unexported lexical sentinel raised only by internal cardinality checks.
 - Hash/receipt helpers that accept trusted prepared carriers should stay module-private. Exposing them creates a second hostile-input API that must otherwise duplicate every descriptor, depth, and capacity defense.
+
+## 2026-07-13 - Bound canonical output in both database characters and owned bytes
+
+- A SQLite character limit does not bound UTF-8 ownership, and a source-string limit does not bound JSON escape expansion. Preflight the exact canonical representation with separate Unicode-code-point and UTF-8-byte counters before emitting chunks.
+- A recursive alias DAG can remain acyclic while causing exponential work. Enforce depth and total visit caps independently, and track only the current ancestor set so benign aliases remain legal without enabling unbounded expansion.
+- For an aggregate persistence budget, cache final representation metrics by original object identity. A repeated alias that would cross the remaining budget can then fail before snapshotting, projection, hashing, or materializing another copy.
+- A canonical fingerprint proves bytes have not changed; it does not prove those bytes still satisfy the writer's security projection. Read decoding must receive the registered-home context and recheck home exclusion, redaction fixed points, native identifiers, and semantic nonempty fields manually.

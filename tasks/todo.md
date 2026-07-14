@@ -302,3 +302,19 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - TDD RED was isolated and diagnostic: identity plus codec reported `9 failed / 156 passed`; normal engine typecheck independently failed both direct trusted-helper privacy assertions with TS2578 before the exports were removed.
 - The exact full-size projection tests prove both readable and injective amplification fail before `structuredClone`; a valid persisted event now records zero clone calls instead of three.
 - Fresh final gate: identity plus codec tests `166/166` in `16.56s` (`16.64s` test execution); normal engine typecheck ran source plus the negative public fixture, and `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.
+
+### Final adversarial recertification repairs
+
+- [x] Cap aggregate canonical event JSON for one prepared task at fixed `64 MiB` UTF-8 bytes and `64 MiB` SQLite code points, with a backend-only byte-limit seam and alias-aware rejection before rematerializing the crossing copy.
+- [x] Replace recursive aggregate canonicalization with exact two-pass metrics/emission bounded to depth 32, 1,000,000 visits, 64 MiB output bytes/code points, fixed dense arrays, ancestor cycles, and proxy-free data descriptors.
+- [x] Make task-key, locator, event-item, and event-turn extractors proxy-first and descriptor-safe; require top provider/locator and nested request locator identity to agree.
+- [x] Require registered-home context while decoding cache rows and manually enforce the writer's home/redaction/native-ID/nonempty-status/diagnostic invariants without reconstructing a native provider event.
+- [x] Complete independent adversarial review, rerun the final focused identity/codec gate plus engine typecheck/diff hygiene, and commit the coherent repair checkpoint.
+
+### Final adversarial recertification review
+
+- TDD RED was isolated: identity plus codec reported `6 failed / 165 passed`, covering proxy-first locator/extractor handling, canonical expansion bounds, aggregate budget enforcement, and registered-home decode equivalence.
+- The aggregate gate measures the final canonical representation in both SQLite code points and UTF-8 bytes. Exact-boundary ASCII and astral cases pass, first-over fails with `CAPACITY`, and the third repeated alias is rejected after exactly two source-text descriptor reads.
+- The canonical encoder preflights exact escaped output before emission, preserves the established lexical JSON output, rejects a 31-level alias DAG at the visit cap, and rejects control-character expansion above 64 MiB without constructing that result.
+- Independent adversarial review and the test-only boundary rereview both returned GO with no P0-P2 findings. The follow-up proves exact depth-32 acceptance/depth-33 rejection and multibyte repeated-alias first-byte-over rejection.
+- Fresh final gate: identity plus codec tests `174/174` in `16.78s` (`17.46s` test execution); normal engine typecheck ran source plus the negative public fixture; `git diff --check` passed. No SQL, migration, store implementation, provider process, browser, full suite, Python runtime, main checkout, or user-owned path was touched.

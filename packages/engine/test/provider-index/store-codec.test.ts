@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  cachedTurnKey,
   canonicalProviderIndexJson,
   parseCachedEventItemKey,
   parseCachedTurnKey,
@@ -259,6 +260,8 @@ describe("provider index store configuration", () => {
       maxMetadataDepth: 32,
     });
     expect(config).toMatchObject(PROVIDER_INDEX_STORE_DEFAULTS);
+    expect((config as unknown as { maxEventJsonBytesPerTask: number })
+      .maxEventJsonBytesPerTask).toBe(67_108_864);
     expect(config.now).toBeTypeOf("function");
     expect(config.tokenFactory).toBeTypeOf("function");
     expect(Object.isFrozen(config)).toBe(true);
@@ -434,6 +437,130 @@ describe("provider index store configuration", () => {
 });
 
 describe("provider task snapshot preparation", () => {
+  it("enforces an exact aggregate event JSON budget before rematerializing aliases", () => {
+    const alias = eventFor({
+      type: "message",
+      role: "assistant",
+      text: "small aliased event budget",
+      turnId: "turn-aggregate-budget",
+      itemId: null,
+    });
+    const eventJsonChars = Array.from(canonicalProviderIndexJson(
+      providersIndex.projectIndexedProviderEvent(alias),
+    )).length;
+    const taskWithCopies = (count: number): NativeTask => nativeTask({
+      turns: [{
+        id: "turn-aggregate-budget",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: Array.from({ length: count }, () => alias),
+      }],
+    });
+    const configWithBudget = (budget: number) => ({
+      ...normalizeProviderIndexStoreOptions(),
+      maxEventJsonBytesPerTask: budget,
+    });
+
+    expect(prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      taskWithCopies(2),
+      configWithBudget(eventJsonChars * 2) as never,
+    ).eventCount).toBe(2);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        taskWithCopies(1),
+        configWithBudget(eventJsonChars - 1) as never,
+      ),
+      "CAPACITY",
+    );
+
+    const original = Object.getOwnPropertyDescriptor;
+    let textDescriptorReads = 0;
+    const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (target === alias && property === "text") textDescriptorReads += 1;
+        return original(target, property);
+      },
+    );
+    try {
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(
+          registrationFor(),
+          key,
+          taskWithCopies(3),
+          configWithBudget(eventJsonChars * 2) as never,
+        ),
+        "CAPACITY",
+      );
+      expect(textDescriptorReads).toBe(2);
+    } finally {
+      descriptor.mockRestore();
+    }
+  });
+
+  it("accounts for aggregate canonical event JSON in UTF-8 bytes", () => {
+    const event = eventFor({
+      type: "message",
+      role: "assistant",
+      text: "🪐".repeat(64),
+      turnId: "turn-aggregate-bytes",
+      itemId: null,
+    });
+    const eventJson = canonicalProviderIndexJson(
+      providersIndex.projectIndexedProviderEvent(event),
+    );
+    const eventJsonBytes = Buffer.byteLength(eventJson, "utf8");
+    expect(eventJsonBytes).toBeGreaterThan(Array.from(eventJson).length);
+    const taskWithCopies = (count: number): NativeTask => nativeTask({
+      turns: [{
+        id: "turn-aggregate-bytes",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: Array.from({ length: count }, () => event),
+      }],
+    });
+    const configWithBudget = (budget: number) => ({
+      ...normalizeProviderIndexStoreOptions(),
+      maxEventJsonBytesPerTask: budget,
+    });
+
+    expect(prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      taskWithCopies(2),
+      configWithBudget(eventJsonBytes * 2) as never,
+    ).eventCount).toBe(2);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        taskWithCopies(2),
+        configWithBudget(eventJsonBytes * 2 - 1) as never,
+      ),
+      "CAPACITY",
+    );
+    expect(prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      taskWithCopies(1),
+      configWithBudget(eventJsonBytes) as never,
+    ).eventCount).toBe(1);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        taskWithCopies(1),
+        configWithBudget(eventJsonBytes - 1) as never,
+      ),
+      "CAPACITY",
+    );
+  });
+
   it("rejects provider-home projection expansion before clone or materialization", () => {
     const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
     const event = normalizeProviderEvent({
@@ -1132,7 +1259,12 @@ describe("provider task snapshot preparation", () => {
     const eventJson = cached.eventJson;
     expect(eventJson.length).toBeGreaterThan(maxEventJsonChars);
     expect(Array.from(eventJson)).toHaveLength(maxEventJsonChars);
-    const decoded = decodeCachedProviderEvent(rowFor(cached), prepared.locator, turn.nativeTurnKey);
+    const decoded = decodeCachedProviderEvent(
+      rowFor(cached),
+      prepared.locator,
+      turn.nativeTurnKey,
+      registrationFor(),
+    );
     expect(decoded.type).toBe("message");
     if (decoded.type !== "message") throw new Error("expected message event");
     expect(decoded.text.length).toBeGreaterThan(Array.from(decoded.text).length);
@@ -1254,6 +1386,7 @@ describe("provider task snapshot preparation", () => {
         rowFor(cached),
         prepared.locator,
         turn.nativeTurnKey,
+        registrationFor(),
       );
       expect(decoded.type).toBe("diagnostic");
       if (decoded.type !== "diagnostic") throw new Error("expected diagnostic");
@@ -1709,6 +1842,7 @@ describe("cached indexed provider event decoding", () => {
         rowFor(cached),
         prepared.locator,
         turn.nativeTurnKey,
+        registrationFor(),
       );
       expect(decoded).toEqual(cached.event);
       expect(Object.isFrozen(decoded)).toBe(true);
@@ -1759,11 +1893,149 @@ describe("cached indexed provider event decoding", () => {
       rowFor(cached),
       prepared.locator,
       prepared.turns[0]!.nativeTurnKey,
+      registrationFor(),
     );
     expect(decoded.type).toBe("request");
     if (decoded.type !== "request") throw new Error("expected request event");
     expect(decoded.request.identity.requestId).toBe(Number.MIN_SAFE_INTEGER);
     expect(decoded.request.identity.approvalId).toBe(-1);
+  });
+
+  it("requires registered-home context and enforces writer-equivalent decoded text", () => {
+    const prepared = exhaustiveSnapshot();
+    const turn = prepared.turns[0]!;
+    const cachedByType = (type: string) => turn.events.find(
+      (candidate) => candidate.event.type === type,
+    )!;
+    const decodeMutation = (
+      cached: ReturnType<typeof cachedByType>,
+      mutate: (event: Record<string, unknown>) => Record<string, unknown>,
+      containingTurnKey = turn.nativeTurnKey,
+    ) => decodeCachedProviderEvent(
+      withEventJson(rowFor(cached), mutate(JSON.parse(cached.eventJson) as Record<string, unknown>)),
+      prepared.locator,
+      containingTurnKey,
+      registrationFor(),
+    );
+
+    const freeTextMutations: readonly [string, (event: Record<string, unknown>) => Record<string, unknown>][] = [
+      ["message", (event) => ({ ...event, text: HOME })],
+      ["message-delta", (event) => ({ ...event, delta: HOME })],
+      ["plan", (event) => ({ ...event, text: HOME })],
+      ["plan", (event) => ({ ...event, status: HOME })],
+      ["activity", (event) => ({ ...event, activity: HOME })],
+      ["activity", (event) => ({ ...event, status: HOME })],
+      ["activity", (event) => ({ ...event, message: HOME })],
+      ["status", (event) => ({ ...event, status: HOME })],
+      ["diagnostic", (event) => ({ ...event, code: HOME })],
+      ["diagnostic", (event) => ({ ...event, message: HOME })],
+      ["diagnostic", (event) => ({ ...event, method: HOME })],
+      ["diagnostic", (event) => ({ ...event, shapeKeys: [HOME] })],
+    ];
+    for (const [type, mutate] of freeTextMutations) {
+      expectStoreError(
+        () => decodeMutation(cachedByType(type), mutate),
+        "CORRUPT_ROW",
+        HOME,
+      );
+    }
+    expectStoreError(
+      () => decodeMutation(cachedByType("message"), (event) => ({
+        ...event,
+        text: "Bearer abcdefghijklmnop",
+      })),
+      "CORRUPT_ROW",
+      "abcdefghijklmnop",
+    );
+
+    for (const [type, mutate] of [
+      ["plan", (event: Record<string, unknown>) => ({ ...event, status: "" })],
+      ["plan", (event: Record<string, unknown>) => ({ ...event, status: "   " })],
+      ["activity", (event: Record<string, unknown>) => ({ ...event, activity: "" })],
+      ["activity", (event: Record<string, unknown>) => ({ ...event, status: "   " })],
+      ["status", (event: Record<string, unknown>) => ({ ...event, status: "" })],
+      ["diagnostic", (event: Record<string, unknown>) => ({ ...event, code: "" })],
+      ["diagnostic", (event: Record<string, unknown>) => ({ ...event, message: "" })],
+    ] as const) {
+      expectStoreError(
+        () => decodeMutation(cachedByType(type), mutate),
+        "CORRUPT_ROW",
+      );
+    }
+
+    const planWithWhitespace = decodeMutation(cachedByType("plan"), (event) => ({
+      ...event,
+      status: "  in_progress  ",
+    }));
+    expect(planWithWhitespace.type).toBe("plan");
+    if (planWithWhitespace.type !== "plan") throw new Error("expected plan");
+    expect(planWithWhitespace.status).toBe("  in_progress  ");
+    const diagnosticWithEmptyOptional = decodeMutation(
+      cachedByType("diagnostic"),
+      (event) => ({ ...event, method: "", shapeKeys: [""] }),
+    );
+    expect(diagnosticWithEmptyOptional.type).toBe("diagnostic");
+    if (diagnosticWithEmptyOptional.type !== "diagnostic") {
+      throw new Error("expected diagnostic");
+    }
+    expect(diagnosticWithEmptyOptional.method).toBe("");
+    expect(diagnosticWithEmptyOptional.shapeKeys).toEqual([""]);
+
+    const message = cachedByType("message");
+    const messageEvent = JSON.parse(message.eventJson) as Record<string, unknown>;
+    const homeTurnKey = cachedTurnKey(HOME);
+    expectStoreError(
+      () => decodeCachedProviderEvent(
+        withEventJson({ ...rowFor(message), native_turn_key: homeTurnKey }, {
+          ...messageEvent,
+          turnId: HOME,
+        }),
+        prepared.locator,
+        homeTurnKey,
+        registrationFor(),
+      ),
+      "CORRUPT_ROW",
+      HOME,
+    );
+    const request = cachedByType("request");
+    expectStoreError(
+      () => decodeMutation(request, (event) => ({
+        ...event,
+        request: {
+          ...(event.request as Record<string, unknown>),
+          identity: {
+            ...((event.request as Record<string, unknown>).identity as Record<string, unknown>),
+            requestId: HOME,
+          },
+        },
+      })),
+      "CORRUPT_ROW",
+      HOME,
+    );
+    expectStoreError(
+      () => decodeMutation(request, (event) => ({
+        ...event,
+        request: {
+          ...(event.request as Record<string, unknown>),
+          identity: {
+            ...((event.request as Record<string, unknown>).identity as Record<string, unknown>),
+            requestId: null,
+          },
+        },
+      })),
+      "CORRUPT_ROW",
+    );
+
+    const otherHomeKey = createNativeTaskKey("openai", `${HOME}-other`, "task-1");
+    expectStoreError(
+      () => decodeCachedProviderEvent(
+        rowFor(message),
+        prepared.locator,
+        turn.nativeTurnKey,
+        registrationFor(otherHomeKey),
+      ),
+      "CORRUPT_ROW",
+    );
   });
 
   it("rejects independent row identity and fingerprint mutations", () => {
@@ -1784,7 +2056,12 @@ describe("cached indexed provider event decoding", () => {
     ];
     for (const mutation of mutations) {
       expectStoreError(
-        () => decodeCachedProviderEvent(mutation, prepared.locator, turn.nativeTurnKey),
+        () => decodeCachedProviderEvent(
+          mutation,
+          prepared.locator,
+          turn.nativeTurnKey,
+          registrationFor(),
+        ),
         "CORRUPT_ROW",
       );
     }
@@ -1812,6 +2089,7 @@ describe("cached indexed provider event decoding", () => {
           withEventJson(row, corrupt),
           prepared.locator,
           turn.nativeTurnKey,
+          registrationFor(),
         ),
         "CORRUPT_ROW",
       );
@@ -1824,6 +2102,7 @@ describe("cached indexed provider event decoding", () => {
         withEventJson(rowFor(usage), { ...usageEvent, totalTokens: 1.5 }),
         prepared.locator,
         turn.nativeTurnKey,
+        registrationFor(),
       ),
       "CORRUPT_ROW",
     );
@@ -1846,7 +2125,7 @@ describe("cached indexed provider event decoding", () => {
           ...row,
           event_json: eventJson,
           event_fingerprint: eventFingerprint(row.replay_key as string, eventJson),
-        }, prepared.locator, turn.nativeTurnKey),
+        }, prepared.locator, turn.nativeTurnKey, registrationFor()),
         "CORRUPT_ROW",
       );
     }
@@ -1878,6 +2157,7 @@ describe("cached indexed provider event decoding", () => {
           corrupt as ReturnType<typeof rowFor>,
           prepared.locator,
           turn.nativeTurnKey,
+          registrationFor(),
         ),
         "CORRUPT_ROW",
         "must-never-leak",
