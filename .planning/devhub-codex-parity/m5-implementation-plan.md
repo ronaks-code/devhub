@@ -76,7 +76,11 @@ export function projectIndexedProviderEvent(event: ProviderEvent): IndexedProvid
 
 - Modify `packages/engine/src/migrations.ts`
 - Modify `packages/engine/src/index-db.ts`
+- Modify `packages/engine/src/provider-index/identity.ts`
+- Create `packages/engine/src/provider-index/schema.ts`
 - Create `packages/engine/src/provider-index/store.ts`
+- Create `packages/engine/src/provider-index/store-types.ts`
+- Create `packages/engine/src/provider-index/store-codec.ts`
 - Create `packages/engine/src/provider-index/cursor.ts`
 - Create `packages/engine/test/provider-index/migration.test.ts`
 - Create `packages/engine/test/provider-index/store.test.ts`
@@ -98,7 +102,7 @@ provider_sync_state(
 )
 provider_task_cache(
   provider, home_fingerprint, native_task_id,
-  title, cwd, model, status, created_at, updated_at, archived, source,
+  title, cwd, cwd_redacted, model, status, created_at, updated_at, archived, source,
   revision_updated_at, revision_status, revision_last_turn_id,
   revision_last_turn_status, revision_last_item_id, revision_fingerprint,
   cache_generation, observed_at,
@@ -155,22 +159,130 @@ provider_reconciliation_state(
 - `provider_homes` is backend-only; only its fingerprint crosses the new HTTP/browser/archive boundary. Deleting a registered home is explicit and `RESTRICT`ed while scoped state exists.
 - Every cache/turn/event/receipt primary and foreign key includes `cache_generation`. Sync state permits only one token-owned staging generation with a bounded heartbeat/expiry and promotes it to active in one transaction after a complete census. Reads join only `provider_sync_state.active_generation`; an interrupted staging generation is never visible.
 - Child cache tables use generation-inclusive composite foreign keys with `ON DELETE CASCADE` only to the exact `provider_task_cache` generation; replay receipts are cache and clear with that exact generation.
+- Add generation-inclusive unique indexes for `(task locator, cache_generation, turn ordinal)`, `(task locator, cache_generation, event ordinal)`, and `(task locator, cache_generation)` on replay receipts. They make turn/event ordinals unique within one task snapshot and permit at most one receipt per fully snapshotted task; promotion additionally proves contiguity and per-receipt counts.
 - Metadata/fork/reconciliation/legacy tables intentionally have no cascading cache foreign key.
 - Constraints enforce known providers, 64-character lowercase fingerprints, nonempty bounded IDs, boolean favorite, nonnegative safe timestamps/generations, valid nullable archive encoding, and bounded JSON text.
 - Fresh schema and v13-to-v14 migration create the same shape. Migration runs in the existing per-version transaction and never rewrites legacy tables.
 - Existing rows are not auto-mapped during migration. Correct mapping requires live provider/home evidence; v1 imports are recorded as unresolved provenance.
 
+**Frozen store-boundary decisions**
+
+- Every fully snapshotted task has exactly one receipt in its exact cache generation; a summary-only task has none. Turn ordinals are exactly `0..turnCount-1`. Event ordinals are exactly `0..eventCount-1` and global across the task: preserve native turn order, then event order within each turn. `event_fingerprint` is lowercase SHA-256 of `devhub-provider-event-cache:v1\0<replay_key>\0<canonical persisted-event JSON>`; including the injective replay key keeps readable-redaction collisions distinct while remaining path-free.
+- `snapshot_fingerprint` is lowercase SHA-256 of `devhub-provider-snapshot:v1\0<canonical fixed-array payload>`. That payload is exactly `[1, locator, summary, turns]`. `summary` is `[title,persistedCwd,cwdRedacted,model,status,createdAt,updatedAt,archived,source,revision]`; `revision` is either `null` or `[updatedAt,status,lastTurnId,lastTurnStatus,lastItemId,fingerprint]`. Each turn is `[nativeTurnKey,status,startedAt,completedAt,turnOrdinal,events]`. Each event is `[globalOrdinal,nativeItemKey,replayKey,eventFingerprint,canonicalPersistedEventJson]`. Cache generation, observed/registered times, receipt key, local metadata, the raw registered provider-home value, and every home-contained cwd value are excluded; an allowed canonical project cwd outside that home remains `persistedCwd`. The replay key supplies the private injective distinction between literal redaction-marker content and provider-home content; add a fixed golden proving those snapshots hash differently.
+- The receipt `replay_key` is `snapshot:v1:<digest>`, where the digest hashes `devhub-provider-snapshot-revision:v1\0<serialized locator>\0<revision basis>`. A `native` snapshot must have a provider revision fingerprint or fails `INVALID_INPUT`. For revisionless `legacy-history` or `degraded-fallback`, the basis is `fallback:<snapshot_fingerprint>`; those read-only sources get replacement/idempotency but make no same-native-revision conflict claim. Reusing one receipt key with a different snapshot fingerprint atomically aborts the stage and increments the durable reconciliation latch; a changed receipt key transactionally replaces stale children and the prior receipt.
+- `promoteStage` takes an exact completion claim `{completedAt,providerVersion,taskCount,turnCount,eventCount,snapshotCount,receiptCount}`. In the ownership transaction it verifies the unexpired stage and all five SQL counts against the configured bounds: total tasks, turns, events, distinct receipt-owning tasks, and total receipts. It requires `0 <= snapshotCount <= taskCount`, `receiptCount === snapshotCount`, exactly one receipt for every snapshotted task, each receipt's `event_count` to equal that task's exact event-row count, contiguous turn/event ordinals, and no turn/event rows for summary-only tasks before switching the active generation. The verified call is the completion marker; a crash before commit leaves staging invisible, and a crash after commit leaves the complete generation active.
+- `store-codec.ts` decodes persisted JSON only to `IndexedProviderEvent`; it never reconstructs a native `ProviderEvent`, and `identity.ts` remains the sole native projection/key owner. A turn row must decode to a non-null canonical native turn ID. Every event's provider/locator and non-null turn ID must match its containing task/turn row. The codec validates exact union fields, canonical JSON/UTF-8, native item ownership where readable, synthetic/replay tag plus ordinal prefixes, and recomputes `event_fingerprint` from the opaque replay key plus canonical persisted event. Opaque digest suffixes are bound through the snapshot fingerprint rather than reverse-engineered from readable redaction. Any row/JSON/key/fingerprint/ordinal mismatch fails the entire read with value-free `CORRUPT_ROW`.
+- A task `cwd` that equals or descends from the registered provider home is replaced with `NULL` before cache persistence and sets `cwd_redacted=1`; an originally-null cwd stores `cwd_redacted=0`. No second copy of the canonical provider home exists outside `provider_homes`. Other canonical project cwd values remain backend cache data and may be returned under the existing authenticated policy. Snapshot fingerprint input uses `(persistedCwd,cwdRedacted)`, never the raw provider home.
+- Every summary/snapshot write proves the method key, payload key, stage scope, resolved registered home, nested event/request locators, and provider all describe the same native task before opening a transaction. Cwd must be null or a bounded absolute canonical path; containment is checked on path-component boundaries. Any mismatch fails `INVALID_INPUT` without writes, while persisted/readback ownership mismatch fails `CORRUPT_ROW`.
+- The default stage lease is `30_000 ms`, configurable only within `1_000..300_000 ms`. Default/hard maxima are: tasks per generation `100_000/1_000_000`, turns per generation `1_000_000/2_000_000`, events per task `100_000/1_000_000`, events per generation `5_000_000/10_000_000`, and metadata depth `16/32`. The constructor snapshots exact own data options, uses an injected clock/token factory only after validating them, and never reflects either value in an error. That clock is the sole source for stage heartbeat/expiry and staged-row `observed_at`; callers cannot supply or extend lease time.
+- `ProviderTaskIndexStore` shares the existing `DatabaseSync` connection. Cache, stage, lease, replay, and reconciliation mutations require ownership of a top-level `BEGIN IMMEDIATE`; they reject a caller-owned outer transaction before changing state. Replay conflict commits the stage abort plus reconciliation latch, then throws only after that commit. Metadata/fork/legacy-import helpers may use a uniquely named `SAVEPOINT` inside the caller's transaction because they have no committed-failure path. Every error is a stable, path/value-free `ProviderIndexStoreError`; parsed cursor positions are attacker-controlled query inputs, never authority, and are used only through parameterized scope-constrained SQL.
+- Store error codes are exactly `INVALID_INPUT`, `CORRUPT_ROW`, `DATABASE_UNAVAILABLE`, `CLOCK_FAILURE`, `TOKEN_FAILURE`, `CAPACITY`, `UNKNOWN_HOME`, `HOME_CONFLICT`, `STAGE_BUSY`, `STAGE_LOST`, `STAGE_EXPIRED`, `STAGE_INCOMPLETE`, `REPLAY_CONFLICT`, `FORK_CONFLICT`, `LEGACY_MAPPING_CONFLICT`, and `RECONCILIATION_CAS_MISMATCH`. SQLite/provider/token/clock exception text is never reflected.
+
 **Store API**
 
 ```ts
+interface ProviderIndexStoreOptions {
+  stageLeaseMs?: number;
+  maxTasksPerGeneration?: number;
+  maxTurnsPerGeneration?: number;
+  maxEventsPerTask?: number;
+  maxEventsPerGeneration?: number;
+  maxMetadataDepth?: number;
+  now?: () => number;
+  tokenFactory?: () => string;
+}
+
+interface ProviderIndexCompletion {
+  completedAt: number;
+  providerVersion: string | null;
+  taskCount: number;
+  turnCount: number;
+  eventCount: number;
+  snapshotCount: number;
+  receiptCount: number;
+}
+
+interface ProviderHomeScope {
+  provider: ProviderId;
+  homeFingerprint: string;
+}
+
+interface IndexedProviderTaskSummary {
+  locator: ProviderTaskLocator;
+  title: string;
+  cwd: string | null;
+  cwdRedacted: boolean;
+  model: string | null;
+  status: string;
+  createdAt: string | null;
+  updatedAt: string | null;
+  archived: boolean | null;
+  source: NativeTaskSource;
+  revision: Readonly<NativeRevision> | null;
+  cacheDetail: "summary" | "snapshot";
+  cacheGeneration: number;
+  observedAt: number;
+}
+
+interface IndexedProviderTurn {
+  id: string;
+  status: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  ordinal: number;
+  events: readonly IndexedProviderEvent[];
+}
+
+interface IndexedProviderTask extends IndexedProviderTaskSummary {
+  turns: readonly IndexedProviderTurn[];
+}
+
+interface ProviderIndexStage extends ProviderHomeScope {
+  generation: number;
+  ownerToken: string;
+}
+
+interface ProviderIndexPromotion extends ProviderHomeScope {
+  previousGeneration: number;
+  activeGeneration: number;
+  completedAt: number;
+  taskCount: number;
+  turnCount: number;
+  eventCount: number;
+  snapshotCount: number;
+}
+
+type ProviderIndexStoreErrorCode =
+  | "INVALID_INPUT"
+  | "CORRUPT_ROW"
+  | "DATABASE_UNAVAILABLE"
+  | "CLOCK_FAILURE"
+  | "TOKEN_FAILURE"
+  | "CAPACITY"
+  | "UNKNOWN_HOME"
+  | "HOME_CONFLICT"
+  | "STAGE_BUSY"
+  | "STAGE_LOST"
+  | "STAGE_EXPIRED"
+  | "STAGE_INCOMPLETE"
+  | "REPLAY_CONFLICT"
+  | "FORK_CONFLICT"
+  | "LEGACY_MAPPING_CONFLICT"
+  | "RECONCILIATION_CAS_MISMATCH";
+
+class ProviderIndexStoreError extends Error {
+  readonly code: ProviderIndexStoreErrorCode;
+}
+
 class ProviderTaskIndexStore {
+  constructor(db: DatabaseSync, options?: ProviderIndexStoreOptions);
   registerHome(key: Pick<NativeTaskKey, "provider" | "home">, registeredAt: number): ProviderHomeRegistration;
   resolveHome(provider: ProviderId, homeFingerprint: string): string | null;
-  beginStage(scope: ProviderHomeScope, observedAt: number): ProviderIndexStage;
-  heartbeatStage(stage: ProviderIndexStage, observedAt: number): boolean;
+  beginStage(scope: ProviderHomeScope): ProviderIndexStage;
+  heartbeatStage(stage: ProviderIndexStage): boolean;
   stageSummary(stage: ProviderIndexStage, key: NativeTaskKey, summary: NativeTaskSummary): void;
   stageSnapshot(stage: ProviderIndexStage, key: NativeTaskKey, task: NativeTask): void;
-  promoteStage(stage: ProviderIndexStage, completedAt: number): ProviderIndexPromotion;
+  promoteStage(stage: ProviderIndexStage, completion: ProviderIndexCompletion): ProviderIndexPromotion;
   abortStage(stage: ProviderIndexStage): void;
   replaceActiveSummary(key: NativeTaskKey, summary: NativeTaskSummary, observedAt: number): IndexedProviderTaskSummary | null;
   replaceActiveSnapshot(key: NativeTaskKey, task: NativeTask, observedAt: number): IndexedProviderTask | null;
@@ -197,17 +309,18 @@ class ProviderTaskIndexStore {
 
 - `stageSnapshot` validates exact stage ownership, projects all nested keys to locators, normalizes browser-safe JSON, and writes only the staging generation. Equal replay key/equal fingerprint is a no-op; equal replay key/different fingerprint aborts the stage and durably latches reconciliation.
 - `beginStage` is an atomic recovery boundary. With no stage it allocates a strictly newer generation and random owner token. With an unexpired foreign stage it returns `STAGE_BUSY`. With an expired non-active stage it deletes only that abandoned generation, clears its token, and allocates the successor in the same transaction. Every stage write/heartbeat verifies token+generation and monotonically extends the bounded expiry; a lost/expired token aborts the coordinator.
-- `promoteStage` verifies the unexpired stage token, scope, completion marker, and row bounds, then changes `active_generation` in one transaction before retiring older generations. `abortStage` deletes only the exact token-owned unpromoted generation. `list`/`read` never query staging rows.
+- `promoteStage` verifies the unexpired stage token, scope, exact completion counts, provider version, and row bounds, then changes `active_generation` in one transaction before retiring older generations. `abortStage` deletes only the exact token-owned unpromoted generation. `list`/`read` never query staging rows.
 - `replaceActiveSnapshot` is permitted only when that home already has a complete active generation; it atomically replaces one task inside that generation after an authoritative point read. Before first full promotion it returns `null` and exposes no partial cache.
 - `replaceActiveSummary` has the same active-generation prerequisite and atomically upserts only task-summary columns while preserving every existing turn/event/receipt child. It returns `null` before the first complete promotion.
 - Every call to `requireReconciliation` atomically increments a bounded monotonic `latch_revision`, even when the native fingerprint/reason is unchanged. `acknowledgeReconciliation` is an atomic compare-and-swap: the row must still be required and match the exact expected latch revision plus native/reviewed fingerprints. It never clears a newer same-fingerprint relatch.
 - `list` enforces limit `1..200`, the Task 5 stable order/scope, and the canonical size-bounded `pi1.` cursor in SQL; it never loads the full table and paginates in memory.
 - Metadata JSON is schema-checked, prototype-safe, at most 32 keys/64 KiB, and contains only JSON primitives/arrays/records.
+- `list` labels each row `cacheDetail:"summary"|"snapshot"` from the unique receipt. `read` may return a summary-only task with `turns:[]` and `cacheDetail:"summary"`; that never claims an empty native transcript. Coordinator/full-task reads treat summary-only as a cache miss and reread natively. Only an explicitly degraded summary projection may consume it without a native read.
 - All returned values are immutable snapshots.
 
 **TDD gate**
 
-- Prove v13 upgrade, fresh v14 equivalence, rerun idempotency, rollback on injected DDL failure, unchanged v13 bytes/rows, provider/home/task collision isolation, multiple deltas for one item, null item/turn cases, replay idempotency/conflict latching, stale-child removal, staging invisibility, live-stage busy refusal, hard-crash/reopen expired-stage atomic cleanup and successor promotion, lost heartbeat/token refusal, transaction rollback, cache deletion preserving metadata/forks/latches, verified-only legacy mapping, corrupt-row fail-closed behavior, and bounds.
+- Prove v13 upgrade, fresh v14 equivalence, rerun idempotency, rollback on injected DDL failure, unchanged v13 bytes/rows, provider/home/task collision isolation, multiple deltas for one item, null event turn/item fields inside a real containing turn, contiguous cross-turn global ordinals, duplicate/gap/compensated-total corruption, injective raw-home-versus-literal-marker snapshot hashing, revisionless-native rejection, native-revision conflict and fallback replacement, replay idempotency/committed conflict latching, stale-child removal, cwd containment plus originally-null distinction, staging invisibility, exact post-dedupe completion and per-receipt count mismatch, live-stage busy refusal, hard-crash/reopen expired-stage atomic cleanup and successor promotion, lost heartbeat/token refusal, caller-owned transaction refusal, clock/token/value-free error mappings, transaction rollback, cache deletion preserving metadata/forks/latches, verified-only legacy mapping, independent mutations of event JSON/fingerprint/ordinal/turn/item/replay identity, corrupt-row fail-closed behavior, and every configured/default/hard bound.
 - Targeted migration/store tests, engine typecheck, and diff hygiene must pass.
 
 ## Task 3: Provider index coordinator, rebuild, dedupe, and rollback read path
@@ -226,9 +339,9 @@ class ProviderTaskIndexStore {
 - Coordinator startup registers each runtime provider/home in the backend-only home registry; public results contain locators, never canonical homes.
 - `observeListPage` calls `replaceActiveSummary` for an already-promoted home, atomically updating summary fields without erasing previously cached turns/events/receipts. Before initial promotion it does not expose page fragments.
 - `observeTask` replaces a complete `includeTurns=true` snapshot; a summary-only observation updates task fields but preserves children.
-- `rebuild({provider, home})` calls `beginStage`, maintains the stage heartbeat while paging the native provider to exhaustion with bounded page/task/time limits, writes only through `stageSummary`/`stageSnapshot`, records an exact completion marker, then calls `promoteStage`. Promotion atomically selects the new generation and invalidates only older cache generations in that exact provider/home scope.
+- `rebuild({provider, home})` calls `beginStage`, maintains the stage heartbeat while paging the native provider to exhaustion with bounded page/task/time limits, and deduplicates locators in a bounded map. `taskCount` is the unique post-dedupe census size; per-locator snapshot counts replace earlier counts rather than accumulate on replay; `turnCount`/`eventCount` are the sums of those final canonical snapshots; `snapshotCount` is the number of distinct fully snapshotted locators and equals `receiptCount`. It writes only through `stageSummary`/`stageSnapshot`, passes those exact five counts to `promoteStage`, and refuses promotion when the store's SQL counts differ. Promotion atomically selects the new generation and invalidates only older cache generations in that exact provider/home scope.
 - A failed/aborted rebuild calls `abortStage`, retains the previous complete active generation, and never publishes a partial generation or deletes metadata. All list/read SQL joins `provider_sync_state.active_generation`; there is no fallback query that can see staging rows.
-- `readThrough` returns an authoritative native observation when available and only returns cache with explicit `freshness:"cache"` when the caller permits degraded cache reads.
+- `readThrough` returns an authoritative native observation when available and only returns cache with explicit `freshness:"cache"` when the caller permits degraded cache reads. A cached full-task request requires `cacheDetail:"snapshot"`; `cacheDetail:"summary"` is eligible only for an explicitly requested summary projection and never fabricates an empty transcript.
 - Legacy `sessionId` lookup falls back through `legacy_session_task_map` only after exact native verification. An unresolved provenance row stays on the legacy path and can never be promoted by matching ID alone.
 - A verified unified task that disappears natively is marked deleted, has rebuildable cache cleared, and cannot fall back to the gzip archive. Unified tasks stop creating new gzip transcript archives; legacy unresolved sessions retain their existing compatibility behavior until M8 cleanup.
 - Flag-off routing does not instantiate or call the coordinator read path. Dual writes/observations are allowed because they are additive cache; rollback immediately restores legacy direct reads.
