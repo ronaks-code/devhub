@@ -148,3 +148,9 @@
 
 - A missing `RETURNING` row is not automatically the method's domain error. Prove capacity and CAS preconditions first; inside the owned writer transaction, an otherwise impossible missing row indicates trigger suppression or persisted-state corruption.
 - Add real BEFORE `RAISE(IGNORE)` tests as well as AFTER delete/rewrite tests. The former certifies suppression classification, while the latter certifies exact post-write authority and rollback.
+
+## 2026-07-14 - Fence stage identity against both state and cache
+
+- A monotonic epoch row is necessary but not sufficient when cache generations are not foreign-keyed to sync state. Before allocating, fail closed if missing/idle sync authority would let cache at or beyond the visible allocation boundary survive into a reused identity.
+- Lease renewal must be monotonic across process/config restarts. A shorter newly configured lease may advance the heartbeat but must preserve a later existing expiry rather than shortening ownership.
+- Snapshot scope/handle inputs and provider-home authority before callbacks, recheck the exact stored home inside the owned transaction without filesystem work, then reread the complete sync row after every write. Trigger suppression, deletion, or rewriting is corruption, not successful ownership.

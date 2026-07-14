@@ -11,6 +11,7 @@ import {
   type ProviderTaskLocator,
 } from "./identity.js";
 import {
+  createProviderIndexOwnerToken,
   normalizeProviderIndexStoreOptions,
   readProviderIndexNow,
 } from "./store-codec.js";
@@ -18,6 +19,8 @@ import {
   ProviderIndexStoreError,
   type NormalizedProviderIndexStoreConfig,
   type ProviderHomeRegistration,
+  type ProviderHomeScope,
+  type ProviderIndexStage,
   type ProviderIndexStoreErrorCode,
   type ProviderIndexStoreOptions,
   type ProviderReconciliationReason,
@@ -75,6 +78,37 @@ interface NormalizedReconciliationInput {
 
 interface NormalizedHomeRegistration extends ProviderHomeRegistration {
   readonly canonicalHome: string;
+}
+
+interface KnownHomeScope {
+  readonly scope: Readonly<ProviderHomeScope>;
+  readonly canonicalHome: string;
+}
+
+interface ProviderSyncStateRow {
+  readonly provider: unknown;
+  readonly home_fingerprint: unknown;
+  readonly active_generation: unknown;
+  readonly staging_generation: unknown;
+  readonly staging_owner_token: unknown;
+  readonly staging_heartbeat_at: unknown;
+  readonly staging_expires_at: unknown;
+  readonly state: unknown;
+  readonly provider_version: unknown;
+  readonly last_completed_at: unknown;
+  readonly generation_epoch: unknown;
+}
+
+interface ProviderSyncState extends ProviderHomeScope {
+  readonly activeGeneration: number;
+  readonly stagingGeneration: number | null;
+  readonly stagingOwnerToken: string | null;
+  readonly stagingHeartbeatAt: number | null;
+  readonly stagingExpiresAt: number | null;
+  readonly state: "idle" | "staging";
+  readonly providerVersion: string | null;
+  readonly lastCompletedAt: number | null;
+  readonly generationEpoch: number;
 }
 
 class InternalStoreFailure extends Error {
@@ -168,6 +202,64 @@ function normalizeRegistrationInput(
     homeFingerprint: fingerprint,
     registeredAt,
   });
+}
+
+function normalizedHomeScope(value: ProviderHomeScope): Readonly<ProviderHomeScope> {
+  const input = exactOwnData(value, ["provider", "homeFingerprint"]);
+  return Object.freeze({
+    provider: providerId(input.provider),
+    homeFingerprint: homeFingerprintValue(input.homeFingerprint),
+  });
+}
+
+function normalizedStage(value: ProviderIndexStage): Readonly<ProviderIndexStage> {
+  const input = exactOwnData(value, [
+    "provider",
+    "homeFingerprint",
+    "generation",
+    "ownerToken",
+  ]);
+  return Object.freeze({
+    provider: providerId(input.provider),
+    homeFingerprint: homeFingerprintValue(input.homeFingerprint),
+    generation: safeInteger(input.generation, 1),
+    ownerToken: ownerTokenValue(input.ownerToken),
+  });
+}
+
+function ownerTokenValue(value: unknown): string {
+  if (typeof value !== "string" || sqliteTextLengthAtMost(value, 512) === null ||
+    value.length === 0 || value !== value.trim() ||
+    /[\u0000-\u001f\u007f]/u.test(value) || !hasCanonicalUnicode(value)) {
+    throw new TypeError();
+  }
+  return value;
+}
+
+function optionalStoredText(value: unknown, maximum: number): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || value.length === 0 || value.includes("\u0000") ||
+    sqliteTextLengthAtMost(value, maximum) === null || !hasCanonicalUnicode(value)) {
+    throw new TypeError();
+  }
+  return value;
+}
+
+function optionalSafeInteger(value: unknown): number | null {
+  return value === null ? null : safeInteger(value);
+}
+
+function leaseExpiry(now: number, config: NormalizedProviderIndexStoreConfig): number {
+  if (now > MAX_SAFE_INTEGER - config.stageLeaseMs) fail("CLOCK_FAILURE");
+  return now + config.stageLeaseMs;
+}
+
+function sampleOwnerToken(config: NormalizedProviderIndexStoreConfig): string {
+  try {
+    return createProviderIndexOwnerToken(config);
+  } catch {
+    return fail("TOKEN_FAILURE");
+  }
 }
 
 function normalizeLocator(value: ProviderTaskLocator): ProviderTaskLocator {
@@ -358,6 +450,231 @@ function verifyInsertedRegisteredHomeInsideOwnedTransaction(
     homeFingerprint: expected.homeFingerprint,
     registeredAt: expected.registeredAt,
   });
+}
+
+function knownHomeScope(
+  db: SqliteDatabase,
+  value: ProviderHomeScope,
+): Readonly<KnownHomeScope> {
+  const scope = normalizedHomeScope(value);
+  const canonicalHome = resolveRegisteredHome(db, scope.provider, scope.homeFingerprint);
+  if (canonicalHome === null) fail("UNKNOWN_HOME");
+  return Object.freeze({ scope, canonicalHome });
+}
+
+function recheckKnownHomeInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+): void {
+  const row = queryRegisteredHomeByFingerprint(
+    db,
+    known.scope.provider,
+    known.scope.homeFingerprint,
+  );
+  if (row === null) fail("UNKNOWN_HOME");
+  const decoded = decodeRegisteredHomeRow(row);
+  if (decoded.provider !== known.scope.provider ||
+    decoded.homeFingerprint !== known.scope.homeFingerprint ||
+    decoded.canonicalHome !== known.canonicalHome) {
+    fail("CORRUPT_ROW");
+  }
+}
+
+function querySyncState(
+  db: SqliteDatabase,
+  scope: ProviderHomeScope,
+): ProviderSyncStateRow | null {
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    row = db.prepare(`SELECT
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, provider_version, last_completed_at, generation_epoch
+      FROM provider_sync_state
+      WHERE provider = ? AND home_fingerprint = ?`)
+      .get(scope.provider, scope.homeFingerprint) as ProviderSyncStateRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  return row ?? null;
+}
+
+function decodeSyncState(
+  row: ProviderSyncStateRow,
+  scope: ProviderHomeScope,
+): Readonly<ProviderSyncState> {
+  try {
+    const provider = providerId(row.provider);
+    const fingerprint = homeFingerprintValue(row.home_fingerprint);
+    if (provider !== scope.provider || fingerprint !== scope.homeFingerprint) {
+      throw new TypeError();
+    }
+    const activeGeneration = safeInteger(row.active_generation);
+    const stagingGeneration = optionalSafeInteger(row.staging_generation);
+    const stagingOwnerToken = row.staging_owner_token === null
+      ? null
+      : ownerTokenValue(row.staging_owner_token);
+    const stagingHeartbeatAt = optionalSafeInteger(row.staging_heartbeat_at);
+    const stagingExpiresAt = optionalSafeInteger(row.staging_expires_at);
+    if (row.state !== "idle" && row.state !== "staging") throw new TypeError();
+    const state = row.state;
+    const providerVersion = optionalStoredText(row.provider_version, 1_024);
+    const lastCompletedAt = optionalSafeInteger(row.last_completed_at);
+    const generationEpoch = safeInteger(row.generation_epoch);
+    if (generationEpoch < activeGeneration) throw new TypeError();
+    if (state === "idle") {
+      if (stagingGeneration !== null || stagingOwnerToken !== null ||
+        stagingHeartbeatAt !== null || stagingExpiresAt !== null) {
+        throw new TypeError();
+      }
+    } else if (stagingGeneration === null || stagingOwnerToken === null ||
+      stagingHeartbeatAt === null || stagingExpiresAt === null ||
+      stagingGeneration <= activeGeneration || stagingGeneration !== generationEpoch ||
+      stagingHeartbeatAt >= stagingExpiresAt) {
+      throw new TypeError();
+    }
+    return Object.freeze({
+      provider,
+      homeFingerprint: fingerprint,
+      activeGeneration,
+      stagingGeneration,
+      stagingOwnerToken,
+      stagingHeartbeatAt,
+      stagingExpiresAt,
+      state,
+      providerVersion,
+      lastCompletedAt,
+      generationEpoch,
+    });
+  } catch (error) {
+    if (error instanceof InternalStoreFailure) throw error;
+    return fail("CORRUPT_ROW");
+  }
+}
+
+function syncStateEquals(
+  left: ProviderSyncState,
+  right: ProviderSyncState,
+): boolean {
+  return left.provider === right.provider &&
+    left.homeFingerprint === right.homeFingerprint &&
+    left.activeGeneration === right.activeGeneration &&
+    left.stagingGeneration === right.stagingGeneration &&
+    left.stagingOwnerToken === right.stagingOwnerToken &&
+    left.stagingHeartbeatAt === right.stagingHeartbeatAt &&
+    left.stagingExpiresAt === right.stagingExpiresAt &&
+    left.state === right.state &&
+    left.providerVersion === right.providerVersion &&
+    left.lastCompletedAt === right.lastCompletedAt &&
+    left.generationEpoch === right.generationEpoch;
+}
+
+function requiredSyncState(
+  db: SqliteDatabase,
+  expected: ProviderSyncState,
+): Readonly<ProviderSyncState> {
+  const row = querySyncState(db, expected);
+  if (row === null) fail("CORRUPT_ROW");
+  const decoded = decodeSyncState(row, expected);
+  if (!syncStateEquals(decoded, expected)) fail("CORRUPT_ROW");
+  return decoded;
+}
+
+function stageFromState(state: ProviderSyncState): Readonly<ProviderIndexStage> {
+  if (state.state !== "staging" || state.stagingGeneration === null ||
+    state.stagingOwnerToken === null) {
+    fail("CORRUPT_ROW");
+  }
+  return Object.freeze({
+    provider: state.provider,
+    homeFingerprint: state.homeFingerprint,
+    generation: state.stagingGeneration,
+    ownerToken: state.stagingOwnerToken,
+  });
+}
+
+function stagingState(
+  current: ProviderSyncState | null,
+  scope: ProviderHomeScope,
+  generation: number,
+  ownerToken: string,
+  now: number,
+  expiresAt: number,
+): Readonly<ProviderSyncState> {
+  return Object.freeze({
+    provider: scope.provider,
+    homeFingerprint: scope.homeFingerprint,
+    activeGeneration: current?.activeGeneration ?? 0,
+    stagingGeneration: generation,
+    stagingOwnerToken: ownerToken,
+    stagingHeartbeatAt: now,
+    stagingExpiresAt: expiresAt,
+    state: "staging",
+    providerVersion: current?.providerVersion ?? null,
+    lastCompletedAt: current?.lastCompletedAt ?? null,
+    generationEpoch: generation,
+  });
+}
+
+function idleState(current: ProviderSyncState): Readonly<ProviderSyncState> {
+  return Object.freeze({
+    ...current,
+    stagingGeneration: null,
+    stagingOwnerToken: null,
+    stagingHeartbeatAt: null,
+    stagingExpiresAt: null,
+    state: "idle",
+  });
+}
+
+function hasCacheGeneration(
+  db: SqliteDatabase,
+  scope: ProviderHomeScope,
+  generation: number,
+): boolean {
+  try {
+    return db.prepare(`SELECT 1 AS present FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ? AND cache_generation = ?
+      LIMIT 1`).get(scope.provider, scope.homeFingerprint, generation) !== undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+}
+
+function maximumCacheGeneration(
+  db: SqliteDatabase,
+  scope: ProviderHomeScope,
+): number | null {
+  let row: { maximum: unknown } | undefined;
+  try {
+    row = db.prepare(`SELECT MAX(cache_generation) AS maximum
+      FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ?`)
+      .get(scope.provider, scope.homeFingerprint) as { maximum: unknown } | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  try {
+    return optionalSafeInteger(row.maximum);
+  } catch {
+    return fail("CORRUPT_ROW");
+  }
+}
+
+function deleteCacheGeneration(
+  db: SqliteDatabase,
+  scope: ProviderHomeScope,
+  generation: number,
+): void {
+  try {
+    db.prepare(`DELETE FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ? AND cache_generation = ?`)
+      .run(scope.provider, scope.homeFingerprint, generation);
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (hasCacheGeneration(db, scope, generation)) fail("CORRUPT_ROW");
 }
 
 function reconciliationTarget(
@@ -575,6 +892,216 @@ function acknowledgeInsideOwnedTransaction(
   return acknowledged;
 }
 
+function beginStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  now: number,
+  expiresAt: number,
+  ownerToken: string,
+): Readonly<ProviderIndexStage> {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const currentRow = querySyncState(db, known.scope);
+  const current = currentRow === null ? null : decodeSyncState(currentRow, known.scope);
+  const maximumCached = maximumCacheGeneration(db, known.scope);
+  if ((current === null && maximumCached !== null) ||
+    (current?.state === "idle" && maximumCached !== null &&
+      maximumCached > current.activeGeneration) ||
+    (current?.state === "staging" && maximumCached !== null &&
+      maximumCached > current.generationEpoch)) {
+    fail("CORRUPT_ROW");
+  }
+  if (current?.state === "staging") {
+    if (current.stagingExpiresAt === null || current.stagingGeneration === null) {
+      fail("CORRUPT_ROW");
+    }
+    if (now < current.stagingExpiresAt) fail("STAGE_BUSY");
+  }
+  if (current?.generationEpoch === MAX_SAFE_INTEGER) fail("CAPACITY");
+  if (current?.state === "staging") {
+    deleteCacheGeneration(db, known.scope, current.generationEpoch);
+  }
+
+  const generation = (current?.generationEpoch ?? 0) + 1;
+  const expected = stagingState(
+    current,
+    known.scope,
+    generation,
+    ownerToken,
+    now,
+    expiresAt,
+  );
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    if (current === null) {
+      row = db.prepare(`INSERT INTO provider_sync_state (
+        provider, home_fingerprint, active_generation, staging_generation,
+        staging_owner_token, staging_heartbeat_at, staging_expires_at,
+        state, provider_version, last_completed_at, generation_epoch
+      ) VALUES (?, ?, 0, ?, ?, ?, ?, 'staging', NULL, NULL, ?)
+      RETURNING
+        provider, home_fingerprint, active_generation, staging_generation,
+        staging_owner_token, staging_heartbeat_at, staging_expires_at,
+        state, provider_version, last_completed_at, generation_epoch`)
+        .get(
+          known.scope.provider,
+          known.scope.homeFingerprint,
+          generation,
+          ownerToken,
+          now,
+          expiresAt,
+          generation,
+        ) as ProviderSyncStateRow | undefined;
+    } else {
+      row = db.prepare(`UPDATE provider_sync_state SET
+        staging_generation = ?, staging_owner_token = ?,
+        staging_heartbeat_at = ?, staging_expires_at = ?,
+        state = 'staging', generation_epoch = ?
+      WHERE provider = ? AND home_fingerprint = ?
+        AND active_generation = ? AND generation_epoch = ? AND state = ?
+        AND staging_generation IS ? AND staging_owner_token IS ?
+        AND staging_heartbeat_at IS ? AND staging_expires_at IS ?
+        AND provider_version IS ? AND last_completed_at IS ?
+      RETURNING
+        provider, home_fingerprint, active_generation, staging_generation,
+        staging_owner_token, staging_heartbeat_at, staging_expires_at,
+        state, provider_version, last_completed_at, generation_epoch`)
+        .get(
+          generation,
+          ownerToken,
+          now,
+          expiresAt,
+          generation,
+          current.provider,
+          current.homeFingerprint,
+          current.activeGeneration,
+          current.generationEpoch,
+          current.state,
+          current.stagingGeneration,
+          current.stagingOwnerToken,
+          current.stagingHeartbeatAt,
+          current.stagingExpiresAt,
+          current.providerVersion,
+          current.lastCompletedAt,
+        ) as ProviderSyncStateRow | undefined;
+    }
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  return stageFromState(requiredSyncState(db, expected));
+}
+
+function heartbeatStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  stage: ProviderIndexStage,
+  now: number,
+  expiresAt: number,
+): boolean {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const currentRow = querySyncState(db, known.scope);
+  if (currentRow === null) return false;
+  const current = decodeSyncState(currentRow, known.scope);
+  if (current.state !== "staging" || current.stagingGeneration !== stage.generation ||
+    current.stagingOwnerToken !== stage.ownerToken) {
+    return false;
+  }
+  if (current.stagingHeartbeatAt === null || current.stagingExpiresAt === null) {
+    fail("CORRUPT_ROW");
+  }
+  if (now >= current.stagingExpiresAt) return false;
+  if (now < current.stagingHeartbeatAt) fail("CLOCK_FAILURE");
+  const renewedExpiresAt = Math.max(expiresAt, current.stagingExpiresAt);
+  const expected = Object.freeze({
+    ...current,
+    stagingHeartbeatAt: now,
+    stagingExpiresAt: renewedExpiresAt,
+  });
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    row = db.prepare(`UPDATE provider_sync_state SET
+      staging_heartbeat_at = ?, staging_expires_at = ?
+    WHERE provider = ? AND home_fingerprint = ?
+      AND active_generation = ? AND generation_epoch = ? AND state = 'staging'
+      AND staging_generation = ? AND staging_owner_token = ?
+      AND staging_heartbeat_at = ? AND staging_expires_at = ?
+      AND provider_version IS ? AND last_completed_at IS ?
+    RETURNING
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, provider_version, last_completed_at, generation_epoch`)
+      .get(
+        now,
+        renewedExpiresAt,
+        current.provider,
+        current.homeFingerprint,
+        current.activeGeneration,
+        current.generationEpoch,
+        current.stagingGeneration,
+        current.stagingOwnerToken,
+        current.stagingHeartbeatAt,
+        current.stagingExpiresAt,
+        current.providerVersion,
+        current.lastCompletedAt,
+      ) as ProviderSyncStateRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  requiredSyncState(db, expected);
+  return true;
+}
+
+function abortStageInsideOwnedTransaction(
+  db: SqliteDatabase,
+  known: KnownHomeScope,
+  stage: ProviderIndexStage,
+): void {
+  recheckKnownHomeInsideOwnedTransaction(db, known);
+  const currentRow = querySyncState(db, known.scope);
+  if (currentRow === null) fail("STAGE_LOST");
+  const current = decodeSyncState(currentRow, known.scope);
+  if (current.state !== "staging" || current.stagingGeneration !== stage.generation ||
+    current.stagingOwnerToken !== stage.ownerToken) {
+    fail("STAGE_LOST");
+  }
+  deleteCacheGeneration(db, known.scope, stage.generation);
+  const expected = idleState(current);
+  let row: ProviderSyncStateRow | undefined;
+  try {
+    row = db.prepare(`UPDATE provider_sync_state SET
+      staging_generation = NULL, staging_owner_token = NULL,
+      staging_heartbeat_at = NULL, staging_expires_at = NULL,
+      state = 'idle'
+    WHERE provider = ? AND home_fingerprint = ?
+      AND active_generation = ? AND generation_epoch = ? AND state = 'staging'
+      AND staging_generation = ? AND staging_owner_token = ?
+      AND staging_heartbeat_at = ? AND staging_expires_at = ?
+      AND provider_version IS ? AND last_completed_at IS ?
+    RETURNING
+      provider, home_fingerprint, active_generation, staging_generation,
+      staging_owner_token, staging_heartbeat_at, staging_expires_at,
+      state, provider_version, last_completed_at, generation_epoch`)
+      .get(
+        current.provider,
+        current.homeFingerprint,
+        current.activeGeneration,
+        current.generationEpoch,
+        current.stagingGeneration,
+        current.stagingOwnerToken,
+        current.stagingHeartbeatAt,
+        current.stagingExpiresAt,
+        current.providerVersion,
+        current.lastCompletedAt,
+      ) as ProviderSyncStateRow | undefined;
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) fail("CORRUPT_ROW");
+  requiredSyncState(db, expected);
+  if (hasCacheGeneration(db, known.scope, stage.generation)) fail("CORRUPT_ROW");
+}
+
 export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   private readonly db: SqliteDatabase;
   private readonly config: Readonly<NormalizedProviderIndexStoreConfig>;
@@ -653,6 +1180,58 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
     } catch (error) {
       throw publicFailure(error, "DATABASE_UNAVAILABLE");
     }
+  }
+
+  beginStage(scopeValue: ProviderHomeScope): Readonly<ProviderIndexStage> {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const known = knownHomeScope(this.db, scopeValue);
+      const now = sampleNow(this.config);
+      const expiresAt = leaseExpiry(now, this.config);
+      const ownerToken = sampleOwnerToken(this.config);
+      return withOwnedImmediateTransaction(this.db, () =>
+        beginStageInsideOwnedTransaction(
+          this.db,
+          known,
+          now,
+          expiresAt,
+          ownerToken,
+        ));
+    });
+  }
+
+  heartbeatStage(stageValue: ProviderIndexStage): boolean {
+    return this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const stage = normalizedStage(stageValue);
+      const known = knownHomeScope(this.db, {
+        provider: stage.provider,
+        homeFingerprint: stage.homeFingerprint,
+      });
+      const now = sampleNow(this.config);
+      const expiresAt = leaseExpiry(now, this.config);
+      return withOwnedImmediateTransaction(this.db, () =>
+        heartbeatStageInsideOwnedTransaction(
+          this.db,
+          known,
+          stage,
+          now,
+          expiresAt,
+        ));
+    });
+  }
+
+  abortStage(stageValue: ProviderIndexStage): void {
+    this.runMutation(() => {
+      assertNoCallerTransaction(this.db);
+      const stage = normalizedStage(stageValue);
+      const known = knownHomeScope(this.db, {
+        provider: stage.provider,
+        homeFingerprint: stage.homeFingerprint,
+      });
+      withOwnedImmediateTransaction(this.db, () =>
+        abortStageInsideOwnedTransaction(this.db, known, stage));
+    });
   }
 
   getReconciliation(locatorValue: ProviderTaskLocator): Readonly<ProviderReconciliationState> {

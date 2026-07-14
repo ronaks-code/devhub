@@ -427,3 +427,22 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - BEFORE `RAISE(IGNORE)` regressions were exact RED (`2 failed / 32 passed`): require misreported `CAPACITY` and acknowledgement misreported `RECONCILIATION_CAS_MISMATCH`; both now return `CORRUPT_ROW` with no mutation.
 - Fresh combined exact-tip gate: store `34/34` plus migration `39/39` plus codec `76/76` plus wiring `5/5` = `154/154`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes.
 - Exact implementation tip `5d0ba77b262b6e62140f708352673cbd74ebab58` received independent SPEC GO and QUALITY GO with zero P0-P3. The initial v15-plan P1 and trigger-classification P3 are closed; the orphan-path candidate was reclassified as a nonfinding because `require` is internal, public acknowledgement needs an existing latch plus authoritative reread, and forbidden path heuristics would violate the frozen slash/Unicode orphan-locator contract.
+
+### Checkpoint C: stage lease, heartbeat, and abort lifecycle
+
+- [x] Add focused RED coverage for initial begin, live-stage refusal, expiry-boundary takeover, monotonic epoch allocation, repeated-token ABA resistance, and restart recovery.
+- [x] Add RED coverage for heartbeat renewal/replay, lost and expired handles, regressing/overflowing clocks, and exact post-write trigger verification.
+- [x] Add RED coverage for exact abort ownership, expired abort, staged-cache deletion, active/durable/epoch preservation, stale handles, and suppressed/deleted/rewritten SQL.
+- [x] Prove caller-owned transaction rejection precedes hostile input and callbacks; callbacks stay outside SQL and reentrant clock/token paths fail closed.
+- [x] Implement only `beginStage`, `heartbeatStage`, and `abortStage` over the shared connection and existing top-level transaction owner.
+- [x] Run focused stage/store/migration/wiring tests with at most two workers, engine typecheck/public-surface fixture, and diff hygiene.
+- [x] Record exact RED/GREEN evidence, self-review scope, and commit the tested checkpoint without pushing.
+
+#### Checkpoint C implementation evidence
+
+- Initial RED was exact: the new lifecycle suite reported `25 failed / 25` because all three public methods were absent. The first minimal implementation reached `25/25` without adding any D/E/F method.
+- Self-review REDs then exposed three independent authority gaps: missing/behind/tombstone sync state allowed occupied cache generations to survive allocation (`2 failed / 25 passed`, then `1 failed / 28 passed`), and a restarted shorter lease reduced an existing expiry (`1 failed / 27 passed`). Exact cache/epoch fencing and monotonic `max(candidate,current)` expiry close them.
+- Begin allocates epoch `1` initially and then only `generation_epoch + 1`; live ownership is immutable `STAGE_BUSY`, boundary expiry atomically removes only abandoned staged cache, repeated tokens cannot create ABA, and overflow is `CAPACITY` without mutation.
+- Heartbeat renews only exact unexpired ownership, samples one clock and no token, returns false for lost/expired handles, rejects clock regression/overflow, and never shortens an existing expiry. Abort samples no callback, accepts an expired exact handle, deletes only its staged generation, and preserves active cache, durable rows, provider completion fields, and epoch.
+- Real SQLite BEFORE-ignore, AFTER-delete, and AFTER-rewrite triggers prove exact post-write rereads/rollback for begin, heartbeat, and abort. Caller transactions, hostile objects, reentrant callbacks, home-authority removal, closed/busy databases, restart recovery, and value-free errors are covered.
+- Fresh focused lifecycle gate passes `29/29`; combined lifecycle/store/migration/wiring passes `107/107`. Engine typecheck and its negative public-surface fixture pass, and `git diff --check` is clean. No D/E/F API, provider process, browser, full suite, heavy queue, Python runtime, main checkout, or user-owned path was touched.
