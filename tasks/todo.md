@@ -45,7 +45,7 @@ Authoritative program plan: `.planning/devhub-codex-parity/implementation-plan.m
 
 The earlier Claude UI decisions above describe the preserved legacy adapter only; the DevHub program decisions below supersede them for new provider-native work.
 
-## Status: M0-M2 and M3 implementation complete; M3 live-wrapper resume artifact blocked by the provider-turn cap; M4 implementation and deterministic gates complete with exact visual evidence and the capped raw-live proof still open
+## Status: M0-M2 and M3 implementation complete; M3 live-wrapper resume artifact blocked by the provider-turn cap; M4 implementation and deterministic gates complete with exact visual evidence and the capped raw-live proof still open; M5 architecture approved and implementation starting
 
 ### M0 - Baseline and preservation
 
@@ -112,6 +112,17 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
   - [x] Deterministic lifecycle, fallback, Browser/Computer Use, and full-repo gates.
   - [ ] Selected-wrapper raw multi-query/resume/permission/interrupt/post-interrupt/fork-continuation live gate; the three-turn cap is exhausted, so keep the flag disabled and report this as blocked rather than passed.
 - [ ] M5 unified provider-locked task/index model.
+  - [x] Complete a read-only audit of v13 SQLite, portable archive, provider identities, leases/revisions, routes, URL/localStorage, env/data paths, and webhook identifiers.
+  - [x] Write the execution-ready TDD/review plan in `.planning/devhub-codex-parity/m5-implementation-plan.md`.
+  - [x] Obtain independent architecture/specification GO on the exact M5 plan.
+  - [ ] Add versioned path-free provider locators plus collision-safe event replay identities.
+  - [ ] Add the additive v14 home/sync/cache/replay/meta/fork/legacy-map/reconciliation schema and store.
+  - [ ] Add staged provider census, read-through/rebuild, verified legacy mapping, cache invalidation, and native-deletion/no-gzip-resurrection behavior.
+  - [ ] Give Codex the proven task writer lease and give both providers durable revision latches/external-mutation refusal without regressing Claude's reviewed semantics.
+  - [ ] Add authenticated locator-only index routes and the instant flag-off legacy rollback path.
+  - [ ] Make portable v2 metadata-only by default; retain explicit v1 export/read compatibility with v1 imports quarantined as unresolved legacy cache.
+  - [ ] Migrate URL/localStorage/env/data-path/webhook identifiers with legacy reads/aliases and no raw-home disclosure.
+  - [ ] Pass induced-failure, delete/rebuild/rollback, Browser, independent-review, full-repo, packaging, preservation, and flag-cutover gates before enabling `unifiedTaskIndex`.
 - [ ] M6 approved Codex-style shell.
 - [ ] M7 cross-provider fork, Work mode, and synchronization.
 - [ ] M8 desktop packaging, cutover, performance, preservation, and cleanup.
@@ -204,3 +215,9 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Final deterministic integration hardening passes focused engine `179/179`, server `65/65`, and web `102/102`; engine/server/web typechecks and `git diff --check` pass. Independent static review found no remaining P1-P3 code issue. The fresh full-repo `typecheck test build` gate passed all `11/11` Turbo tasks after a measured `766,562 ms` FIFO wait and `2m23.664s` execution.
 - Final Browser/IAB recapture proves exact copy/options and disabled-to-enabled required-field gating at `1280x720` and `768x720`, with exact document widths and no console warnings/errors. Computer Use independently drove create/completion/idle/interrupt and captured receipt-correlated `Cancelled by you`; first-party Codex control remains host-blocked.
 - No Python or live provider/model turn was used. The live Claude raw-lifecycle budget remains exhausted, so `persistentClaude` stays disabled. The noisy 15-minute resource heartbeat is deleted; the independent hourly `:04` status-file automation remains active.
+
+## M5 planning review/results (current)
+
+- The live v13/schema/archive/identity/lease/route/storage/env/webhook audit found the collision, alternate-authority, raw-home, replay, staging, and restart-reconciliation risks before implementation.
+- The execution plan now defines generation-keyed staged cache promotion, tagged non-null replay identity, additive metadata and verified-only legacy mapping, durable provider reconciliation CAS, Codex lease parity, a full path-free locator API/SSE boundary, metadata-only portable v2 with quarantined v1 compatibility, identifier aliases, induced-failure drills, and an exact enabled-tip full gate.
+- Independent architecture/specification review converged to GO with no P1-P3 findings after three repair rounds. No product code, provider call, Python process, heavy job, or user-owned dirty path was used during planning.
