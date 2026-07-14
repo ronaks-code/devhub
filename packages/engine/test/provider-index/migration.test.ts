@@ -5,7 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { TranscriptIndex } from "../../src/index-db.js";
 import { runMigrations } from "../../src/migrations.js";
-import { PROVIDER_INDEX_SCHEMA_VERSION } from "../../src/provider-index/schema.js";
+import {
+  createProviderIndexSchema,
+  PROVIDER_INDEX_SCHEMA_VERSION,
+} from "../../src/provider-index/schema.js";
 
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 type TestDatabase = InstanceType<typeof DatabaseSync>;
@@ -199,6 +202,73 @@ const GOLDEN_FOREIGN_KEYS: Record<ProviderTableName, readonly ForeignKeyField[]>
   legacy_session_task_map: [],
   legacy_session_provenance: [],
   provider_reconciliation_state: [],
+};
+
+type IndexDirection = 0 | 1;
+
+interface GoldenIndex {
+  readonly table: ProviderTableName;
+  readonly columns: readonly (readonly [name: string, desc: IndexDirection])[];
+  readonly sql: string;
+}
+
+const GOLDEN_INDEXES: Readonly<Record<string, GoldenIndex>> = {
+  idx_provider_task_cache_active_list: {
+    table: "provider_task_cache",
+    columns: [
+      ["updated_at", 1],
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+      ["cache_generation", 0],
+    ],
+    sql: "CREATE INDEX idx_provider_task_cache_active_list ON provider_task_cache ( updated_at DESC, provider, home_fingerprint, native_task_id, cache_generation )",
+  },
+  idx_provider_event_cache_order: {
+    table: "provider_event_cache",
+    columns: [
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+      ["cache_generation", 0],
+      ["native_turn_key", 0],
+      ["ordinal", 0],
+      ["native_item_key", 0],
+      ["replay_key", 0],
+    ],
+    sql: "CREATE INDEX idx_provider_event_cache_order ON provider_event_cache ( provider, home_fingerprint, native_task_id, cache_generation, native_turn_key, ordinal, native_item_key, replay_key )",
+  },
+  idx_provider_task_meta_updated: {
+    table: "provider_task_meta",
+    columns: [
+      ["updated_at", 1],
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+    ],
+    sql: "CREATE INDEX idx_provider_task_meta_updated ON provider_task_meta (updated_at DESC, provider, home_fingerprint, native_task_id)",
+  },
+  idx_provider_fork_links_target: {
+    table: "provider_fork_links",
+    columns: [
+      ["target_provider", 0],
+      ["target_home_fingerprint", 0],
+      ["target_native_task_id", 0],
+      ["created_at", 0],
+    ],
+    sql: "CREATE INDEX idx_provider_fork_links_target ON provider_fork_links ( target_provider, target_home_fingerprint, target_native_task_id, created_at )",
+  },
+  idx_provider_reconciliation_required: {
+    table: "provider_reconciliation_state",
+    columns: [
+      ["required", 0],
+      ["updated_at", 0],
+      ["provider", 0],
+      ["home_fingerprint", 0],
+      ["native_task_id", 0],
+    ],
+    sql: "CREATE INDEX idx_provider_reconciliation_required ON provider_reconciliation_state ( required, updated_at, provider, home_fingerprint, native_task_id ) WHERE required = 1",
+  },
 };
 
 const HOME_FINGERPRINT = "a".repeat(64);
@@ -407,11 +477,43 @@ function expectedForeignKeys(table: ProviderTableName): ReadonlyArray<Record<str
   );
 }
 
+function normalizedSql(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 describe("provider index v14 migration", () => {
+  it("pins the provider schema step at v14 while allowing future migration appends", async () => {
+    const migrations = await import("../../src/migrations.js") as unknown as {
+      assertProviderIndexMigrationLayout?: (steps: readonly unknown[]) => void;
+    };
+    const check = migrations.assertProviderIndexMigrationLayout;
+    expect(typeof check).toBe("function");
+
+    const placeholder = (): void => {};
+    const v14: unknown[] = Array.from(
+      { length: PROVIDER_INDEX_SCHEMA_VERSION },
+      () => placeholder,
+    );
+    v14[PROVIDER_INDEX_SCHEMA_VERSION - 1] = createProviderIndexSchema;
+    expect(() => check!(v14)).not.toThrow();
+    expect(() => check!([...v14, placeholder])).not.toThrow();
+    expect(() => check!([...v14, placeholder, placeholder])).not.toThrow();
+
+    expect(() => check!(v14.slice(0, -1))).toThrow(
+      "provider index migration version is inconsistent",
+    );
+    const misplaced = [...v14];
+    misplaced[PROVIDER_INDEX_SCHEMA_VERSION - 2] = createProviderIndexSchema;
+    misplaced[PROVIDER_INDEX_SCHEMA_VERSION - 1] = placeholder;
+    expect(() => check!(misplaced)).toThrow(
+      "provider index migration version is inconsistent",
+    );
+  });
+
   it("upgrades a v13 database additively and advances user_version to 14", () => {
     const db = openDatabase();
     migrateV13(db);
@@ -437,6 +539,39 @@ describe("provider index v14 migration", () => {
       expect(db.prepare(`PRAGMA table_info(${table})`).all()).toEqual(expectedTableInfo(table));
       expect(db.prepare(`PRAGMA foreign_key_list(${table})`).all())
         .toEqual(expectedForeignKeys(table));
+    }
+    db.close();
+  });
+
+  it("matches the independent golden definitions for all explicit indexes", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    const expectedNames = Object.keys(GOLDEN_INDEXES).sort();
+    const actualNames = db.prepare(`SELECT name FROM sqlite_master
+      WHERE type = 'index' AND sql IS NOT NULL
+        AND (tbl_name LIKE 'provider\\_%' ESCAPE '\\'
+          OR tbl_name LIKE 'legacy\\_session\\_%' ESCAPE '\\')
+      ORDER BY name`).all() as Array<{ name: string }>;
+    expect(actualNames.map((row) => row.name)).toEqual(expectedNames);
+
+    for (const name of expectedNames) {
+      const golden = GOLDEN_INDEXES[name]!;
+      const object = db.prepare(`SELECT tbl_name, sql FROM sqlite_master
+        WHERE type = 'index' AND name = ?`).get(name) as {
+        tbl_name: string;
+        sql: string;
+      };
+      expect(object.tbl_name).toBe(golden.table);
+      expect(normalizedSql(object.sql)).toBe(golden.sql);
+      const columns = db.prepare(`PRAGMA index_xinfo(${name})`).all() as Array<{
+        name: string | null;
+        desc: number;
+        key: number;
+      }>;
+      expect(columns
+        .filter((column) => column.key === 1)
+        .map((column) => [column.name, column.desc]))
+        .toEqual(golden.columns);
     }
     db.close();
   });
@@ -533,6 +668,43 @@ describe("provider index v14 migration", () => {
     db.close();
   });
 
+  it("rejects user_version 14 when the provider schema is missing without mutating sentinels", () => {
+    const db = openDatabase();
+    db.exec("CREATE TABLE migration_sentinel (value TEXT NOT NULL)");
+    db.prepare("INSERT INTO migration_sentinel VALUES (?)").run("keep-missing");
+    db.exec(`PRAGMA user_version = ${PROVIDER_INDEX_SCHEMA_VERSION}`);
+
+    expect(() => runMigrations(db)).toThrow("provider index schema validation failed");
+
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(providerSchema(db)).toEqual([]);
+    expect(db.prepare("SELECT * FROM migration_sentinel").all())
+      .toEqual([{ value: "keep-missing" }]);
+    db.close();
+  });
+
+  it("rejects user_version 14 with a lax provider table without mutating its row", () => {
+    const db = openDatabase();
+    db.exec("CREATE TABLE provider_homes (sentinel TEXT NOT NULL)");
+    db.prepare("INSERT INTO provider_homes VALUES (?)").run("keep-v14-lax");
+    db.exec(`PRAGMA user_version = ${PROVIDER_INDEX_SCHEMA_VERSION}`);
+
+    expect(() => runMigrations(db)).toThrow("provider index schema validation failed");
+
+    expect(userVersion(db)).toBe(PROVIDER_INDEX_SCHEMA_VERSION);
+    expect(db.prepare("SELECT * FROM provider_homes").all())
+      .toEqual([{ sentinel: "keep-v14-lax" }]);
+    expect(providerSchema(db)).toEqual([
+      {
+        type: "table",
+        name: "provider_homes",
+        tbl_name: "provider_homes",
+        sql: "CREATE TABLE provider_homes (sentinel TEXT NOT NULL)",
+      },
+    ]);
+    db.close();
+  });
+
   it("leaves v13 session, metadata, and settings sentinel rows exactly unchanged", () => {
     const db = openDatabase();
     db.exec(`CREATE TABLE sessions (
@@ -572,16 +744,22 @@ describe("provider index v14 migration", () => {
 
   it("does not downgrade or mutate a future user_version", () => {
     const db = openDatabase();
-    db.exec("CREATE TABLE future_sentinel (value TEXT NOT NULL)");
+    migrateV13(db);
+    db.exec(`CREATE TABLE future_sentinel (value TEXT NOT NULL);
+      CREATE TABLE provider_future_extension (value TEXT NOT NULL);`);
     db.prepare("INSERT INTO future_sentinel VALUES (?)").run("preserved");
+    db.prepare("INSERT INTO provider_future_extension VALUES (?)").run("future-preserved");
+    const before = providerSchema(db);
     const futureVersion = PROVIDER_INDEX_SCHEMA_VERSION + 1;
     db.exec(`PRAGMA user_version = ${futureVersion}`);
 
     runMigrations(db);
 
     expect(userVersion(db)).toBe(futureVersion);
-    expect(providerSchema(db)).toEqual([]);
+    expect(providerSchema(db)).toEqual(before);
     expect(db.prepare("SELECT * FROM future_sentinel").all()).toEqual([{ value: "preserved" }]);
+    expect(db.prepare("SELECT * FROM provider_future_extension").all())
+      .toEqual([{ value: "future-preserved" }]);
     db.close();
   });
 
@@ -770,6 +948,52 @@ describe("provider index v14 migration", () => {
     ]) {
       expect(db.prepare(`SELECT provider, home_fingerprint FROM ${table}
         ORDER BY provider, home_fingerprint`).all()).toEqual(survivors);
+    }
+    db.close();
+  });
+
+  it("isolates child rows for two native task IDs in one provider/home generation", () => {
+    const db = openDatabase();
+    migrateV13(db);
+    registerHome(db);
+    insertTask(db, { nativeTaskId: "task-1" });
+    insertTask(db, { nativeTaskId: "task-2" });
+    insertTurn(db, { nativeTaskId: "task-1", nativeTurnKey: "native:v1:shared-turn" });
+
+    expect(() => insertEvent(db, {
+      nativeTaskId: "task-2",
+      nativeTurnKey: "native:v1:shared-turn",
+      nativeItemKey: "native:v1:shared-item",
+      replayKey: "replay:v1:shared",
+    })).toThrow();
+
+    insertTurn(db, { nativeTaskId: "task-2", nativeTurnKey: "native:v1:shared-turn" });
+    for (const nativeTaskId of ["task-1", "task-2"]) {
+      insertEvent(db, {
+        nativeTaskId,
+        nativeTurnKey: "native:v1:shared-turn",
+        nativeItemKey: "native:v1:shared-item",
+        replayKey: "replay:v1:shared",
+      });
+      insertReceipt(db, {
+        nativeTaskId,
+        replayKey: "snapshot:v1:shared",
+      });
+    }
+
+    db.prepare(`DELETE FROM provider_task_cache
+      WHERE provider = ? AND home_fingerprint = ?
+        AND native_task_id = ? AND cache_generation = ?`)
+      .run("openai", HOME_FINGERPRINT, "task-1", 1);
+
+    for (const table of [
+      "provider_task_cache",
+      "provider_turn_cache",
+      "provider_event_cache",
+      "provider_replay_receipts",
+    ]) {
+      expect(db.prepare(`SELECT native_task_id FROM ${table}`).all())
+        .toEqual([{ native_task_id: "task-2" }]);
     }
     db.close();
   });

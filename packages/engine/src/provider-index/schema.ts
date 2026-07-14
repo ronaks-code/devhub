@@ -330,7 +330,7 @@ function expectedSchemaObjects(): readonly ProviderIndexSchemaObject[] {
 
 const EXPECTED_SCHEMA_OBJECTS = expectedSchemaObjects();
 
-function validateProviderIndexSchema(db: SqliteDatabase): void {
+export function validateProviderIndexSchema(db: SqliteDatabase): void {
   const actual = db.prepare(`SELECT type, name, tbl_name, sql
     FROM sqlite_master
     WHERE (

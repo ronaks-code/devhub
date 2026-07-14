@@ -23,6 +23,7 @@ import {
 import {
   createProviderIndexSchema,
   PROVIDER_INDEX_SCHEMA_VERSION,
+  validateProviderIndexSchema,
 } from "./provider-index/schema.js";
 
 type Migration = (db: SqliteDatabase) => void;
@@ -227,12 +228,16 @@ const MIGRATIONS: Migration[] = [
   createProviderIndexSchema,
 ];
 
-if (
-  MIGRATIONS.length !== PROVIDER_INDEX_SCHEMA_VERSION ||
-  MIGRATIONS[PROVIDER_INDEX_SCHEMA_VERSION - 1] !== createProviderIndexSchema
-) {
-  throw new Error("provider index migration version is inconsistent");
+export function assertProviderIndexMigrationLayout(steps: readonly unknown[]): void {
+  if (
+    steps.length < PROVIDER_INDEX_SCHEMA_VERSION ||
+    steps[PROVIDER_INDEX_SCHEMA_VERSION - 1] !== createProviderIndexSchema
+  ) {
+    throw new Error("provider index migration version is inconsistent");
+  }
 }
+
+assertProviderIndexMigrationLayout(MIGRATIONS);
 
 /**
  * Migration v8 body (extracted for readability): rebuild `messages_fts` onto the best
@@ -314,6 +319,10 @@ function migrateFtsAddToolName(db: SqliteDatabase): void {
 export function runMigrations(db: SqliteDatabase): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
   let current = row ? Number(row.user_version) : 0;
+
+  if (current === PROVIDER_INDEX_SCHEMA_VERSION) {
+    validateProviderIndexSchema(db);
+  }
 
   for (let v = current; v < MIGRATIONS.length; v++) {
     const step = MIGRATIONS[v]!;
