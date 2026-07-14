@@ -115,7 +115,7 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
   - [x] Complete a read-only audit of v13 SQLite, portable archive, provider identities, leases/revisions, routes, URL/localStorage, env/data paths, and webhook identifiers.
   - [x] Write the execution-ready TDD/review plan in `.planning/devhub-codex-parity/m5-implementation-plan.md`.
   - [x] Obtain independent architecture/specification GO on the exact M5 plan.
-  - [ ] Add versioned path-free provider locators plus collision-safe event replay identities.
+  - [x] Add versioned path-free provider locators plus collision-safe event replay identities.
   - [ ] Add the additive v14 home/sync/cache/replay/meta/fork/legacy-map/reconciliation schema and store.
   - [ ] Add staged provider census, read-through/rebuild, verified legacy mapping, cache invalidation, and native-deletion/no-gzip-resurrection behavior.
   - [ ] Give Codex the proven task writer lease and give both providers durable revision latches/external-mutation refusal without regressing Claude's reviewed semantics.
@@ -221,3 +221,4 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The live v13/schema/archive/identity/lease/route/storage/env/webhook audit found the collision, alternate-authority, raw-home, replay, staging, and restart-reconciliation risks before implementation.
 - The execution plan now defines generation-keyed staged cache promotion, tagged non-null replay identity, additive metadata and verified-only legacy mapping, durable provider reconciliation CAS, Codex lease parity, a full path-free locator API/SSE boundary, metadata-only portable v2 with quarantined v1 compatibility, identifier aliases, induced-failure drills, and an exact enabled-tip full gate.
 - Independent architecture/specification review converged to GO with no P1-P3 findings after three repair rounds. No product code, provider call, Python process, heavy job, or user-owned dirty path was used during planning.
+- Task 1 identity slice: exact locator/home fingerprinting, tagged non-null turn/item keys, readable path-free event projection, and private injective replay hashing pass root-owned `87/87` focused tests plus engine typecheck. Independent final specification and quality/security reviews are both GO with no P1-P3 findings after closing UTF-8, hostile-object, timestamp, diagnostic, raw-home, sparse-array, injectivity, and exhaustiveness defects.

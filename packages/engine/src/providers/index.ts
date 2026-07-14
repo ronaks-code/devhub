@@ -8,6 +8,7 @@ export * from "./events.js";
 export * from "./feature-flags.js";
 export * from "./registry.js";
 export * from "./writer-lease.js";
+export * from "../provider-index/identity.js";
 export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";
 export * from "./claude/native-adapter.js";
