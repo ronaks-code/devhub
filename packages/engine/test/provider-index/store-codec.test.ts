@@ -187,10 +187,9 @@ const expectStoreError = (
 };
 
 describe("provider index store codec public surface", () => {
-  it("exports the pure store/config/codec API", () => {
+  it("keeps backend-only raw-home and preparation plumbing out of the provider barrel", () => {
     const api = providersIndex as unknown as Record<string, unknown>;
     for (const name of [
-      "ProviderIndexStoreError",
       "normalizeProviderIndexStoreOptions",
       "readProviderIndexNow",
       "createProviderIndexOwnerToken",
@@ -200,8 +199,9 @@ describe("provider index store codec public surface", () => {
       "providerTaskSnapshotReceiptKey",
       "decodeCachedProviderEvent",
     ]) {
-      expect(api[name], name).toBeTypeOf("function");
+      expect(api[name], name).toBeUndefined();
     }
+    expect(api.ProviderIndexStoreError).toBe(ProviderIndexStoreError);
     for (const name of [
       "PROVIDER_INDEX_STORE_DEFAULTS",
       "PROVIDER_INDEX_STORE_HARD_LIMITS",
@@ -720,6 +720,88 @@ describe("provider task snapshot preparation", () => {
     );
   });
 
+  it("bounds the final canonical event JSON including its persisted envelope", () => {
+    const maxEventJsonChars = 8_388_608;
+    const eventWithText = (text: string): ProviderEvent => eventFor({
+      type: "message",
+      role: "assistant",
+      text,
+      turnId: "turn-sized",
+      itemId: null,
+    });
+    const emptyEventJsonLength = canonicalProviderIndexJson(
+      providersIndex.projectIndexedProviderEvent(eventWithText("")),
+    ).length;
+    const taskWithText = (text: string): NativeTask => nativeTask({
+      turns: [{
+        id: "turn-sized",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventWithText(text)],
+      }],
+    });
+
+    const atLimit = prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      taskWithText("x".repeat(maxEventJsonChars - emptyEventJsonLength)),
+    );
+    expect(atLimit.turns[0]!.events[0]!.eventJson).toHaveLength(maxEventJsonChars);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        taskWithText("x".repeat(maxEventJsonChars - emptyEventJsonLength + 1)),
+      ),
+      "INVALID_INPUT",
+    );
+  });
+
+  it("rejects oversized multibyte native cache keys before snapshot persistence", () => {
+    const withinBound = "界".repeat(253);
+    const beyondBound = "界".repeat(254);
+    const snapshotWithIds = (turnId: string, itemId: string): NativeTask => nativeTask({
+      turns: [{
+        id: turnId,
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "message-delta",
+          role: "assistant",
+          delta: "cache key bounds",
+          turnId,
+          itemId,
+        })],
+      }],
+    });
+
+    const accepted = prepareProviderTaskSnapshot(
+      registrationFor(),
+      key,
+      snapshotWithIds(withinBound, withinBound),
+    );
+    expect(accepted.turns[0]!.nativeTurnKey.length).toBeLessThanOrEqual(1_024);
+    expect(accepted.turns[0]!.events[0]!.nativeItemKey.length).toBeLessThanOrEqual(1_024);
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        snapshotWithIds(beyondBound, withinBound),
+      ),
+      "INVALID_INPUT",
+    );
+    expectStoreError(
+      () => prepareProviderTaskSnapshot(
+        registrationFor(),
+        key,
+        snapshotWithIds(withinBound, beyondBound),
+      ),
+      "INVALID_INPUT",
+    );
+  });
+
   it("keeps raw-home and literal marker snapshots path-free but injectively distinct", () => {
     const withText = (text: string): NativeTask => nativeTask({
       turns: [{
@@ -964,6 +1046,41 @@ describe("cached indexed provider event decoding", () => {
       "permission",
       "user-input",
     ]);
+  });
+
+  it("round-trips negative safe-integer JSON-RPC request and approval ids", () => {
+    const identity = createProviderRequestIdentity({
+      key,
+      generation: 7,
+      turnId: "turn-negative-id",
+      requestId: Number.MIN_SAFE_INTEGER,
+      itemId: "request-item-negative-id",
+      approvalId: -1,
+    });
+    const task = nativeTask({
+      turns: [{
+        id: "turn-negative-id",
+        status: "complete",
+        startedAt: null,
+        completedAt: null,
+        events: [eventFor({
+          type: "request",
+          request: { kind: "command-approval", identity },
+        })],
+      }],
+    });
+    const prepared = prepareProviderTaskSnapshot(registrationFor(), key, task);
+    const cached = prepared.turns[0]!.events[0]!;
+
+    const decoded = decodeCachedProviderEvent(
+      rowFor(cached),
+      prepared.locator,
+      prepared.turns[0]!.nativeTurnKey,
+    );
+    expect(decoded.type).toBe("request");
+    if (decoded.type !== "request") throw new Error("expected request event");
+    expect(decoded.request.identity.requestId).toBe(Number.MIN_SAFE_INTEGER);
+    expect(decoded.request.identity.approvalId).toBe(-1);
   });
 
   it("rejects independent row identity and fingerprint mutations", () => {

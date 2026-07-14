@@ -262,3 +262,11 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - CWD redaction resolves the deepest existing ancestor before component-boundary containment, including root, symlink, and missing-leaf cases. Fixed raw-home/literal-marker snapshot goldens remain distinct and path-free.
 - Strict read decoding covers all ten event variants and five request kinds, exact canonical JSON/UTF-8, immutable reconstruction, readable ownership, ordinal tags, and independent row/JSON/key/fingerprint mutations.
 - Fresh focused gate: identity plus codec tests `146/146`; engine typecheck and `git diff --check` pass. No SQL, migration, `store.ts`, `index-db`, full suite, provider call, Python process, or user-owned path was touched.
+
+### Independent-review repairs
+
+- [x] Replace the providers-barrel wildcard exports with an explicit path-free store API; keep the raw-home registration carrier, normalized callbacks, prepared persistence shapes, row decoder, and all preparation codecs backend-only.
+- [x] Add a dedicated TypeScript public-surface contract so accidental re-export of any backend-only symbol fails compilation, in addition to the runtime export regression.
+- [x] Preserve negative safe-integer JSON-RPC request and approval IDs through project, canonical persistence, and strict decode round trips.
+- [x] Reject a final canonical persisted-event envelope above `8_388_608` characters before any SQL boundary, while accepting the exact limit. This is `INVALID_INPUT` because the fixed per-value schema/input constraint is violated; `CAPACITY` remains reserved in this slice for configurable aggregate turn/event-count limits.
+- [x] Bound every emitted native turn/item cache key to `1_024` characters after UTF-8/base64url expansion, expose only the fixed caller-specific errors, and cover accepted/rejected multibyte boundaries both directly and through snapshot preparation.

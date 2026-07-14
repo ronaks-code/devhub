@@ -36,6 +36,7 @@ const EVENT_PROJECTION_ERROR = "provider event could not be safely projected";
 const TASK_KEY_ERROR = "native task key is unsafe for provider indexing";
 const HOME_ERROR = "provider home must be canonical exact UTF-8";
 const CACHED_TURN_KEY_ERROR = "cached turn key is invalid";
+const CACHED_EVENT_ITEM_KEY_ERROR = "cached event item key is invalid";
 const HOME_REPLACEMENT = "[PROVIDER_HOME]";
 
 export interface ProviderTaskLocator {
@@ -344,7 +345,9 @@ export function assertLocatorMatchesKey(
 
 function nativeCacheKey(value: unknown, label: string): string {
   const nativeId = canonicalNativeId(value, label);
-  return `native:v1:${Buffer.from(nativeId, "utf8").toString("base64url")}`;
+  const cacheKey = `native:v1:${Buffer.from(nativeId, "utf8").toString("base64url")}`;
+  if (cacheKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
+  return cacheKey;
 }
 
 function parseNativeCacheKey(value: unknown, label: string): string {
@@ -366,7 +369,11 @@ function parseNativeCacheKey(value: unknown, label: string): string {
 }
 
 export function cachedTurnKey(nativeTurnId: string | null): string {
-  return nativeTurnId === null ? "none:v1" : nativeCacheKey(nativeTurnId, "native turn id");
+  try {
+    return nativeTurnId === null ? "none:v1" : nativeCacheKey(nativeTurnId, "native turn id");
+  } catch {
+    throw new TypeError(CACHED_TURN_KEY_ERROR);
+  }
 }
 
 export function parseCachedTurnKey(value: unknown): string | null {
@@ -839,11 +846,18 @@ function projectedEventDigest(event: IndexedProviderEvent, ordinal: number): str
 }
 
 export function cachedEventItemId(event: ProviderEvent, ordinalValue: number): string {
-  const ordinal = eventOrdinal(ordinalValue);
-  const projections = eventProjectionsForHash(event);
-  const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
-  if (nativeItemId !== null) return nativeCacheKey(nativeItemId, "native item id");
-  return `synthetic:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`;
+  try {
+    const ordinal = eventOrdinal(ordinalValue);
+    const projections = eventProjectionsForHash(event);
+    const nativeItemId = indexedProviderEventItemId(projections.publicEvent);
+    const cacheKey = nativeItemId === null
+      ? `synthetic:v1:${ordinal}:${projectedEventDigest(projections.hashEvent, ordinal)}`
+      : nativeCacheKey(nativeItemId, "native item id");
+    if (cacheKey.length > MAX_CACHED_KEY_CHARS) throw new TypeError();
+    return cacheKey;
+  } catch {
+    throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
+  }
 }
 
 export function providerEventReplayKey(event: ProviderEvent, ordinalValue: number): string {
@@ -876,7 +890,7 @@ export function parseCachedEventItemKey(
     if (!FINGERPRINT.test(digest)) throw new TypeError();
     return Object.freeze({ kind: "synthetic" as const, nativeItemId: null });
   } catch {
-    throw new TypeError("cached event item key is invalid");
+    throw new TypeError(CACHED_EVENT_ITEM_KEY_ERROR);
   }
 }
 

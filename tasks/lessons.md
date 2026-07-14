@@ -60,3 +60,10 @@
 - Provider-event normalization is a safety projection, not an authorization boundary: it may turn mismatched provider/task/request identity into a benign diagnostic.
 - Before projection or persistence, snapshot raw own-data descriptors and independently prove the top-level provider/key plus nested request and request-resolved identity keys match the method, payload, registered home, and stage scope.
 - Keep canonical JSON and cached turn/item/replay key formats in the identity module with strict reciprocal helpers; persistence codecs should reuse those helpers instead of duplicating security-sensitive grammars.
+
+## 2026-07-13 - Enforce persistence limits on final representations and package surfaces
+
+- A source-string bound does not prove the encoded cache key or canonical persisted envelope fits its database constraint. Enforce limits on the final base64url/JSON representation at the last pure boundary before SQL, and test the exact accepted and first rejected values with multibyte input.
+- Distinguish a fixed malformed-value bound from configured aggregate capacity: an oversized single persisted value is `INVALID_INPUT`, while configured turn/event-count exhaustion is `CAPACITY`.
+- Runtime barrel checks cannot detect leaked TypeScript-only carriers. Pair selective exports with a compiler fixture whose `@ts-expect-error` assertions fail if raw-home or backend preparation symbols reappear.
+- JSON-RPC numeric IDs are signed safe integers. Do not reuse nonnegative counters for request/approval identity validation; prove negative safe-integer round trips independently.

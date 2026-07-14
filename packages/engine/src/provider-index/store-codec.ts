@@ -357,6 +357,9 @@ function preparedEvent(
   const nativeItemKey = cachedEventItemId(eventValue as ProviderEvent, ordinal);
   const replayKey = providerEventReplayKey(eventValue as ProviderEvent, ordinal);
   const eventJson = canonicalProviderIndexJson(event);
+  if (eventJson.length > MAX_EVENT_JSON_CHARS) {
+    throw new ProviderIndexStoreError("INVALID_INPUT");
+  }
   const eventFingerprint = sha256(
     `devhub-provider-event-cache:v1\u0000${replayKey}\u0000${eventJson}`,
   );

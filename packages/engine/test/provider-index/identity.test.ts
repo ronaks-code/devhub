@@ -447,6 +447,19 @@ describe("cache identity keys", () => {
     );
   });
 
+  it("bounds encoded multibyte native turn and item cache keys", () => {
+    const withinBound = "界".repeat(253);
+    const beyondBound = "界".repeat(254);
+    const acceptedTurnKey = cachedTurnKey(withinBound);
+    expect(acceptedTurnKey).toHaveLength(1_022);
+    expect(() => cachedTurnKey(beyondBound)).toThrow("cached turn key is invalid");
+
+    const acceptedItemKey = cachedEventItemId(messageDelta("bounded", withinBound), 0);
+    expect(acceptedItemKey).toHaveLength(1_022);
+    expect(() => cachedEventItemId(messageDelta("oversized", beyondBound), 0))
+      .toThrow("cached event item key is invalid");
+  });
+
   it("strictly parses cached turn keys with a fixed Unicode vector", () => {
     const vector = "native:v1:6L2u5qyhL_Cfp6o";
     expect(cachedTurnKey("轮次/🧪")).toBe(vector);
