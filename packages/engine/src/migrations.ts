@@ -20,6 +20,7 @@ import {
   ftsTableColumns,
   ftsLacksColumn,
 } from "./fts-schema.js";
+import { createProviderIndexSchema } from "./provider-index/schema.js";
 
 type Migration = (db: SqliteDatabase) => void;
 
@@ -216,6 +217,11 @@ const MIGRATIONS: Migration[] = [
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(toolName)`);
     db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(sessionId)`);
   },
+  // v14: provider-native task index. These tables separate rebuildable provider
+  // cache from DevHub-owned metadata, mappings, fork links, and reconciliation
+  // latches. Keep this DDL migration-only (not in index-db.ts's legacy base schema)
+  // so a v13 database reaches the full shape atomically in this version transaction.
+  createProviderIndexSchema,
 ];
 
 /**
