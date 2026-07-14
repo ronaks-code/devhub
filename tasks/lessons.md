@@ -143,3 +143,14 @@
 - A previously reviewed checkpoint can still encode an older plan revision. Before extending it, compare every existing public signature and lifecycle assumption with the current frozen source of truth rather than inheriting prior review prose.
 - Provider locators are durable path-free metadata identities, so reconciliation must remain readable and mutable after a home is removed; home registration is optional validation context, not reconciliation authority.
 - Return the exact post-write reconciliation row for require/ack CAS operations, and reread it inside the owned transaction. Nullable equal acknowledgement pairs represent authoritative deletion/invalid state and must not be rejected merely because an older latch stored a non-null native fingerprint.
+
+## 2026-07-14 - Preserve allocation tombstones across additive schema versions
+
+- An active generation plus nullable staging generation cannot remember an aborted allocation, so deriving the next generation from visible cache state permits ABA reuse.
+- Preserve the historical migration byte-for-byte and append a monotonic allocation watermark in a new version. Abort, conflict cleanup, promotion, and cache clearing retain that watermark; only a successful begin/takeover advances it.
+- A reviewed migration is not complete while its frozen plan still names the old version as latest. Update DDL sketches, lifecycle invariants, overflow behavior, and migration gates before handing the next checkpoint to another implementer.
+
+## 2026-07-14 - Distinguish domain refusal from suppressed SQLite writes
+
+- A missing `RETURNING` row is not automatically the method's domain error. Prove capacity and CAS preconditions first; inside the owned writer transaction, an otherwise impossible missing row indicates trigger suppression or persisted-state corruption.
+- Add real BEFORE `RAISE(IGNORE)` tests as well as AFTER delete/rewrite tests. The former certifies suppression classification, while the latter certifies exact post-write authority and rollback.
