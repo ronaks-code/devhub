@@ -172,3 +172,9 @@
 - An instance-local guard does not protect a shared SQLite handle: a callback can construct or retain a second store over the same object and mutate while the outer store believes it has exclusive sequencing.
 - Key mutation guard state by the exact connection object in a module-private `WeakMap`, and release it in `finally`. This shares authority without retaining closed connections or coupling independent handles.
 - Reentrancy tests must use two store instances, snapshot cache and durable state as well as sync authority, assert exact callback counts and stable outer error mapping, then prove both post-failure release and cross-database independence.
+
+## 2026-07-14 - Verify staged writes as exact generation replacements
+
+- Verifying only the requested task rowset does not catch a hostile trigger that writes the requested row and injects a sibling task. Snapshot the bounded generation census and target-task census before mutation, derive the exact post-replacement census, and require that delta before commit.
+- Capacity is a property of the final deduplicated generation, not the incoming payload in isolation. Enforce it after replacement inside the owned transaction so rollback restores both cache and lease authority.
+- When extracting internal SQL helpers, preserve their stable failure identity through the transaction owner as well as the public boundary. Otherwise a domain `CAPACITY` or `CORRUPT_ROW` can be accidentally flattened into `DATABASE_UNAVAILABLE` during rollback.
