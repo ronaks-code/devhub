@@ -61,9 +61,9 @@ interface ReconciliationRow {
   readonly updated_at: unknown;
 }
 
-interface KnownLocator {
+interface ReconciliationTarget {
   readonly locator: ProviderTaskLocator;
-  readonly canonicalHome: string;
+  readonly canonicalHome: string | null;
 }
 
 interface NormalizedReconciliationInput {
@@ -174,17 +174,18 @@ function normalizeLocator(value: ProviderTaskLocator): ProviderTaskLocator {
   return parseTaskLocator(serializeTaskLocator(value));
 }
 
-function semanticFingerprint(value: unknown, canonicalHome: string): string {
+function semanticFingerprint(value: unknown, canonicalHome: string | null): string {
   if (typeof value !== "string" || value.includes("\u0000") ||
     sqliteTextLengthAtMost(value, MAX_FINGERPRINT_CHARS) === null ||
     value.length === 0 || !hasCanonicalUnicode(value) ||
-    value.includes(canonicalHome) || redactSecrets(value) !== value) {
+    (canonicalHome !== null && value.includes(canonicalHome)) ||
+    redactSecrets(value) !== value) {
     throw new TypeError();
   }
   return value;
 }
 
-function optionalSemanticFingerprint(value: unknown, canonicalHome: string): string | null {
+function optionalSemanticFingerprint(value: unknown, canonicalHome: string | null): string | null {
   return value === null ? null : semanticFingerprint(value, canonicalHome);
 }
 
@@ -198,7 +199,7 @@ function reconciliationReason(value: unknown): ProviderReconciliationReason {
 
 function normalizeReconciliationInput(
   value: ReconciliationLatchInput,
-  canonicalHome: string,
+  canonicalHome: string | null,
 ): Readonly<NormalizedReconciliationInput> {
   const input = exactOwnData(value, [
     "reviewedFingerprint",
@@ -359,10 +360,10 @@ function verifyInsertedRegisteredHomeInsideOwnedTransaction(
   });
 }
 
-function knownLocator(
+function reconciliationTarget(
   db: SqliteDatabase,
   locatorValue: ProviderTaskLocator,
-): Readonly<KnownLocator> {
+): Readonly<ReconciliationTarget> {
   let locator: ProviderTaskLocator;
   try {
     locator = normalizeLocator(locatorValue);
@@ -374,27 +375,10 @@ function knownLocator(
     locator.provider,
     locator.homeFingerprint,
   );
-  if (canonicalHome === null) return fail("UNKNOWN_HOME");
-  if (locator.nativeTaskId.includes(canonicalHome)) throw new TypeError();
-  return Object.freeze({ locator, canonicalHome });
-}
-
-function recheckRegisteredHomeInsideOwnedTransaction(
-  db: SqliteDatabase,
-  target: KnownLocator,
-): void {
-  const row = queryRegisteredHomeByFingerprint(
-    db,
-    target.locator.provider,
-    target.locator.homeFingerprint,
-  );
-  if (row === null) fail("UNKNOWN_HOME");
-  const decoded = decodeRegisteredHomeRow(row);
-  if (decoded.provider !== target.locator.provider ||
-    decoded.homeFingerprint !== target.locator.homeFingerprint ||
-    decoded.canonicalHome !== target.canonicalHome) {
-    fail("CORRUPT_ROW");
+  if (canonicalHome !== null && locator.nativeTaskId.includes(canonicalHome)) {
+    throw new TypeError();
   }
+  return Object.freeze({ locator, canonicalHome });
 }
 
 function queryReconciliationRow(
@@ -433,7 +417,7 @@ function missingReconciliationState(
 
 function decodeReconciliationRow(
   row: ReconciliationRow,
-  target: KnownLocator,
+  target: ReconciliationTarget,
 ): Readonly<ProviderReconciliationState> {
   try {
     if (providerId(row.provider) !== target.locator.provider ||
@@ -457,10 +441,7 @@ function decodeReconciliationRow(
     const reason = row.reason === null ? null : reconciliationReason(row.reason);
     const updatedAt = safeInteger(row.updated_at);
     if (required !== (reason !== null)) throw new TypeError();
-    if (!required && (
-      reviewedFingerprint === null || nativeFingerprint === null ||
-      reviewedFingerprint !== nativeFingerprint
-    )) {
+    if (!required && reviewedFingerprint !== nativeFingerprint) {
       throw new TypeError();
     }
     return Object.freeze({
@@ -481,10 +462,10 @@ function decodeReconciliationRow(
 
 function writeRequiredReconciliationInsideOwnedTransaction(
   db: SqliteDatabase,
-  target: KnownLocator,
+  target: ReconciliationTarget,
   input: NormalizedReconciliationInput,
   updatedAt: number,
-): void {
+): Readonly<ProviderReconciliationState> {
   const currentRow = queryReconciliationRow(db, target.locator);
   const current = currentRow === null ? null : decodeReconciliationRow(currentRow, target);
   if (current?.latchRevision === MAX_SAFE_INTEGER) fail("CAPACITY");
@@ -521,7 +502,9 @@ function writeRequiredReconciliationInsideOwnedTransaction(
     return fail("DATABASE_UNAVAILABLE");
   }
   if (row === undefined) fail("CAPACITY");
-  const written = decodeReconciliationRow(row, target);
+  const committedRow = queryReconciliationRow(db, target.locator);
+  if (committedRow === null) fail("CORRUPT_ROW");
+  const written = decodeReconciliationRow(committedRow, target);
   const expectedRevision = current === null ? 1 : current.latchRevision + 1;
   if (!written.required || written.latchRevision !== expectedRevision ||
     written.reviewedFingerprint !== input.reviewedFingerprint ||
@@ -530,22 +513,22 @@ function writeRequiredReconciliationInsideOwnedTransaction(
     written.updatedAt !== updatedAt) {
     fail("CORRUPT_ROW");
   }
+  return written;
 }
 
 function acknowledgeInsideOwnedTransaction(
   db: SqliteDatabase,
-  target: KnownLocator,
+  target: ReconciliationTarget,
   expectedLatchRevision: number,
-  reviewedFingerprint: string,
-  observedNativeFingerprint: string,
+  reviewedFingerprint: string | null,
+  observedNativeFingerprint: string | null,
   updatedAt: number,
 ): Readonly<ProviderReconciliationState> {
   const currentRow = queryReconciliationRow(db, target.locator);
   if (currentRow === null) return fail("RECONCILIATION_CAS_MISMATCH");
   const current = decodeReconciliationRow(currentRow, target);
   if (!current.required || current.latchRevision !== expectedLatchRevision ||
-    reviewedFingerprint !== observedNativeFingerprint ||
-    current.nativeFingerprint !== observedNativeFingerprint) {
+    reviewedFingerprint !== observedNativeFingerprint) {
     return fail("RECONCILIATION_CAS_MISMATCH");
   }
 
@@ -578,7 +561,9 @@ function acknowledgeInsideOwnedTransaction(
     return fail("DATABASE_UNAVAILABLE");
   }
   if (row === undefined) return fail("RECONCILIATION_CAS_MISMATCH");
-  const acknowledged = decodeReconciliationRow(row, target);
+  const committedRow = queryReconciliationRow(db, target.locator);
+  if (committedRow === null) fail("CORRUPT_ROW");
+  const acknowledged = decodeReconciliationRow(committedRow, target);
   if (acknowledged.required || acknowledged.reason !== null ||
     acknowledged.latchRevision !== current.latchRevision ||
     acknowledged.writerEpoch !== current.writerEpoch ||
@@ -671,9 +656,9 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   }
 
   getReconciliation(locatorValue: ProviderTaskLocator): Readonly<ProviderReconciliationState> {
-    let target: Readonly<KnownLocator>;
+    let target: Readonly<ReconciliationTarget>;
     try {
-      target = knownLocator(this.db, locatorValue);
+      target = reconciliationTarget(this.db, locatorValue);
     } catch (error) {
       throw publicFailure(error, "INVALID_INPUT");
     }
@@ -689,40 +674,37 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   requireReconciliation(
     locatorValue: ProviderTaskLocator,
     inputValue: ReconciliationLatchInput,
-  ): void {
-    this.runMutation(() => {
+  ): Readonly<ProviderReconciliationState> {
+    return this.runMutation(() => {
       assertNoCallerTransaction(this.db);
-      const target = knownLocator(this.db, locatorValue);
+      const target = reconciliationTarget(this.db, locatorValue);
       const input = normalizeReconciliationInput(inputValue, target.canonicalHome);
       const now = sampleNow(this.config);
-      withOwnedImmediateTransaction(this.db, () => {
-        recheckRegisteredHomeInsideOwnedTransaction(this.db, target);
-        writeRequiredReconciliationInsideOwnedTransaction(this.db, target, input, now);
-      });
+      return withOwnedImmediateTransaction(this.db, () =>
+        writeRequiredReconciliationInsideOwnedTransaction(this.db, target, input, now));
     });
   }
 
   acknowledgeReconciliation(
     locatorValue: ProviderTaskLocator,
     expectedLatchRevisionValue: number,
-    reviewedFingerprintValue: string,
-    observedNativeFingerprintValue: string,
+    reviewedFingerprintValue: string | null,
+    observedNativeFingerprintValue: string | null,
   ): Readonly<ProviderReconciliationState> {
     return this.runMutation(() => {
       assertNoCallerTransaction(this.db);
-      const target = knownLocator(this.db, locatorValue);
+      const target = reconciliationTarget(this.db, locatorValue);
       const expectedLatchRevision = safeInteger(expectedLatchRevisionValue);
-      const reviewedFingerprint = semanticFingerprint(
+      const reviewedFingerprint = optionalSemanticFingerprint(
         reviewedFingerprintValue,
         target.canonicalHome,
       );
-      const observedNativeFingerprint = semanticFingerprint(
+      const observedNativeFingerprint = optionalSemanticFingerprint(
         observedNativeFingerprintValue,
         target.canonicalHome,
       );
       const now = sampleNow(this.config);
       return withOwnedImmediateTransaction(this.db, () => {
-        recheckRegisteredHomeInsideOwnedTransaction(this.db, target);
         return acknowledgeInsideOwnedTransaction(
           this.db,
           target,

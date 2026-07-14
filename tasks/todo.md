@@ -403,3 +403,21 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - `TranscriptIndex` now constructs one `ProviderTaskIndexStore` immediately after `runMigrations(this.db)` and passes that exact owned `DatabaseSync` handle before initializing dependent stores or statements. The store has no close API; `TranscriptIndex.close()` remains the sole connection close path.
 - Focused integration proves the constructor observes user version 14 plus `provider_homes`, fresh register/resolve, durable authority and reconciliation across reopen, caller-transaction refusal on the shared handle, post-owner-close `DATABASE_UNAVAILABLE`, unchanged legacy settings/read behavior, and root-versus-provider package boundaries.
 - Fresh focused gate: wiring `5/5` plus store `30/30` plus migration `32/32` = `67/67`; engine typecheck and its negative public-surface compiler fixture pass. `git diff --check` passes. No store semantics, schema/migration, cache/stage/coordinator/route/adapter/UI, provider process, browser, full suite, heavy queue, Python runtime, or push was used.
+
+### Checkpoint C0: current-contract reconciliation and public store types
+
+- [x] Replace the stale known-home reconciliation assumption with path-free orphan metadata identity semantics while retaining registered-home raw-path validation when that optional authority exists.
+- [x] Make every `requireReconciliation` return its exact committed frozen state/CAS token and make acknowledgement accept/return an exact nullable authoritative pair.
+- [x] Permit exact-revision `C/C` or `NULL/NULL` acknowledgement to supersede an older latch pair, while preserving exact prior-row SQL fencing and newer-relatch refusal.
+- [x] Reread and verify reconciliation authority after both require and acknowledgement writes inside the owned transaction.
+- [x] Add the frozen page/scope/cache-clear/metadata/fork/legacy public types and keep raw-home, concrete-store, prepared, and internal carriers outside the provider barrel.
+- [x] Freeze staged/active summary demotion and replay-conflict latch payload semantics without implementing the later lifecycle methods.
+- [x] Run the fresh focused store/codec/wiring regression, typecheck/public-surface, and diff-hygiene gate.
+- [ ] Obtain independent specification then quality/security GO on the exact checkpoint.
+
+#### Checkpoint C0 implementation evidence
+
+- TDD RED was exact: focused store tests reported `6 failed / 24 passed`, covering orphan get/require/ack, returned require state, exact-revision authoritative fingerprint supersession, and nullable deletion acknowledgement.
+- The negative/positive public-surface compiler RED named exactly ten absent frozen exports before implementation.
+- A separate persisted-authority RED removed the new reread and made both real AFTER-trigger require/ack regressions fail (`2 failed / 30 skipped`); restoring the reread makes both mutations fail closed and roll back trigger changes.
+- Fresh exact-tip gate: store `32/32` plus codec `76/76` plus wiring `5/5` = `113/113`; engine source typecheck and the dedicated negative public-surface compiler fixture pass; `git diff --check` passes. Independent review remains pending.
