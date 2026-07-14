@@ -41,12 +41,17 @@ export type {
   IndexedProviderTask,
   IndexedProviderTaskSummary,
   IndexedProviderTurn,
+  ProviderHomeRegistration,
   ProviderHomeScope,
   ProviderIndexCompletion,
   ProviderIndexPromotion,
   ProviderIndexStage,
   ProviderIndexStoreErrorCode,
   ProviderIndexStoreOptions,
+  ProviderReconciliationReason,
+  ProviderReconciliationState,
+  ProviderReconciliationStore,
+  ReconciliationLatchInput,
 } from "../provider-index/store-types.js";
 export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";

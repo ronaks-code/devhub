@@ -109,6 +109,48 @@ export interface ProviderHomeScope {
   readonly homeFingerprint: string;
 }
 
+export interface ProviderHomeRegistration extends ProviderHomeScope {
+  readonly registeredAt: number;
+}
+
+export type ProviderReconciliationReason =
+  | "REPLAY_CONFLICT"
+  | "NATIVE_REVISION_MISMATCH"
+  | "NATIVE_TASK_MISSING"
+  | "WRITER_LEASE_LOST"
+  | "MUTATION_OUTCOME_UNCERTAIN"
+  | "PROCESS_GENERATION_CHANGED"
+  | "NATIVE_STATE_INVALID";
+
+export interface ReconciliationLatchInput {
+  readonly reviewedFingerprint: string | null;
+  readonly nativeFingerprint: string | null;
+  readonly writerEpoch: number;
+  readonly reason: ProviderReconciliationReason;
+}
+
+export interface ProviderReconciliationState {
+  readonly locator: ProviderTaskLocator;
+  readonly required: boolean;
+  readonly latchRevision: number;
+  readonly reviewedFingerprint: string | null;
+  readonly nativeFingerprint: string | null;
+  readonly writerEpoch: number;
+  readonly reason: ProviderReconciliationReason | null;
+  readonly updatedAt: number | null;
+}
+
+export interface ProviderReconciliationStore {
+  getReconciliation(locator: ProviderTaskLocator): ProviderReconciliationState;
+  requireReconciliation(locator: ProviderTaskLocator, input: ReconciliationLatchInput): void;
+  acknowledgeReconciliation(
+    locator: ProviderTaskLocator,
+    expectedLatchRevision: number,
+    reviewedFingerprint: string,
+    observedNativeFingerprint: string,
+  ): ProviderReconciliationState;
+}
+
 export interface ProviderIndexRegisteredHome extends ProviderHomeScope {
   readonly canonicalHome: string;
 }
