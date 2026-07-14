@@ -23,6 +23,6 @@ Open legacy-shell differences, not relabeled as M4 completion:
 
 - Two permanent rails and the legacy top navigation remain until M6.
 - First-run/PWA installation still contains Claude-era wording, including the browser-visible legacy install name; M8 rebrand/compatibility owns it.
-- The M4 create screenshots were captured before the final exact-copy repair and must not be used as proof of the repaired strings; source tests plus the required final recapture are authoritative.
+- The original `browser-*-create-claude.png` screenshots predate the exact-copy repair. Fresh `browser-*-exact-copy.png`, `computer-use-chrome-*.png`, and `computer-use-exact-copy-trace.md` artifacts are authoritative for the repaired strings and interactions.
 
 No visible `Claude UI` string appears inside the provider-native task canvas itself.

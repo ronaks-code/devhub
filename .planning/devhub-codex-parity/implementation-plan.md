@@ -377,7 +377,7 @@ M3 implementation result: production code, synthetic lifecycle, one-turn live st
 - [x] Keep `LegacyClaudeAdapter` as flagged fallback until side-by-side parity passes.
 - [ ] Enable `persistentClaude` only after the lifecycle gate passes.
 
-M4 deterministic implementation result: persistent transport, controls, event/model evidence, bounded backend drift diagnostics, helpers, leases, adapter/server/UI composition, and synthetic lifecycle are implemented. Exact-copy Browser recapture remains open and first-party Computer Use is host-blocked. Exact raw product-wrapper multi-query/resume/permission/interrupt/post-interrupt/fork-continuation proof remains unavailable within the exhausted three-turn live cap; the flag stays false. See `evidence/m4/` and `tasks/todo.md`. This is not reported as milestone completion.
+M4 deterministic implementation result: persistent transport, controls, event/model evidence, bounded backend drift diagnostics, helpers, leases, adapter/server/UI composition, synthetic lifecycle, final exact-copy Browser/IAB, and DevHub Computer Use gates pass. First-party Codex Computer Use remains host-blocked. Exact raw product-wrapper multi-query/resume/permission/interrupt/post-interrupt/fork-continuation proof remains unavailable within the exhausted three-turn live cap; the flag stays false. See `evidence/m4/` and `tasks/todo.md`. This is not reported as milestone completion.
 
 ## M5 - Unified task/index model
 

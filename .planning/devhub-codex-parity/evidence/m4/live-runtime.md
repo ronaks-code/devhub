@@ -16,7 +16,8 @@ Date: 2026-07-13
 - M4 deterministic persistent transport, control correlation, fail-closed permission bridge, event normalization, model-evidence divergence, restart/circuit behavior, official helpers, one-writer lease, adapter/server composition, and provider-native pane implementation.
 - Unknown/malformed drift frames are retained as bounded, redacted, backend-only process-memory diagnostics keyed by opaque home scope, session, and event. Known raw lifecycle envelopes are not retained by that ring and it is not a substitute for the selected-wrapper artifact below.
 - Current post-hardening focused gates: engine `179/179`, server `65/65`, web `102/102`; engine/server/web typechecks and `git diff --check` pass.
-- Fresh full-repo gate: `pnpm exec turbo run typecheck test build --force --concurrency=2` passed `11/11` tasks in `2m23.664s`, including the supported desktop application and x64 DMG bundles. The shared FIFO wait was `766,562 ms` (`12m46.562s`). Turbo emitted only its existing non-fatal missing-output declaration warning for the desktop build. Exact-copy Browser/Computer Use recapture remains open.
+- Fresh full-repo gate: `pnpm exec turbo run typecheck test build --force --concurrency=2` passed `11/11` tasks in `2m23.664s`, including the supported desktop application and x64 DMG bundles. The shared FIFO wait was `766,562 ms` (`12m46.562s`). Turbo emitted only its existing non-fatal missing-output declaration warning for the desktop build.
+- Final deterministic visual gate: Browser/IAB exact-copy and no-overflow checks pass at `1280x720` and `768x720`; Computer Use drove the Chrome setup/create/complete/idle/interrupt workflow and saved screenshots plus an action/state trace. No live provider turn was used.
 
 ## Not proven and therefore disabled
 

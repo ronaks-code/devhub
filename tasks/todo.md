@@ -103,13 +103,14 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
     - [x] Official Agent SDK `0.3.207` session helpers use an isolated real child and process-wide four-child capacity gate.
     - [x] SQLite writer lease retains monotonic epochs/tombstones, reread fencing, reentrancy guards, and real multi-process/crash tests.
     - [x] Native Claude adapter/server composition fail closed for uncertain start/send/fork/control outcomes, external drift, and bounded revision capacity.
-    - [x] Settings request/effective-state toggle and provider-aware existing native pane/Chat route integration implemented; exact-copy Browser recapture remains pending.
+    - [x] Settings request/effective-state toggle and provider-aware existing native pane/Chat route integration implemented; final exact-copy Browser and Computer Use recapture passes.
     - [x] Active-turn child crash publishes one uncertainty terminal, latches reconciliation, and blocks another mutation until authoritative review.
     - [x] Clean idle release/reacquisition permits handler/policy rebinding only for a fully stopped, quiescent entry.
     - [x] Resume preserves attested Claude permission policy; missing evidence requires explicit non-elevating policy repair.
     - [x] Persistent child env strips DevHub and cross-provider credentials while retaining the selected Claude auth and operational allowlist.
     - [x] Terminal-ordering tests cover provider-terminal-before-exit, intentional shutdown, fulfilled/rejected termination, hostile clocks/sinks, and receipt-correlated user cancellation.
-  - [ ] Deterministic lifecycle, fallback, browser, and full-repo gates; retain the live three-turn lifecycle gate as an explicit budget blocker and keep the flag disabled.
+  - [x] Deterministic lifecycle, fallback, Browser/Computer Use, and full-repo gates.
+  - [ ] Selected-wrapper raw multi-query/resume/permission/interrupt/post-interrupt/fork-continuation live gate; the three-turn cap is exhausted, so keep the flag disabled and report this as blocked rather than passed.
 - [ ] M5 unified provider-locked task/index model.
 - [ ] M6 approved Codex-style shell.
 - [ ] M7 cross-provider fork, Work mode, and synchronization.
@@ -200,6 +201,6 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The official helper boundary now uses the pinned Agent SDK in an isolated Node child with an exact one-request/one-response protocol, no inherited parent secrets, bounded stdin/stdout/stderr/time, real kill-path integration tests, and a process-wide four-child gate charged exactly once. Focused helper tests pass 16/16; final independent review is running.
 - The writer lease now retains per-key tombstones so clean release/reacquisition cannot reset the exported epoch (ABA), and reentrant clock/timer callbacks fail closed. Focused lease tests pass 16/16, including barriered cross-process ownership and child-crash expiry takeover; final independent rereview remains.
 - Claude supervisor hardening passes 9/9 focused tests: hung failed-generation cleanup cannot block recovery scheduling, hostile clocks fail closed, subscription OAuth is scrubbed, feature disable drains runtimes, and canonical provider-home validation is shared. Independent review remains.
-- Final deterministic integration hardening passes focused engine `179/179`, server `65/65`, and web `102/102`; engine/server/web typechecks and `git diff --check` pass. Independent static review found no remaining P1-P3 code issue. The fresh full-repo `typecheck test build` gate passed all `11/11` Turbo tasks after a measured `766,562 ms` FIFO wait and `2m23.664s` execution; exact-copy Browser/Computer Use recapture remains open.
-- The existing provider-native pane now requires a first Claude message before create, preserves provider-native policy, retains exact reconciliation fingerprints, and renders receipt-correlated `Cancelled by you` only for the proven interrupt result. Exact-copy Browser recapture remains pending; first-party Computer Use remains host-blocked.
-- No Python or live provider/model turn was used. The live Claude raw-lifecycle budget remains exhausted, so `persistentClaude` stays disabled. A read-only resource heartbeat now checks load, memory, and the shared heavy lock without starting or killing jobs.
+- Final deterministic integration hardening passes focused engine `179/179`, server `65/65`, and web `102/102`; engine/server/web typechecks and `git diff --check` pass. Independent static review found no remaining P1-P3 code issue. The fresh full-repo `typecheck test build` gate passed all `11/11` Turbo tasks after a measured `766,562 ms` FIFO wait and `2m23.664s` execution.
+- Final Browser/IAB recapture proves exact copy/options and disabled-to-enabled required-field gating at `1280x720` and `768x720`, with exact document widths and no console warnings/errors. Computer Use independently drove create/completion/idle/interrupt and captured receipt-correlated `Cancelled by you`; first-party Codex control remains host-blocked.
+- No Python or live provider/model turn was used. The live Claude raw-lifecycle budget remains exhausted, so `persistentClaude` stays disabled. The noisy 15-minute resource heartbeat is deleted; the independent hourly `:04` status-file automation remains active.

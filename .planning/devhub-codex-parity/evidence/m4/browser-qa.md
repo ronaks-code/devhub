@@ -16,19 +16,27 @@ Scope: the Anthropic presentation of the shared provider-native task pane, exerc
 | Workflow | Evidence | Result |
 | --- | --- | --- |
 | Select active Claude task | `browser-wide-active-claude.png` (`1280x720`) | `Anthropic · Claude` appears in the rail and header; plans, shell activity, diff summary, usage, turn state, and an unsupported request explanation render without pretending the control works. |
-| Create Claude task | `browser-wide-create-claude.png` (`1280x720`) and `browser-narrow-create-claude.png` (`768x720`) | Provider is fixed; model selection is disabled with a truthful capability disclosure; only the safe verified subset of Claude modes is offered. |
+| Create Claude task | Final `browser-wide-create-exact-copy.png`, `browser-narrow-create-exact-copy.png`, and `browser-narrow-create-ready-exact-copy.png` | Provider is fixed; model selection is disabled with exact truthful disclosure; permission options are exactly `Manual`, `Accept edits`, `Plan`; required-field gating changes creation from disabled to enabled. |
 | Complete a synthetic turn | `browser-narrow-completed-claude.png` (`768x720`) | Task creation, user message, plan, activity, assistant result, and follow-up composer render from native-provider-shaped events. |
 | Regress terminal row status | `browser-narrow-completed-after-fix.jpg` (`768x720`) | A second terminal event leaves the selected task row `idle`, not stale `active`. |
 
-The create-copy screenshots predate the final exact-copy repair. The current source and focused test now require:
+The original create-copy screenshots predate the final exact-copy repair. The final Browser/IAB and Computer Use recaptures now prove:
 
 - `Manual`, `Accept edits`, `Plan`;
 - `Claude model selection unavailable until runtime support is verified.`;
-- `Provider is fixed after creation. Fork to another provider to continue there.`
+- `Provider is fixed after creation. Fork to another provider to continue there.`;
 - `First message (required)` for Anthropic creation;
 - `Cancelled by you` only after an exact strict interrupt receipt and the proven `error_during_execution` result correlate.
 
-The next Browser recapture must retain those exact strings; the older captures remain useful only for geometry and state provenance.
+The authoritative recaptures are `browser-wide-create-exact-copy.png`, `browser-narrow-create-exact-copy.png`, `browser-narrow-create-ready-exact-copy.png`, and the fresh Computer Use screenshots/trace. The older create captures remain useful only for historical geometry and state provenance.
+
+## Final exact-copy recapture
+
+- Browser/IAB at `1280x720` found exactly one model disclosure, provider-lock disclosure, required first-message textbox, permission combobox, and create button. Permission options were exactly `Manual`, `Accept edits`, `Plan`, with `Plan` selected.
+- Browser/IAB at `768x720` returned the same exact copy/options. `Create task` was disabled before required input and enabled after synthetic cwd/message input.
+- Wide body/document/client widths were exactly `1280`; narrow widths were exactly `768`. Neither viewport had horizontal overflow.
+- The in-app Browser reported no warning/error console entries.
+- Computer Use independently drove the matching Chrome workflow through create, completion, idle composer, and strict interrupt; see `computer-use-exact-copy-trace.md`.
 
 ## Responsive and accessibility checks
 
@@ -49,4 +57,4 @@ Browser/IAB exposed that a terminal turn notification could leave the task-list 
 
 ## Judgment
 
-Synthetic Browser gate: earlier geometry/state pass retained, but final exact-copy recapture is still open and is not counted complete. Live selected-runtime lifecycle gate: blocked and recorded separately in `live-runtime.md`; `persistentClaude` remains false.
+Synthetic Browser and Computer Use gates pass, including final exact-copy and responsive recapture. The live selected-runtime lifecycle gate remains blocked and recorded separately in `live-runtime.md`; `persistentClaude` remains false and M4 is not reported complete.
