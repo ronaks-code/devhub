@@ -331,3 +331,20 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - The minimal fix defines `MAX_CANONICAL_JSON_VISITS` as `MAX_CANONICAL_JSON_ARRAY_ITEMS + 1`; the fixed maximum produces 5,000,001 canonical characters with SHA-256 `cb6de8b9c9a77e11b64b829ec767c4aa407ac87dd10a14812044a5ff25346ec0`.
 - Independent follow-up review returned GO: the cap grows by exactly one root visit, the fixed hash was independently verified, and first-over rejection remains pre-enumeration.
 - Fresh focused gate: identity plus codec tests `174/174` in `18.04s` (`19.72s` test execution).
+
+## M5 store slice 1: fourth adversarial repair
+
+- [x] Add RED regressions proving all three public event projection APIs reject nested/ignored accessors, request-identity accessors, revoked proxies, deep alias expansion, and oversized ignored graphs without invoking getters or traps.
+- [x] Replace the public `structuredClone` boundary with one bounded recursive data-descriptor snapshot; retain the trusted store snapshot path without a second snapshot.
+- [x] Enforce diagnostic `shapeKeys` cardinality 32 before key enumeration or numeric descriptors on both writer and decoder paths.
+- [x] Run focused identity/codec tests, engine typecheck/public-surface fixture, diff hygiene, and independent adversarial review.
+- [x] Commit the repair as a new checkpoint without rewriting prior commits or pushing/integrating.
+
+### Fourth adversarial repair review
+
+- TDD RED isolated the public shallow-clone gap and decoder post-enumeration overflow. A test-fixture scope typo in the first writer RED was corrected before production work; the corrected writer counter then proved the original graph was enumerated too early.
+- The public snapshot rejects proxies before every trap and recursively bounds depth, nodes, local/aggregate keys, dense arrays, individual/aggregate strings, cycles, symbols, exotics, and accessors. Benign aliases remain legal and are cloned within the same fixed budget.
+- The direct trusted-seam regression proves the already-deep-frozen store snapshot is not recursively resnapshotted; its ignored nested object receives zero descriptor reads.
+- Writer and decoder both reject 33 diagnostic shape keys before `Reflect.ownKeys` or numeric element descriptors, producing `INVALID_INPUT` and `CORRUPT_ROW` respectively.
+- Initial independent review returned P3-only for missing cycle/symbol/exotic cases and an obsolete `structuredClone` spy. After exact test repairs, independent rereview returned GO with no P0-P3 findings.
+- Fresh final gate: identity plus codec tests `177/177` in `16.00s` (`17.68s` test execution); engine typecheck and the negative public-surface fixture pass; `git diff --check` passes.

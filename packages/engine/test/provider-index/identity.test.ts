@@ -918,6 +918,132 @@ describe("indexed provider event projection", () => {
     expect(() => indexedProviderEventTurnId(hostile)).toThrow(TypeError);
   });
 
+  it("snapshots every public projection graph through bounded data descriptors", () => {
+    let getterCalls = 0;
+    let proxyTrapCalls = 0;
+    const base = {
+      provider: "openai" as const,
+      key,
+      occurredAt: OCCURRED_AT,
+      type: "message" as const,
+      role: "assistant" as const,
+      text: "safe public projection",
+      turnId: "turn-public-snapshot",
+      itemId: "item-public-snapshot",
+    };
+    const nestedAccessor = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-nested-accessor");
+      },
+    });
+    const ignoredAccessor = Object.defineProperty({ ...base }, "ignored", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("must-never-leak-ignored-accessor");
+      },
+    });
+    const requestWithIdentityAccessor = {
+      provider: "openai" as const,
+      key,
+      occurredAt: OCCURRED_AT,
+      type: "request" as const,
+      request: Object.defineProperty({ kind: "permission" }, "identity", {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("must-never-leak-identity-accessor");
+        },
+      }),
+    };
+    const nestedProxy = new Proxy({ safe: true }, {
+      get() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-get");
+      },
+      getPrototypeOf() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-prototype");
+      },
+      ownKeys() {
+        proxyTrapCalls += 1;
+        throw new Error("must-never-leak-nested-proxy-keys");
+      },
+    });
+    const revocable = Proxy.revocable({ safe: true }, {});
+    revocable.revoke();
+    let deepAlias: Record<string, unknown> = { leaf: true };
+    for (let index = 0; index < 18; index += 1) {
+      deepAlias = { left: deepAlias, right: deepAlias };
+    }
+    const oversizedIgnored = Array(65).fill(null);
+    const tooManyLocalKeys = Object.fromEntries(
+      Array.from({ length: 33 }, (_, index) => [`key${index}`, index]),
+    );
+    const tooManyNodes = {
+      left: Array.from({ length: 64 }, () => ({})),
+      right: Array.from({ length: 64 }, () => ({})),
+    };
+    const tooManyAggregateKeys = Object.fromEntries(
+      Array.from({ length: 8 }, (_, group) => [
+        `group${group}`,
+        Object.fromEntries(Array.from(
+          { length: 32 },
+          (_, index) => [`key${group}-${index}`, index],
+        )),
+      ]),
+    );
+    const tooManyAggregateStringChars = {
+      left: "x".repeat(4_300_000),
+      right: "y".repeat(4_300_000),
+    };
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    const symbolKey = { [Symbol("hidden")]: true };
+    const exotic = new Date(0);
+    const hostileEvents: readonly ProviderEvent[] = [
+      { ...base, ignored: { nestedAccessor } } as ProviderEvent,
+      ignoredAccessor as ProviderEvent,
+      requestWithIdentityAccessor as unknown as ProviderEvent,
+      { ...base, ignored: nestedProxy } as ProviderEvent,
+      { ...base, ignored: revocable.proxy } as ProviderEvent,
+      { ...base, ignored: deepAlias } as ProviderEvent,
+      { ...base, ignored: oversizedIgnored } as ProviderEvent,
+      { ...base, ignored: tooManyLocalKeys } as ProviderEvent,
+      { ...base, ignored: tooManyNodes } as ProviderEvent,
+      { ...base, ignored: tooManyAggregateKeys } as ProviderEvent,
+      { ...base, ignored: tooManyAggregateStringChars } as ProviderEvent,
+      { ...base, ignored: cycle } as ProviderEvent,
+      { ...base, ignored: symbolKey } as ProviderEvent,
+      { ...base, ignored: exotic } as ProviderEvent,
+    ];
+
+    for (const event of hostileEvents) {
+      for (const [action, message] of [
+        [() => projectIndexedProviderEvent(event), "provider event could not be safely projected"],
+        [() => cachedEventItemId(event, 0), "cached event item key is invalid"],
+        [() => providerEventReplayKey(event, 0), "provider event could not be safely projected"],
+      ] as const) {
+        expectValueFreeTypeError(action, message, "must-never-leak");
+      }
+    }
+    expect(getterCalls).toBe(0);
+    expect(proxyTrapCalls).toBe(0);
+
+    const shared = Object.freeze({ safe: "alias" });
+    const safeAliasEvent = {
+      ...base,
+      ignored: { left: shared, right: shared },
+    } as ProviderEvent;
+    expect(projectIndexedProviderEvent(safeAliasEvent))
+      .toEqual(projectIndexedProviderEvent(base as ProviderEvent));
+    expect(cachedEventItemId(safeAliasEvent, 0)).toBe(cachedEventItemId(base as ProviderEvent, 0));
+    expect(providerEventReplayKey(safeAliasEvent, 0))
+      .toBe(providerEventReplayKey(base as ProviderEvent, 0));
+  });
+
   it("rejects readable or injective projection expansion before structured cloning", () => {
     const rootKey = createNativeTaskKey("openai", "/", "task-root-expansion");
     const readableExpansion = normalizeProviderEvent({
@@ -1373,26 +1499,23 @@ describe("indexed provider event projection", () => {
     }
   });
 
-  it("rejects sparse diagnostic shape keys and always projects a dense frozen array", () => {
+  it("rejects sparse diagnostic shape keys and preserves dense frozen arrays", () => {
     const sparseShapeKeys = Array(1) as string[];
     Object.freeze(sparseShapeKeys);
     const dense = diagnosticEvent({ shapeKeys: Object.freeze([]) });
     const sparse = diagnosticEvent({ shapeKeys: sparseShapeKeys });
     const denseProjection = projectIndexedProviderEvent(dense);
-    const sparseProjection = projectIndexedProviderEvent(sparse);
     expect(denseProjection.type).toBe("diagnostic");
-    expect(sparseProjection.type).toBe("diagnostic");
-    if (denseProjection.type !== "diagnostic" || sparseProjection.type !== "diagnostic") {
-      throw new Error("expected diagnostic projections");
-    }
+    if (denseProjection.type !== "diagnostic") throw new Error("expected diagnostic projection");
 
     expect(denseProjection.code).toBe("SAFE_DIAGNOSTIC");
-    expect(sparseProjection.code).toBe("UNKNOWN_PROVIDER_EVENT");
-    expect(sparseProjection).not.toEqual(denseProjection);
-    expect(Object.isFrozen(sparseProjection.shapeKeys)).toBe(true);
-    for (let index = 0; index < sparseProjection.shapeKeys.length; index += 1) {
-      expect(Object.prototype.hasOwnProperty.call(sparseProjection.shapeKeys, index)).toBe(true);
+    expect(Object.isFrozen(denseProjection.shapeKeys)).toBe(true);
+    for (const [action, message] of [
+      [() => projectIndexedProviderEvent(sparse), "provider event could not be safely projected"],
+      [() => cachedEventItemId(sparse, 51), "cached event item key is invalid"],
+      [() => providerEventReplayKey(sparse, 51), "provider event could not be safely projected"],
+    ] as const) {
+      expectValueFreeTypeError(action, message, "must-never-leak");
     }
-    expect(providerEventReplayKey(sparse, 51)).not.toBe(providerEventReplayKey(dense, 51));
   });
 });

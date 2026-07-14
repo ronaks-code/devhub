@@ -102,3 +102,9 @@
 
 - A traversal budget counts the root as well as its children. If an API declares a maximum dense array length, its visit cap must allow at least `maximum items + 1` or the advertised boundary is unreachable.
 - Prove coupled limits at their exact intersection, not only independently: accept the declared maximum with a fixed output length/hash, then reject the first-over input before expensive enumeration.
+
+## 2026-07-14 - Test the replacement boundary, not the removed mechanism
+
+- Replacing `structuredClone` with a descriptor-only snapshot makes a `structuredClone` spy permanently green and therefore useless. A trusted-path regression must observe the new mechanism directly, such as asserting zero descriptor reads on an ignored nested object.
+- Recursive hostile-graph tests must cover each distinct rejection branch: cycles, symbol keys, exotic prototypes, proxies, accessors, sparse/oversized arrays, and every aggregate budget. One representative oversized graph does not certify unrelated branches.
+- A type-valid test helper must still be in lexical scope. When a RED fixture itself fails, repair and rerun the fixture before treating its output as product evidence.

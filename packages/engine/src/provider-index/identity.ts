@@ -39,6 +39,14 @@ const MAX_CANONICAL_JSON_VISITS = MAX_CANONICAL_JSON_ARRAY_ITEMS + 1;
 const MAX_CANONICAL_JSON_OBJECT_KEYS = 100_000;
 const MAX_CANONICAL_JSON_OUTPUT_CODE_POINTS = 64 * 1024 * 1024;
 const MAX_CANONICAL_JSON_OUTPUT_BYTES = 64 * 1024 * 1024;
+const MAX_PROJECTION_GRAPH_DEPTH = 16;
+const MAX_PROJECTION_GRAPH_NODES = 128;
+const MAX_PROJECTION_GRAPH_KEYS = 256;
+const MAX_PROJECTION_GRAPH_ARRAY_ITEMS = 64;
+const MAX_PROJECTION_GRAPH_KEY_CHARS = 512;
+const MAX_PROJECTION_GRAPH_STRING_CHARS = MAX_PROVIDER_INDEX_EVENT_JSON_CHARS;
+const MAX_PROJECTION_GRAPH_AGGREGATE_STRING_CHARS =
+  MAX_PROVIDER_INDEX_EVENT_JSON_CHARS + 131_072;
 const FINGERPRINT = /^[0-9a-f]{64}$/u;
 const BASE64URL = /^[A-Za-z0-9_-]+$/u;
 const HIDDEN_PROVIDER_MARKER =
@@ -567,6 +575,135 @@ function projectionDenseArray(
   return Object.freeze(snapshot);
 }
 
+interface ProjectionGraphBudget {
+  nodes: number;
+  keys: number;
+  stringChars: number;
+}
+
+function accountProjectionGraphString(
+  value: string,
+  budget: ProjectionGraphBudget,
+  perValueMaximum: number,
+): void {
+  const remaining = MAX_PROJECTION_GRAPH_AGGREGATE_STRING_CHARS - budget.stringChars;
+  if (remaining < 0) throw new TypeError(EVENT_PROJECTION_ERROR);
+  const length = sqliteTextLengthAtMost(value, Math.min(perValueMaximum, remaining));
+  if (length === null) throw new TypeError(EVENT_PROJECTION_ERROR);
+  budget.stringChars += length;
+}
+
+function snapshotProjectionGraph(
+  value: unknown,
+  depth: number,
+  budget: ProjectionGraphBudget,
+  ancestors: WeakSet<object>,
+): unknown {
+  if (depth > MAX_PROJECTION_GRAPH_DEPTH) throw new TypeError(EVENT_PROJECTION_ERROR);
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    accountProjectionGraphString(value, budget, MAX_PROJECTION_GRAPH_STRING_CHARS);
+    return value;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new TypeError(EVENT_PROJECTION_ERROR);
+    return value;
+  }
+  if (typeof value !== "object" || utilTypes.isProxy(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  budget.nodes += 1;
+  if (budget.nodes > MAX_PROJECTION_GRAPH_NODES || ancestors.has(value)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+      if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+        !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+        lengthDescriptor.value > MAX_PROJECTION_GRAPH_ARRAY_ITEMS) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const length = lengthDescriptor.value;
+      const keys = Reflect.ownKeys(value);
+      if (keys.some((key) => typeof key !== "string") ||
+        keys.length !== length + 1 || !keys.includes("length")) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      budget.keys += keys.length;
+      if (budget.keys > MAX_PROJECTION_GRAPH_KEYS) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      const result: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) {
+          throw new TypeError(EVENT_PROJECTION_ERROR);
+        }
+        result.push(snapshotProjectionGraph(
+          descriptor.value,
+          depth + 1,
+          budget,
+          ancestors,
+        ));
+      }
+      return Object.freeze(result);
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > 32 || keys.some((key) => typeof key !== "string")) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    budget.keys += keys.length;
+    if (budget.keys > MAX_PROJECTION_GRAPH_KEYS) {
+      throw new TypeError(EVENT_PROJECTION_ERROR);
+    }
+    const result = Object.create(prototype) as Record<string, unknown>;
+    for (const key of keys as string[]) {
+      accountProjectionGraphString(key, budget, MAX_PROJECTION_GRAPH_KEY_CHARS);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) {
+        throw new TypeError(EVENT_PROJECTION_ERROR);
+      }
+      Object.defineProperty(result, key, {
+        configurable: false,
+        enumerable: true,
+        writable: false,
+        value: snapshotProjectionGraph(
+          descriptor.value,
+          depth + 1,
+          budget,
+          ancestors,
+        ),
+      });
+    }
+    return Object.freeze(result);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function snapshotProjectionEvent(value: unknown): Readonly<ProviderEvent> {
+  const snapshot = snapshotProjectionGraph(
+    value,
+    0,
+    { nodes: 0, keys: 0, stringChars: 0 },
+    new WeakSet<object>(),
+  );
+  if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    throw new TypeError(EVENT_PROJECTION_ERROR);
+  }
+  return snapshot as Readonly<ProviderEvent>;
+}
+
 function projectedContentLengths(
   value: string,
   providerHome: string,
@@ -733,8 +870,8 @@ function hiddenDiagnostic(context: ProjectionContext): ProviderEvent {
 
 function normalizeProjectionBoundary(event: ProviderEvent, trustedSnapshot = false): ProviderEvent {
   try {
-    preflightProjectionBoundary(event);
-    const snapshot = trustedSnapshot ? event : structuredClone(event);
+    const snapshot = trustedSnapshot ? event : snapshotProjectionEvent(event);
+    preflightProjectionBoundary(snapshot);
     if (snapshot === null || typeof snapshot !== "object") throw new TypeError();
     const context: ProjectionContext = {
       provider: snapshot.provider,

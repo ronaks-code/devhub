@@ -9,6 +9,7 @@ import {
   parseCachedEventItemKey,
   parseCachedTurnKey,
   parseProviderEventReplayKey,
+  projectProviderEventCacheBundleFromSnapshot,
   taskLocator,
 } from "../../src/provider-index/identity.js";
 import {
@@ -623,28 +624,37 @@ describe("provider task snapshot preparation", () => {
     }
   });
 
-  it("projects each persistence event bundle once without cloning its trusted snapshot", () => {
-    const task = nativeTask({
-      turns: [{
-        id: "turn-single-projection",
-        status: "complete",
-        startedAt: null,
-        completedAt: null,
-        events: [eventFor({
-          type: "message",
-          role: "assistant",
-          text: "single projection",
-          turnId: "turn-single-projection",
-          itemId: null,
-        })],
-      }],
-    });
-    const clone = vi.spyOn(globalThis, "structuredClone");
+  it("does not recursively resnapshot the trusted persistence projection seam", () => {
+    const ignored = Object.freeze({ sentinel: "trusted-snapshot-must-not-be-read" });
+    const event = Object.freeze({
+      ...eventFor({
+        type: "message",
+        role: "assistant",
+        text: "single projection",
+        turnId: "turn-single-projection",
+        itemId: null,
+      }),
+      ignored,
+    }) as ProviderEvent;
+    let ignoredDescriptorReads = 0;
+    const original = Object.getOwnPropertyDescriptor;
+    const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (target === ignored) ignoredDescriptorReads += 1;
+        return original(target, property);
+      },
+    );
     try {
-      prepareProviderTaskSnapshot(registrationFor(), key, task);
-      expect(clone).not.toHaveBeenCalled();
+      const projection = projectProviderEventCacheBundleFromSnapshot(
+        event,
+        0,
+        8_388_608,
+        64 * 1024 * 1024,
+      );
+      expect(projection.ok).toBe(true);
+      expect(ignoredDescriptorReads).toBe(0);
     } finally {
-      clone.mockRestore();
+      descriptor.mockRestore();
     }
   });
 
@@ -1510,6 +1520,56 @@ describe("provider task snapshot preparation", () => {
     expect(getterCalls).toBe(0);
   });
 
+  it("rejects 33 diagnostic shape keys before enumerating or reading array elements", () => {
+    const shapeKeys = Array(33).fill("shape");
+    let ownKeyReads = 0;
+    let numericDescriptorReads = 0;
+    const originalOwnKeys = Reflect.ownKeys;
+    const originalDescriptor = Object.getOwnPropertyDescriptor;
+    const ownKeys = vi.spyOn(Reflect, "ownKeys").mockImplementation((target: object) => {
+      if (target === shapeKeys) ownKeyReads += 1;
+      return originalOwnKeys(target);
+    });
+    const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (target === shapeKeys && typeof property === "string" && /^\d+$/u.test(property)) {
+          numericDescriptorReads += 1;
+        }
+        return originalDescriptor(target, property);
+      },
+    );
+    try {
+      const task = nativeTask({
+        turns: [{
+          id: "turn-shape-key-overflow",
+          status: "complete",
+          startedAt: null,
+          completedAt: null,
+          events: [{
+            provider: "openai",
+            key,
+            occurredAt: OCCURRED_AT,
+            type: "diagnostic",
+            level: "warning",
+            code: "SHAPE_KEY_OVERFLOW",
+            message: "shape key overflow",
+            method: null,
+            shapeKeys,
+          }],
+        }],
+      });
+      expectStoreError(
+        () => prepareProviderTaskSnapshot(registrationFor(), key, task),
+        "INVALID_INPUT",
+      );
+      expect(ownKeyReads).toBe(0);
+      expect(numericDescriptorReads).toBe(0);
+    } finally {
+      descriptor.mockRestore();
+      ownKeys.mockRestore();
+    }
+  });
+
   it("rejects over-depth and aggregate-oversized raw event graphs before cloning", () => {
     let getterCalls = 0;
     let nested: Record<string, unknown> = Object.defineProperty({}, "secret", {
@@ -1819,6 +1879,50 @@ describe("cached indexed provider event decoding", () => {
       }],
     }),
   );
+
+  it("rejects decoded diagnostic shape-key overflow before array enumeration", () => {
+    const prepared = exhaustiveSnapshot();
+    const turn = prepared.turns[0]!;
+    const cached = turn.events.find((event) => event.event.type === "diagnostic")!;
+    const event = JSON.parse(cached.eventJson) as Record<string, unknown>;
+    const row = withEventJson(rowFor(cached), {
+      ...event,
+      shapeKeys: Array(33).fill("shape"),
+    });
+    let ownKeyReads = 0;
+    let numericDescriptorReads = 0;
+    const originalOwnKeys = Reflect.ownKeys;
+    const originalDescriptor = Object.getOwnPropertyDescriptor;
+    const ownKeys = vi.spyOn(Reflect, "ownKeys").mockImplementation((target: object) => {
+      if (Array.isArray(target) && target.length === 33) ownKeyReads += 1;
+      return originalOwnKeys(target);
+    });
+    const descriptor = vi.spyOn(Object, "getOwnPropertyDescriptor").mockImplementation(
+      (target: object, property: PropertyKey) => {
+        if (Array.isArray(target) && target.length === 33 &&
+          typeof property === "string" && /^\d+$/u.test(property)) {
+          numericDescriptorReads += 1;
+        }
+        return originalDescriptor(target, property);
+      },
+    );
+    try {
+      expectStoreError(
+        () => decodeCachedProviderEvent(
+          row,
+          prepared.locator,
+          turn.nativeTurnKey,
+          registrationFor(),
+        ),
+        "CORRUPT_ROW",
+      );
+      expect(ownKeyReads).toBe(0);
+      expect(numericDescriptorReads).toBe(0);
+    } finally {
+      descriptor.mockRestore();
+      ownKeys.mockRestore();
+    }
+  });
 
   it("round-trips all ten event variants and all five request kinds", () => {
     const prepared = exhaustiveSnapshot();

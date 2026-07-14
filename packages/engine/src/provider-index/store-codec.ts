@@ -464,7 +464,31 @@ function snapshotEventGraph(
   }
 }
 
+function assertRawDiagnosticShapeKeyCardinality(value: unknown): void {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+    Array.isArray(value)) throw new TypeError();
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw new TypeError();
+  const typeDescriptor = Object.getOwnPropertyDescriptor(value, "type");
+  if (typeDescriptor === undefined || !("value" in typeDescriptor)) throw new TypeError();
+  if (typeDescriptor.value !== "diagnostic") return;
+  const shapeKeysDescriptor = Object.getOwnPropertyDescriptor(value, "shapeKeys");
+  if (shapeKeysDescriptor === undefined || !("value" in shapeKeysDescriptor)) {
+    throw new TypeError();
+  }
+  const shapeKeys = shapeKeysDescriptor.value;
+  if (shapeKeys === null || typeof shapeKeys !== "object" || utilTypes.isProxy(shapeKeys) ||
+    !Array.isArray(shapeKeys) || Object.getPrototypeOf(shapeKeys) !== Array.prototype) {
+    throw new TypeError();
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(shapeKeys, "length");
+  if (lengthDescriptor === undefined || !("value" in lengthDescriptor) ||
+    !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0 ||
+    lengthDescriptor.value > 32) throw new TypeError();
+}
+
 function snapshotProviderEvent(value: unknown): Readonly<ProviderEvent> {
+  assertRawDiagnosticShapeKeyCardinality(value);
   const budget: EventGraphBudget = { nodes: 0, keys: 0, stringChars: 0 };
   const snapshot = snapshotEventGraph(value, 0, budget, new WeakSet<object>());
   if (snapshot === null || typeof snapshot !== "object" || Array.isArray(snapshot)) {
@@ -478,8 +502,7 @@ function assertRawDiagnosticBounds(event: Readonly<ProviderEvent>): void {
   boundedText(event.code, 128);
   boundedText(event.message, MAX_SHORT_TEXT_CHARS);
   if (event.method !== null) boundedText(event.method, 256);
-  const keys = denseDataArray(event.shapeKeys);
-  if (keys.length > 32) throw new TypeError();
+  const keys = denseDataArray(event.shapeKeys, 32);
   for (const key of keys) boundedText(key, 64, 0);
 }
 
@@ -1194,8 +1217,7 @@ function normalizedIndexedEvent(
         "shapeKeys",
       ]);
       if (raw.level !== "warning" && raw.level !== "error") throw new TypeError();
-      const shapeKeys = denseDataArray(raw.shapeKeys);
-      if (shapeKeys.length > 32) throw new TypeError();
+      const shapeKeys = denseDataArray(raw.shapeKeys, 32);
       return Object.freeze({
         ...commonIndexedEvent(raw, expectedLocator, canonicalHome),
         type,
