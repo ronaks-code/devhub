@@ -14,6 +14,7 @@ describe("DevHub feature flags", () => {
       nativeCodex: false,
       persistentClaude: false,
       unifiedTaskIndex: true,
+      shellChrome: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,

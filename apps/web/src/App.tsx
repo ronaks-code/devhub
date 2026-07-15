@@ -56,6 +56,8 @@ import { AuthGate, LogoutButton } from "./components/AuthGate";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SessionCostBadge } from "./components/SessionCostBadge";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
+import { AppShell } from "./components/features/shell/AppShell";
+import { resolveShellChromeMode } from "./components/features/shell/DevHubShell";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
@@ -1214,6 +1216,11 @@ export default function App() {
   // Effective chat model: explicit palette choice → settings default → built-in.
   const effectiveModel = chatModel ?? settings?.defaultModel ?? CHAT_MODELS[0];
 
+  // M6 slice 1: mount the measured Codex-style DevHubShell only when the server
+  // resolves the `shellChrome` flag true; otherwise keep the legacy chrome. Default
+  // false, so the shipping default renders the current shell unchanged.
+  const shellChromeMode = resolveShellChromeMode(settings);
+
   const startNewChat = useCallback(() => {
     setChatSeed(null);
     setChatNonce((n) => n + 1);
@@ -1511,51 +1518,42 @@ export default function App() {
   return (
     <AuthGate>
       <div className="flex h-full flex-col">
-      {/* Skip link: the first focusable element, hidden until focused (Tab from a
-          fresh load) so a keyboard/screen-reader user can jump straight past the
-          top bar into the main content instead of tabbing through every header
-          control. Visually offscreen until focused, then a clay pill, top-left. */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-2 focus:z-[80] focus:rounded-md focus:bg-clay-500 focus:px-3 focus:py-1.5 focus:text-[12px] focus:font-medium focus:text-white focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-clay-500/50"
-      >
-        Skip to main content
-      </a>
-      <TopBar
-        tab={tab}
-        onTab={(t) => {
-          // A manual tab click is a fresh intent — drop any pending resume seed.
-          setChatSeed(null);
-          setTab(t);
-        }}
-        onOpenSearch={() => setSearchOpen(true)}
-        onOpenCommands={() => setCommandOpen(true)}
-        onOpenShortcuts={() => setShortcutOpen(true)}
-        perfPreference={perf.preference}
-        perfReduced={perf.reduced}
-        onCyclePerf={perf.cyclePreference}
-        themePreference={theme.preference}
-        theme={theme.theme}
-        onCycleTheme={cycleTheme}
-        progress={progress}
-        sessionCount={sessionCount}
-        projectCount={projects.length}
-        recents={recents}
-        onOpenRecent={openSession}
-        onClearRecents={clearRecents}
-        projectSessions={sessions}
-        projectName={project?.name}
-      />
-      <ErrorBoundary>
-      {/* Main landmark + skip-link target. `tabIndex={-1}` lets the skip link move
-          focus here (it's not natively focusable) without adding it to the Tab
-          order. `outline-none` so that programmatic focus doesn't draw a ring. */}
-      <div id="main-content" role="main" tabIndex={-1} className="flex min-h-0 flex-1 outline-none">
-        {/* ── Sidebar nav ─────────────────────────────────────────────────── */}
-        <nav
-          aria-label="Primary navigation"
-          className="flex w-44 shrink-0 flex-col border-r border-zinc-800/80 bg-zinc-950 py-2"
-        >
+      {/* M6 slice 1 (shellChrome, default off): the legacy branch reproduces the
+          current chrome — skip link, TopBar, ErrorBoundary, #main-content main
+          landmark, and the w-44 primary-navigation rail — byte-for-byte; the devhub
+          branch mounts the measured DevHubShell with the same slots. */}
+      <AppShell
+        mode={shellChromeMode}
+        railLabel="Primary navigation"
+        header={
+          <TopBar
+            tab={tab}
+            onTab={(t) => {
+              // A manual tab click is a fresh intent — drop any pending resume seed.
+              setChatSeed(null);
+              setTab(t);
+            }}
+            onOpenSearch={() => setSearchOpen(true)}
+            onOpenCommands={() => setCommandOpen(true)}
+            onOpenShortcuts={() => setShortcutOpen(true)}
+            perfPreference={perf.preference}
+            perfReduced={perf.reduced}
+            onCyclePerf={perf.cyclePreference}
+            themePreference={theme.preference}
+            theme={theme.theme}
+            onCycleTheme={cycleTheme}
+            progress={progress}
+            sessionCount={sessionCount}
+            projectCount={projects.length}
+            recents={recents}
+            onOpenRecent={openSession}
+            onClearRecents={clearRecents}
+            projectSessions={sessions}
+            projectName={project?.name}
+          />
+        }
+        rail={
+          <>
           {/* ── CLAUDE section ── */}
           <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
             Claude
@@ -1645,10 +1643,10 @@ export default function App() {
               {label}
             </button>
           ))}
-        </nav>
-
-        {/* ── Main content area ────────────────────────────────────────────── */}
-        <div className="flex min-w-0 flex-1 flex-col">
+          </>
+        }
+      >
+        {/* ── Main content area (AppShell provides the flex column wrapper) ── */}
         {tab === "home" ? (
           <Suspense fallback={<PaneFallback />}>
             <HomePane onNewChat={startNewChat} />
@@ -1831,9 +1829,7 @@ export default function App() {
             />
           </Suspense>
         ) : legacyClaudePane}
-        </div>{/* end main content area */}
-      </div>
-      </ErrorBoundary>
+      </AppShell>
 
       <SearchPalette
         open={searchOpen}

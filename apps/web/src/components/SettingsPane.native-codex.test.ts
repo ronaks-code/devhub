@@ -18,6 +18,7 @@ const FEATURES = {
   nativeCodex: false,
   persistentClaude: true,
   unifiedTaskIndex: false,
+  shellChrome: false,
   codexStyleShell: true,
   crossProviderFork: false,
   workMode: true,
@@ -48,16 +49,17 @@ describe("SettingsPane native Codex feature persistence", () => {
     expect(reconciliations).toBe(1);
   });
 
-  it("always completes the server's exact six-field feature payload", () => {
+  it("always completes the server's exact feature payload", () => {
     expect(completeDevHubFeatures({ nativeCodex: true })).toEqual({
       nativeCodex: true,
       persistentClaude: false,
       unifiedTaskIndex: false,
+      shellChrome: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,
     });
-    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(6);
+    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(7);
   });
 
   it("changes only nativeCodex while retaining the other requested feature flags", () => {

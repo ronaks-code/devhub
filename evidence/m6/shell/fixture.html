@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DevHubShell geometry QA fixture (M6 slice 1)</title>
+  <!--
+    Self-contained QA harness. The <style> block and the DOM below are copied
+    VERBATIM from the shipped shell: the CSS is the `--dh-*` token + `.dh-*` rules
+    added to apps/web/src/index.css, and the markup mirrors DevHubShell.tsx output.
+    No Tailwind is required for the frame itself, so measurements here reflect the
+    real component. Slot content is representative placeholder text only (the real
+    rail/header/transcript/composer/inspector arrive in M6 Tasks 2-8).
+  -->
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    :root, :root[data-theme="dark"] {
+      color-scheme: dark;
+      --dh-canvas: #181818;
+      --dh-header: #181818;
+      --dh-rail-inactive: #202020;
+      --dh-rail-active: #404040;
+      --dh-surface: #2d2d2d;
+      --dh-user-bubble: #242424;
+      --dh-control: #262626;
+      --dh-control-seam: #252525;
+      --dh-selected: #313131;
+      --dh-hover: #2a2a2a;
+      --dh-pressed: #383838;
+      --dh-scrim: rgb(0 0 0 / 0.6);
+      --dh-text-strong: #ffffff;
+      --dh-text: #dedede;
+      --dh-text-muted: #969696;
+      --dh-text-disabled: #676767;
+      --dh-border-subtle: #2b2b2b;
+      --dh-border: #3a3a3a;
+      --dh-border-rail: #424242;
+      --dh-focus: #8ab4f8;
+      --dh-link: #86b9f9;
+      --dh-brand: #d97757;
+    }
+    :root {
+      --dh-rail-width: 273px;
+      --dh-rail-collapsed-width: 48px;
+      --dh-header-height: 46px;
+      --dh-transcript-width: 736px;
+      --dh-composer-width: 736px;
+      --dh-composer-height: 98px;
+      --dh-inspector-width: 300px;
+      --dh-inspector-lane-width: 316px;
+      --dh-shell-gutter: 16px;
+      --dh-composer-bottom: 16px;
+      --dh-inspector-top-gutter: 12px;
+      --dh-inspector-right-gutter: 16px;
+      --dh-radius-control: 6px;
+      --dh-radius-inspector: 16px;
+      --dh-radius-composer: 21px;
+    }
+
+    .dh-shell {
+      display: flex; flex-direction: row; height: 100%; min-height: 0;
+      overflow: hidden; background: var(--dh-canvas); color: var(--dh-text);
+    }
+    .dh-skip-link { position: absolute; left: -9999px; top: 0; z-index: 80; }
+    .dh-skip-link:focus {
+      left: 12px; top: 8px; border-radius: var(--dh-radius-control);
+      background: var(--dh-brand); padding: 6px 12px; font-size: 12px;
+      font-weight: 500; color: var(--dh-text-strong);
+      outline: 2px solid var(--dh-focus); outline-offset: 2px;
+    }
+    .dh-rail {
+      width: var(--dh-rail-width); flex-shrink: 0; display: flex;
+      flex-direction: column; min-height: 0; background: var(--dh-rail-active);
+      border-right: 1px solid var(--dh-border-rail);
+    }
+    .dh-brand {
+      height: var(--dh-header-height); flex-shrink: 0; display: flex;
+      align-items: center; padding: 0 var(--dh-shell-gutter);
+      font-size: 18px; line-height: 22px; font-weight: 600; color: var(--dh-text-strong);
+    }
+    .dh-rail-content { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 8px 0; }
+    .dh-frame { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; }
+    .dh-header {
+      height: var(--dh-header-height); flex-shrink: 0; display: flex; align-items: center;
+      padding: 0 var(--dh-shell-gutter); background: var(--dh-header);
+      border-bottom: 1px solid var(--dh-border-subtle);
+    }
+    .dh-body { display: flex; flex-direction: row; flex: 1 1 0; min-height: 0; }
+    .dh-canvas {
+      flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column;
+      background: var(--dh-canvas); outline: none; position: relative;
+    }
+    .dh-transcript-col {
+      flex: 1 1 0; min-height: 0; width: 100%; max-width: var(--dh-transcript-width);
+      margin: 0 auto; overflow: hidden; display: flex; flex-direction: column;
+    }
+    .dh-composer-slot {
+      flex-shrink: 0; width: 100%; max-width: var(--dh-composer-width);
+      margin: 0 auto; padding-bottom: var(--dh-composer-bottom);
+    }
+    .dh-inspector-lane {
+      width: var(--dh-inspector-lane-width); flex-shrink: 0;
+      padding-top: var(--dh-inspector-top-gutter); padding-right: var(--dh-inspector-right-gutter);
+      display: flex; justify-content: flex-end; align-items: flex-start;
+    }
+    .dh-inspector {
+      width: var(--dh-inspector-width); background: var(--dh-surface);
+      border-radius: var(--dh-radius-inspector); padding: var(--dh-shell-gutter);
+      max-height: calc(100dvh - 75px); overflow: auto;
+    }
+    @media (max-width: 1439px) { .dh-inspector-lane { display: none; } }
+    @media (max-width: 1023px) {
+      .dh-rail { width: var(--dh-rail-collapsed-width); }
+      .dh-brand { justify-content: center; padding: 0; font-size: 0; }
+    }
+    @media (max-width: 767px) {
+      .dh-rail { display: none; }
+      .dh-header { height: 44px; }
+      .dh-composer-slot { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+    }
+
+    /* Representative slot content styling (placeholder only). */
+    .demo-row { height: 30px; margin: 2px 8px; border-radius: 9px; display: flex;
+      align-items: center; padding: 0 10px; font-size: 13px; color: var(--dh-text-muted); }
+    .demo-row.sel { width: 256px; background: var(--dh-selected); color: var(--dh-text-strong); }
+    .demo-title { font-size: 13px; font-weight: 600; color: var(--dh-text); }
+    .demo-msg { align-self: flex-end; max-width: 566px; margin: 8px 0; padding: 12px 14px;
+      background: var(--dh-user-bubble); border-radius: 12px; font-size: 14px; line-height: 21px; }
+    .demo-prose { color: var(--dh-text); font-size: 14px; line-height: 21px; padding: 24px 0 0; }
+    .demo-composer { height: 98px; background: var(--dh-surface); border-radius: 21px;
+      border: 1px solid rgb(255 255 255 / 0.04); }
+    .demo-insp-row { font-size: 11px; color: var(--dh-text-muted); padding: 4px 0;
+      border-bottom: 1px solid var(--dh-border-subtle); }
+  </style>
+</head>
+<body>
+  <div class="dh-shell" data-dh-shell data-dh-status="rest">
+    <a class="dh-skip-link" href="#dh-main">Skip to main content</a>
+    <nav class="dh-rail" aria-label="Primary navigation" data-dh-rail data-dh-width="273">
+      <div class="dh-brand" data-dh-brand>DevHub</div>
+      <div class="dh-rail-content">
+        <div class="demo-row sel">Refactor the shell geometry</div>
+        <div class="demo-row">Wire the composer slot</div>
+        <div class="demo-row">Fix inspector padding</div>
+      </div>
+    </nav>
+    <div class="dh-frame">
+      <div class="dh-header" data-dh-header data-dh-height="46">
+        <span class="demo-title">Refactor the shell geometry</span>
+      </div>
+      <div class="dh-body">
+        <main id="dh-main" role="main" tabindex="-1" class="dh-canvas" data-dh-canvas data-dh-canvas-color="#181818" data-dh-gutter="16">
+          <div class="dh-transcript-col" data-dh-transcript data-dh-width="736">
+            <div class="demo-prose">Assistant prose renders unframed on the open canvas.</div>
+            <div class="demo-msg">Can you tighten the inspector gutters?</div>
+            <div class="demo-prose">Done. The dock is 300 wide with a 16 right gutter.</div>
+          </div>
+          <div class="dh-composer-slot" data-dh-composer data-dh-width="736" data-dh-height="98" data-dh-bottom-gutter="16">
+            <div class="demo-composer"></div>
+          </div>
+        </main>
+        <aside role="complementary" aria-label="Task inspector" class="dh-inspector-lane"
+               data-dh-inspector-lane data-dh-lane-width="316" data-dh-top-gutter="12" data-dh-right-gutter="16">
+          <div class="dh-inspector" data-dh-inspector data-dh-inspector-width="300" data-dh-radius="16">
+            <div class="demo-insp-row">Environment</div>
+            <div class="demo-insp-row">Diff · Files · Terminal · Browser · Artifacts</div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -58,6 +58,267 @@
 }
 
 /*
+ * DevHub reference-first design tokens (M6). Transcribed verbatim from
+ * `.planning/devhub-codex-parity/design-system.md` §2.1 (dark semantic palette)
+ * and §3.1 (wide-reference geometry). These are ADDITIVE and do not mutate the
+ * legacy `--bg`/`--panel`/`--accent` tokens above; the brownfield shadcn semantic
+ * migration (moving clay to `--brand`, aliasing shadcn `--primary`/`--accent`) is a
+ * separate task. The dark reference palette is the fidelity authority; light is a
+ * supported theme audited separately in M8, so the colors below stay dark-scoped.
+ * Feature components reference `var(--dh-*)`, never raw hex.
+ */
+:root,
+:root[data-theme="dark"] {
+  /* Observed shell surfaces */
+  --dh-canvas: #181818;
+  --dh-header: #181818;
+  --dh-rail-inactive: #202020;
+  --dh-rail-active: #404040;
+  --dh-surface: #2d2d2d;
+  --dh-user-bubble: #242424;
+  --dh-control: #262626;
+  --dh-control-seam: #252525;
+  --dh-selected: #313131;
+
+  /* Locked state fallbacks; static captures did not expose all states */
+  --dh-hover: #2a2a2a;
+  --dh-pressed: #383838;
+  --dh-scrim: rgb(0 0 0 / 0.6);
+
+  /* Text */
+  --dh-text-strong: #ffffff;
+  --dh-text: #dedede;
+  --dh-text-muted: #969696;
+  --dh-text-disabled: #676767;
+
+  /* Dividers and focus */
+  --dh-border-subtle: #2b2b2b;
+  --dh-border: #3a3a3a;
+  --dh-border-rail: #424242;
+  --dh-focus: #8ab4f8;
+  --dh-link: #86b9f9;
+
+  /* Status; always pair color with text and/or an icon */
+  --dh-success: #4fa66a;
+  --dh-warning: #d4a24c;
+  --dh-danger: #d95c5c;
+  --dh-diff-add: #45a65a;
+  --dh-diff-remove: #db5652;
+
+  /* Product brand; never reuse as neutral selection */
+  --dh-brand: #d97757;
+
+  /* Provider/elevated-access accents, never provider logos */
+  --dh-provider-openai: #6f8f7d;
+  --dh-provider-anthropic: #b87356;
+  --dh-access-elevated: #d97757;
+}
+
+/* Wide-reference geometry constants (design-system.md §3.1). Logical CSS pixels
+ * derived from the exact 3600x2260 content rectangle at 2x backing scale. */
+:root {
+  --dh-window-reference-width: 1800px;
+  --dh-window-reference-height: 1130px;
+  --dh-rail-width: 273px;
+  --dh-rail-collapsed-width: 48px; /* proposed narrow fallback */
+  --dh-header-height: 46px;
+  --dh-transcript-width: 736px;
+  --dh-composer-width: 736px;
+  --dh-composer-height: 98px;
+  --dh-inspector-width: 300px;
+  --dh-inspector-lane-width: 316px;
+  --dh-shell-gutter: 16px;
+  --dh-composer-bottom: 16px;
+  --dh-inspector-top-gutter: 12px;
+  --dh-inspector-right-gutter: 16px;
+
+  /* Radius scale (design-system.md §4.2) — each component owns its semantic radius. */
+  --dh-radius-control: 6px;
+  --dh-radius-row: 9px;
+  --dh-radius-bubble: 12px;
+  --dh-radius-dialog: 12px;
+  --dh-radius-inspector: 16px;
+  --dh-radius-goal: 17px;
+  --dh-radius-composer: 21px;
+  --dh-radius-pill: 999px;
+}
+
+/*
+ * DevHubShell frame (M6 slice 1). Locked container/geometry from design-lock §4
+ * and design-system.md §3. Geometry reads the tokens above so measured values live
+ * in one place. Mounted only behind the default-off `shellChrome` flag.
+ */
+.dh-shell {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden; /* the shell never scrolls horizontally; content owns its own scroll */
+  background: var(--dh-canvas);
+  color: var(--dh-text);
+}
+
+.dh-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 80;
+}
+.dh-skip-link:focus {
+  left: 12px;
+  top: 8px;
+  border-radius: var(--dh-radius-control);
+  background: var(--dh-brand);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dh-text-strong);
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 2px;
+}
+
+.dh-rail {
+  width: var(--dh-rail-width);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--dh-rail-active); /* browser/PWA opaque fallback = active window */
+  border-right: 1px solid var(--dh-border-rail);
+}
+
+.dh-brand {
+  height: var(--dh-header-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--dh-shell-gutter);
+  font-size: 18px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--dh-text-strong);
+}
+
+.dh-rail-content {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--dh-space-2, 8px) 0;
+}
+
+.dh-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dh-header {
+  height: var(--dh-header-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--dh-shell-gutter);
+  background: var(--dh-header);
+  border-bottom: 1px solid var(--dh-border-subtle);
+}
+
+.dh-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.dh-canvas {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--dh-canvas);
+  outline: none;
+  position: relative;
+}
+
+/* Transcript + composer share one centered 736 column; hiding the inspector at
+ * wide width must not move it, so the stage stays centered in the flexible area. */
+.dh-transcript-col {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  max-width: var(--dh-transcript-width);
+  margin: 0 auto;
+  overflow: hidden; /* the transcript owns its own scroll region internally */
+  display: flex;
+  flex-direction: column;
+}
+
+.dh-composer-slot {
+  flex-shrink: 0;
+  width: 100%;
+  max-width: var(--dh-composer-width);
+  margin: 0 auto;
+  padding-bottom: var(--dh-composer-bottom);
+}
+
+/* Inspector lane = 300 dock + 16 right gutter; content-height, not full height. */
+.dh-inspector-lane {
+  width: var(--dh-inspector-lane-width);
+  flex-shrink: 0;
+  padding-top: var(--dh-inspector-top-gutter);
+  padding-right: var(--dh-inspector-right-gutter);
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.dh-inspector {
+  width: var(--dh-inspector-width);
+  background: var(--dh-surface);
+  border-radius: var(--dh-radius-inspector);
+  padding: var(--dh-shell-gutter);
+  max-height: calc(100dvh - 75px);
+  overflow: auto;
+}
+
+/* Compact desktop (1024–1439): inspector hides behind an explicit control; the
+ * transcript width clamps but does not overflow. */
+@media (max-width: 1439px) {
+  .dh-inspector-lane {
+    display: none;
+  }
+}
+
+/* Narrow desktop/browser (768–1023): one-pane drill-down. The single rail collapses
+ * to an icon strip in place (no second, hidden, tabbable rail is ever rendered). */
+@media (max-width: 1023px) {
+  .dh-rail {
+    width: var(--dh-rail-collapsed-width);
+  }
+  .dh-brand {
+    justify-content: center;
+    padding: 0;
+    font-size: 0; /* wordmark collapses to its accessible text only at narrow width */
+  }
+}
+
+/* PWA/phone (<768): no permanent rail; compact header/back navigation, one task
+ * pane, safe-area-aware bottom composer. */
+@media (max-width: 767px) {
+  .dh-rail {
+    display: none;
+  }
+  .dh-header {
+    height: 44px;
+  }
+  .dh-composer-slot {
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+
+/*
  * Light palette — inert until a component reads these tokens AND the toggle sets
  * [data-theme="light"]. Tuned to keep the clay accent identity while flipping the
  * neutral surfaces. Not wired to any UI yet (groundwork only).

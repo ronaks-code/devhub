@@ -55,3 +55,47 @@ Governing sources: installed Codex shell captures for layout, concepts `02-activ
 ### M4 judgment
 
 The existing-UI Anthropic slice is functionally and semantically coherent under deterministic fixtures. Exact-copy, task-status, responsive Browser/IAB, and Computer Use gates now pass with fresh evidence. The raw selected-runtime lifecycle artifact is still missing, so the feature flag remains false and M4 is not complete.
+
+## M6 - approved Codex-style shell
+
+M6 records the strangler-slice extraction of the measured Codex-style shell. Each slice
+appends its own dated sub-table below. Per the ledger preamble, no M6 row relabels an
+M3/M4 functional result as new visual parity; M6 rows report measured geometry and
+token/copy fidelity of the newly extracted surface only.
+
+### Task 1 - DevHubShell + application chrome (`shellChrome`)
+
+Date: 2026-07-15
+
+Governing sources: `reference-captures/chatgpt-empty-task-1800x1130.png` (REF-EMPTY) and
+`chatgpt-current-1800x1130.png` (REF-RICH) for the measured 273/46/`#181818`/16-gutter
+frame; `design-lock.md` §4 container/geometry model; `reference-capture-manifest.md`
+"Measured wide-shell geometry"; `design-system.md` §2–§4 tokens. Evidence:
+`evidence/m6/shell/` (`qa-note.md`, `fixture.html`, wide/narrow/PWA screenshots) plus the
+unit/snapshot suite `apps/web/src/components/features/shell/{DevHubShell,AppShell}.test.ts`.
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Left rail width | design-lock §4 "Left task rail: 273 units" | `m6-shell-wide-1800x1130.png`; live `getBoundingClientRect` rail width = 273; `SHELL_GEOMETRY.railWidth === 273` asserted | Match. |
+| Header height | design-lock §4 "Header: 46 units" | measured header height = 46; `data-dh-height="46"` asserted; header slot never grows | Match. |
+| Canvas color / open canvas | design-lock §4 "Main canvas: open `#181818`, without a page card" | measured `getComputedStyle` background = `rgb(24,24,24)` = `#181818`; canvas is a bare `<main>` flex column, no card wrapper | Match. |
+| Shared transcript/composer column | design-lock §4 "Transcript and composer share a 736-unit column" | measured transcript column = 736; composer slot max-width = 736; both centered in the stage | Match. |
+| Resting composer box | design-lock §4 "Resting composer is 736x98 with a 16-unit bottom gutter and ~21-unit radius" | measured composer 736 wide, 98-high box + 16 padding-bottom, radius 21 (`--dh-radius-composer`) | Match. |
+| Inspector dock | design-lock §4 "300-unit, content-height surface with a 12-unit top gutter, 16-unit right gutter, ~16-unit radius; not a full-height split pane" | measured dock 300 wide, lane 316, top gutter 12, right gutter 16, radius 16, `#2d2d2d`, height follows content | Match. |
+| Outer shell gutters | design-lock §4 / manifest "16 gutter" | `--dh-shell-gutter: 16px` drives header/inspector padding + composer bottom gutter; no horizontal shell overflow at any tier (doc width == viewport) | Match. |
+| Brand wordmark | design-lock §3 / invariant 9 "brand is always `DevHub`" | rendered wordmark is exactly `DevHub`; test forbids provider wordmarks in the brand slot | Match. Intentional deviation from the capture's `Codex` wordmark. |
+| Token-only geometry | design-system §2–§4 "use CSS variables, not raw values in feature components" | shell markup carries no `273px`/`#181818` style literals; all geometry reads `var(--dh-*)`; test asserts no hex/px leak | Match. |
+| Landmarks + skip link | design-system §10.3 "one main, named navigation, skip link" | exactly one `<main>`, one named rail `<nav>`, one skip link, optional named `complementary` inspector; asserted by count | Match. |
+| Geometry invariant across status | design-lock §4 "composer does not move when send becomes stop or activity appends" | rest/loading/streaming render byte-identical geometry markup (only `aria-busy` differs); asserted | Match. |
+| Responsive / no hidden duplicate | design-lock §10 / design-system §8 "one-pane drill-down below 1024, no horizontal overflow" | 768: one rail collapses to 48 icon strip in place, inspector hidden, 1 nav/1 main/1 skip, no overflow; 390: rail `display:none` (not tabbable), header 44, no overflow | Match (proposed narrow/PWA behavior, QA-gated). |
+
+### Task 1 judgment
+
+The DevHubShell frame reproduces the locked wide-reference geometry to the measured unit
+(rail 273, header 46, canvas `#181818`, 736 column, 300 content-height dock with 12/16
+gutters, 16 outer gutter) using `design-system.md` tokens only, with correct DevHub brand
+and shell landmarks. It ships behind the default-off `shellChrome` flag; flag-off renders
+the legacy `App.tsx`/`ResponsiveShell` chrome byte-for-byte (proven by `AppShell.test.ts`).
+Rail rows, header title/actions, transcript renderers, composer controls, and inspector
+destinations remain placeholder slots owned by M6 Tasks 2–8; this task claims frame
+geometry, tokens, landmarks, and flag safety only, not final content fidelity.
