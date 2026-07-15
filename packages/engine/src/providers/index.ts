@@ -62,6 +62,7 @@ export type {
   ProviderTaskMetaPatch,
   ReconciliationLatchInput,
   VerifiedLegacyMapping,
+  VerifiedLegacySessionResolution,
 } from "../provider-index/store-types.js";
 export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";

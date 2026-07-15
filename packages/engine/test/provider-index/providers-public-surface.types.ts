@@ -28,6 +28,7 @@ import type {
   LegacySessionProvenance,
   ReconciliationLatchInput,
   VerifiedLegacyMapping,
+  VerifiedLegacySessionResolution,
 } from "../../src/providers/index.js";
 import { ProviderTaskIndexStore as RootProviderTaskIndexStore } from "../../src/index.js";
 
@@ -58,7 +59,8 @@ type PublicProviderIndexTypes =
   | ProviderTaskMetaPatch
   | LegacySessionProvenance
   | ReconciliationLatchInput
-  | VerifiedLegacyMapping;
+  | VerifiedLegacyMapping
+  | VerifiedLegacySessionResolution;
 declare const publicProviderIndexType: PublicProviderIndexTypes;
 void publicProviderIndexType;
 void RootProviderTaskIndexStore;

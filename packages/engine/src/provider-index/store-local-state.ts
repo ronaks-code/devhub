@@ -9,6 +9,7 @@ import {
   serializeTaskLocator,
   type ProviderTaskLocator,
 } from "./identity.js";
+import { hashPersistedProviderHome } from "./home-fingerprint.js";
 import {
   PROVIDER_INDEX_STORE_HARD_LIMITS,
   type LegacySessionProvenance,
@@ -18,6 +19,7 @@ import {
   type ProviderTaskMeta,
   type ProviderTaskMetaPatch,
   type VerifiedLegacyMapping,
+  type VerifiedLegacySessionResolution,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
@@ -1022,16 +1024,9 @@ interface VerifiedLegacyMappingRow {
   readonly verified_at: unknown;
 }
 
-interface DecodedVerifiedLegacyMapping {
-  readonly sessionId: string;
-  readonly locator: ProviderTaskLocator;
-  readonly mappingSource: "live-provider-observation";
-  readonly verifiedAt: number;
-}
-
 function decodeVerifiedLegacyMappingRow(
   row: VerifiedLegacyMappingRow,
-): Readonly<DecodedVerifiedLegacyMapping> {
+): Readonly<VerifiedLegacySessionResolution> {
   if (row.mapping_source !== "live-provider-observation") throw new TypeError();
   return Object.freeze({
     sessionId: legacySessionId(row.legacy_session_id),
@@ -1065,6 +1060,61 @@ function queryVerifiedMappingByLocator(
 
 function sameLocator(left: ProviderTaskLocator, right: ProviderTaskLocator): boolean {
   return serializeTaskLocator(left) === serializeTaskLocator(right);
+}
+
+export function readVerifiedLegacySessionMapping(
+  db: SqliteDatabase,
+  sessionIdValue: string,
+): Readonly<VerifiedLegacySessionResolution> | null {
+  let sessionId: string;
+  try {
+    sessionId = legacySessionId(sessionIdValue);
+  } catch {
+    return fail("INVALID_INPUT");
+  }
+
+  let row: VerifiedLegacyMappingRow | undefined;
+  try {
+    row = queryVerifiedMappingBySession(db, sessionId);
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (row === undefined) return null;
+
+  let resolution: Readonly<VerifiedLegacySessionResolution>;
+  try {
+    resolution = decodeVerifiedLegacyMappingRow(row);
+  } catch {
+    return fail("CORRUPT_ROW");
+  }
+  if (resolution.sessionId !== sessionId) return fail("CORRUPT_ROW");
+
+  let authorityRow: RegisteredAuthorityRow | undefined;
+  try {
+    authorityRow = queryRegisteredAuthorityRow(
+      db,
+      resolution.locator.provider,
+      resolution.locator.homeFingerprint,
+    );
+  } catch {
+    return fail("DATABASE_UNAVAILABLE");
+  }
+  if (authorityRow !== undefined) {
+    let authority: ProviderRegisteredHomeAuthority;
+    try {
+      authority = decodeRegisteredAuthorityRow(authorityRow);
+    } catch {
+      return fail("CORRUPT_ROW");
+    }
+    if (authority.provider !== resolution.locator.provider ||
+      authority.homeFingerprint !== resolution.locator.homeFingerprint ||
+      hashPersistedProviderHome(authority.provider, authority.canonicalHome) !==
+        authority.homeFingerprint ||
+      resolution.locator.nativeTaskId.includes(authority.canonicalHome)) {
+      return fail("CORRUPT_ROW");
+    }
+  }
+  return resolution;
 }
 
 export function mapVerifiedLegacySession(
@@ -1141,8 +1191,8 @@ export function mapVerifiedLegacySession(
 
     const sessionRow = queryVerifiedMappingBySession(db, sessionId);
     const locatorRow = queryVerifiedMappingByLocator(db, locator);
-    let bySession: Readonly<DecodedVerifiedLegacyMapping> | null;
-    let byLocator: Readonly<DecodedVerifiedLegacyMapping> | null;
+    let bySession: Readonly<VerifiedLegacySessionResolution> | null;
+    let byLocator: Readonly<VerifiedLegacySessionResolution> | null;
     try {
       bySession = sessionRow === undefined ? null : decodeVerifiedLegacyMappingRow(sessionRow);
       byLocator = locatorRow === undefined ? null : decodeVerifiedLegacyMappingRow(locatorRow);
@@ -1185,7 +1235,7 @@ export function mapVerifiedLegacySession(
       locator.homeFingerprint,
     );
     if (persistedAuthorityRow === undefined) return fail("CORRUPT_ROW");
-    let persisted: Readonly<DecodedVerifiedLegacyMapping>;
+    let persisted: Readonly<VerifiedLegacySessionResolution>;
     try {
       persisted = decodeVerifiedLegacyMappingRow(persistedRow);
       if (decodeVerifiedLegacyMappingRow(persistedLocatorRow).sessionId !== sessionId) {

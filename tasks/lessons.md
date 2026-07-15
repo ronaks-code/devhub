@@ -242,3 +242,10 @@
 
 - The same low-level missing-authority result has different meaning across a preflight boundary: initial absence is `UNKNOWN_HOME`, but absence or mismatch after the facade captured valid authority is concurrent drift and must fail `CORRUPT_ROW`.
 - Keep the translation at the facade context that owns the preflight, and accept only the primitive's private tagged failure provenance. Do not weaken the primitive's direct semantics or trust caller-shaped error codes.
+
+## 2026-07-14 - Keep legacy mapping reads on verified authority
+
+- A verified mapping lookup must query only the current mapping authority. Provenance is immutable history, not a fallback mapping source, and a missing provider-home registration does not invalidate an otherwise verified orphan mapping.
+- When current registered-home authority exists, a native task ID that embeds the canonical home is corrupt persisted data. Reject it without returning the path-bearing locator or consulting the filesystem.
+- Never trust a syntactically valid persisted canonical home as fingerprint authority. Recompute the pure provider/home fingerprint first; otherwise a decoy home can make the raw-home exclusion check validate the wrong string.
+- A negative fixture must reach the branch it claims to prove. Pair intact-authority rejection with a positive control using the same valid registered home so a new earlier guard cannot silently make the intended privacy check untested.

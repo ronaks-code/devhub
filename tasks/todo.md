@@ -593,10 +593,22 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 ### Task 3 prerequisite contract slices
 
 - [x] Add stable, value-free `NATIVE_TASK_MISSING` classification only for proven Claude-null and exact retained Codex remote-error evidence; sanitize it through registry/server/web boundaries.
-- [ ] Add bounded frozen verified-legacy mapping lookup without treating unresolved provenance as authority.
+- [x] Add bounded frozen verified-legacy mapping lookup without treating unresolved provenance as authority.
 - [ ] Add atomic native-missing reconciliation latch plus all-generation cache invalidation with exact census/change proofs.
 - [ ] Implement the frozen bounded full-snapshot coordinator, path-free projection/read-through, cancellation/heartbeat, startup registration, and lazy flag-off wiring.
 - [ ] Obtain exact-tip SPEC and separate QUALITY/SECURITY GO for each contract-changing checkpoint before tested-main promotion.
+
+#### Task 3 verified legacy mapping lookup checkpoint
+
+- Authoritative RED was `4 failed / 0 passed`: the bounded mapping primitive and facade did not exist.
+- The new lookup queries only the canonical session primary key, accepts only current `live-provider-observation` mappings, returns an exact frozen path-free provider locator, and never treats unresolved provenance as authority. Orphaned verified mappings remain readable; when a provider home is currently registered, a native task ID containing that canonical home fails closed as `CORRUPT_ROW`.
+- Missing and provenance-only records return `null`; invalid input, unavailable storage, and corrupt rows retain the exact public store error taxonomy. The facade uses the existing guarded connection boundary and does not consult the filesystem or clock.
+- Initial targeted GREEN was `4/4`; the queued full provider-index gate was `530/530`. Engine source typecheck, negative public-surface typecheck, and diff hygiene passed, but exact-tip review correctly withheld promotion.
+- SPEC, QUALITY, and SECURITY independently found the same P1: the lookup decoded current registered-home authority structurally but did not prove that its stored canonical home still hashed to the stored fingerprint. A decoy home could therefore bypass raw-home rejection. Strict induced RED was `1 failed / 4 passed`; the repair reuses the pure persisted-home fingerprint invariant with no filesystem or clock work.
+- Repaired targeted GREEN was `5/5`; the queued full provider-index gate was `531/531` across 12 files (queue wait `284 ms`). Fresh recertification proved the production P1 closed, then SPEC/QUALITY withheld promotion on a proof gap: the old raw-home fixture now stopped at the new fingerprint check, so it no longer exercised intact registered authority.
+- The retained proof now derives a valid provider/home fingerprint, proves a safe registered-home lookup succeeds, and separately proves the same intact authority rejects a native ID containing its raw home with a value-free `CORRUPT_ROW`. Targeted GREEN is `6/6`; the queued full provider-index gate is `532/532` (queue wait `287 ms`). Engine source plus negative public-surface typecheck and diff hygiene pass.
+- Exact clean source tip `364d736b28acf227f469d58143e373d2a5ff47f7` received fresh independent SPEC GO, QUALITY GO, and separate SECURITY GO with zero P0-P3 findings. Only its reviewed three-commit mapping chain was applied to tested main.
+- The queued tested-main provider-index gate passes the same `532/532` across 12 files (queue wait `273 ms`). Engine source plus negative public-surface typecheck, reviewed-source byte equality, feature-flag defaults, index hygiene, and protected-file hashes all pass. This commit is the verified-legacy mapping prerequisite promotion checkpoint; overall milestone progress remains `3/9 = 33%`.
 
 #### Task 3 native-task-missing contract checkpoint
 

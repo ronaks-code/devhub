@@ -186,6 +186,13 @@ export interface VerifiedLegacyMapping {
   readonly verifiedAt: number;
 }
 
+export interface VerifiedLegacySessionResolution {
+  readonly sessionId: string;
+  readonly locator: ProviderTaskLocator;
+  readonly mappingSource: "live-provider-observation";
+  readonly verifiedAt: number;
+}
+
 export type ProviderReconciliationReason =
   | "REPLAY_CONFLICT"
   | "NATIVE_REVISION_MISMATCH"

@@ -59,6 +59,7 @@ import {
   normalizeProviderTaskMetaPatch,
   patchProviderTaskMeta,
   providerLocalStateFailureCode,
+  readVerifiedLegacySessionMapping,
   readProviderTaskMeta,
   type ProviderRegisteredHomeAuthority,
 } from "./store-local-state.js";
@@ -90,6 +91,7 @@ import {
   type PreparedProviderTaskSummary,
   type ReconciliationLatchInput,
   type VerifiedLegacyMapping,
+  type VerifiedLegacySessionResolution,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
@@ -2777,6 +2779,13 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
       provenanceValue,
       observedAtValue,
     )));
+  }
+
+  getVerifiedLegacySessionMapping(
+    sessionIdValue: string,
+  ): Readonly<VerifiedLegacySessionResolution> | null {
+    return this.runMutation(() => runProviderLocalState(() =>
+      readVerifiedLegacySessionMapping(this.db, sessionIdValue)));
   }
 
   mapVerifiedLegacySession(
