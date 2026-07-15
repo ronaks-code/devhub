@@ -17,6 +17,19 @@ const allEnabled: DevHubFeatureFlags = {
   workMode: true,
 };
 
+// Explicit fully-disabled resolution. Since the M5 cutover flipped
+// DEFAULT_DEVHUB_FEATURE_FLAGS.unifiedTaskIndex on, the default object is no longer an
+// all-false sentinel; the "no runtime capability available" cases must compare against
+// this literal instead so they still assert every resolved flag clamps to false.
+const allDisabled: DevHubFeatureFlags = {
+  nativeCodex: false,
+  persistentClaude: false,
+  unifiedTaskIndex: false,
+  codexStyleShell: false,
+  crossProviderFork: false,
+  workMode: false,
+};
+
 async function makeApp(
   storedFeatures: DevHubFeatureFlags = { ...DEFAULT_DEVHUB_FEATURE_FLAGS },
   availableFeatures:
@@ -56,7 +69,7 @@ describe("DevHub feature settings HTTP resolution", () => {
 
     const response = await handle.app.inject({ method: "GET", url: "/api/settings" });
     expect(response.statusCode).toBe(200);
-    expect(response.json().devHubFeatures).toEqual(DEFAULT_DEVHUB_FEATURE_FLAGS);
+    expect(response.json().devHubFeatures).toEqual(allDisabled);
   });
 
   it("persists requested flags but returns only the backend-resolved intersection", async () => {
@@ -89,7 +102,7 @@ describe("DevHub feature settings HTTP resolution", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toMatchObject({
       devHubFeatures: {
-        ...DEFAULT_DEVHUB_FEATURE_FLAGS,
+        ...allDisabled,
         nativeCodex: true,
       },
       requestedDevHubFeatures: allEnabled,

@@ -127,13 +127,14 @@ describe("gate-2 drill: v13 migration interruption + idempotent recovery", () =>
 });
 
 describe("gate-2 drill: flag rollback = instant legacy path with no schema down-migration", () => {
-  it("lets an explicit stored false override win over an on-default", () => {
+  it("lets an explicit stored false override win over the on-default", () => {
     // The rollback switch is an explicitly stored false; it must win regardless of
-    // any future default flip. Simulate a default-on world and prove false wins.
+    // the default flip. After the M5 Task 9 cutover the shipped default is ON, so this
+    // now proves false wins over the REAL on-default (not a simulated one).
     const rolledBack = defineDevHubFeatureFlags({ unifiedTaskIndex: false });
     expect(rolledBack.unifiedTaskIndex).toBe(false);
-    // The shipped default is still false (cutover has not happened in this task).
-    expect(DEFAULT_DEVHUB_FEATURE_FLAGS.unifiedTaskIndex).toBe(false);
+    // The shipped default is now true (M5 Task 9 cutover); explicit false above still wins.
+    expect(DEFAULT_DEVHUB_FEATURE_FLAGS.unifiedTaskIndex).toBe(true);
   });
 
   it("never down-migrates the schema when the flag is rolled back after cutover", () => {

@@ -218,6 +218,14 @@ async function harness(opts: {
   registry.register(codexHome, makeAdapter("openai", opts.behavior));
 
   const engine = new Engine(path.join(root, "index.db"));
+  // Post-M5-cutover the requested default is unifiedTaskIndex ON, so a fresh engine would
+  // initialize the coordinator at app.ready(). The flag-off case must exercise the explicit
+  // stored-false rollback switch: persist it BEFORE ready so onReady never builds a coordinator.
+  if (opts.enableFlag === false) {
+    engine.setSettings({
+      devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS, unifiedTaskIndex: false },
+    });
+  }
   const { app } = buildApp({
     engine,
     providerRegistry: registry,

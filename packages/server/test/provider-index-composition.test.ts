@@ -81,37 +81,14 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("provider task index server composition", () => {
-  it("never builds a coordinator while unifiedTaskIndex stays false", async () => {
-    const { app, registerHome } = composition();
-    await app.ready();
-
-    const settings = await app.inject({ method: "GET", url: "/api/settings" });
-    expect(settings.json().devHubFeatures.unifiedTaskIndex).toBe(false);
-
-    // A feature change that leaves unifiedTaskIndex false must not instantiate anything.
-    expect(await putFeatures(app, { nativeCodex: false })).toBe(200);
-    expect(await putFeatures(app, { unifiedTaskIndex: false })).toBe(200);
-
-    expect(registerHome).not.toHaveBeenCalled();
-  });
-
-  it("creates + initializes the coordinator once on the false->true transition", async () => {
+describe("provider task index server composition (post-M5 cutover: default ON)", () => {
+  it("initializes the coordinator once at ready and reports the feature applied", async () => {
+    // Fresh engine, no stored override: the M5 cutover default requests unifiedTaskIndex ON,
+    // so onReady builds + initializes the coordinator exactly once and registers the trusted
+    // runtime home. The settings surface reports it applied (available store + initialized).
     const { app, codexHome, registerHome } = composition();
     await app.ready();
-    expect(registerHome).not.toHaveBeenCalled();
 
-    const enabled = await app.inject({
-      method: "PUT",
-      url: "/api/settings",
-      payload: {
-        devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS, unifiedTaskIndex: true },
-      },
-    });
-    expect(enabled.statusCode).toBe(200);
-    expect(enabled.json().devHubFeatures.unifiedTaskIndex).toBe(true);
-
-    // Exactly one trusted runtime home was registered, path-free result, canonical home in.
     expect(registerHome).toHaveBeenCalledTimes(1);
     expect(registerHome).toHaveBeenCalledWith(
       { provider: "openai", home: codexHome },
@@ -124,21 +101,46 @@ describe("provider task index server composition", () => {
     };
     expect(registration.provider).toBe("openai");
     expect(typeof registration.homeFingerprint).toBe("string");
+    // Path-free registration result: the canonical home never leaves the backend.
     expect(JSON.stringify(registration)).not.toContain(codexHome);
+
+    const settings = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(settings.json().devHubFeatures.unifiedTaskIndex).toBe(true);
   });
 
-  it("does not rebuild the coordinator on a repeat transition or a flip back to false", async () => {
-    const { app, registerHome } = composition();
+  it("treats an explicit stored false as the immediate rollback switch (no coordinator)", async () => {
+    // ROLLBACK REHEARSAL: an explicit stored `unifiedTaskIndex: false` wins over the ON
+    // default. Persist it BEFORE ready so onReady never instantiates the coordinator; the
+    // server then reports the feature disabled (applied only when the coordinator initialized).
+    const { app, engine, registerHome } = composition();
+    engine.setSettings({
+      devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS, unifiedTaskIndex: false },
+    });
     await app.ready();
 
+    expect(registerHome).not.toHaveBeenCalled();
+    const disabled = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(disabled.json().devHubFeatures.unifiedTaskIndex).toBe(false);
+
+    // Re-enabling from the rolled-back state builds the coordinator exactly once.
     expect(await putFeatures(app, { unifiedTaskIndex: true })).toBe(200);
+    expect(registerHome).toHaveBeenCalledTimes(1);
+    const reenabled = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(reenabled.json().devHubFeatures.unifiedTaskIndex).toBe(true);
+  });
+
+  it("does not rebuild or tear down the coordinator across repeat/flip-back transitions", async () => {
+    const { app, registerHome } = composition();
+    await app.ready();
+    // Built once at ready under the ON default.
     expect(registerHome).toHaveBeenCalledTimes(1);
 
     // Repeat true: coordinator already exists, no second registration.
     expect(await putFeatures(app, { unifiedTaskIndex: true })).toBe(200);
     expect(registerHome).toHaveBeenCalledTimes(1);
 
-    // Flip back to false, then true again: still the same single coordinator.
+    // Flip to explicit false (rollback), then true again: still the same single coordinator,
+    // never torn down and never re-registered.
     expect(await putFeatures(app, { unifiedTaskIndex: false })).toBe(200);
     expect(await putFeatures(app, { unifiedTaskIndex: true })).toBe(200);
     expect(registerHome).toHaveBeenCalledTimes(1);

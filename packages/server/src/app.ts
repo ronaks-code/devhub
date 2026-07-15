@@ -296,6 +296,11 @@ export function buildApp(opts: BuildOptions = {}): {
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
+      // Honest applied truth: the unified task index counts as applied only once the
+      // coordinator has actually initialized over the shared store. syncProviderTaskIndex
+      // fails open (leaves the coordinator null) if init throws, so a store that exists but
+      // could not initialize reports the feature disabled instead of falsely applied.
+      unifiedTaskIndex: providerTaskIndexCoordinator !== null,
     }),
     onDevHubFeaturesChanged: (features) => {
       syncProviderTaskIndex(features.unifiedTaskIndex === true);
