@@ -361,3 +361,75 @@ dock geometry, runtime-gated destination logic, keyboard/a11y, and flag safety o
 mounting into the shell + wiring real repository/provider events is a deferred data-wire
 staged for the Task 9 `codexStyleShell` cutover. `nativeCodex` / `persistentClaude` /
 `inspectorDock` requested-defaults stay false.
+
+### M6 Task 7 - Search + Commands
+
+Date: 2026-07-15
+
+Governing sources: `design-lock.md` §8 (Search is a dedicated dialog with query,
+global/project scope, date facets, highlighted result rows, keyboard selection,
+status/count, open/close navigation; Commands is a SEPARATE Command-in-Dialog action
+palette; `Search tasks` transitions into Search rather than replacing it),
+`component-state-matrix.md` §12, `surface-inventory.md` `SF-18`/`SF-19`,
+`design-system.md` §7.9, REF-SEARCH (`devhub-current-search-results.png`, the
+PRESERVATION authority for the populated results contract). Evidence:
+`evidence/m6/search-commands/` (`qa-note.md`, `fixture.html`,
+`m6-search-commands-wide.png`) plus the unit/snapshot suites
+`apps/web/src/components/features/search/TaskSearchDialog.test.ts` (26) and
+`apps/web/src/components/features/commands/CommandDialog.test.ts` (16).
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| One shared `#2d2d2d` / 12px-radius Dialog composition, two SEPARATE surfaces | design-system §7.9 / design-lock §8 | measured `rgb(45,45,45)` / `12px` on both; `5` `data-dh-search-dialog` + `3` `data-dh-command-dialog`, never both on one node | Match. |
+| Search is Search; Commands is Commands (never merged) | design-lock §8 | each dialog's markup excludes the other's title/marker (`TaskSearchDialog` never contains `Search commands and tasks`/`data-dh-command-dialog`, and vice versa) | Match. |
+| `Search tasks` closes Commands, opens Search (no inline merge) | design-lock §8 | `describeSearchTasksTransition()` returns `{closeCommands:true,openSearch:true,merged:false}`; dispatch routes to `onSearchTasks`, never `onRun`, for the `open-search` kind | Match. |
+| Global/current-project scope + locked date facets (radio/pressed semantics) | `T-search` / matrix §12 | `role="radio"` scope + date buttons with `aria-checked`; Project scope `disabled` + `Select a project to scope the search to it` reason when no project is active | Match. |
+| Populated result rows: title / project / highlighted snippet / count | REF-SEARCH preservation contract | `<mark>` highlight (not color-only), `N results` / `1 result` singularization, title+project+provider-label rows | Match. |
+| Result provider is derived from the composite key, never model text | `assertNativeTaskKey` parity / design-lock §3 | `providerFromTaskKey`/`navigationTargetForResult` parse the `provider\0home\0nativeTaskId` key and `throw` on a malformed/textual key; a snippet mentioning "Codex" never becomes the provider | Match. |
+| Degraded raw OpenAI session is `OpenAI`, never `Codex`, and discloses `Read-only fallback` | design-lock §3 (raw OpenAI ≠ Codex identity) | `resultProviderLabel` returns `OpenAI` (not `Codex`) for a `degraded` result; row renders `data-dh-read-only` + `Read-only fallback` | Match. |
+| Error is a DISTINCT accessible Alert, never collapses to `No results` | design-lock §8 / matrix §12 | `role="alert"` region, `Search failed` + `Retry`, retains query/scope/date; `resolveSearchStatus` precedence proves `error` always wins over `empty` | Match. |
+| Loading renders content-shaped Skeleton rows | matrix §12 (loading distinct from empty) | `3` `data-dh-search-skeleton-row` (`aria-hidden="true"`) reusing the shared `Skeleton` primitive; announced to AT via the `role="status"` `Searching…` text above, not the hidden rows | Match. |
+| Commands keeps the approved 5-row registry with runtime-gated provider-scoped rows | design-lock §8 / `T-commands` | `DEFAULT_COMMANDS` titles exactly `[New task, Search tasks, Toggle inspector, Open Settings, Go to Ops]`; `visibleCommands` drops a `providerScoped` row whose `capable` is false, so Commands never offers a silent cross-provider action | Match. |
+| Keyboard-active row distinct from scope/date; Escape restores the invoker | matrix §12 focus row | `aria-activedescendant` + `aria-selected` mark the ONE active row; Commands carries zero `data-dh-search-scope`/`data-dh-date-facet` nodes; `describeEscapeRestore` names the invoker to refocus | Match. |
+| No provider logos anywhere | design-lock §3 / invariant 9 | `0` `<svg>` and `0` `<img>` across all 8 fixture sections | Match. |
+
+### Task 7 judgment
+
+`TaskSearchDialog` and `CommandDialog` are the canonical, SEPARATE Search-results and
+Commands-action-palette dialogs: one shared `#2d2d2d`/12px-radius Dialog composition,
+each with its own titled `role="dialog"` and accessible name, never merged into one
+surface. Search owns a focused query, Global/current-project scope (radio semantics,
+Project disabled with a stated reason absent a project), five locked date facets
+plus after/before/clear controls, a result count/status region, and provider-locked
+result rows (title/project/highlighted-`<mark>`-snippet) whose provider is derived
+SOLELY from the composite native task key (`providerFromTaskKey`/
+`navigationTargetForResult`, which throw rather than infer a provider from text) — a
+degraded raw OpenAI session is labeled `OpenAI` (never `Codex`) and discloses
+`Read-only fallback`. A read failure renders a DISTINCT `role="alert"` Alert that
+retains the query/facets and can never collapse to `No results` (`resolveSearchStatus`'s
+precedence proves it); a request in flight renders content-shaped `Skeleton` rows
+instead of a bare spinner. Commands is a wholly separate contract carrying only the five
+approved rows (`New task`/`Search tasks`/`Toggle inspector`/`Open Settings`/`Go to Ops`)
+with a subsequence fuzzy filter, hides any `providerScoped` row whose runtime capability
+is false so it can never silently invoke another provider, and its `Search tasks` row
+CLOSES Commands then OPENS Search (`describeSearchTasksTransition`) rather than
+rendering Search inline. Both dialogs render no provider logos. Ships behind the
+default-off `searchCommands` flag shared by both dialogs (`resolveSearchCommandsMode` /
+`isSearchCommandsApplied`, mirroring `resolveInspectorDockMode`): flag-off keeps the
+legacy `SearchPalette` mounted exactly as today and keeps the legacy `CommandPalette`
+UNMOUNTED exactly as today, so flag-off is a true no-op that instantiates neither new
+dialog. SCOPE (honest): this claims the Search + Commands PRESENTATION, the
+provider-locked result/navigation contract, the Commands→Search handoff, keyboard/a11y,
+and flag safety only; live mounting into `App.tsx`'s overlay tree (real debounced fetch,
+real `onOpen`/`onRun` handlers, real keyboard-shortcut dispatch replacing the legacy
+`SearchPalette`/unused `CommandPalette` import) is a deferred data-wire staged for the
+Task 9 `codexStyleShell` cutover, mirroring how Tasks 3–6 left their live mount as a
+later data-wire (only the outermost `shellChrome`/`taskRail` cutover points are
+live-switched in `App.tsx` today). TOOLING (honest): `design-lock.md` §7 names the
+shadcn/Radix toolchain, but no M6 task (1–7) has installed shadcn/cmdk/Radix packages —
+this slice, like the rest of `apps/web` including the legacy `SearchPalette`/
+`CommandPalette` it supersedes, uses hand-rolled ARIA-correct primitives on the shared
+token system, reusing the existing `Skeleton` component for loading and a `role="alert"`
+region standing in for `Alert`; a full shadcn migration remains an unstarted, larger
+follow-up. `nativeCodex` / `persistentClaude` / `searchCommands` requested-defaults stay
+false.

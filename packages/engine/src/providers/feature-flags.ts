@@ -54,6 +54,16 @@ export interface DevHubFeatureFlags {
    * diff/file/git panels. Additive to the umbrella `codexStyleShell` cutover flag.
    */
   inspectorDock: boolean;
+  /**
+   * M6 slice 7 (TaskSearchDialog + CommandDialog). Default false. When requested true
+   * AND the server reports it applied, the web app mounts the two SEPARATE Codex-style
+   * dialogs — a dedicated `Search tasks and messages` results dialog and a separate
+   * `Search commands and tasks` command palette (where `Search tasks` closes Commands
+   * then opens Search); an explicit stored false is the immediate, non-destructive
+   * rollback to the legacy `SearchPalette` with Commands unmounted exactly as today.
+   * Additive to the umbrella `codexStyleShell` cutover flag.
+   */
+  searchCommands: boolean;
   codexStyleShell: boolean;
   crossProviderFork: boolean;
   workMode: boolean;
@@ -72,13 +82,14 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
   // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3;
   // threadWorkspace gates M6 Task 4; composerSurface gates M6 Task 5;
-  // inspectorDock gates M6 Task 6.
+  // inspectorDock gates M6 Task 6; searchCommands gates M6 Task 7.
   shellChrome: false,
   taskRail: false,
   taskHeaderSetup: false,
   threadWorkspace: false,
   composerSurface: false,
   inspectorDock: false,
+  searchCommands: false,
   codexStyleShell: false,
   crossProviderFork: false,
   workMode: false,

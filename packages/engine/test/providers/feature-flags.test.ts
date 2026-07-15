@@ -20,6 +20,7 @@ describe("DevHub feature flags", () => {
       threadWorkspace: false,
       composerSurface: false,
       inspectorDock: false,
+      searchCommands: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,
