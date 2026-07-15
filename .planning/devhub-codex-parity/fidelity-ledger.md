@@ -99,3 +99,44 @@ the legacy `App.tsx`/`ResponsiveShell` chrome byte-for-byte (proven by `AppShell
 Rail rows, header title/actions, transcript renderers, composer controls, and inspector
 destinations remain placeholder slots owned by M6 Tasks 2–8; this task claims frame
 geometry, tokens, landmarks, and flag safety only, not final content fidelity.
+
+### Task 2 - TaskRail open list (`taskRail`)
+
+Date: 2026-07-15
+
+Governing sources: REF-EMPTY / REF-ACTIVE / REF-RICH for rail grouping and the open-list
+hierarchy; `design-lock.md` §4 "Rail hierarchy is an open list"; `reference-capture-manifest.md`
+"256x30 selected row at 8 inset"; `design-system.md` §2–§4 tokens; `component-state-matrix.md`
+§5 (rail and task rows); `surface-inventory.md` `SF-02` / `T-rail`. Evidence:
+`evidence/m6/taskrail/` (`qa-note.md`, `fixture.html`, `fixture-empty.html`,
+`m6-taskrail-wide.png`, `m6-taskrail-empty.png`) plus the unit/snapshot suite
+`apps/web/src/components/features/shell/TaskRail.test.ts`.
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Open list, not nested cards | design-lock §4 "Rail hierarchy is an open list" | rail is a `role="list"` of flat `data-dh-task-row` list items grouped under quiet headings; no card container chrome; test asserts open-list semantics | Match. |
+| Selected row 256x30 | manifest "256x30 selected row" | measured selected row width 256, height 30 via `getBoundingClientRect`; driven by `--dh-selected-row-width/height` | Match. |
+| Rail inset 8 | manifest "…at 8 inset" | measured 8-unit inset from the rail-content left edge; `--dh-rail-inset` | Match. |
+| Selected fill `#313131` | design-system §2.1 `--dh-selected` | measured `getComputedStyle` background `rgb(49,49,49)` = `#313131`, radius 9px | Match. |
+| Provider identity is quiet text, never a logo | design-lock §3 / invariant 1 | quiet visible suffix `Codex`/`Claude` + full `OpenAI · Codex` / `Anthropic · Claude` in the accessible name; 0 `svg`/`img` in the rail | Match. |
+| Height invariant under active spinner | component-state-matrix §5 (`selected`/active) | selected+active row height stays 30 with the quiet spinner present; asserted | Match. |
+| Roving focus distinct from selection | design-lock §10 / a11y gate | exactly one open-button `tabIndex 0`; `nextRovingIndex` covers Arrow/J/K/Home/End; overflow `Actions for {task}` are independently `tabIndex 0` and reachable without hover | Match. |
+| Secondary destinations reachable-only, never inert | surface-inventory `RT-01/RT-02` | unreachable destinations are absent (never rendered `disabled`/`aria-disabled`); current destination carries `aria-current` | Match. |
+| Failure isolation | design-lock §4 (provider-failure isolation) | `failedProvider` marks only that provider's rows; the other provider's rows carry no failure marker; asserted both directions | Match. |
+| No raw-home / NUL in keys | invariant / preservation | `sanitizeRailKey` strips NUL/control chars and path separators; rendered markup carries no NUL and no `/Users/` or `.codex/sessions` path | Match. |
+| Rail copy (`T-rail`) | surface-inventory `T-rail` | `New task`, `No tasks`, provider suffixes present; no unapproved generated rail strings | Match. |
+| Brand wordmark | invariant 9 | brand stays `DevHub`; no provider wordmark in the rail | Match. |
+
+### Task 2 judgment
+
+`TaskRail` renders the rail as a Codex-style open list — flat task rows grouped under
+quiet headings, a measured 256x30 selected fill at an 8-unit inset (`#313131`, 9px
+radius), quiet provider identity (visible `Codex`/`Claude` suffix + full `OpenAI · Codex`
+/ `Anthropic · Claude` accessible name, never a logo), height-invariant active spinner,
+roving focus distinct from selection, hover-free overflow actions, single-provider
+failure isolation, and NUL/raw-home-safe keys. It ships behind the default-off `taskRail`
+flag; flag-off keeps the legacy rail and never instantiates `TaskRail` (the App model is
+built only in the devhub branch). The App-side model currently supplies the reachable
+primary tabs as secondary destinations with an empty task list (`No tasks`); populating
+live native task rows with their immutable provider identity is a later data-wire, not in
+this unit.

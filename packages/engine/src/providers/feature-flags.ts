@@ -10,6 +10,13 @@ export interface DevHubFeatureFlags {
    * chrome. Additive to the umbrella `codexStyleShell` cutover flag.
    */
   shellChrome: boolean;
+  /**
+   * M6 slice 2 (TaskRail). Default false. When requested true AND the server reports
+   * it applied, the web app renders the rail as a Codex-style open list (compact
+   * 256x30 selected row, quiet provider identity); an explicit stored false is the
+   * immediate, non-destructive rollback to the legacy rail. Additive to `codexStyleShell`.
+   */
+  taskRail: boolean;
   codexStyleShell: boolean;
   crossProviderFork: boolean;
   workMode: boolean;
@@ -25,8 +32,10 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // non-destructive rollback switch (legacy provider routes stay byte-compatible).
   unifiedTaskIndex: true,
   // M6 slice flags are additive and default-off; each gates exactly one strangler
-  // slice and rolls back non-destructively. shellChrome gates M6 Task 1.
+  // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
+  // taskRail gates M6 Task 2.
   shellChrome: false,
+  taskRail: false,
   codexStyleShell: false,
   crossProviderFork: false,
   workMode: false,

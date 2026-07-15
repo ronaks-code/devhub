@@ -51,6 +51,7 @@ export function completeDevHubFeatures(
     persistentClaude: value?.persistentClaude === true,
     unifiedTaskIndex: value?.unifiedTaskIndex === true,
     shellChrome: value?.shellChrome === true,
+    taskRail: value?.taskRail === true,
     codexStyleShell: value?.codexStyleShell === true,
     crossProviderFork: value?.crossProviderFork === true,
     workMode: value?.workMode === true,

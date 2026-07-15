@@ -58,6 +58,11 @@ import { SessionCostBadge } from "./components/SessionCostBadge";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
 import { AppShell } from "./components/features/shell/AppShell";
 import { resolveShellChromeMode } from "./components/features/shell/DevHubShell";
+import {
+  TaskRail,
+  resolveTaskRailMode,
+  type TaskRailModel,
+} from "./components/features/shell/TaskRail";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
@@ -1221,6 +1226,29 @@ export default function App() {
   // false, so the shipping default renders the current shell unchanged.
   const shellChromeMode = resolveShellChromeMode(settings);
 
+  // M6 slice 2: swap the rail for the Codex-style open-list TaskRail only when the
+  // server resolves `taskRail` true; otherwise keep the legacy rail (default false, so
+  // the shipping default is unchanged). The model is built ONLY in the devhub branch
+  // below, so flag-off never constructs it or instantiates TaskRail. Secondary
+  // destinations are the reachable primary tabs; native task rows (with their provider
+  // identity) are a later data-wire, so the task list is empty (`No tasks`) for now.
+  const taskRailMode = resolveTaskRailMode(settings);
+  const taskRailModel = useMemo<TaskRailModel>(
+    () => ({
+      sections: [],
+      destinations: [
+        { id: "home", label: "Home", current: tab === "home" },
+        { id: "browse", label: "Browse", current: tab === "browse" },
+        { id: "chat", label: "Chat", current: tab === "chat" },
+        { id: "dashboard", label: "Dashboard", current: tab === "dashboard" },
+        { id: "ops", label: "Live Ops", current: tab === "ops" },
+        { id: "inbox", label: "Inbox", current: tab === "inbox" },
+        { id: "settings", label: "Settings", current: tab === "settings" },
+      ],
+    }),
+    [tab],
+  );
+
   const startNewChat = useCallback(() => {
     setChatSeed(null);
     setChatNonce((n) => n + 1);
@@ -1553,6 +1581,13 @@ export default function App() {
           />
         }
         rail={
+          taskRailMode === "devhub" ? (
+            <TaskRail
+              model={taskRailModel}
+              onNewTask={startNewChat}
+              onSelectDestination={(id) => { setChatSeed(null); setTab(id as Tab); }}
+            />
+          ) : (
           <>
           {/* ── CLAUDE section ── */}
           <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
@@ -1644,6 +1679,7 @@ export default function App() {
             </button>
           ))}
           </>
+          )
         }
       >
         {/* ── Main content area (AppShell provides the flex column wrapper) ── */}
