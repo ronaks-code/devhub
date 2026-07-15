@@ -19,6 +19,7 @@ import {
   projectNativeTaskSummaryForIndex,
 } from "./store-codec.js";
 import {
+  homeFingerprint as computeHomeFingerprint,
   serializeTaskLocator,
   taskLocator,
   type ProviderTaskLocator,
@@ -28,7 +29,11 @@ import type {
   IndexedProviderTask,
   IndexedProviderTaskSummary,
   ProviderHomeRegistration,
+  ProviderHomeScope,
+  ProviderIndexCompletion,
+  ProviderIndexPromotion,
   ProviderIndexRegisteredHome,
+  ProviderIndexStage,
   VerifiedLegacySessionResolution,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
@@ -141,6 +146,25 @@ export type ProviderTaskReadThrough =
       task: Readonly<IndexedProviderTask>;
     }>
   | Readonly<{ freshness: "missing"; locator: ProviderTaskLocator }>;
+
+export interface ProviderTaskRebuildInput {
+  readonly provider: ProviderId;
+  /** Raw runtime provider home; canonicalized and never returned in any result. */
+  readonly home: string;
+  /** Optional cooperative cancellation for a mid-run rebuild. */
+  readonly signal?: AbortSignal;
+}
+
+/** Terminal code recorded when a rebuild run is invalidated by cancel/deadline/clock/stage loss. */
+interface RebuildRun {
+  code: ProviderTaskIndexCoordinatorErrorCode | null;
+  stageLost: boolean;
+}
+
+/** Internal marker thrown when a rebuild run token is invalidated; never leaves the coordinator. */
+const REBUILD_INVALIDATED = Symbol("ProviderTaskIndexCoordinator rebuild invalidated");
+
+const MAX_REBUILD_CURSOR_UTF8_BYTES = 4_096;
 
 const OPTION_KEYS = [
   "pageSize",
@@ -309,6 +333,28 @@ interface ObservationLane {
   epoch: number;
 }
 
+interface RebuildWinner {
+  readonly key: NativeTaskKey;
+  readonly locator: ProviderTaskLocator;
+  readonly rank: number;
+}
+
+/**
+ * Dedupe rank for a native summary: greater is a stronger winner. A non-null revision `updatedAt` beats a
+ * null/absent one; equal ranks (including two nulls) are ties, resolved by the caller keeping the
+ * later-encountered candidate (later page, then later item).
+ */
+function rebuildRevisionRank(summaryValue: unknown): number {
+  const record = requireObservationRecord(summaryValue);
+  const revision = ownDataValue(record, "revision");
+  if (revision === undefined || revision === null) return Number.NEGATIVE_INFINITY;
+  const revisionRecord = requireObservationRecord(revision);
+  const updatedAt = ownDataValue(revisionRecord, "updatedAt");
+  if (updatedAt === null) return Number.NEGATIVE_INFINITY;
+  if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt)) fail("INVALID_INPUT");
+  return updatedAt;
+}
+
 function requireObservationRecord(value: unknown): Readonly<Record<string, unknown>> {
   if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
     Array.isArray(value)) {
@@ -410,6 +456,7 @@ export class ProviderTaskIndexCoordinator {
   private lastNow: number | null = null;
   private observationOperations = 0;
   private readonly observationLanes = new Map<string, ObservationLane>();
+  private readonly activeRebuilds = new Set<string>();
 
   constructor(
     authority: typeof COORDINATOR_CONSTRUCTION,
@@ -421,7 +468,6 @@ export class ProviderTaskIndexCoordinator {
     private readonly options: Readonly<NormalizedCoordinatorOptions>,
   ) {
     if (authority !== COORDINATOR_CONSTRUCTION) fail("INVALID_INPUT");
-    void this.timers;
   }
 
   initialize(): readonly Readonly<ProviderHomeRegistration>[] {
@@ -581,6 +627,293 @@ export class ProviderTaskIndexCoordinator {
   ): Readonly<VerifiedLegacySessionResolution> | null {
     if (typeof sessionIdValue !== "string") fail("INVALID_INPUT");
     return this.store.getVerifiedLegacySessionMapping(sessionIdValue);
+  }
+
+  /**
+   * Rebuild the provider/home cache generation from the native provider APIs. Begins one token-owned
+   * stage, pages the native list to exhaustion with `includeArchived:true` under bounded page/task/time
+   * limits, deduplicates locators (winner = greatest non-null revision `updatedAt`; a tie takes the later
+   * page then later item), point-reads every final unique locator with `includeTurns:true` in
+   * serialized-locator order, and writes exclusively through `stageSnapshot`. A successful rebuild is
+   * full-snapshot only: `taskCount = snapshotCount = receiptCount = unique locators`, with `turnCount`
+   * and `eventCount` summed from the final canonical snapshots. Those exact five counts pass to
+   * `promoteStage`, which atomically switches the new generation, invalidates only older generations in
+   * that exact provider/home scope, and refuses on any SQL-count mismatch. `providerVersion` is `null`.
+   *
+   * The injected clock is the sole monotonic deadline authority (throw/regress/invalid -> CLOCK_FAILURE).
+   * Synchronous, non-overlapping heartbeats run before and after each provider call and before each stage
+   * write and the promotion; host timers only wake one heartbeat while a provider await is pending. A
+   * pre-aborted request fails `CANCELLED` before `beginStage`; a mid-run cancel/deadline invalidates the
+   * run token, drains the heartbeat, aborts the exact stage, ignores late provider results, and reports a
+   * cleanup/stage-loss failure ahead of `CANCELLED`/`REBUILD_TIMEOUT`. Each final locator's observation
+   * epoch is recorded and rechecked before promotion; a newer read/observation makes the rebuild
+   * `STALE_OBSERVATION` and aborts. Any failure best-effort aborts the stage and preserves the previous
+   * active generation and all durable rows. Rebuild calls no provider mutation API; one rebuild runs per
+   * exact provider/home (`REBUILD_BUSY` otherwise).
+   */
+  async rebuild(value: ProviderTaskRebuildInput): Promise<Readonly<ProviderIndexPromotion>> {
+    const { provider, home, signal } = this.normalizeRebuildInput(value);
+    let homeFp: string;
+    try {
+      homeFp = computeHomeFingerprint(provider, home);
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+    const scope: Readonly<ProviderHomeScope> = Object.freeze({ provider, homeFingerprint: homeFp });
+    const scopeKey = `${provider} ${homeFp}`;
+    if (this.activeRebuilds.has(scopeKey)) fail("REBUILD_BUSY");
+    // Pre-aborted work fails before any stage is created.
+    if (signal !== undefined && signal.aborted) fail("CANCELLED");
+
+    this.activeRebuilds.add(scopeKey);
+    try {
+      const startNow = this.readNow();
+      const deadline = startNow + this.options.maxRebuildMs;
+      if (!Number.isSafeInteger(deadline)) fail("CLOCK_FAILURE");
+      const cadence = Math.max(250, Math.floor(this.store.getStageLeaseMs() / 3));
+      const run: RebuildRun = { code: null, stageLost: false };
+      const stage = this.store.beginStage(scope);
+      const pinnedLanes: string[] = [];
+      let timerHandle: unknown = null;
+      let heartbeatRunning = false;
+
+      const beat = (): void => {
+        if (heartbeatRunning) return;
+        heartbeatRunning = true;
+        try {
+          if (run.code !== null || run.stageLost) return;
+          let now: number;
+          try {
+            now = this.readNow();
+          } catch {
+            run.code = "CLOCK_FAILURE";
+            return;
+          }
+          if (now > deadline) {
+            run.code = "REBUILD_TIMEOUT";
+            return;
+          }
+          if (signal !== undefined && signal.aborted) {
+            run.code = "CANCELLED";
+            return;
+          }
+          let alive: boolean;
+          try {
+            alive = this.store.heartbeatStage(stage);
+          } catch {
+            alive = false;
+          }
+          if (!alive) run.stageLost = true;
+        } finally {
+          heartbeatRunning = false;
+        }
+      };
+      const clearTimer = (): void => {
+        if (timerHandle !== null) {
+          this.timers.clearTimeout(timerHandle);
+          timerHandle = null;
+        }
+      };
+      const scheduleTimer = (): void => {
+        timerHandle = this.timers.setTimeout(() => {
+          timerHandle = null;
+          beat();
+          if (run.code === null && !run.stageLost) scheduleTimer();
+        }, cadence);
+      };
+      const assertLive = (): void => {
+        if (run.code !== null || run.stageLost) throw REBUILD_INVALIDATED;
+      };
+      const callProvider = async <T>(fn: () => Promise<T>): Promise<T> => {
+        beat();
+        assertLive();
+        this.reserveObservationOperations(1);
+        scheduleTimer();
+        try {
+          return await fn();
+        } finally {
+          clearTimer();
+          this.releaseObservationOperations(1);
+        }
+      };
+
+      try {
+        // ---- Pagination + dedupe ----
+        const winners = new Map<string, RebuildWinner>();
+        const cursorHistory = new Set<string>();
+        let cursor: string | undefined;
+        for (let pageIndex = 0; ; pageIndex += 1) {
+          if (pageIndex >= this.options.maxPages) fail("CAPACITY");
+          const page = await callProvider(() =>
+            this.registry.listTasks(provider, {
+              home,
+              includeArchived: true,
+              limit: this.options.pageSize,
+              ...(cursor === undefined ? {} : { cursor }),
+            }));
+          beat();
+          assertLive();
+          const items = page.items;
+          if (items.length > this.options.pageSize) fail("CAPACITY");
+          for (const summary of items) {
+            const locator = this.rebuildSummaryLocator(summary, homeFp);
+            const serialized = serializeTaskLocator(locator);
+            const existing = winners.get(serialized);
+            if (existing === undefined && winners.size >= this.options.maxUniqueTasks) {
+              fail("CAPACITY");
+            }
+            const rank = rebuildRevisionRank(summary);
+            if (existing === undefined || rank >= existing.rank) {
+              winners.set(serialized, { key: summary.key, locator, rank });
+            }
+          }
+          const next = page.nextCursor;
+          if (next === null) break;
+          this.assertCanonicalCursor(next);
+          if (cursorHistory.has(next)) fail("INVALID_INPUT");
+          cursorHistory.add(next);
+          cursor = next;
+        }
+
+        // ---- Point-read every final unique locator in serialized-locator order ----
+        const serializedOrder = [...winners.keys()].sort();
+        for (const serialized of serializedOrder) {
+          this.pinObservationLane(serialized);
+          pinnedLanes.push(serialized);
+        }
+        const recordedEpochs = new Map<string, number>();
+        for (const serialized of serializedOrder) {
+          const lane = this.observationLanes.get(serialized);
+          recordedEpochs.set(serialized, lane === undefined ? 0 : lane.epoch);
+        }
+        let turnCount = 0;
+        let eventCount = 0;
+        for (const serialized of serializedOrder) {
+          const winner = winners.get(serialized)!;
+          const task = await callProvider(() => this.registry.readTask(winner.key, true));
+          beat();
+          assertLive();
+          for (const turn of task.turns) {
+            turnCount += 1;
+            eventCount += turn.events.length;
+          }
+          beat();
+          assertLive();
+          this.store.stageSnapshot(stage, winner.key, task);
+        }
+
+        // ---- Recheck observation epochs; a newer read/observation makes the rebuild stale ----
+        for (const serialized of serializedOrder) {
+          const lane = this.observationLanes.get(serialized);
+          const current = lane === undefined ? 0 : lane.epoch;
+          if (current !== recordedEpochs.get(serialized)) fail("STALE_OBSERVATION");
+        }
+
+        beat();
+        assertLive();
+        clearTimer();
+        const completedAt = this.readNow();
+        const completion: Readonly<ProviderIndexCompletion> = Object.freeze({
+          completedAt,
+          providerVersion: null,
+          taskCount: winners.size,
+          turnCount,
+          eventCount,
+          snapshotCount: winners.size,
+          receiptCount: winners.size,
+        });
+        const promotion = this.store.promoteStage(stage, completion);
+        return promotion;
+      } catch (error) {
+        clearTimer();
+        let abortError: unknown = null;
+        try {
+          this.store.abortStage(stage);
+        } catch (thrown) {
+          abortError = thrown;
+        }
+        // A cleanup/stage-loss failure outranks CANCELLED/REBUILD_TIMEOUT: invisibility is unproven.
+        if (abortError !== null) throw abortError;
+        if (error === REBUILD_INVALIDATED) {
+          if (run.code !== null) fail(run.code);
+          // Stage lost yet abort unexpectedly succeeded: report the timeout terminal.
+          fail("REBUILD_TIMEOUT");
+        }
+        throw error;
+      } finally {
+        clearTimer();
+        for (const laneKey of pinnedLanes) this.unpinObservationLane(laneKey);
+      }
+    } finally {
+      this.activeRebuilds.delete(scopeKey);
+    }
+  }
+
+  private normalizeRebuildInput(value: unknown): {
+    readonly provider: ProviderId;
+    readonly home: string;
+    readonly signal: AbortSignal | undefined;
+  } {
+    const input = exactOwnData(value, ["provider", "home"], ["signal"]);
+    const provider = providerId(input.provider);
+    if (typeof input.home !== "string") fail("INVALID_INPUT");
+    let home: string;
+    try {
+      home = canonicalizeProviderHome(input.home);
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+    if (!hasCanonicalUnicode(home) ||
+      sqliteTextLengthAtMost(home, MAX_PROVIDER_HOME_CHARS) === null) {
+      fail("INVALID_INPUT");
+    }
+    let signal: AbortSignal | undefined;
+    if (Object.hasOwn(input, "signal") && input.signal !== undefined) {
+      if (utilTypes.isProxy(input.signal) || !(input.signal instanceof AbortSignal)) {
+        fail("INVALID_INPUT");
+      }
+      signal = input.signal;
+    }
+    return { provider, home, signal };
+  }
+
+  private rebuildSummaryLocator(summaryValue: unknown, expectedHomeFingerprint: string): ProviderTaskLocator {
+    const record = requireObservationRecord(summaryValue);
+    const key = ownDataValue(record, "key");
+    let locator: ProviderTaskLocator;
+    try {
+      locator = taskLocator(key as NativeTaskKey);
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+    // Reject any foreign-scope key the provider surfaced under this home.
+    if (locator.homeFingerprint !== expectedHomeFingerprint) fail("INVALID_INPUT");
+    return locator;
+  }
+
+  private assertCanonicalCursor(cursor: unknown): void {
+    if (typeof cursor !== "string" || !hasCanonicalUnicode(cursor)) fail("INVALID_INPUT");
+    const bytes = Buffer.byteLength(cursor, "utf8");
+    if (bytes < 1 || bytes > MAX_REBUILD_CURSOR_UTF8_BYTES) fail("INVALID_INPUT");
+  }
+
+  private pinObservationLane(laneKey: string): void {
+    let lane = this.observationLanes.get(laneKey);
+    if (lane === undefined) {
+      if (this.observationLanes.size >= this.options.maxUniqueTasks) fail("CAPACITY");
+      lane = { tail: Promise.resolve(), refCount: 0, epoch: 0 };
+      this.observationLanes.set(laneKey, lane);
+    }
+    lane.refCount += 1;
+  }
+
+  private unpinObservationLane(laneKey: string): void {
+    const lane = this.observationLanes.get(laneKey);
+    if (lane === undefined) return;
+    lane.refCount -= 1;
+    if (lane.refCount === 0 && this.observationLanes.get(laneKey) === lane) {
+      this.observationLanes.delete(laneKey);
+    }
   }
 
   private degradedCacheOrRethrow(
@@ -772,9 +1105,6 @@ export function createProviderTaskIndexCoordinator(
   if (Object.hasOwn(input, "options") && input.options === undefined) fail("INVALID_INPUT");
   const timers = normalizeTimers(input.timers);
   const options = normalizeOptions(input.options);
-  void input.registry;
-  void timers;
-  void options;
   return new ProviderTaskIndexCoordinator(
     COORDINATOR_CONSTRUCTION,
     input.registry,
