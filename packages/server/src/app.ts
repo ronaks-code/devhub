@@ -16,7 +16,11 @@ import {
   type ProviderTaskIndexCoordinator,
 } from "@devhub/engine";
 import type { EngineEvent } from "@devhub/engine/types";
-import { ProviderRegistry } from "@devhub/engine/providers";
+import {
+  ProviderRegistry,
+  canonicalizeProviderHome,
+  homeFingerprint,
+} from "@devhub/engine/providers";
 import {
   createNativeCodexRuntime,
   type CreateNativeCodexRuntimeOptions,
@@ -64,6 +68,10 @@ import { registerWebhooksRoutes } from "./routes/webhooks.js";
 import { registerCodexRoutes } from "./routes/codex.js";
 import { registerProviderTaskRoutes } from "./routes/provider-tasks.js";
 import {
+  registerProviderIndexRoutes,
+  type RegisteredIndexHome,
+} from "./routes/provider-index.js";
+import {
   registerOpenAIRoutes,
   type OpenAISessionFactory,
 } from "./routes/openai.js";
@@ -96,6 +104,13 @@ export interface BuildOptions {
   nativeCodex?: false | Omit<CreateNativeCodexRuntimeOptions, "registry" | "isEnabled">;
   /** false disables discovery; an object provides explicit hermetic/runtime overrides. */
   nativeClaude?: false | Omit<CreateNativeClaudeRuntimeOptions, "registry" | "isEnabled">;
+  /**
+   * Explicit trusted provider homes registered with the unified task index at startup. This is a
+   * DoD-sanctioned registration source alongside installed-runtime discovery and DEVHUB_*_HOME
+   * env, used when a home's adapter is supplied through an injected registry rather than a managed
+   * native runtime. Raw homes never leave the server; only their fingerprints cross the boundary.
+   */
+  providerHomes?: readonly ConfiguredProviderHome[];
 }
 
 async function settleProviderRuntimeOperations(
@@ -158,18 +173,42 @@ export function buildApp(opts: BuildOptions = {}): {
     ...(nativeClaudeRuntime === null
       ? []
       : [{ provider: "anthropic", home: nativeClaudeRuntime.installation.home } as const]),
+    ...(opts.providerHomes ?? []),
   ]);
+  // Backend-only fingerprint view of the trusted registered homes. The canonical home is
+  // retained here solely so the indexed routes can match it against the registry census and
+  // resolve locators; it is never returned to the browser.
+  const indexedRegisteredHomes: readonly RegisteredIndexHome[] = Object.freeze(
+    registeredProviderHomes.map((home) => {
+      const canonicalHome = canonicalizeProviderHome(home.home);
+      return Object.freeze({
+        provider: home.provider,
+        homeFingerprint: homeFingerprint(home.provider, canonicalHome),
+        canonicalHome,
+      });
+    }),
+  );
+  // The unified task index needs the shared store; a partial/mocked engine without it makes the
+  // feature unavailable (the coordinator can never initialize there). unifiedTaskIndex is reported
+  // available only when this store exists.
+  const providerIndexStore = engine.index?.providerIndex ?? null;
   let providerTaskIndexCoordinator: ProviderTaskIndexCoordinator | null = null;
   const syncProviderTaskIndex = (unifiedTaskIndex: boolean): void => {
     if (!unifiedTaskIndex || providerTaskIndexCoordinator !== null) return;
-    const coordinator = createProviderTaskIndexCoordinator({
-      registry: providerRegistry,
-      store: engine.index.providerIndex,
-      registeredHomes: registeredProviderHomes,
-      clock: { now: () => Date.now() },
-    });
-    coordinator.initialize();
-    providerTaskIndexCoordinator = coordinator;
+    // Fail-open to the legacy path: if the store/coordinator cannot initialize, the coordinator
+    // stays null and every indexed route reports the feature as disabled without a schema change.
+    try {
+      const coordinator = createProviderTaskIndexCoordinator({
+        registry: providerRegistry,
+        store: engine.index.providerIndex,
+        registeredHomes: registeredProviderHomes,
+        clock: { now: () => Date.now() },
+      });
+      coordinator.initialize();
+      providerTaskIndexCoordinator = coordinator;
+    } catch {
+      providerTaskIndexCoordinator = null;
+    }
   };
 
   const app = Fastify({ logger: false });
@@ -250,7 +289,7 @@ export function buildApp(opts: BuildOptions = {}): {
       nativeCodex: nativeCodexRuntime !== null,
       persistentClaude:
         hasMutationToken && nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable(),
-      unifiedTaskIndex: true,
+      unifiedTaskIndex: providerIndexStore !== null,
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
@@ -334,7 +373,19 @@ export function buildApp(opts: BuildOptions = {}): {
 
   registerCodexRoutes(app);
 
-  registerProviderTaskRoutes(app, providerRegistry, token);
+  registerProviderTaskRoutes(app, providerRegistry, token, {
+    getCoordinator: () => providerTaskIndexCoordinator,
+  });
+
+  if (providerIndexStore) {
+    registerProviderIndexRoutes(app, {
+      registry: providerRegistry,
+      store: providerIndexStore,
+      getCoordinator: () => providerTaskIndexCoordinator,
+      registeredHomes: indexedRegisteredHomes,
+      ...(typeof token === "string" && token.length > 0 ? { token } : {}),
+    });
+  }
 
   registerOpenAIRoutes(app, openAIOptions);
 
