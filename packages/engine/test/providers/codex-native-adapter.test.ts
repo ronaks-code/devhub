@@ -5,9 +5,14 @@ import {
 } from "../../src/providers/codex/native-adapter.js";
 import { CodexRemoteRpcError } from "../../src/providers/codex/protocol/rpc-peer.js";
 import type {
+  AdapterReconciliationLatchInput,
+  AdapterReconciliationSnapshot,
+  AdapterReconciliationStore,
   AppServerReconcileContext,
   CodexAppServerLease,
   CodexSupervisorAcquireOptions,
+  NativeTaskWriterLease,
+  NativeTaskKey,
 } from "../../src/providers/index.js";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -1044,5 +1049,328 @@ describe("CodexNativeAdapter hardening boundaries", () => {
       method: "thread/fork",
       params: expect.objectContaining({ cwd: secretCwd }),
     });
+  });
+});
+
+// --- Writer-lease fence + durable reconciliation over existing-task mutations ---
+
+const keyId = (key: NativeTaskKey): string =>
+  `${key.provider} ${key.home} ${key.nativeTaskId}`;
+
+class FakeWriterLease implements NativeTaskWriterLease {
+  readonly key: Readonly<NativeTaskKey>;
+  readonly fence: Readonly<{ readonly key: Readonly<NativeTaskKey>; readonly epoch: number }>;
+  private confirmed = false;
+  private releasedFlag = false;
+  private lostFlag = false;
+  confirmReads = 0;
+  fencedWrites = 0;
+  releaseCalls = 0;
+
+  constructor(
+    key: NativeTaskKey,
+    epoch: number,
+    private readonly opts: { started?: boolean; confirm?: boolean } = {},
+  ) {
+    this.key = key;
+    this.fence = Object.freeze({ key, epoch });
+  }
+
+  get rereadRequired(): boolean { return !this.confirmed && !this.releasedFlag; }
+  get usable(): boolean { return this.confirmed && !this.releasedFlag && !this.lostFlag; }
+  get lost(): boolean { return this.lostFlag; }
+  get released(): boolean { return this.releasedFlag; }
+  get lossReason(): "ownership" | null { return this.lostFlag ? "ownership" : null; }
+  get expiresAtMs(): number { return 15_000; }
+
+  confirmReread(): boolean {
+    this.confirmReads += 1;
+    if (this.opts.confirm === false || this.releasedFlag || this.lostFlag) {
+      this.lostFlag = true;
+      return false;
+    }
+    this.confirmed = true;
+    return true;
+  }
+
+  heartbeat(): boolean { return this.confirmed && !this.releasedFlag && !this.lostFlag; }
+
+  runFencedWrite<T>(
+    start: (fence: Readonly<{ readonly key: Readonly<NativeTaskKey>; readonly epoch: number }>) => T,
+  ): { readonly started: false } | { readonly started: true; readonly value: T } {
+    this.fencedWrites += 1;
+    if (this.opts.started === false || this.releasedFlag || this.lostFlag || !this.confirmed) {
+      this.lostFlag = true;
+      return { started: false as const };
+    }
+    return { started: true as const, value: start(this.fence) };
+  }
+
+  release(): boolean {
+    this.releaseCalls += 1;
+    if (this.releasedFlag) return false;
+    this.releasedFlag = true;
+    return true;
+  }
+}
+
+class FakeWriterLeaseStore {
+  readonly epochs = new Map<string, number>();
+  readonly acquires: NativeTaskKey[] = [];
+  readonly handles: FakeWriterLease[] = [];
+  mode: "ok" | "null" = "ok";
+  leaseOpts: { started?: boolean; confirm?: boolean } = {};
+
+  acquire(key: NativeTaskKey): NativeTaskWriterLease | null {
+    this.acquires.push(key);
+    if (this.mode === "null") return null;
+    const id = keyId(key);
+    const epoch = (this.epochs.get(id) ?? 0) + 1;
+    this.epochs.set(id, epoch);
+    const handle = new FakeWriterLease(key, epoch, this.leaseOpts);
+    this.handles.push(handle);
+    return handle;
+  }
+}
+
+type FailOp = "get" | "require" | "ack";
+
+class FakeReconciliationStore implements AdapterReconciliationStore {
+  readonly rows = new Map<string, AdapterReconciliationSnapshot>();
+  readonly failOn = new Set<FailOp>();
+  private failed = false;
+
+  get unavailable(): boolean { return this.failed; }
+
+  private base(): AdapterReconciliationSnapshot {
+    return Object.freeze({
+      required: false,
+      latchRevision: 0,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 0,
+      reason: null,
+    });
+  }
+
+  private guard<T>(op: FailOp, run: () => T): T {
+    if (this.failed) throw new Error("reconciliation store unavailable");
+    if (this.failOn.has(op)) {
+      this.failed = true;
+      throw new Error("reconciliation store fault");
+    }
+    return run();
+  }
+
+  getReconciliation(key: NativeTaskKey): AdapterReconciliationSnapshot {
+    return this.guard("get", () => this.rows.get(keyId(key)) ?? this.base());
+  }
+
+  requireReconciliation(
+    key: NativeTaskKey,
+    input: AdapterReconciliationLatchInput,
+  ): AdapterReconciliationSnapshot {
+    return this.guard("require", () => {
+      const id = keyId(key);
+      const prev = this.rows.get(id) ?? this.base();
+      const next = Object.freeze({
+        required: true,
+        latchRevision: prev.latchRevision + 1,
+        reviewedFingerprint: input.reviewedFingerprint,
+        nativeFingerprint: input.nativeFingerprint,
+        writerEpoch: input.writerEpoch,
+        reason: input.reason,
+      });
+      this.rows.set(id, next);
+      return next;
+    });
+  }
+
+  acknowledgeReconciliation(
+    key: NativeTaskKey,
+    expectedLatchRevision: number,
+    reviewedFingerprint: string | null,
+    observedNativeFingerprint: string | null,
+  ): AdapterReconciliationSnapshot {
+    return this.guard("ack", () => {
+      const id = keyId(key);
+      const prev = this.rows.get(id) ?? this.base();
+      if (
+        prev.required && prev.latchRevision === expectedLatchRevision &&
+        prev.reviewedFingerprint === reviewedFingerprint &&
+        prev.nativeFingerprint === observedNativeFingerprint
+      ) {
+        const next = Object.freeze({ ...prev, required: false, reason: null });
+        this.rows.set(id, next);
+        return next;
+      }
+      return prev;
+    });
+  }
+}
+
+const fencedAdapter = (enabled = true) => {
+  const supervisor = new FakeSupervisor();
+  const writerLeases = new FakeWriterLeaseStore();
+  const reconciliationStore = new FakeReconciliationStore();
+  const native = new CodexNativeAdapter({
+    home: HOME,
+    supervisor,
+    cursorSecret: SECRET,
+    isEnabled: () => enabled,
+    requestMode: "manual",
+    writerLeases,
+    reconciliationStore,
+  });
+  return { native, supervisor, writerLeases, reconciliationStore };
+};
+
+const enqueueRead = (
+  h: ReturnType<typeof fencedAdapter>,
+  overrides: Record<string, unknown> = {},
+) => h.supervisor.lease.enqueue("thread/read", { thread: nativeThread("thread-1", overrides) });
+
+describe("CodexNativeAdapter fenced external-mutation parity", () => {
+  it("routes the five turn/control mutations through the exact task writer fence", async () => {
+    const h = fencedAdapter();
+    for (let i = 0; i < 5; i += 1) enqueueRead(h);
+    h.supervisor.lease.enqueue("turn/start", { turn: nativeTurn("turn-2", "inProgress") });
+    h.supervisor.lease.enqueue("turn/steer", { turnId: "turn-2" });
+    h.supervisor.lease.enqueue("turn/interrupt", {});
+    h.supervisor.lease.enqueue("thread/archive", {});
+    h.supervisor.lease.enqueue("thread/name/set", {});
+
+    await expect(h.native.send(nativeKey(), { text: "next" }))
+      .resolves.toMatchObject({ turnId: "turn-2" });
+    await h.native.steer(nativeKey(), "turn-2", { text: "adjust" });
+    await h.native.interrupt(nativeKey(), "turn-2");
+    await h.native.archive(nativeKey());
+    await h.native.rename(nativeKey(), "Renamed");
+
+    expect(h.writerLeases.acquires).toHaveLength(5);
+    for (const handle of h.writerLeases.handles) {
+      expect(handle.confirmReads).toBe(1);
+      expect(handle.fencedWrites).toBe(1);
+      expect(handle.releaseCalls).toBeGreaterThanOrEqual(1);
+    }
+    // A clean run never latches durable reconciliation.
+    expect(h.reconciliationStore.rows.size).toBe(0);
+  });
+
+  it("resumes an existing task through a reread-compare-confirm-fence sequence", async () => {
+    const h = fencedAdapter();
+    enqueueRead(h); // resume pre-read for cwd
+    enqueueRead(h); // fence reread of exact native revision
+    h.supervisor.lease.enqueue(
+      "thread/resume",
+      configuredResult(nativeThread("thread-1"), "readOnly"),
+    );
+    const task = await h.native.resumeTask(nativeKey(), { permissionMode: "read-only" });
+    expect(task.key.nativeTaskId).toBe("thread-1");
+    const handle = h.writerLeases.handles[0]!;
+    expect(handle.confirmReads).toBe(1);
+    expect(handle.fencedWrites).toBe(1);
+    expect(handle.releaseCalls).toBeGreaterThanOrEqual(1);
+  });
+
+  it("fails closed and latches when the native revision drifted since last review", async () => {
+    const h = fencedAdapter();
+    // First resume establishes the reviewed revision.
+    enqueueRead(h);
+    enqueueRead(h);
+    h.supervisor.lease.enqueue(
+      "thread/resume",
+      configuredResult(nativeThread("thread-1"), "readOnly"),
+    );
+    await h.native.resumeTask(nativeKey(), { permissionMode: "read-only" });
+
+    // Second resume: the fence reread observes an externally advanced revision.
+    enqueueRead(h); // pre-read
+    enqueueRead(h, { updatedAt: 1_700_099_999 }); // fence reread differs
+    await expect(h.native.resumeTask(nativeKey(), { permissionMode: "read-only" }))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    const row = h.reconciliationStore.rows.get(keyId(nativeKey()));
+    expect(row?.required).toBe(true);
+    expect(row?.reason).toBe("NATIVE_REVISION_MISMATCH");
+    // No thread/resume was dispatched on the drift.
+    expect(h.supervisor.lease.calls.filter(({ method }) => method === "thread/resume"))
+      .toHaveLength(1);
+    // The latch is durable: a later mutation stays blocked without a fresh read.
+    await expect(h.native.rename(nativeKey(), "later"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+  });
+
+  it("fails closed when a persisted task is deleted before a mutation", async () => {
+    const h = fencedAdapter();
+    enqueueRead(h); // rename fence reread establishes everPersisted
+    h.supervisor.lease.enqueue("thread/name/set", {});
+    await h.native.rename(nativeKey(), "first");
+
+    h.supervisor.lease.enqueue("thread/read", async () => {
+      throw missingRemoteError("thread-1");
+    });
+    await expect(h.native.rename(nativeKey(), "second"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.reconciliationStore.rows.get(keyId(nativeKey()))?.reason).toBe("NATIVE_TASK_MISSING");
+  });
+
+  it("fails closed and never replays when the writer lease is lost", async () => {
+    const h = fencedAdapter();
+    h.writerLeases.mode = "null";
+    await expect(h.native.rename(nativeKey(), "x"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    const row = h.reconciliationStore.rows.get(keyId(nativeKey()));
+    expect(row?.required).toBe(true);
+    expect(row?.reason).toBe("WRITER_LEASE_LOST");
+    // Even with a healthy lease again, the durable latch keeps it closed.
+    h.writerLeases.mode = "ok";
+    await expect(h.native.rename(nativeKey(), "y"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    // No provider mutation ever reached the app server.
+    expect(h.supervisor.lease.calls.some(({ method }) => method === "thread/name/set")).toBe(false);
+  });
+
+  it("fails closed when the lease reread cannot be confirmed", async () => {
+    const h = fencedAdapter();
+    h.writerLeases.leaseOpts = { confirm: false };
+    enqueueRead(h);
+    await expect(h.native.rename(nativeKey(), "x"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.reconciliationStore.rows.get(keyId(nativeKey()))?.reason).toBe("WRITER_LEASE_LOST");
+  });
+
+  it("fails closed when the fenced write never starts", async () => {
+    const h = fencedAdapter();
+    h.writerLeases.leaseOpts = { started: false };
+    enqueueRead(h);
+    await expect(h.native.rename(nativeKey(), "x"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.supervisor.lease.calls.some(({ method }) => method === "thread/name/set")).toBe(false);
+  });
+
+  it("latches and never replays when a dispatched mutation outcome is uncertain", async () => {
+    const h = fencedAdapter();
+    enqueueRead(h);
+    h.supervisor.lease.enqueue("turn/start", async () => { throw new Error("connection reset"); });
+    await expect(h.native.send(nativeKey(), { text: "send once" }))
+      .rejects.toMatchObject({ code: "MUTATION_UNCERTAIN" });
+    expect(h.reconciliationStore.rows.get(keyId(nativeKey()))?.reason)
+      .toBe("MUTATION_OUTCOME_UNCERTAIN");
+    // The response is never replayed: the next attempt fails closed before dispatch.
+    await expect(h.native.send(nativeKey(), { text: "send once" }))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.supervisor.lease.calls.filter(({ method }) => method === "turn/start"))
+      .toHaveLength(1);
+  });
+
+  it("fails closed and marks the unified runtime unavailable on a durable-store fault", async () => {
+    const h = fencedAdapter();
+    h.reconciliationStore.failOn.add("get");
+    await expect(h.native.rename(nativeKey(), "x"))
+      .rejects.toMatchObject({ code: "DISABLED" });
+    expect(h.reconciliationStore.unavailable).toBe(true);
+    // The whole adapter is now unavailable; every later call fails closed.
+    await expect(h.native.readTask(nativeKey(), false))
+      .rejects.toMatchObject({ code: "DISABLED" });
   });
 });

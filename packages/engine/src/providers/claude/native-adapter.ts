@@ -39,6 +39,8 @@ import type {
   UserInput,
 } from "../types.js";
 import type { NativeTaskWriterLease } from "../writer-lease.js";
+import type { AdapterReconciliationStore } from "../reconciliation-store.js";
+import type { ProviderReconciliationReason } from "../../provider-index/store-types.js";
 import { buildClaudeNativeRevision } from "./revision.js";
 import type { ClaudeCliPermissionMode } from "./cli-process.js";
 import {
@@ -141,6 +143,15 @@ export interface ClaudeNativeAdapterOptions {
   readonly idFactory?: () => string;
   readonly canonicalizeHome?: (home: string) => string;
   readonly maxTrackedRevisions?: number;
+  /**
+   * Optional durable mirror of the in-memory reconciliation latch over
+   * `provider_reconciliation_state`. When injected, Claude keeps its existing
+   * in-memory/reentrancy behavior but also mirrors required/acknowledged state
+   * durably and restores a required latch before accepting any post-restart
+   * mutation. A durable read/write fault fails closed and makes the unified
+   * runtime unavailable. Absent, behavior is exactly the in-memory-only path.
+   */
+  readonly reconciliationStore?: AdapterReconciliationStore;
 }
 
 interface SubscriberState {
@@ -519,6 +530,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
   private readonly helpers: ClaudeNativeAdapterHelpers;
   private readonly supervisor: ClaudeNativeAdapterSupervisor;
   private readonly writerLeases: ClaudeNativeAdapterWriterLeases;
+  private readonly reconciliationStore: AdapterReconciliationStore | null;
   private readonly isEnabledFn: () => boolean;
   private readonly idFactory: () => string;
   private readonly canonicalizeHome: (home: string) => string;
@@ -542,6 +554,12 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       (options.isEnabled !== undefined && typeof options.isEnabled !== "function") ||
       (options.idFactory !== undefined && typeof options.idFactory !== "function") ||
       (options.canonicalizeHome !== undefined && typeof options.canonicalizeHome !== "function") ||
+      (options.reconciliationStore !== undefined && (
+        typeof options.reconciliationStore !== "object" || options.reconciliationStore === null ||
+        typeof options.reconciliationStore.getReconciliation !== "function" ||
+        typeof options.reconciliationStore.requireReconciliation !== "function" ||
+        typeof options.reconciliationStore.acknowledgeReconciliation !== "function"
+      )) ||
       (options.maxTrackedRevisions !== undefined && (
         !Number.isSafeInteger(options.maxTrackedRevisions) ||
         options.maxTrackedRevisions < 1 ||
@@ -560,6 +578,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     this.helpers = options.helpers;
     this.supervisor = options.supervisor;
     this.writerLeases = options.writerLeases;
+    this.reconciliationStore = options.reconciliationStore ?? null;
     this.isEnabledFn = options.isEnabled ?? (() => true);
     this.idFactory = options.idFactory ?? randomUUID;
     this.maxTrackedRevisions = options.maxTrackedRevisions ?? MAX_TRACKED_REVISIONS;
@@ -629,6 +648,8 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     const reviewed = safeRevisionFingerprint(reviewedFingerprint);
     const state = this.stateFor(owned);
     await this.serializeMutation(state, async () => {
+      // A durable-required latch from a prior process must gate the ack too.
+      this.restoreDurableLatch(owned.nativeTaskId);
       const revision = this.revisions.get(owned.nativeTaskId);
       const reconciliationEpoch = revision?.reconciliationEpoch;
       const current = await this.currentFingerprint(owned);
@@ -658,6 +679,38 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
           "RECONCILIATION_REQUIRED",
           "Claude native task requires authoritative reconciliation",
         );
+      }
+      // Durable clear (CAS) occurs before the in-memory clear. A CAS mismatch or
+      // newer same-fingerprint durable relatch keeps the task latched.
+      if (this.reconciliationStore !== null) {
+        let durable: ReturnType<AdapterReconciliationStore["getReconciliation"]>;
+        try {
+          durable = this.reconciliationStore.getReconciliation(
+            this.reconciliationKey(owned.nativeTaskId),
+          );
+        } catch {
+          throw adapterError("DISABLED", "Claude reconciliation store is unavailable");
+        }
+        if (durable.required) {
+          let cleared: ReturnType<AdapterReconciliationStore["acknowledgeReconciliation"]>;
+          try {
+            cleared = this.reconciliationStore.acknowledgeReconciliation(
+              this.reconciliationKey(owned.nativeTaskId),
+              durable.latchRevision,
+              reviewed,
+              current.fingerprint,
+            );
+          } catch {
+            throw adapterError("DISABLED", "Claude reconciliation store is unavailable");
+          }
+          if (cleared.required) {
+            this.latchRevision(owned.nativeTaskId, true);
+            throw adapterError(
+              "RECONCILIATION_REQUIRED",
+              "Claude native task requires authoritative reconciliation",
+            );
+          }
+        }
       }
       this.rememberRevision(owned.nativeTaskId, reviewed, true, true);
       const acknowledged = this.revisions.get(owned.nativeTaskId);
@@ -1502,6 +1555,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     revision.lastAcknowledgedFingerprint = null;
     if (invalidatePolicy) revision.policy = null;
     this.revisions.set(nativeTaskId, revision);
+    this.mirrorRequireReconciliation(nativeTaskId, "NATIVE_REVISION_MISMATCH");
   }
 
   private latchPartialFork(sourceTaskId: string, targetTaskId: string): void {
@@ -1667,6 +1721,8 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       await pendingRefresh;
       this.assertAvailable();
     }
+    // Restore a durable latch before accepting any post-restart mutation.
+    this.restoreDurableLatch(state.key.nativeTaskId);
     if (this.revisions.get(state.key.nativeTaskId)?.reconciliationRequired) {
       throw adapterError(
         "RECONCILIATION_REQUIRED",
@@ -2289,7 +2345,61 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
   }
 
   private isAvailable(): boolean {
-    return !this.disposed && !this.suspended && this.flagEnabled();
+    if (this.disposed || this.suspended || !this.flagEnabled()) return false;
+    // A durable-store read/write fault latches the wrapper permanently
+    // unavailable; the whole unified runtime then fails closed.
+    if (this.reconciliationStore?.unavailable === true) return false;
+    return true;
+  }
+
+  /**
+   * Best-effort durable mirror of an in-memory latch. A durable fault latches the
+   * fail-closed wrapper unavailable (so `isAvailable()` reports the runtime
+   * unavailable); the live in-memory latch is already set, so the process stays
+   * conservatively closed. Never throws from a sync latch call site.
+   */
+  private mirrorRequireReconciliation(
+    nativeTaskId: string,
+    reason: ProviderReconciliationReason,
+  ): void {
+    if (this.reconciliationStore === null) return;
+    const revision = this.revisions.get(nativeTaskId);
+    try {
+      this.reconciliationStore.requireReconciliation(
+        this.reconciliationKey(nativeTaskId),
+        {
+          reviewedFingerprint: revision?.lastAcknowledgedFingerprint ?? null,
+          nativeFingerprint: revision?.fingerprint ?? null,
+          writerEpoch: revision?.lastWriterEpoch ?? 0,
+          reason,
+        },
+      );
+    } catch {
+      // The wrapper self-latches unavailable; isAvailable() now fails closed.
+    }
+  }
+
+  private reconciliationKey(nativeTaskId: string): Readonly<NativeTaskKey> {
+    return Object.freeze({ provider: "anthropic" as const, home: this.home, nativeTaskId });
+  }
+
+  /**
+   * Restart-safe restore: when the durable store still says a task is required
+   * but the fresh live process has no latch yet, reinstate the in-memory latch
+   * before any mutation proceeds. A durable read fault fails closed.
+   */
+  private restoreDurableLatch(nativeTaskId: string): void {
+    if (this.reconciliationStore === null) return;
+    if (this.revisions.get(nativeTaskId)?.reconciliationRequired) return;
+    let required = false;
+    try {
+      required = this.reconciliationStore.getReconciliation(
+        this.reconciliationKey(nativeTaskId),
+      ).required;
+    } catch {
+      throw adapterError("DISABLED", "Claude reconciliation store is unavailable");
+    }
+    if (required) this.latchRevision(nativeTaskId, true);
   }
 
   private assertAvailable(): void {

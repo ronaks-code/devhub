@@ -5,13 +5,19 @@ import {
   realpathSync,
   statSync,
 } from "node:fs";
+import { mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { paths } from "@devhub/engine";
 import {
   canonicalizeProviderHome,
   CodexAppServerSupervisor,
   CodexNativeAdapter,
+  createAdapterReconciliationStore,
+  NativeTaskWriterLeaseStore,
+  type CodexNativeAdapterWriterLeases,
   type CodexSupervisorProcessFactory,
+  type ProviderReconciliationStore,
   type ProviderRegistry,
 } from "@devhub/engine/providers";
 
@@ -26,6 +32,10 @@ export interface NativeCodexDiscoveryOptions {
   readonly platform?: NodeJS.Platform;
 }
 
+export interface NativeCodexWriterLeases extends CodexNativeAdapterWriterLeases {
+  close(): void;
+}
+
 export interface CreateNativeCodexRuntimeOptions {
   readonly registry: ProviderRegistry;
   readonly isEnabled: () => boolean;
@@ -35,6 +45,22 @@ export interface CreateNativeCodexRuntimeOptions {
   readonly processFactory?: CodexSupervisorProcessFactory;
   readonly clientVersion?: string;
   readonly discovery?: NativeCodexDiscoveryOptions;
+  /**
+   * The exact writer-lease store Claude uses (`native-task-writer-leases.sqlite`).
+   * Inject the shared instance so Codex and Claude fence the same key space with
+   * no second competing lease. When omitted the runtime opens its own handle on
+   * the same default path; when the path is unavailable the runtime stays
+   * unfenced rather than failing to start.
+   */
+  readonly writerLeases?: NativeCodexWriterLeases;
+  readonly writerLeaseDbPath?: string;
+  /**
+   * Raw durable reconciliation seam over `provider_reconciliation_state` (the
+   * shared engine index store). The runtime wraps it in the fail-closed adapter
+   * seam and injects it. Fencing engages only when both this and a writer-lease
+   * store are present.
+   */
+  readonly reconciliationStore?: ProviderReconciliationStore;
 }
 
 export interface NativeCodexRuntime {
@@ -147,6 +173,30 @@ export function createNativeCodexRuntime(
   const installation = normalizeInstallation(candidate);
   if (installation === null) return null;
 
+  // Shared writer-lease store: reuse the exact Claude path/primitive; never build
+  // a second competing lease. A path/open failure leaves Codex unfenced (still
+  // functional) rather than failing the runtime.
+  let ownsWriterStore = false;
+  let writerLeases: NativeCodexWriterLeases | null = null;
+  if (options.writerLeases !== undefined) {
+    writerLeases = options.writerLeases;
+  } else {
+    try {
+      const dbPath = options.writerLeaseDbPath ??
+        path.join(paths.appDataDir(), "native-task-writer-leases.sqlite");
+      if (path.isAbsolute(dbPath) && path.normalize(dbPath) === dbPath) {
+        mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 });
+        writerLeases = new NativeTaskWriterLeaseStore({ dbPath });
+        ownsWriterStore = true;
+      }
+    } catch {
+      writerLeases = null;
+    }
+  }
+  const reconciliationStore = options.reconciliationStore === undefined
+    ? null
+    : createAdapterReconciliationStore(options.reconciliationStore);
+
   let adapter!: CodexNativeAdapter;
   const supervisor = new CodexAppServerSupervisor({
     executable: installation.executable,
@@ -160,6 +210,8 @@ export function createNativeCodexRuntime(
     supervisor,
     cursorSecret: options.cursorSecret ?? randomBytes(32),
     isEnabled: options.isEnabled,
+    ...(writerLeases === null ? {} : { writerLeases }),
+    ...(reconciliationStore === null ? {} : { reconciliationStore }),
   });
   options.registry.register(installation.home, adapter);
 
@@ -192,7 +244,12 @@ export function createNativeCodexRuntime(
       let adapterFailure: unknown;
       try { await adapter.dispose(); } catch (error) { adapterFailure = error; }
       try { await supervisor.shutdown(); } catch (error) {
-        if (adapterFailure === undefined) throw error;
+        if (adapterFailure === undefined) adapterFailure = error;
+      }
+      if (ownsWriterStore && writerLeases !== null) {
+        try { writerLeases.close(); } catch (error) {
+          if (adapterFailure === undefined) adapterFailure = error;
+        }
       }
       if (adapterFailure !== undefined) throw adapterFailure;
     })();

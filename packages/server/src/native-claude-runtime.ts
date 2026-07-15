@@ -13,12 +13,14 @@ import {
   ClaudeNativeAdapter,
   ClaudePersistentSupervisor,
   ClaudeSessionHelpers,
+  createAdapterReconciliationStore,
   NativeTaskWriterLeaseStore,
   requireClaudeProgrammaticAuth,
   type ClaudeNativeAdapterHelpers,
   type ClaudeNativeAdapterWriterLeases,
   type ClaudeProgrammaticAuthDecision,
   type ClaudeSupervisorRuntimeFactory,
+  type ProviderReconciliationStore,
   type ProviderRegistry,
 } from "@devhub/engine/providers";
 
@@ -80,6 +82,12 @@ export interface CreateNativeClaudeRuntimeOptions {
   readonly helpers?: ClaudeNativeAdapterHelpers;
   readonly writerLeaseDbPath?: string;
   readonly writerLeases?: NativeClaudeWriterLeases;
+  /**
+   * Raw durable reconciliation seam over `provider_reconciliation_state` (the
+   * shared engine index store). The runtime wraps it in the fail-closed adapter
+   * seam and injects it so the in-memory latch is mirrored durably.
+   */
+  readonly reconciliationStore?: ProviderReconciliationStore;
   readonly runtimeFactory?: ClaudeSupervisorRuntimeFactory;
   readonly idFactory?: () => string;
   readonly discovery?: NativeClaudeDiscoveryOptions;
@@ -472,6 +480,9 @@ export function createNativeClaudeRuntime(
       reconcile: (context) => adapter!.reconcile(context),
       ...(options.runtimeFactory === undefined ? {} : { runtimeFactory: options.runtimeFactory }),
     });
+    const reconciliationStore = options.reconciliationStore === undefined
+      ? undefined
+      : createAdapterReconciliationStore(options.reconciliationStore);
     adapter = new ClaudeNativeAdapter({
       home: installation.home,
       helpers,
@@ -479,6 +490,7 @@ export function createNativeClaudeRuntime(
       writerLeases,
       isEnabled: adapterExposed,
       ...(options.idFactory === undefined ? {} : { idFactory: options.idFactory }),
+      ...(reconciliationStore === undefined ? {} : { reconciliationStore }),
     });
     const bootstrapRefresh = adapter.refreshEnabled().catch(() => undefined);
     options.registry.register(installation.home, adapter);

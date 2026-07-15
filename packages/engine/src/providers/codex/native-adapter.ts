@@ -64,6 +64,12 @@ import type {
   CodexAppServerLease,
   CodexSupervisorAcquireOptions,
 } from "./supervisor.js";
+import type { NativeTaskWriterLease } from "../writer-lease.js";
+import type {
+  AdapterReconciliationLatchInput,
+  AdapterReconciliationStore,
+} from "../reconciliation-store.js";
+import type { ProviderReconciliationReason } from "../../provider-index/store-types.js";
 
 const MAX_INPUT_CHARS = 1_048_576;
 const MAX_INPUT_ATTACHMENTS = 32;
@@ -86,6 +92,7 @@ export type CodexNativeAdapterErrorCode =
   | "PARTIAL_FORK"
   | "PARTIAL_START"
   | "POLICY_MISMATCH"
+  | "RECONCILIATION_REQUIRED"
   | "SUBSCRIPTION_CAPACITY"
   | "UNSAFE_OVERRIDE"
   | "UNSUPPORTED_INTERACTION";
@@ -106,6 +113,15 @@ export interface CodexNativeAdapterSupervisor {
   acquire(options: CodexSupervisorAcquireOptions): Promise<CodexAppServerLease>;
 }
 
+/**
+ * The exact writer-lease acquire seam Claude uses. Codex never constructs a
+ * second competing lease: the server runtime injects the same shared
+ * {@link NativeTaskWriterLeaseStore} (backed by `native-task-writer-leases.sqlite`).
+ */
+export interface CodexNativeAdapterWriterLeases {
+  acquire(key: NativeTaskKey): NativeTaskWriterLease | null;
+}
+
 export interface CodexNativeAdapterOptions {
   readonly home: string;
   readonly supervisor: CodexNativeAdapterSupervisor;
@@ -116,6 +132,33 @@ export interface CodexNativeAdapterOptions {
    * flags remain false until request details have a safe provider-neutral shape.
    */
   readonly requestMode?: "fail-closed" | "manual";
+  /**
+   * DevHub writer-lease fence over existing-task mutations. Optional so hermetic
+   * projection tests can exercise the read/list surface without a lease store;
+   * the server runtime always injects the shared store, so every production
+   * existing-task mutation runs through the fenced-write path.
+   */
+  readonly writerLeases?: CodexNativeAdapterWriterLeases;
+  /**
+   * Narrow durable-reconciliation seam over `provider_reconciliation_state`.
+   * Optional for the same reason as {@link writerLeases}. When both are injected,
+   * every existing-task mutation reads the durable latch first and mirrors any
+   * new latch/ack durably; a durable read/write fault fails closed and marks the
+   * unified runtime unavailable.
+   */
+  readonly reconciliationStore?: AdapterReconciliationStore;
+  readonly maxTrackedRevisions?: number;
+}
+
+const DEFAULT_MAX_TRACKED_REVISIONS = 512;
+const MAX_TRACKED_REVISIONS_HARD = 4_096;
+
+interface CodexRevisionState {
+  reviewedFingerprint: string | null;
+  everPersisted: boolean;
+  reconciliationRequired: boolean;
+  reconciliationEpoch: number;
+  lastWriterEpoch: number;
 }
 
 interface SubscriptionState {
@@ -458,6 +501,11 @@ export class CodexNativeAdapter implements ProviderAdapter {
   private readonly cursorCodec: CodexListCursorCodec;
   private readonly isEnabledFn: () => boolean;
   private readonly requestMode: "fail-closed" | "manual";
+  private readonly writerLeases: CodexNativeAdapterWriterLeases | null;
+  private readonly reconciliationStore: AdapterReconciliationStore | null;
+  private readonly maxTrackedRevisions: number;
+  /** Bounded per-task last-observed native revision and explicit latch. */
+  private readonly revisions = new Map<string, CodexRevisionState>();
   private readonly owner = Symbol("CodexNativeAdapter");
   private readonly subscriptions = new Map<string, SubscriptionState>();
   private readonly taskPolicies = new Map<string, Readonly<TaskExecutionPolicy>>();
@@ -545,6 +593,26 @@ export class CodexNativeAdapter implements ProviderAdapter {
       throw new TypeError("requestMode must be fail-closed or manual");
     }
     this.requestMode = options.requestMode ?? "fail-closed";
+    if (options.writerLeases !== undefined &&
+      (typeof options.writerLeases !== "object" || options.writerLeases === null ||
+        typeof options.writerLeases.acquire !== "function")) {
+      throw new TypeError("CodexNativeAdapter writerLeases must expose acquire");
+    }
+    this.writerLeases = options.writerLeases ?? null;
+    if (options.reconciliationStore !== undefined &&
+      (typeof options.reconciliationStore !== "object" || options.reconciliationStore === null ||
+        typeof options.reconciliationStore.getReconciliation !== "function" ||
+        typeof options.reconciliationStore.requireReconciliation !== "function" ||
+        typeof options.reconciliationStore.acknowledgeReconciliation !== "function")) {
+      throw new TypeError("CodexNativeAdapter reconciliationStore is invalid");
+    }
+    this.reconciliationStore = options.reconciliationStore ?? null;
+    const maxTracked = options.maxTrackedRevisions ?? DEFAULT_MAX_TRACKED_REVISIONS;
+    if (!Number.isSafeInteger(maxTracked) || maxTracked < 1 ||
+      maxTracked > MAX_TRACKED_REVISIONS_HARD) {
+      throw new TypeError("CodexNativeAdapter maxTrackedRevisions is invalid");
+    }
+    this.maxTrackedRevisions = maxTracked;
     this.suspended = !this.flagEnabled();
     this.broker = new CodexRequestBroker({ emit: (event) => this.publish(event) });
   }
@@ -690,25 +758,32 @@ export class CodexNativeAdapter implements ProviderAdapter {
       throw adapterError("OWNERSHIP", "Codex read returned a different task");
     }
     const cwd = controlCwdFromThreadEnvelope(rawRead);
-    const rawResume = await this.mutationCall(lease, "thread/resume", {
-      threadId: owned.nativeTaskId,
-      ...threadPolicy(mode, cwd, overrides?.model),
-    });
-    const resumed = this.parseMutation(() => parseCodexThreadResumeResult(rawResume));
-    verifyConfiguredResult(resumed, rawResume, {
-      mode,
-      cwd,
-      model: overrides?.model,
-      threadId: owned.nativeTaskId,
-    });
-    this.rememberTaskPolicy(owned.nativeTaskId, { mode, cwd, model: overrides?.model });
-    return taskFromThread(
-      this.home,
-      lease.generation,
-      resumed.thread,
-      rawThread(rawResume),
-      true,
-      resumed.model,
+    return this.fencedExistingMutation(
+      owned,
+      lease,
+      async () => {
+        const rawResume = await this.mutationCall(lease, "thread/resume", {
+          threadId: owned.nativeTaskId,
+          ...threadPolicy(mode, cwd, overrides?.model),
+        });
+        const resumed = this.parseMutation(() => parseCodexThreadResumeResult(rawResume));
+        verifyConfiguredResult(resumed, rawResume, {
+          mode,
+          cwd,
+          model: overrides?.model,
+          threadId: owned.nativeTaskId,
+        });
+        this.rememberTaskPolicy(owned.nativeTaskId, { mode, cwd, model: overrides?.model });
+        return taskFromThread(
+          this.home,
+          lease.generation,
+          resumed.thread,
+          rawThread(rawResume),
+          true,
+          resumed.model,
+        );
+      },
+      (task) => task.revision?.fingerprint ?? null,
     );
   }
 
@@ -726,40 +801,42 @@ export class CodexNativeAdapter implements ProviderAdapter {
     }
     const cwd = controlCwdFromThreadEnvelope(rawRead);
     const mode: SafePermissionMode = "read-only";
-    const rawFork = await this.mutationCall(lease, "thread/fork", {
-      threadId: owned.nativeTaskId,
-      ...(lastTurnId === undefined ? {} : { lastTurnId }),
-      ...threadPolicy(mode, cwd),
-      ephemeral: false,
-    });
-    const forked = this.parseMutation(() => parseCodexThreadForkResult(rawFork));
-    if (forked.thread.id === owned.nativeTaskId) {
-      throw adapterError("OWNERSHIP", "Codex fork reused the source task id");
-    }
-    const forkedTask = taskFromThread(
-      this.home,
-      lease.generation,
-      forked.thread,
-      rawThread(rawFork),
-      true,
-      forked.model,
-    );
-    try {
-      verifyConfiguredResult(forked, rawFork, {
-        mode,
-        cwd,
-        forkedFromId: owned.nativeTaskId,
+    return this.fencedExistingMutation(owned, lease, async () => {
+      const rawFork = await this.mutationCall(lease, "thread/fork", {
+        threadId: owned.nativeTaskId,
+        ...(lastTurnId === undefined ? {} : { lastTurnId }),
+        ...threadPolicy(mode, cwd),
         ephemeral: false,
       });
-    } catch (cause) {
-      throw adapterError(
-        "PARTIAL_FORK",
-        "Codex created a fork but did not preserve its safe ownership policy",
-        { cause, task: forkedTask },
+      const forked = this.parseMutation(() => parseCodexThreadForkResult(rawFork));
+      if (forked.thread.id === owned.nativeTaskId) {
+        throw adapterError("OWNERSHIP", "Codex fork reused the source task id");
+      }
+      const forkedTask = taskFromThread(
+        this.home,
+        lease.generation,
+        forked.thread,
+        rawThread(rawFork),
+        true,
+        forked.model,
       );
-    }
-    this.rememberTaskPolicy(forked.thread.id, { mode, cwd });
-    return forkedTask;
+      try {
+        verifyConfiguredResult(forked, rawFork, {
+          mode,
+          cwd,
+          forkedFromId: owned.nativeTaskId,
+          ephemeral: false,
+        });
+      } catch (cause) {
+        throw adapterError(
+          "PARTIAL_FORK",
+          "Codex created a fork but did not preserve its safe ownership policy",
+          { cause, task: forkedTask },
+        );
+      }
+      this.rememberTaskPolicy(forked.thread.id, { mode, cwd });
+      return forkedTask;
+    });
   }
 
   async send(key: NativeTaskKey, input: UserInput): Promise<NativeTurnRef> {
@@ -767,14 +844,14 @@ export class CodexNativeAdapter implements ProviderAdapter {
     const preparedInput = inputItems(input);
     const lease = await this.getLease();
     const policy = this.taskPolicy(owned.nativeTaskId);
-    return this.startTurn(
+    return this.fencedExistingMutation(owned, lease, () => this.startTurn(
       lease,
       owned,
       preparedInput,
       policy.mode,
       policy.cwd,
       policy.model,
-    );
+    ));
   }
 
   async steer(key: NativeTaskKey, expectedTurnId: string, input: UserInput): Promise<void> {
@@ -782,10 +859,12 @@ export class CodexNativeAdapter implements ProviderAdapter {
     const turnId = this.nativeId(expectedTurnId, "Expected turn id");
     const preparedInput = inputItems(input);
     const lease = await this.getLease();
-    await this.mutationCall(lease, "turn/steer", {
-      threadId: owned.nativeTaskId,
-      expectedTurnId: turnId,
-      input: preparedInput,
+    await this.fencedExistingMutation(owned, lease, async () => {
+      await this.mutationCall(lease, "turn/steer", {
+        threadId: owned.nativeTaskId,
+        expectedTurnId: turnId,
+        input: preparedInput,
+      });
     });
   }
 
@@ -793,26 +872,38 @@ export class CodexNativeAdapter implements ProviderAdapter {
     const owned = this.assertKey(key);
     const exactTurnId = this.nativeId(turnId, "Turn id");
     const lease = await this.getLease();
-    this.broker.cancelTurn(owned, exactTurnId, lease.generation);
-    this.streamingSecrets.cancelTurn(lease.generation, owned.nativeTaskId, exactTurnId);
-    await this.mutationCall(lease, "turn/interrupt", {
-      threadId: owned.nativeTaskId,
-      turnId: exactTurnId,
+    await this.fencedExistingMutation(owned, lease, async () => {
+      this.broker.cancelTurn(owned, exactTurnId, lease.generation);
+      this.streamingSecrets.cancelTurn(lease.generation, owned.nativeTaskId, exactTurnId);
+      await this.mutationCall(lease, "turn/interrupt", {
+        threadId: owned.nativeTaskId,
+        turnId: exactTurnId,
+      });
     });
   }
 
   async respond(response: ProviderRequestResponse): Promise<void> {
     this.assertAvailable();
-    await this.broker.respond(response);
+    const owned = this.fencingActive() ? this.respondKey(response) : null;
+    if (owned === null) {
+      // The broker rejects unknown/late/foreign/stale request+generation
+      // identities before dispatch (no-op single dispatch).
+      await this.broker.respond(response);
+      return;
+    }
+    const lease = await this.getLease();
+    await this.fencedExistingMutation(owned, lease, () => this.broker.respond(response));
   }
 
   async archive(key: NativeTaskKey): Promise<void> {
     const owned = this.assertKey(key);
     const lease = await this.getLease();
-    this.broker.cancelTask(owned);
-    this.streamingSecrets.cancelTask(lease.generation, owned.nativeTaskId);
-    this.taskPolicies.delete(owned.nativeTaskId);
-    await this.mutationCall(lease, "thread/archive", { threadId: owned.nativeTaskId });
+    await this.fencedExistingMutation(owned, lease, async () => {
+      this.broker.cancelTask(owned);
+      this.streamingSecrets.cancelTask(lease.generation, owned.nativeTaskId);
+      this.taskPolicies.delete(owned.nativeTaskId);
+      await this.mutationCall(lease, "thread/archive", { threadId: owned.nativeTaskId });
+    });
   }
 
   async rename(key: NativeTaskKey, name: string): Promise<void> {
@@ -822,7 +913,89 @@ export class CodexNativeAdapter implements ProviderAdapter {
       throw adapterError("INVALID_INPUT", "Task name must be a bounded non-empty value");
     }
     const lease = await this.getLease();
-    await this.mutationCall(lease, "thread/name/set", { threadId: owned.nativeTaskId, name });
+    await this.fencedExistingMutation(owned, lease, async () => {
+      await this.mutationCall(lease, "thread/name/set", { threadId: owned.nativeTaskId, name });
+    });
+  }
+
+  /**
+   * Clears a provider-private reconciliation latch only for an exact reviewed
+   * revision. Rereads exact native state, then durably clears via the store CAS
+   * on the returned latch revision plus reviewed/native fingerprint before the
+   * in-memory clear. A CAS mismatch, stale revision, or newer same-fingerprint
+   * durable relatch keeps the task latched.
+   */
+  async acknowledgeReconciliation(
+    key: NativeTaskKey,
+    reviewedFingerprint: string,
+  ): Promise<void> {
+    const owned = this.assertKey(key);
+    const reviewed = this.safeReviewedFingerprint(reviewedFingerprint);
+    const state = this.revisions.get(owned.nativeTaskId);
+    if (this.reconciliationStore === null) {
+      if (!state?.reconciliationRequired) return;
+      throw this.reconciliationRequired();
+    }
+    let durable: ReturnType<AdapterReconciliationStore["getReconciliation"]>;
+    try {
+      durable = this.reconciliationStore.getReconciliation(owned);
+    } catch (cause) {
+      throw this.storeUnavailable(cause);
+    }
+    if (!durable.required && !state?.reconciliationRequired) return;
+    // Authoritative reread of exact native state; a deletion resolves with a null
+    // native fingerprint.
+    const lease = await this.getLease();
+    let observedNative: string | null;
+    try {
+      observedNative = await this.fenceReread(owned, lease);
+    } catch (cause) {
+      if (cause instanceof CodexNativeAdapterError && cause.code === "NATIVE_TASK_MISSING") {
+        observedNative = null;
+      } else {
+        throw cause;
+      }
+    }
+    let cleared: ReturnType<AdapterReconciliationStore["acknowledgeReconciliation"]>;
+    try {
+      cleared = this.reconciliationStore.acknowledgeReconciliation(
+        owned,
+        durable.latchRevision,
+        reviewed,
+        observedNative,
+      );
+    } catch (cause) {
+      throw this.storeUnavailable(cause);
+    }
+    if (cleared.required) {
+      this.restoreLatch(owned);
+      throw this.reconciliationRequired();
+    }
+    // Durable clear committed; clear the live latch and reviewed baseline.
+    const live = this.ensureRevisionState(owned.nativeTaskId);
+    live.reconciliationRequired = false;
+    live.reviewedFingerprint = observedNative;
+    if (observedNative !== null) live.everPersisted = true;
+  }
+
+  private respondKey(response: ProviderRequestResponse): Readonly<NativeTaskKey> | null {
+    try {
+      const identity = (response as { identity?: { key?: NativeTaskKey } })?.identity;
+      if (!identity || !identity.key) return null;
+      return this.assertKey(identity.key);
+    } catch {
+      return null;
+    }
+  }
+
+  private safeReviewedFingerprint(value: unknown): string {
+    if (
+      typeof value !== "string" || value.length === 0 || value.length > 4_096 ||
+      value !== value.trim() || value.includes(" ") || /[\u0000-\u001f\u007f]/u.test(value)
+    ) {
+      throw adapterError("INVALID_INPUT", "Codex reviewed revision is invalid");
+    }
+    return value;
   }
 
   async subscribe(key: NativeTaskKey, sink: ProviderEventSink): Promise<Unsubscribe> {
@@ -1027,6 +1200,313 @@ export class CodexNativeAdapter implements ProviderAdapter {
     }
   }
 
+  // --- Writer-lease fence + durable reconciliation over existing-task mutations ---
+
+  /**
+   * The fenced-write path only engages when the runtime injected both the shared
+   * writer-lease store and the durable reconciliation seam. Hermetic projection
+   * tests without those dependencies keep the pre-fence direct-dispatch behavior.
+   */
+  private fencingActive(): boolean {
+    return this.writerLeases !== null && this.reconciliationStore !== null;
+  }
+
+  private reconciliationRequired(): CodexNativeAdapterError {
+    return adapterError(
+      "RECONCILIATION_REQUIRED",
+      "Codex native task requires authoritative reconciliation",
+    );
+  }
+
+  private storeUnavailable(cause: unknown): CodexNativeAdapterError {
+    // A durable read/write fault latches the wrapper unavailable; isAvailable()
+    // then reports the whole unified runtime unavailable and every later call
+    // fails closed.
+    return adapterError("DISABLED", "Codex reconciliation store is unavailable", { cause });
+  }
+
+  private ensureRevisionState(nativeTaskId: string): CodexRevisionState {
+    const existing = this.revisions.get(nativeTaskId);
+    if (existing) {
+      // Preserve recency ordering for bounded eviction.
+      this.revisions.delete(nativeTaskId);
+      this.revisions.set(nativeTaskId, existing);
+      return existing;
+    }
+    while (this.revisions.size >= this.maxTrackedRevisions) {
+      let evictable: string | null = null;
+      for (const [candidateId, candidate] of this.revisions) {
+        // Never evict a latched task: a lost latch could let a required
+        // reconciliation be skipped after eviction.
+        if (!candidate.reconciliationRequired) { evictable = candidateId; break; }
+      }
+      if (evictable === null) {
+        throw adapterError(
+          "SUBSCRIPTION_CAPACITY",
+          "Codex revision reconciliation capacity was reached",
+        );
+      }
+      this.revisions.delete(evictable);
+    }
+    const created: CodexRevisionState = {
+      reviewedFingerprint: null,
+      everPersisted: false,
+      reconciliationRequired: false,
+      reconciliationEpoch: 0,
+      lastWriterEpoch: 0,
+    };
+    this.revisions.set(nativeTaskId, created);
+    return created;
+  }
+
+  private durableRequire(
+    owned: Readonly<NativeTaskKey>,
+    state: CodexRevisionState,
+    reason: ProviderReconciliationReason,
+    nativeFingerprint: string | null,
+  ): void {
+    if (this.reconciliationStore === null) return;
+    const input: AdapterReconciliationLatchInput = {
+      reviewedFingerprint: state.reviewedFingerprint,
+      nativeFingerprint,
+      writerEpoch: state.lastWriterEpoch,
+      reason,
+    };
+    try {
+      this.reconciliationStore.requireReconciliation(owned, input);
+    } catch (cause) {
+      throw this.storeUnavailable(cause);
+    }
+  }
+
+  /**
+   * Latches reconciliation for one owned task. The in-memory latch is set before
+   * the durable mirror so a durable fault leaves the live process conservatively
+   * latched. Never clears a reviewed fingerprint; a required latch survives cache
+   * clears because it lives in DevHub-owned reconciliation state.
+   */
+  private latchReconciliation(
+    owned: Readonly<NativeTaskKey>,
+    reason: ProviderReconciliationReason,
+    nativeFingerprint: string | null,
+  ): void {
+    const state = this.ensureRevisionState(owned.nativeTaskId);
+    state.reconciliationRequired = true;
+    state.reconciliationEpoch += 1;
+    this.durableRequire(owned, state, reason, nativeFingerprint);
+  }
+
+  private restoreLatch(owned: Readonly<NativeTaskKey>): void {
+    const state = this.ensureRevisionState(owned.nativeTaskId);
+    if (!state.reconciliationRequired) {
+      state.reconciliationRequired = true;
+      state.reconciliationEpoch += 1;
+    }
+  }
+
+  /**
+   * Fails closed when an existing latch is present. Reads the durable latch first
+   * (restart-safe) and restores the live latch before rejecting; a durable fault
+   * fails closed.
+   */
+  private guardReconciliation(owned: Readonly<NativeTaskKey>): void {
+    if (this.revisions.get(owned.nativeTaskId)?.reconciliationRequired) {
+      throw this.reconciliationRequired();
+    }
+    if (this.reconciliationStore === null) return;
+    let snapshotRequired = false;
+    try {
+      snapshotRequired = this.reconciliationStore.getReconciliation(owned).required;
+    } catch (cause) {
+      throw this.storeUnavailable(cause);
+    }
+    if (snapshotRequired) {
+      this.restoreLatch(owned);
+      throw this.reconciliationRequired();
+    }
+  }
+
+  private validateWriterIdentity(
+    owned: Readonly<NativeTaskKey>,
+    writer: NativeTaskWriterLease,
+  ): void {
+    const state = this.ensureRevisionState(owned.nativeTaskId);
+    const previousEpoch = state.lastWriterEpoch;
+    let epoch = 0;
+    let valid = false;
+    try {
+      epoch = writer.fence.epoch;
+      valid = nativeTaskKeyId(writer.key) === nativeTaskKeyId(owned) &&
+        nativeTaskKeyId(writer.fence.key) === nativeTaskKeyId(owned) &&
+        Number.isSafeInteger(epoch) && epoch >= 1 && epoch > previousEpoch;
+    } catch {
+      valid = false;
+    }
+    if (!valid) {
+      // Lost/ABA/stale writer identity is a fail-closed reconciliation trigger.
+      this.latchReconciliation(owned, "WRITER_LEASE_LOST", null);
+      throw this.reconciliationRequired();
+    }
+    state.lastWriterEpoch = epoch;
+  }
+
+  /** Reads the exact native revision. Missing throws NATIVE_TASK_MISSING; a
+   * parser/ownership break fails closed after latching. */
+  private async fenceReread(
+    owned: Readonly<NativeTaskKey>,
+    lease: CodexAppServerLease,
+  ): Promise<string> {
+    const raw = await readCodexThread(owned.nativeTaskId, () => lease.call("thread/read", {
+      threadId: owned.nativeTaskId,
+      includeTurns: false,
+    }));
+    let fingerprint: string;
+    try {
+      const parsed = parseCodexThreadReadResult(raw);
+      if (parsed.thread.id !== owned.nativeTaskId) throw new Error("id mismatch");
+      fingerprint = buildCodexNativeRevision(parsed.thread).fingerprint;
+    } catch {
+      this.latchReconciliation(owned, "NATIVE_STATE_INVALID", null);
+      throw this.reconciliationRequired();
+    }
+    return fingerprint;
+  }
+
+  private compareReviewed(
+    owned: Readonly<NativeTaskKey>,
+    current: { readonly exists: boolean; readonly fingerprint: string | null },
+  ): void {
+    const state = this.ensureRevisionState(owned.nativeTaskId);
+    if (!current.exists) {
+      if (state.everPersisted || state.reviewedFingerprint !== null) {
+        this.latchReconciliation(owned, "NATIVE_TASK_MISSING", null);
+        throw this.reconciliationRequired();
+      }
+      throw adapterError("NATIVE_TASK_MISSING", "Provider native task is missing");
+    }
+    if (
+      state.reviewedFingerprint !== null &&
+      state.reviewedFingerprint !== current.fingerprint
+    ) {
+      this.latchReconciliation(owned, "NATIVE_REVISION_MISMATCH", current.fingerprint);
+      throw this.reconciliationRequired();
+    }
+    state.reviewedFingerprint = current.fingerprint;
+    state.everPersisted = true;
+  }
+
+  private rememberReviewed(owned: Readonly<NativeTaskKey>, fingerprint: string | null): void {
+    const state = this.ensureRevisionState(owned.nativeTaskId);
+    state.reviewedFingerprint = fingerprint;
+    state.everPersisted = true;
+  }
+
+  /**
+   * Runs one existing-task mutation. When fencing is active every mutation
+   * acquires the exact task's writer lease, rereads the exact native revision,
+   * compares it with the last reviewed revision, confirms the lease reread, and
+   * starts the provider dispatch only through `runFencedWrite`. Any mismatch,
+   * lost lease, deletion, generation change, thrown parser, or uncertain
+   * post-dispatch outcome fails closed with reconciliation required and never
+   * replays.
+   */
+  private async fencedExistingMutation<T>(
+    owned: Readonly<NativeTaskKey>,
+    lease: CodexAppServerLease,
+    dispatch: () => Promise<T>,
+    revisionAfter?: (result: T) => string | null,
+  ): Promise<T> {
+    if (!this.fencingActive()) return await dispatch();
+    this.assertAvailable();
+    this.guardReconciliation(owned);
+
+    let writer: NativeTaskWriterLease | null = null;
+    try { writer = this.writerLeases!.acquire(owned); } catch { writer = null; }
+    if (writer === null) {
+      this.latchReconciliation(owned, "WRITER_LEASE_LOST", null);
+      throw this.reconciliationRequired();
+    }
+
+    try {
+      this.validateWriterIdentity(owned, writer);
+      const capturedGeneration = this.activeGeneration;
+
+      let current: { readonly exists: boolean; readonly fingerprint: string | null };
+      try {
+        current = { exists: true, fingerprint: await this.fenceReread(owned, lease) };
+      } catch (cause) {
+        if (cause instanceof CodexNativeAdapterError && cause.code === "NATIVE_TASK_MISSING") {
+          current = { exists: false, fingerprint: null };
+        } else {
+          throw cause;
+        }
+      }
+      this.compareReviewed(owned, current);
+
+      this.assertAvailable();
+      if (!writer.confirmReread()) {
+        this.latchReconciliation(owned, "WRITER_LEASE_LOST", null);
+        throw this.reconciliationRequired();
+      }
+
+      let callbackThrew = false;
+      let callbackError: unknown;
+      let outcome: { readonly started: false } | { readonly started: true; readonly value: Promise<T> };
+      try {
+        outcome = writer.runFencedWrite((fence) => {
+          try {
+            let exact = false;
+            try {
+              exact = nativeTaskKeyId(fence.key) === nativeTaskKeyId(owned) &&
+                fence.epoch === writer!.fence.epoch &&
+                Number.isSafeInteger(fence.epoch) && fence.epoch >= 1;
+            } catch { exact = false; }
+            if (!exact) {
+              throw adapterError("OWNERSHIP", "Codex writer ownership is unavailable");
+            }
+            this.assertAvailable();
+            if (this.revisions.get(owned.nativeTaskId)?.reconciliationRequired) {
+              throw this.reconciliationRequired();
+            }
+            return dispatch();
+          } catch (error) {
+            callbackThrew = true;
+            callbackError = error;
+            throw error;
+          }
+        });
+      } catch {
+        if (callbackThrew) throw callbackError;
+        throw adapterError("OWNERSHIP", "Codex writer ownership is unavailable");
+      }
+      if (!outcome.started) {
+        this.latchReconciliation(owned, "WRITER_LEASE_LOST", null);
+        throw this.reconciliationRequired();
+      }
+
+      let result: T;
+      try {
+        result = await outcome.value;
+      } catch (cause) {
+        // The provider dispatch started but its outcome is uncertain. Latch
+        // reconciliation so it is never replayed automatically, then surface the
+        // exact cause.
+        this.latchReconciliation(owned, "MUTATION_OUTCOME_UNCERTAIN", null);
+        throw cause;
+      }
+
+      if (this.activeGeneration !== capturedGeneration) {
+        this.latchReconciliation(owned, "PROCESS_GENERATION_CHANGED", null);
+        throw this.reconciliationRequired();
+      }
+
+      this.rememberReviewed(owned, revisionAfter ? revisionAfter(result) : null);
+      return result;
+    } finally {
+      try { writer.release(); } catch { /* The primary outcome remains authoritative. */ }
+    }
+  }
+
   private publish(event: ProviderEvent): void {
     if (!this.isAvailable() || event.key.home !== this.home) return;
     const state = this.subscriptions.get(event.key.nativeTaskId);
@@ -1206,7 +1686,11 @@ export class CodexNativeAdapter implements ProviderAdapter {
   }
 
   private isAvailable(): boolean {
-    return !this.disposed && !this.suspended && this.flagEnabled();
+    if (this.disposed || this.suspended || !this.flagEnabled()) return false;
+    // A durable-store read/write fault latches the wrapper permanently
+    // unavailable; the whole unified runtime then fails closed.
+    if (this.reconciliationStore?.unavailable === true) return false;
+    return true;
   }
 
   private flagEnabled(): boolean {

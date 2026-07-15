@@ -10,6 +10,12 @@ import type {
   TaskOverrides,
 } from "../../src/providers/types.js";
 import { ClaudeNativeAdapter } from "../../src/providers/claude/native-adapter.js";
+import type {
+  AdapterReconciliationLatchInput,
+  AdapterReconciliationSnapshot,
+  AdapterReconciliationStore,
+  NativeTaskKey,
+} from "../../src/providers/index.js";
 
 const HOME = "/canonical/claude-home";
 const CWD = "/canonical/project";
@@ -114,7 +120,97 @@ class FakeRuntimeLease {
   async release(): Promise<void> { this.releaseCalls += 1; }
 }
 
-const harness = (enabled = true, maxTrackedRevisions?: number) => {
+const reconciliationKeyId = (key: NativeTaskKey): string =>
+  `${key.provider} ${key.home} ${key.nativeTaskId}`;
+
+class FakeReconciliationStore implements AdapterReconciliationStore {
+  readonly rows = new Map<string, AdapterReconciliationSnapshot>();
+  readonly failOn = new Set<"get" | "require" | "ack">();
+  private failed = false;
+
+  get unavailable(): boolean { return this.failed; }
+
+  seedRequired(key: NativeTaskKey): void {
+    this.rows.set(reconciliationKeyId(key), Object.freeze({
+      required: true,
+      latchRevision: 1,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 0,
+      reason: "NATIVE_REVISION_MISMATCH",
+    }));
+  }
+
+  private base(): AdapterReconciliationSnapshot {
+    return Object.freeze({
+      required: false,
+      latchRevision: 0,
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 0,
+      reason: null,
+    });
+  }
+
+  private guard<T>(op: "get" | "require" | "ack", run: () => T): T {
+    if (this.failed) throw new Error("reconciliation store unavailable");
+    if (this.failOn.has(op)) { this.failed = true; throw new Error("reconciliation store fault"); }
+    return run();
+  }
+
+  getReconciliation(key: NativeTaskKey): AdapterReconciliationSnapshot {
+    return this.guard("get", () => this.rows.get(reconciliationKeyId(key)) ?? this.base());
+  }
+
+  requireReconciliation(
+    key: NativeTaskKey,
+    input: AdapterReconciliationLatchInput,
+  ): AdapterReconciliationSnapshot {
+    return this.guard("require", () => {
+      const id = reconciliationKeyId(key);
+      const prev = this.rows.get(id) ?? this.base();
+      const next = Object.freeze({
+        required: true,
+        latchRevision: prev.latchRevision + 1,
+        reviewedFingerprint: input.reviewedFingerprint,
+        nativeFingerprint: input.nativeFingerprint,
+        writerEpoch: input.writerEpoch,
+        reason: input.reason,
+      });
+      this.rows.set(id, next);
+      return next;
+    });
+  }
+
+  acknowledgeReconciliation(
+    key: NativeTaskKey,
+    expectedLatchRevision: number,
+    reviewedFingerprint: string | null,
+    observedNativeFingerprint: string | null,
+  ): AdapterReconciliationSnapshot {
+    // Mirrors the real store: a CAS mismatch throws, the two fingerprints must
+    // match, and the row must still be required at the expected revision.
+    return this.guard("ack", () => {
+      const id = reconciliationKeyId(key);
+      const prev = this.rows.get(id) ?? this.base();
+      if (
+        !prev.required || prev.latchRevision !== expectedLatchRevision ||
+        reviewedFingerprint !== observedNativeFingerprint
+      ) {
+        throw new Error("RECONCILIATION_CAS_MISMATCH");
+      }
+      const next = Object.freeze({ ...prev, required: false, reason: null });
+      this.rows.set(id, next);
+      return next;
+    });
+  }
+}
+
+const harness = (
+  enabled = true,
+  maxTrackedRevisions?: number,
+  reconciliationStore?: AdapterReconciliationStore,
+) => {
   let featureEnabled = enabled;
   const sessionRows = [summary()];
   const helpers = {
@@ -212,6 +308,7 @@ const harness = (enabled = true, maxTrackedRevisions?: number) => {
     idFactory: () => FORK,
     canonicalizeHome: (home: string) => home,
     ...(maxTrackedRevisions === undefined ? {} : { maxTrackedRevisions }),
+    ...(reconciliationStore === undefined ? {} : { reconciliationStore }),
   });
   return {
     adapter,
@@ -2496,5 +2593,42 @@ describe("ClaudeNativeAdapter", () => {
     await expect(h.adapter.rename(key(FORK), "Blocked target"))
       .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
     expect(h.helpers.renameSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("ClaudeNativeAdapter durable reconciliation mirror", () => {
+  it("mirrors an in-memory latch to the durable store", async () => {
+    const store = new FakeReconciliationStore();
+    const h = harness(true, undefined, store);
+    await h.adapter.readTask(key(), false);
+    h.sessionRows.splice(0, 1);
+    await expect(h.adapter.rename(key(), "must reconcile"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    const row = store.rows.get(reconciliationKeyId(key()));
+    expect(row?.required).toBe(true);
+  });
+
+  it("restores a durable latch before accepting a post-restart mutation", async () => {
+    const store = new FakeReconciliationStore();
+    store.seedRequired(key());
+    // A fresh adapter has no in-memory latch, but the durable store still says
+    // the task is required.
+    const h = harness(true, undefined, store);
+    await expect(h.adapter.rename(key(), "after restart"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.helpers.renameSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed and marks the runtime unavailable on a durable-store fault", async () => {
+    const store = new FakeReconciliationStore();
+    store.failOn.add("get");
+    const h = harness(true, undefined, store);
+    // The mutation path restores the durable latch first; the faulting read
+    // fails closed.
+    await expect(h.adapter.rename(key(), "boom"))
+      .rejects.toMatchObject({ code: "DISABLED" });
+    expect(store.unavailable).toBe(true);
+    await expect(h.adapter.readTask(key(), false))
+      .rejects.toMatchObject({ code: "DISABLED" });
   });
 });
