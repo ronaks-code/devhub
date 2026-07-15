@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { serializeTaskLocator } from "@devhub/engine/providers";
 import { parseRoute, buildRouteSearch } from "./router";
+
+/** A valid, canonical serialized provider-task locator for the URL tests. */
+const LOCATOR = serializeTaskLocator({
+  version: 1,
+  provider: "openai",
+  homeFingerprint: "a".repeat(64),
+  nativeTaskId: "task-123",
+});
 
 describe("parseRoute", () => {
   it("reads tab, project, and session from a query string", () => {
@@ -36,6 +45,32 @@ describe("parseRoute", () => {
       expect(parseRoute(`?tab=${tab}`).tab).toBe(tab);
     }
   });
+
+  it("reads a valid providerTask locator", () => {
+    const r = parseRoute(`?tab=chat&providerTask=${encodeURIComponent(LOCATOR)}`);
+    expect(r.tab).toBe("chat");
+    expect(r.providerTask).toBe(LOCATOR);
+  });
+
+  it("drops a malformed providerTask without throwing, keeping other params", () => {
+    const r = parseRoute("?tab=chat&project=p1&providerTask=not-a-locator");
+    expect(r.tab).toBe("chat");
+    expect(r.project).toBe("p1");
+    expect(r.providerTask).toBeUndefined();
+  });
+
+  it("drops a providerTask that carries a NUL byte", () => {
+    const r = parseRoute("?providerTask=pt1.openai.%00");
+    expect(r.providerTask).toBeUndefined();
+  });
+
+  it("parses a legacy URL (no providerTask) unchanged", () => {
+    expect(parseRoute("?tab=browse&project=p1&session=s1")).toEqual({
+      tab: "browse",
+      project: "p1",
+      session: "s1",
+    });
+  });
 });
 
 describe("buildRouteSearch", () => {
@@ -64,5 +99,27 @@ describe("buildRouteSearch", () => {
     const route = { tab: "browse", project: "a/b c&d", session: "x=y?z" } as const;
     const search = buildRouteSearch(route);
     expect(parseRoute(search)).toEqual(route);
+  });
+
+  it("emits providerTask last, in stable parameter order", () => {
+    const search = buildRouteSearch({
+      tab: "chat",
+      project: "p1",
+      session: "s1",
+      providerTask: LOCATOR,
+    });
+    expect(search).toBe(
+      `?tab=chat&project=p1&session=s1&providerTask=${encodeURIComponent(LOCATOR)}`,
+    );
+  });
+
+  it("round-trips a full route including providerTask", () => {
+    const route = { tab: "chat", project: "p1", session: "s1", providerTask: LOCATOR } as const;
+    expect(parseRoute(buildRouteSearch(route))).toEqual(route);
+  });
+
+  it("omits a malformed providerTask instead of throwing", () => {
+    expect(buildRouteSearch({ tab: "chat", providerTask: "garbage" })).toBe("?tab=chat");
+    expect(buildRouteSearch({ tab: "chat", providerTask: null })).toBe("?tab=chat");
   });
 });

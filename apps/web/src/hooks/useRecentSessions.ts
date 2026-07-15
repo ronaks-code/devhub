@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { legacyKeyFor, readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * A "recently viewed" jump-back list. Tracks the last {@link MAX_RECENTS} sessions
@@ -11,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
  * App's UI-state persistence): any storage failure (private mode, quota) degrades
  * to in-memory only.
  */
-const STORAGE_KEY = "claude-ui:recent-sessions";
+const STORAGE_KEY = "devhub:recent-sessions";
 
 /** How many recents to keep (the oldest beyond this are dropped). */
 export const MAX_RECENTS = 12;
@@ -29,9 +30,8 @@ export interface RecentSession {
 
 /** Read + sanity-check the persisted list. Anything malformed degrades to []. */
 function read(): RecentSession[] {
-  if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readCompat(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -52,12 +52,7 @@ function read(): RecentSession[] {
 }
 
 function write(list: RecentSession[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  writeCompat(STORAGE_KEY, JSON.stringify(list));
 }
 
 export interface UseRecentSessionsResult {
@@ -103,8 +98,11 @@ export function useRecentSessions(): UseRecentSessionsResult {
   // Keep multiple tabs / mounts roughly in sync: pick up another tab's write.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    // A cross-tab write may land on the DevHub key (new build) or the legacy key
+    // (a rolled-back tab) — pick up either.
+    const legacyKey = legacyKeyFor(STORAGE_KEY);
     const onStorage = (e: StorageEvent) => {
-      if (e.key === STORAGE_KEY) setRecents(read());
+      if (e.key === STORAGE_KEY || e.key === legacyKey) setRecents(read());
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);

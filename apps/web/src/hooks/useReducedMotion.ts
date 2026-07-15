@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * "Perf mode" / reduced motion. Two inputs decide whether non-essential
@@ -23,7 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type PerfPreference = "auto" | "on" | "off";
 
-const STORAGE_KEY = "claude-ui:perf-mode";
+const STORAGE_KEY = "devhub:perf-mode";
 const ROOT_ATTR = "data-reduce-motion";
 
 const PREFS: readonly PerfPreference[] = ["auto", "on", "off"];
@@ -34,22 +35,12 @@ function isPerfPreference(v: unknown): v is PerfPreference {
 
 /** Read the persisted preference; tolerant of missing/garbage values. */
 function readPreference(): PerfPreference {
-  if (typeof window === "undefined") return "auto";
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return isPerfPreference(raw) ? raw : "auto";
-  } catch {
-    return "auto";
-  }
+  const raw = readCompat(STORAGE_KEY);
+  return isPerfPreference(raw) ? raw : "auto";
 }
 
 function writePreference(pref: PerfPreference): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, pref);
-  } catch {
-    /* storage unavailable / quota — non-fatal */
-  }
+  writeCompat(STORAGE_KEY, pref);
 }
 
 /** Whether the OS currently asks for reduced motion. SSR-safe (false). */

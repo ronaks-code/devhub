@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readCompat, removeCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * Per-conversation composer draft, persisted in localStorage so an unsent
@@ -10,30 +11,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * Mirrors the SSR-guarded, try/catch storage style used elsewhere in the app:
  * any storage failure (private mode, quota) degrades to in-memory only.
  */
-const PREFIX = "claude-ui:draft:";
+const PREFIX = "devhub:draft:";
 
 function keyFor(projectId: string | null | undefined, sessionId: string | null | undefined): string {
   return `${PREFIX}${projectId ?? "_"}|${sessionId ?? "_"}`;
 }
 
 function read(key: string): string {
-  if (typeof window === "undefined") return "";
-  try {
-    return window.localStorage.getItem(key) ?? "";
-  } catch {
-    return "";
-  }
+  return readCompat(key) ?? "";
 }
 
 function write(key: string, value: string): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (value) window.localStorage.setItem(key, value);
-    // Empty drafts are removed rather than stored so the table stays tidy.
-    else window.localStorage.removeItem(key);
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  // Empty drafts are removed rather than stored so the table stays tidy. Removal
+  // clears the legacy twin too so an emptied draft can't be resurrected.
+  if (value) writeCompat(key, value);
+  else removeCompat(key);
 }
 
 export interface UseDraftResult {

@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * A reusable prompt template the user saves to insert later. `body` may contain
@@ -24,7 +25,7 @@ export interface Snippet {
   updatedAt: number;
 }
 
-const STORAGE_KEY = "claude-ui:snippets";
+const STORAGE_KEY = "devhub:snippets";
 
 /** A few starter templates so the library isn't empty on first open. */
 const SEED: Omit<Snippet, "id" | "updatedAt">[] = [
@@ -48,9 +49,8 @@ function makeId(): string {
 
 /** Read snippets from localStorage; SSR- and corruption-safe (returns []). */
 function readSnippets(): Snippet[] {
-  if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readCompat(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
@@ -68,12 +68,7 @@ function readSnippets(): Snippet[] {
 }
 
 function writeSnippets(list: Snippet[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
-  } catch {
-    /* storage unavailable or quota — non-fatal */
-  }
+  writeCompat(STORAGE_KEY, JSON.stringify(list));
 }
 
 /** Extract the unique `{placeholder}` names from a body, in first-seen order. */
@@ -128,7 +123,7 @@ export function SnippetLibrary({
   useEffect(() => {
     if (!open) return;
     const existing = readSnippets();
-    if (existing.length === 0 && window.localStorage.getItem(STORAGE_KEY) == null) {
+    if (existing.length === 0 && readCompat(STORAGE_KEY) == null) {
       const seeded = SEED.map((s) => ({ ...s, id: makeId(), updatedAt: Date.now() }));
       writeSnippets(seeded);
       setSnippets(seeded);

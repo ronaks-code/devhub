@@ -38,6 +38,7 @@ import type {
   BudgetStatus,
   BudgetConfig,
 } from "./types";
+import { readCompat, removeCompat, writeCompat, TOKEN_KEY as DEVHUB_TOKEN_KEY } from "./compat-storage";
 
 /**
  * Bearer-token plumbing for remote/mobile access. The server may require a token
@@ -47,30 +48,22 @@ import type {
  * header, exactly like before. AuthGate captures the 401, stores a token here, and
  * re-runs the failed call; ws.ts reads the same token onto the socket URL.
  *
- * Stored in localStorage under {@link TOKEN_KEY} so it survives reloads. Reads are
- * SSR/quota guarded (same defensive pattern as App.tsx's UI-state persistence).
+ * Stored in localStorage under {@link TOKEN_KEY} (the DevHub key) so it survives
+ * reloads. All access goes through the compat-storage seam: a token saved by the
+ * old `claude-ui-token` key is read (and migrated forward) transparently, and a
+ * logout clears BOTH keys so a stale legacy token can't come back.
  */
-export const TOKEN_KEY = "claude-ui-token";
+export const TOKEN_KEY = DEVHUB_TOKEN_KEY;
 
 /** Read the stored access token, or null when none is set / storage is unavailable. */
 export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    return window.localStorage.getItem(TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return readCompat(TOKEN_KEY);
 }
 
 /** Persist (or, with null, clear) the access token. Non-fatal on storage errors. */
 export function setToken(token: string | null): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (token) window.localStorage.setItem(TOKEN_KEY, token);
-    else window.localStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  if (token) writeCompat(TOKEN_KEY, token);
+  else removeCompat(TOKEN_KEY);
 }
 
 /**

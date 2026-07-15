@@ -9,10 +9,18 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * tab you're on, which project, which session. Open the link on another machine
  * and you land on the same screen.
  *
- * Shape: `?tab=browse&project=<id>&session=<id>`. Only the keys that have a value
- * are written, so a bare `/` (no query) is the clean default. Parsing is fully
- * tolerant: unknown tabs fall back to undefined, missing keys are simply absent,
- * and a malformed query never throws (URLSearchParams handles the decoding).
+ * Shape: `?tab=browse&project=<id>&session=<id>&providerTask=<locator>`. Only the
+ * keys that have a value are written, so a bare `/` (no query) is the clean
+ * default. Parsing is fully tolerant: unknown tabs fall back to undefined, missing
+ * keys are simply absent, and a malformed query never throws (URLSearchParams
+ * handles the decoding).
+ *
+ * `providerTask` carries a serialized `ProviderTaskLocator` — an opaque,
+ * path-free handle for a native provider task (no raw filesystem home ever
+ * appears in the URL). It is validated on the way in AND out: a malformed locator
+ * is dropped, never thrown, so a hand-edited or stale link degrades gracefully
+ * instead of crashing the app. Legacy URLs that predate this field parse
+ * unchanged (the field is simply absent).
  *
  * No react-router: it's a single useSyncedRoute hook plus two pure helpers, so
  * there's nothing to learn and no bundle cost beyond a few lines.
@@ -43,10 +51,41 @@ export interface RouteState {
   tab?: RouteTab;
   project?: string | null;
   session?: string | null;
+  /**
+   * Serialized `ProviderTaskLocator` for a native provider task. Opaque and
+   * path-free; validated on parse/build so a malformed value is dropped rather
+   * than surfaced. Absent on legacy URLs.
+   */
+  providerTask?: string | null;
 }
 
 function isRouteTab(v: string | null): v is RouteTab {
   return v != null && (ROUTE_TABS as readonly string[]).includes(v);
+}
+
+/**
+ * Grammar of a serialized `ProviderTaskLocator`, mirrored from the engine's
+ * `serializeTaskLocator` (`packages/engine/src/provider-index/identity.ts`):
+ * `pt1.<provider>.<64-hex-fingerprint>.<base64url-native-id>`, at most 1024
+ * chars, no whitespace, no NUL. Validated locally so the browser bundle stays
+ * free of the engine's Node-only locator module (which imports `node:fs`); the
+ * server's facade re-validates against the exact provider registry. The router's
+ * job is only to keep a malformed/opaque token out of the URL, never to parse it.
+ * router.test.ts feeds a genuinely engine-serialized locator through this to
+ * guard against grammar drift.
+ */
+const MAX_LOCATOR_CHARS = 1_024;
+const SERIALIZED_LOCATOR =
+  /^pt1\.[a-z][a-z0-9-]*\.[0-9a-f]{64}\.[A-Za-z0-9_-]+$/u;
+
+/**
+ * Validate a serialized provider-task locator. Returns the (already-canonical)
+ * string on success, or null for anything malformed. Never throws — a bad locator
+ * in a URL must degrade, not crash.
+ */
+function normalizeProviderTask(value: string | null | undefined): string | null {
+  if (!value || value.length > MAX_LOCATOR_CHARS) return null;
+  return SERIALIZED_LOCATOR.test(value) ? value : null;
 }
 
 /**
@@ -66,6 +105,8 @@ export function parseRoute(search?: string): RouteState {
     if (project) out.project = project;
     const session = params.get("session");
     if (session) out.session = session;
+    const providerTask = normalizeProviderTask(params.get("providerTask"));
+    if (providerTask) out.providerTask = providerTask;
   } catch {
     /* malformed query — fall through to the empty route */
   }
@@ -75,14 +116,17 @@ export function parseRoute(search?: string): RouteState {
 /**
  * Build the `?…` query string for a route. Omits empty/undefined keys so the URL
  * stays minimal (a default Browse view with no project is just `?tab=browse`, and
- * an all-empty route is the empty string). Order is stable (tab, project, session)
- * so consecutive states produce comparable strings (used to skip no-op pushes).
+ * an all-empty route is the empty string). Order is stable (tab, project, session,
+ * providerTask) so consecutive states produce comparable strings (used to skip
+ * no-op pushes). A malformed `providerTask` is dropped, never emitted.
  */
 export function buildRouteSearch(state: RouteState): string {
   const params = new URLSearchParams();
   if (state.tab) params.set("tab", state.tab);
   if (state.project) params.set("project", state.project);
   if (state.session) params.set("session", state.session);
+  const providerTask = normalizeProviderTask(state.providerTask);
+  if (providerTask) params.set("providerTask", providerTask);
   const s = params.toString();
   return s ? `?${s}` : "";
 }
@@ -146,7 +190,7 @@ export function useUrlRouter(
       /* history API unavailable (sandboxed iframe) — non-fatal, state still works */
     }
     lastSearchRef.current = search;
-  }, [state.tab, state.project, state.session]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.tab, state.project, state.session, state.providerTask]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Adopt back/forward navigations. We update lastSearchRef first so the sync
   // effect above sees the popped URL as "already written" and doesn't push it
@@ -172,7 +216,7 @@ export function useUrlRouter(
 export function useHadInitialRoute(): boolean {
   const [had] = useState(() => {
     const r = parseRoute();
-    return r.tab != null || r.project != null || r.session != null;
+    return r.tab != null || r.project != null || r.session != null || r.providerTask != null;
   });
   return had;
 }

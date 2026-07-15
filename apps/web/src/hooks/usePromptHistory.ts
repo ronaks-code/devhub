@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { readCompat, removeCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * Shell-style prompt recall for the chat composer. Sent prompts are pushed onto a
@@ -18,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
  * Storage is SSR-guarded and try/catch'd (private mode / quota) → degrades to
  * in-memory, matching useDraft's style. Scoped per project id.
  */
-const PREFIX = "claude-ui:prompt-history:";
+const PREFIX = "devhub:prompt-history:";
 const MAX_ENTRIES = 100;
 
 function keyFor(projectId: string | null | undefined): string {
@@ -26,9 +27,8 @@ function keyFor(projectId: string | null | undefined): string {
 }
 
 function read(key: string): string[] {
-  if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(key);
+    const raw = readCompat(key);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
@@ -38,13 +38,8 @@ function read(key: string): string[] {
 }
 
 function write(key: string, value: string[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    if (value.length > 0) window.localStorage.setItem(key, JSON.stringify(value));
-    else window.localStorage.removeItem(key);
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  if (value.length > 0) writeCompat(key, JSON.stringify(value));
+  else removeCompat(key);
 }
 
 export interface UsePromptHistoryResult {

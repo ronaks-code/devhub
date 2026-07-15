@@ -25,6 +25,7 @@ import {
   latestActiveTurn,
   nativeMutationsArePaused,
   nativeTaskIdentity,
+  pathFreeHomeToken,
   providerCreateOverrides,
   providerDefaultPermission,
   providerRequiresFirstMessage,
@@ -519,13 +520,42 @@ describe("CodexNativePane keyboard and lifecycle ordering", () => {
       .toBeNull();
   });
 
-  it("uses provider, home, and native task id for every internal task identity", () => {
+  it("builds a path-free, NUL-free task identity keyed by provider, home, and id", () => {
     const identity = nativeTaskIdentity(key);
+    // Provider and the exact native id remain distinguishable...
     expect(identity).toContain("openai");
-    expect(identity).toContain(key.home);
     expect(identity).toContain(key.nativeTaskId);
-    expect(nativeTaskIdentity({ ...key, provider: "anthropic" }))
-      .not.toBe(identity);
+    // ...but the raw filesystem home is folded to an opaque token, never embedded,
+    // and there is no NUL separator.
+    expect(identity).not.toContain(key.home);
+    expect(identity).toContain(pathFreeHomeToken(key.home));
+    expect(identity).not.toContain("\u0000");
+    // Every dimension still discriminates.
+    expect(nativeTaskIdentity({ ...key, provider: "anthropic" })).not.toBe(identity);
+    expect(nativeTaskIdentity({ ...key, home: "/Users/test/.codex-other" })).not.toBe(identity);
+    expect(nativeTaskIdentity({ ...key, nativeTaskId: "thread-2" })).not.toBe(identity);
+  });
+
+  it("keeps a native id with a NUL / dot / slash from leaking a separator or path", () => {
+    const hostile = nativeTaskIdentity({
+      provider: "anthropic",
+      home: "/home/../secret/path",
+      nativeTaskId: "a\u0000b.c/d",
+    });
+    expect(hostile).not.toContain("\u0000");
+    expect(hostile).not.toContain("/home/../secret/path");
+    // Deterministic + collision-free vs a different home under the same id.
+    expect(hostile).not.toBe(
+      nativeTaskIdentity({ provider: "anthropic", home: "/other", nativeTaskId: "a\u0000b.c/d" }),
+    );
+  });
+
+  it("pathFreeHomeToken is deterministic, opaque, and path-free", () => {
+    expect(pathFreeHomeToken("/Users/test/.codex")).toBe(pathFreeHomeToken("/Users/test/.codex"));
+    expect(pathFreeHomeToken("/Users/test/.codex")).not.toBe(pathFreeHomeToken("/Users/test/.claude"));
+    const token = pathFreeHomeToken("/Users/test/.codex");
+    expect(token).toMatch(/^[0-9a-f]{8}$/);
+    expect(token).not.toContain("/");
   });
 
   it("drops hidden cross-provider model and permission state at serialization", () => {
