@@ -54,6 +54,7 @@ export function completeDevHubFeatures(
     taskRail: value?.taskRail === true,
     taskHeaderSetup: value?.taskHeaderSetup === true,
     threadWorkspace: value?.threadWorkspace === true,
+    composerSurface: value?.composerSurface === true,
     codexStyleShell: value?.codexStyleShell === true,
     crossProviderFork: value?.crossProviderFork === true,
     workMode: value?.workMode === true,

@@ -247,3 +247,53 @@ data-wire because the live transcript canvas is owned by the user-owned `ChatPan
 data-wire. The flag gate + resolver land here; the App composition mount is staged for the
 Task 9 `codexStyleShell` cutover integration. `nativeCodex` / `persistentClaude` /
 `threadWorkspace` requested-defaults stay false.
+
+### M6 Task 5 - Composer
+
+Date: 2026-07-15
+
+Governing sources: `design-lock.md` §4/§6 (stable composer, provider-native context,
+no credential/unsandboxed-shell exposure), REF-EMPTY (resting 736x98 composer, 16 bottom
+gutter, disabled send) + REF-ACTIVE (send→stop swap without layout shift, footer
+model/mode/permission context), `component-state-matrix.md` §9, `surface-inventory.md`
+`SF-08` / `T-composer` / `L-chat`. Evidence: `evidence/m6/composer/` (`qa-note.md`,
+`fixture-{resting,active,new,disconnected}.html`, `m6-composer-{resting,active,disconnected}-wide.png`)
+plus the unit/snapshot suite `apps/web/src/components/features/shell/Composer.test.ts` (26).
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Composer measured 736x98 | design-lock §4/§6 / manifest | measured width `736`, height `98` across resting/active/disconnected | Match. |
+| Bottom gutter 16 | manifest resting composer | measured `margin-bottom: 16px` in every state | Match. |
+| Surface fill `#2d2d2d` | design-system §2 / manifest | measured `rgb(45,45,45)` = `#2d2d2d` in every state | Match. |
+| Footer context present | design-lock §6 (compact folder/permission/model/mode) | measured footer text `Folder ~/devhub`, `Model claude-sonnet-4`, `Mode default`, `Permission mode plan`; Codex shows `Permissions workspace-write` | Match. |
+| Send → Stop, no layout shift | design-lock §4 ("composer does not move when send becomes stop") | the geometry-bearing container tag is byte-identical send↔stop (unit-asserted); measured 736x98 identical live; only the button label/state/`#d95c5c` fill change | Match. |
+| Stop honestly gated | design-lock §6 (Stop only for a real native interrupt) | `resolveSendState` returns `stop` only when `turnRunning && nativeInterruptEnabled`; a running Claude turn (no native interrupt) stays `send` | Match. |
+| Provider-native permission (never cross-mapped) | design-lock §5/§6 | Claude renders `Permission mode` / `plan`; Codex renders `Permissions` / `workspace-write`; values pass through verbatim; Claude never renders `Workspace` | Match. |
+| Accessible label (not placeholder-only) | design-lock a11y | `label[for=dh-composer-textarea]` present with copy `Message`; new-task placeholder `Describe the outcome or change…` | Match. |
+| Disabled send carries an accessible reason | component-state-matrix §9 | send `disabled` + `aria-describedby="dh-composer-send-reason"` with distinct reason per blocking condition (empty/blocking-request/missing-writer-lease/disconnected-stale/unsupported/pending-creation) | Match. |
+| Disconnect keeps draft editable | design-lock §6 | textarea NOT disabled while disconnected; draft preserved; note `Reconnect to send. Your draft is saved.` shown | Match. |
+| No credentials / unsandboxed shell | design-lock §6 | rendered markup contains none of credential/apiKey/sk-/unsandboxed/danger/bypassPermissions (unit-asserted) | Match. |
+| No logos anywhere | design-lock §3 / invariant 9 | `0` `<svg>` and `0` `<img>` across all fixtures | Match. |
+
+### Task 5 judgment
+
+`Composer` is the canonical geometry-stable task composer: a measured 736x98 slot on the
+`#2d2d2d` surface with a 16 bottom gutter and ~21 radius whose container is byte-identical
+across Send↔Stop and every draft/disabled transition (the stable-composer invariant). It
+reimplements the legacy `ChatPane` composer against the SAME registries/hooks
+(`useDraft`, `usePromptHistory`, `detectMention`, `filterCommands`, snippets) WITHOUT
+editing the user-owned `ChatPane.tsx` or `SlashPalette.tsx`; the keyboard contract
+(Enter sends, Shift+Enter newline, boundary Up/Down history only while idle, pickers own
+Arrow/Enter/Tab/Escape) and every send-disabled reason are pure functions
+(`decideComposerKey`, `computeSendDisabledReason`, `resolveSendState`,
+`computePickerState`). Stop is honestly gated (only for a real native interrupt, false for
+Claude); permission/mode values are provider-native strings never cross-mapped; disconnect
+keeps the draft editable with `Reconnect to send. Your draft is saved.`; credentials and an
+unsandboxed shell fallback are never exposed. Ships behind the default-off `composerSurface`
+flag; flag-off keeps the legacy `ChatPane` composer (`resolveComposerSurfaceMode` returns
+`legacy` for false/undefined/missing, `isComposerSurfaceApplied` true only for an explicit
+true). SCOPE: this claims the composer PRESENTATION, stable-slot geometry, provider-native
+footer, keyboard/disabled-reason logic, and flag safety only; live mounting into the task
+canvas is a deferred data-wire (the live host is the user-owned `ChatPane.tsx`), mirroring
+Tasks 3–4 and staged for the Task 9 cutover. `nativeCodex` / `persistentClaude` /
+`composerSurface` requested-defaults stay false.

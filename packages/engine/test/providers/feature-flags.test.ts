@@ -18,6 +18,7 @@ describe("DevHub feature flags", () => {
       taskRail: false,
       taskHeaderSetup: false,
       threadWorkspace: false,
+      composerSurface: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,

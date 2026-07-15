@@ -1,0 +1,413 @@
+import { type ReactNode } from "react";
+import type { DevHubFeatureFlags } from "@devhub/engine/providers";
+import {
+  PERMISSION_FIELD_LABEL,
+  providerIdentity,
+  type ProviderId,
+} from "../providers/provider-capabilities.js";
+import { detectMention } from "../../MentionPicker.js";
+import { filterCommands } from "../../SlashPalette.js";
+
+/**
+ * Composer — the canonical, geometry-stable task composer (M6 slice 5).
+ *
+ * `design-lock.md` §6: the composer sits in a measured 736x98 slot with a 16-unit
+ * bottom gutter and ~21-unit radius, on the elevated `#2d2d2d` surface. Its geometry
+ * NEVER moves when Send becomes Stop or when the transcript grows (`design-lock.md`
+ * §4). It shows the real folder / permission / model / mode context compactly and
+ * NEVER exposes credentials or an unsandboxed shell fallback (§6).
+ *
+ * This is a from-scratch reimplementation of the legacy `ChatPane` composer against
+ * the SAME registries/hooks (`useDraft`, `usePromptHistory`, `detectMention`,
+ * `filterCommands`, snippets) — it does NOT edit the user-owned `ChatPane.tsx` or
+ * `SlashPalette.tsx`. All behavior that is not pure presentation is expressed as pure
+ * functions so it can be asserted without a DOM: `decideComposerKey` (Enter/Shift+Enter/
+ * boundary history/picker ownership), `computeSendDisabledReason`, `resolveSendState`
+ * (honest Stop gating), and the provider-native footer/`computePickerState` helpers.
+ *
+ * Mounted only behind the default-off `composerSurface` slice flag; flag-off keeps the
+ * legacy `ChatPane` composer as the immediate, non-destructive rollback. Renders no
+ * `<svg>`/`<img>` (provider identity is quiet text, never a logo).
+ */
+
+export type { ProviderId };
+
+/** Composer send affordance. `stop` shows only when a native interrupt path is product-enabled. */
+export type ComposerSendState = "send" | "stop";
+
+/** Connection health of the task's transport. `stale` = a superseded revision. */
+export type ComposerConnection = "connected" | "disconnected" | "stale";
+
+/**
+ * The measured composer geometry, transcribed from `reference-capture-manifest.md`
+ * and mirrored on the shell's `SHELL_GEOMETRY`/`THREAD_GEOMETRY` so the composer never
+ * drifts from the shell. This is the single source the stable-slot invariant asserts.
+ */
+export const COMPOSER_GEOMETRY = Object.freeze({
+  width: 736,
+  height: 98,
+  bottomGutter: 16,
+  radius: 21,
+} as const);
+
+/**
+ * Accessible disabled reasons. Each blocking condition has a distinct, honest reason
+ * that reaches assistive tech via `aria-describedby`. The disconnected/stale reason is
+ * literally the reconnect note so there is ONE source for that copy.
+ */
+const DISABLED_REASON = Object.freeze({
+  pendingCreation: "Creating the task…",
+  unsupported: "Sending isn't available for this provider task.",
+  disconnectedStale: "Reconnect to send. Your draft is saved.",
+  missingWriterLease: "Another session holds the write lock.",
+  blockingRequest: "Respond to the request above to continue.",
+  empty: "Write a message to send.",
+});
+
+/** Copy for the composer. One source for the `T-composer`/`L-chat` visible-copy diff. */
+export const COMPOSER_COPY = Object.freeze({
+  textareaLabel: "Message",
+  newTaskPlaceholder: "Describe the outcome or change…",
+  sendLabel: "Send",
+  stopLabel: "Stop current turn",
+  reconnectNote: DISABLED_REASON.disconnectedStale,
+  disabledReason: DISABLED_REASON,
+});
+
+/** DOM ids so the label/reason associations are stable and testable. */
+const TEXTAREA_ID = "dh-composer-textarea";
+const SEND_REASON_ID = "dh-composer-send-reason";
+
+// --- Pure decision functions (asserted without a DOM) --------------------------
+
+/**
+ * The Stop affordance is honest: it appears ONLY when a turn is running AND a real
+ * native interrupt path is product-enabled. Claude has no native interrupt until M4
+ * (`persistentClaude` false), so a running Claude turn correctly stays `send` — the
+ * gated state is proven, not faked (`design-lock.md` §6, invariant).
+ */
+export interface ComposerInterruptContext {
+  turnRunning?: boolean;
+  nativeInterruptEnabled?: boolean;
+}
+export function resolveSendState(ctx: ComposerInterruptContext): ComposerSendState {
+  return ctx.turnRunning === true && ctx.nativeInterruptEnabled === true ? "stop" : "send";
+}
+
+/** Everything that can block a send. Missing fields default to the sendable value. */
+export interface ComposerSendContext {
+  draft: string;
+  taskState?: "ready" | "pending-creation";
+  sendSupported?: boolean;
+  connection?: ComposerConnection;
+  hasWriterLease?: boolean;
+  hasBlockingRequest?: boolean;
+}
+
+/**
+ * The first-unmet blocking reason, in a deterministic precedence, or null when the
+ * message can be sent. Structural blockers (pending creation, unsupported) come first,
+ * then transport (disconnected/stale), then the write lease, then a pending request,
+ * then an empty draft. CSS state never substitutes for these — the button carries a
+ * real `disabled` + accessible reason.
+ */
+export function computeSendDisabledReason(ctx: ComposerSendContext): string | null {
+  const R = DISABLED_REASON;
+  if (ctx.taskState === "pending-creation") return R.pendingCreation;
+  if (ctx.sendSupported === false) return R.unsupported;
+  if (ctx.connection === "disconnected" || ctx.connection === "stale") return R.disconnectedStale;
+  if (ctx.hasWriterLease === false) return R.missingWriterLease;
+  if (ctx.hasBlockingRequest === true) return R.blockingRequest;
+  if (ctx.draft.trim() === "") return R.empty;
+  return null;
+}
+
+/** Keyboard context for the composer textarea. */
+export interface ComposerKeyContext {
+  key: string;
+  shiftKey: boolean;
+  /** Which picker is open (mention/slash), if any. */
+  picker: "none" | "mention" | "slash";
+  /** Number of picker matches (0 = the picker doesn't trap the key). */
+  pickerCount: number;
+  caretAtStart: boolean;
+  caretAtEnd: boolean;
+  /** History recall is disabled while a turn is running. */
+  turnRunning: boolean;
+  /** True while already walking history (Down only steps forward then). */
+  historyNavigating: boolean;
+}
+
+export type ComposerKeyAction =
+  | { type: "none" }
+  | { type: "send" }
+  | { type: "newline" }
+  | { type: "history-prev" }
+  | { type: "history-next" }
+  | { type: "picker-next" }
+  | { type: "picker-prev" }
+  | { type: "picker-accept" }
+  | { type: "picker-dismiss" };
+
+/**
+ * Decide what a keypress does. The open picker OWNS Arrow/Enter/Tab/Escape (so focus
+ * stays in the textarea); Enter sends and Shift+Enter inserts a newline; boundary
+ * Up/Down recall history only while idle at the caret boundary. Mirrors the legacy
+ * `ChatPane.onKeyDown` exactly without importing it.
+ */
+export function decideComposerKey(
+  ctx: ComposerKeyContext,
+): { action: ComposerKeyAction; preventDefault: boolean } {
+  const { key, shiftKey, picker, pickerCount } = ctx;
+
+  if (picker !== "none") {
+    if (key === "ArrowDown" && pickerCount > 0) return { action: { type: "picker-next" }, preventDefault: true };
+    if (key === "ArrowUp" && pickerCount > 0) return { action: { type: "picker-prev" }, preventDefault: true };
+    if ((key === "Enter" && !shiftKey) || key === "Tab") {
+      if (pickerCount > 0) return { action: { type: "picker-accept" }, preventDefault: true };
+      // No matches: fall through so Enter still sends / Tab does nothing special.
+    }
+    if (key === "Escape") return { action: { type: "picker-dismiss" }, preventDefault: true };
+  }
+
+  if (key === "Enter" && !shiftKey) return { action: { type: "send" }, preventDefault: true };
+  if (key === "Enter" && shiftKey) return { action: { type: "newline" }, preventDefault: false };
+
+  if ((key === "ArrowUp" || key === "ArrowDown") && !ctx.turnRunning) {
+    if (key === "ArrowUp" && ctx.caretAtStart) return { action: { type: "history-prev" }, preventDefault: false };
+    if (key === "ArrowDown" && ctx.caretAtEnd && ctx.historyNavigating) {
+      return { action: { type: "history-next" }, preventDefault: false };
+    }
+  }
+
+  return { action: { type: "none" }, preventDefault: false };
+}
+
+/** Slash/mention picker state derived from the live text + caret, using the shared registries. */
+export interface ComposerPickerState {
+  picker: "none" | "mention" | "slash";
+  /** Ranked slash-command matches (empty for mention/none). */
+  matches: string[];
+  /** The detected mention token (null for slash/none). */
+  mention: { query: string; start: number; end: number } | null;
+}
+
+/**
+ * Compute picker state against the SAME registries the legacy composer uses. Slash mode
+ * requires the whole draft to be a single leading-`/` token (so a message that merely
+ * starts with `/path ...` is not slash mode); otherwise an `@`-token opens the mention
+ * picker via the shared `detectMention`.
+ */
+export function computePickerState(
+  text: string,
+  caret: number,
+  slashCommands: string[],
+): ComposerPickerState {
+  const slashMatch = /^\/(\S*)$/.exec(text);
+  if (slashMatch) {
+    const matches = filterCommands(slashCommands, slashMatch[1]!);
+    return { picker: matches.length > 0 ? "slash" : "none", matches, mention: null };
+  }
+  const mention = detectMention(text, caret);
+  if (mention) return { picker: "mention", matches: [], mention };
+  return { picker: "none", matches: [], mention: null };
+}
+
+/** Insert a chosen slash command as `/name ` (trailing space for arguments). */
+export function applySlashInsert(command: string): string {
+  return `/${command} `;
+}
+
+/** Replace the detected mention token with the picked path (dir keeps the `/` open). */
+export function applyMentionInsert(
+  text: string,
+  mention: { start: number; end: number; query?: string },
+  insertPath: string,
+  isDir = false,
+): string {
+  const insert = `@${insertPath}${isDir ? "/" : " "}`;
+  return text.slice(0, mention.start) + insert + text.slice(mention.end);
+}
+
+/** Append a snippet after the existing draft with a separating blank line. */
+export function appendSnippet(draft: string, snippet: string): string {
+  const base = draft.trim();
+  return base ? `${base}\n\n${snippet}` : snippet;
+}
+
+/** Provider-native footer context. Permission/mode strings pass through VERBATIM. */
+export interface ComposerFooterInput {
+  model?: string;
+  mode?: string;
+  permissionMode?: string;
+  folder?: string;
+}
+export interface ComposerFooterContext {
+  provider: ProviderId;
+  identityLabel: string;
+  modelValue?: string;
+  modeValue?: string;
+  permissionLabel: string;
+  permissionValue?: string;
+  folderValue?: string;
+}
+
+/**
+ * Build the footer context. The permission LABEL is derived from the provider (Codex
+ * `Permissions`, Claude `Permission mode`) so a bad inventory can't cross-map it; the
+ * permission/mode VALUES are the provider-native runtime strings shown unchanged — they
+ * are NEVER remapped by equality between providers (`design-lock.md` §5/§6).
+ */
+export function composerFooterContext(
+  provider: ProviderId,
+  input: ComposerFooterInput,
+): ComposerFooterContext {
+  return {
+    provider,
+    identityLabel: providerIdentity(provider).label,
+    modelValue: input.model,
+    modeValue: input.mode,
+    permissionLabel: PERMISSION_FIELD_LABEL[provider],
+    permissionValue: input.permissionMode,
+    folderValue: input.folder,
+  };
+}
+
+// --- Presentation --------------------------------------------------------------
+
+export interface ComposerProps {
+  /** Immutable-after-creation provider identity (footer context only). */
+  provider?: ProviderId;
+  /** Fresh task → outcome-oriented placeholder. */
+  isNewTask?: boolean;
+  /** Draft text (task/provider-scoped; owned by `useDraft`, never cleared until send is accepted). */
+  draft?: string;
+  /** Send affordance; geometry is invariant across the swap. */
+  sendState?: ComposerSendState;
+  /** When non-null, send is disabled and this reason is exposed to assistive tech. */
+  disabledReason?: string | null;
+  /** Transport health; a non-connected value keeps the draft editable and shows the reconnect note. */
+  connection?: ComposerConnection;
+  /** Compact provider-native context (folder/permission/model/mode). */
+  footer?: ComposerFooterInput;
+  /** Placeholder override. */
+  placeholder?: string;
+}
+
+function FooterContext({ provider, footer }: { provider?: ProviderId; footer?: ComposerFooterInput }) {
+  if (!provider) return null;
+  const ctx = composerFooterContext(provider, footer ?? {});
+  const pairs: Array<{ label: string; value: string }> = [];
+  if (ctx.folderValue) pairs.push({ label: "Folder", value: ctx.folderValue });
+  if (ctx.modelValue) pairs.push({ label: "Model", value: ctx.modelValue });
+  if (ctx.modeValue) pairs.push({ label: "Mode", value: ctx.modeValue });
+  if (ctx.permissionValue) pairs.push({ label: ctx.permissionLabel, value: ctx.permissionValue });
+  return (
+    <div className="dh-composer-context" data-dh-composer-context="" data-dh-provider={provider}>
+      <span className="dh-composer-identity" data-dh-composer-identity="">
+        {ctx.identityLabel}
+      </span>
+      {pairs.map((p) => (
+        <span key={p.label} className="dh-composer-ctx-item" data-dh-composer-ctx-item="">
+          <span className="dh-composer-ctx-label">{p.label}</span>
+          <span className="dh-composer-ctx-value">{p.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+export function Composer({
+  provider,
+  isNewTask = true,
+  draft = "",
+  sendState = "send",
+  disabledReason = null,
+  connection = "connected",
+  footer,
+  placeholder,
+}: ComposerProps): ReactNode {
+  const isStop = sendState === "stop";
+  // Stop is always actionable (a real interrupt path). Only a real Send can be blocked.
+  const sendDisabled = !isStop && disabledReason != null;
+  const resolvedPlaceholder = placeholder ?? COMPOSER_COPY.newTaskPlaceholder;
+  const disconnected = connection !== "connected";
+
+  return (
+    // The stable geometry slot. Its data attrs are CONSTANT — they never depend on
+    // sendState, draft content, or disabled state — so the container tag is byte-identical
+    // across every transition (the slice's stable-composer invariant).
+    <div
+      className="dh-composer"
+      data-dh-composer=""
+      data-dh-surface=""
+      data-dh-composer-width={COMPOSER_GEOMETRY.width}
+      data-dh-composer-height={COMPOSER_GEOMETRY.height}
+      data-dh-composer-gutter={COMPOSER_GEOMETRY.bottomGutter}
+      data-dh-composer-radius={COMPOSER_GEOMETRY.radius}
+    >
+      {/* Explicit accessible label element (not placeholder-only). */}
+      <label className="dh-sr-only" htmlFor={TEXTAREA_ID}>
+        {COMPOSER_COPY.textareaLabel}
+      </label>
+      {/* The draft is ALWAYS editable — even while disconnected — and is owned by
+          `useDraft`, never cleared until a send is accepted. */}
+      <textarea
+        id={TEXTAREA_ID}
+        className="dh-composer-input"
+        data-dh-composer-input=""
+        data-dh-composer-new-task={isNewTask ? "" : undefined}
+        placeholder={resolvedPlaceholder}
+        defaultValue={draft}
+        rows={2}
+      />
+
+      {disconnected ? (
+        <p className="dh-composer-notice" data-dh-composer-notice="">
+          {COMPOSER_COPY.reconnectNote}
+        </p>
+      ) : null}
+
+      <div className="dh-composer-footer" data-dh-composer-footer="">
+        <FooterContext provider={provider} footer={footer} />
+        <button
+          type="button"
+          className="dh-composer-send"
+          data-dh-composer-send=""
+          data-dh-send-state={sendState}
+          disabled={sendDisabled}
+          aria-describedby={sendDisabled ? SEND_REASON_ID : undefined}
+        >
+          {isStop ? COMPOSER_COPY.stopLabel : COMPOSER_COPY.sendLabel}
+        </button>
+      </div>
+
+      {/* The accessible disabled reason, associated with the send button. */}
+      {sendDisabled && disabledReason ? (
+        <span id={SEND_REASON_ID} className="dh-sr-only" data-dh-composer-send-reason="">
+          {disabledReason}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+export type ComposerSurfaceMode = "devhub" | "legacy";
+
+/**
+ * Slice-flag gate. Mirrors `resolveThreadWorkspaceMode`: the new Composer mounts only
+ * for a server-resolved true `composerSurface`; anything else (false/undefined/missing)
+ * keeps the legacy `ChatPane` composer — the immediate, non-destructive rollback.
+ */
+export function resolveComposerSurfaceMode(
+  settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
+): ComposerSurfaceMode {
+  return settings?.devHubFeatures?.composerSurface === true ? "devhub" : "legacy";
+}
+
+/** True only when the composer-surface slice flag is applied. */
+export function isComposerSurfaceApplied(
+  features: Partial<DevHubFeatureFlags> | undefined,
+): boolean {
+  return features?.composerSurface === true;
+}
