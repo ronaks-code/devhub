@@ -803,6 +803,52 @@ describe("ProviderTaskIndexCoordinator rebuild lifecycle", () => {
     );
     expect(activeIds(store)).toEqual(["prior"]);
   });
+
+  it("rebuilds byte-equivalent indexed tasks from a cleared DevHub DB without mutating native snapshots", async () => {
+    const registry = new ProviderRegistry();
+    const home = temporaryHome("rebuild-clear");
+    const keyA = keyFor(home, "task-a");
+    const keyB = keyFor(home, "task-b");
+    // The native provider is the source of truth: clearing the index cache must never touch it.
+    const nativeSnapshots = new Map([
+      [keyA.nativeTaskId, snapshot(keyA, ["a1", "a2"])],
+      [keyB.nativeTaskId, snapshot(keyB, ["b1"])],
+    ]);
+    const nativeFingerprint = JSON.stringify([...nativeSnapshots.entries()]);
+    registry.register(home, pagedAdapter(
+      [page([summary(keyA), summary(keyB)], null)],
+      nativeSnapshots,
+    ));
+    const homes = [{ provider: "openai" as const, home }];
+
+    // Project the full active index (summaries plus their canonical snapshots) in list order.
+    const indexedProjection = (store: ProviderTaskIndexStore): unknown =>
+      store.list().items.map((item) => ({
+        summary: item,
+        task: store.read(item.locator),
+      }));
+
+    // Build the first DevHub DB and capture its indexed projection.
+    const first = openStore();
+    const coordinatorFirst = coordinatorFor(registry, first, homes);
+    await coordinatorFirst.rebuild({ provider: "openai", home });
+    const indexedFirst = indexedProjection(first);
+    expect((indexedFirst as readonly unknown[]).length).toBe(2);
+    // Indexing the first DB left the fake native snapshots untouched.
+    expect(JSON.stringify([...nativeSnapshots.entries()])).toBe(nativeFingerprint);
+
+    // Clearing the ENTIRE DevHub DB is modelled by a fresh empty store: nothing is retained.
+    const second = openStore();
+    expect(second.list().items).toEqual([]);
+    const coordinatorSecond = coordinatorFor(registry, second, homes);
+    await coordinatorSecond.rebuild({ provider: "openai", home });
+    const indexedSecond = indexedProjection(second);
+
+    // The fresh DB reproduces byte-equivalent indexed tasks from the unchanged native source.
+    expect(indexedSecond).toEqual(indexedFirst);
+    expect(JSON.stringify(indexedSecond)).toBe(JSON.stringify(indexedFirst));
+    expect(JSON.stringify([...nativeSnapshots.entries()])).toBe(nativeFingerprint);
+  });
 });
 
 /** Promote a one-task generation directly through the store so a rebuild has a prior active state. */
