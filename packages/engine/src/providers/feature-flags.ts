@@ -17,6 +17,15 @@ export interface DevHubFeatureFlags {
    * immediate, non-destructive rollback to the legacy rail. Additive to `codexStyleShell`.
    */
   taskRail: boolean;
+  /**
+   * M6 slice 3 (TaskHeader + provider-aware task setup). Default false. When
+   * requested true AND the server reports it applied, the web app renders the
+   * capability-gated Codex-style task header + new-task setup (provider immutable
+   * after creation; only provider-supported fields exposed); an explicit stored
+   * false is the immediate, non-destructive rollback to the legacy `ChatPane`
+   * header / setup. Additive to the umbrella `codexStyleShell` cutover flag.
+   */
+  taskHeaderSetup: boolean;
   codexStyleShell: boolean;
   crossProviderFork: boolean;
   workMode: boolean;
@@ -33,9 +42,10 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   unifiedTaskIndex: true,
   // M6 slice flags are additive and default-off; each gates exactly one strangler
   // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
-  // taskRail gates M6 Task 2.
+  // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3.
   shellChrome: false,
   taskRail: false,
+  taskHeaderSetup: false,
   codexStyleShell: false,
   crossProviderFork: false,
   workMode: false,

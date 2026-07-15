@@ -140,3 +140,57 @@ built only in the devhub branch). The App-side model currently supplies the reac
 primary tabs as secondary destinations with an empty task list (`No tasks`); populating
 live native task rows with their immutable provider identity is a later data-wire, not in
 this unit.
+
+### Task 3 - TaskHeader + provider-aware setup (`taskHeaderSetup`)
+
+Date: 2026-07-15
+
+Governing sources: REF-EMPTY / REF-SPARSE for the 46-high thin header and title
+truncation; concepts `05-provider-setup` (C05) and `01-new-task-empty` (C01) for the
+compact anchored setup (rejecting C01's oversized overlapping inset per `design-lock.md`
+§2/§13); `design-lock.md` §3 (identity/provider ownership) and §5 (task setup and
+provider-aware control rules); `design-system.md` §2–§4 tokens; `component-state-matrix.md`
+§6 (task header + provider-aware setup) and §7 (provider identity + capability
+disclosure); `surface-inventory.md` `SF-03`/`SF-05`/`SF-17`, `T-header`/`T-setup`.
+Evidence: `evidence/m6/taskheader/` (`qa-note.md`, `fixture.html`,
+`m6-taskheader-wide.png`) plus the unit/snapshot suites
+`apps/web/src/components/features/providers/TaskSetup.test.ts` and
+`apps/web/src/components/features/shell/TaskHeader.test.ts`.
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Header height 46 | design-lock §4 / manifest | measured 47 = 46 content + 1px bottom border; driven by `--dh-header-height` | Match. |
+| Title truncates before overflow | design-lock §5 / REF-SPARSE | `getComputedStyle` `text-overflow: ellipsis`, `white-space: nowrap`, `overflow: hidden`; full title in `title=` | Match. |
+| Provider identity is quiet read-only text | design-lock §3 / invariant 1 | `<span data-dh-provider-identity>` `OpenAI · Codex` / `Anthropic · Claude`; no control | Match. |
+| Provider immutable after creation (no in-task picker) | design-lock §3 / invariant 1 | 0 `<select>` and 0 `data-dh-provider-picker` in the header; change is only `Create cross-provider fork` (source unchanged) | Match. |
+| Setup exposes only capability-supported fields | design-lock §5 | Codex shows Provider/Model/Reasoning/Mode/Project/Folder/Permissions; Claude shows the same minus Reasoning; absent fields have no faked control | Match. |
+| Reasoning is Codex-only | design-lock §5 (Codex real reasoning inventory) | reasoning field present for Codex, ABSENT for Claude (asserted both) | Match. |
+| Provider-native permission label | design-lock §5 (not interchangeable) | Codex `Permissions`, Claude `Permission mode`; Claude never renders `Workspace` | Match. |
+| Unproven control is disabled WITH a reason, never CSS-faked | design-lock §5 / invariant 2 | `decideSetupFields` only emits `disabled` together with a non-empty `reason`; rendered as a real `disabled` control + `data-dh-capability-reason` wired via `aria-describedby` | Match. |
+| Fixed-provider disclosure present | design-lock §5 | `Provider is fixed after creation. Fork to another provider to continue there.` in setup + header note | Match. |
+| Create task gated until valid | design-lock §5 | `canCreateTask` requires auth+project+folder+policy; disabled Create carries the first-unmet accessible reason (`Choose a project.`) | Match. |
+| Claude model divergence copy | design-lock §5 | on divergence: Requested/Session reported/Response used each under its own label + `Model differs from request`; requested is never relabeled as the model that ran | Match. |
+| No Claude warning beside a Codex task | design-lock §13 (rejected) | Codex header computes no Claude disclosure even when divergence-shaped data is passed | Match. |
+| Provider identity is never a logo | design-lock §3 / invariant 9 | 0 `svg`/`img` in header or setup | Match. |
+
+### Task 3 judgment
+
+`TaskHeader` renders the compact 46-high existing-task header with a truncating title and
+QUIET read-only provider identity (`OpenAI · Codex` / `Anthropic · Claude`) and NO in-task
+provider control — provider is immutable after creation and the only change is
+`Create cross-provider fork`. `TaskSetup` is a compact anchored new-task panel (not a
+wizard/hero) that exposes ONLY the fields the selected provider/version proves it
+supports: Codex uses its real model/reasoning/permission inventory with the `Permissions`
+label; Claude drops reasoning and uses `Permission mode` (never `Workspace`); a
+schema-named-but-unproven control renders as an explicitly disabled field with its exact
+capability reason (never a greyed style alone). `Create task` stays disabled with the
+first-unmet accessible reason until auth/project/folder/policy are valid. For a Claude
+task only, when the requested model diverges from the session-reported or response-used
+model, the header surfaces all three under their own labels plus `Model differs from
+request` and never claims the requested model ran. Ships behind the default-off
+`taskHeaderSetup` flag; flag-off keeps the legacy `ChatPane` header/setup
+(`resolveTaskHeaderSetupMode` returns `legacy` for false/undefined/missing). Live mounting
+into the task canvas is a later data-wire (the per-task canvas header lives in the
+user-owned `ChatPane.tsx`, off-limits to this slice), mirroring how Tasks 1–2 left
+slots/rows as later data-wires. `nativeCodex`/`persistentClaude`/`taskHeaderSetup`
+requested-defaults stay false.

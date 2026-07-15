@@ -20,6 +20,7 @@ const FEATURES = {
   unifiedTaskIndex: false,
   shellChrome: false,
   taskRail: false,
+  taskHeaderSetup: false,
   codexStyleShell: true,
   crossProviderFork: false,
   workMode: true,
@@ -57,11 +58,12 @@ describe("SettingsPane native Codex feature persistence", () => {
       unifiedTaskIndex: false,
       shellChrome: false,
       taskRail: false,
+      taskHeaderSetup: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,
     });
-    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(8);
+    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(9);
   });
 
   it("changes only nativeCodex while retaining the other requested feature flags", () => {
