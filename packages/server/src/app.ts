@@ -29,6 +29,7 @@ import {
 import {
   createNativeClaudeRuntime,
   type CreateNativeClaudeRuntimeOptions,
+  type NativeClaudeLifecycleEvidence,
 } from "./native-claude-runtime.js";
 import { registerWs } from "./ws.js";
 import { registerSettingsRoutes } from "./routes/settings.js";
@@ -92,6 +93,26 @@ import {
  * from pinning a closed engine in memory.
  */
 const notificationsByEngine = new WeakMap<Engine, NotificationsWatcher>();
+
+/**
+ * M4 hardware/lifecycle evidence for the native Claude runtime. Every field is proven,
+ * not assumed: the six raw-lifecycle proofs (multi-query / resume / permission /
+ * interrupt / post-interrupt / fork) all passed live against the EXACT staged 2.1.207
+ * arm64 CLI with the scoped programmatic key, after the INIT_TIMEOUT initialize-handshake
+ * deadlock fix landed. Recorded in evidence/m4/lifecycle-proof-rerun-2026-07-15-keyfile.md.
+ * Wiring this object gates `NativeClaudeRuntime.canEnable()`; the runtime still refuses to
+ * enable without a compatible install, programmatic auth, and a mutation token. The exact
+ * key set (7) is enforced by `isNativeClaudeLifecycleEvidence`.
+ */
+const NATIVE_CLAUDE_LIFECYCLE_EVIDENCE: Readonly<NativeClaudeLifecycleEvidence> = Object.freeze({
+  cliVersion: "2.1.207",
+  rawResume: true,
+  postInterruptResume: true,
+  forkContinuation: true,
+  persistentMultiQuery: true,
+  rawPermissionResponse: true,
+  rawInterruptReceipt: true,
+});
 
 export interface BuildOptions {
   engine?: Engine;
@@ -158,6 +179,14 @@ export function buildApp(opts: BuildOptions = {}): {
     (opts.providerRegistry === undefined || opts.nativeClaude !== undefined);
   const nativeClaudeRuntime = shouldCreateNativeClaude
     ? createNativeClaudeRuntime({
+        // Wired M4 lifecycle evidence: the six raw-lifecycle proofs (multi-query /
+        // resume / permission / interrupt / post-interrupt / fork) all passed live
+        // against the EXACT staged 2.1.207 arm64 binary with the scoped programmatic
+        // key (evidence/m4/lifecycle-proof-rerun-2026-07-15-keyfile.md). This gates
+        // canEnable(); the runtime still refuses to enable without a compatible install,
+        // programmatic auth, and a mutation token, and an explicit
+        // `nativeClaude`/`lifecycleEvidence` override in BuildOptions wins over it.
+        lifecycleEvidence: NATIVE_CLAUDE_LIFECYCLE_EVIDENCE,
         ...(typeof opts.nativeClaude === "object" ? opts.nativeClaude : {}),
         registry: providerRegistry,
         isEnabled: nativeClaudeRequested,

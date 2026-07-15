@@ -5,15 +5,16 @@ import {
 } from "../../src/providers/feature-flags.js";
 
 describe("DevHub feature flags", () => {
-  it("defaults nativeCodex + unifiedTaskIndex on after the M3/M5 cutovers, other program flags off", () => {
+  it("defaults nativeCodex + persistentClaude + unifiedTaskIndex on after the M3/M4/M5 cutovers, other program flags off", () => {
     // M3 native Codex cutover: nativeCodex is now the requested default (live resume
-    // proof captured). M5 Task 9 cutover: unifiedTaskIndex is the requested default.
-    // persistentClaude (its own live-proof gate) and the not-yet-shipped shell/fork/work
-    // flags stay false. The server still clamps every resolved value to real runtime
-    // availability + applied truth, so these defaults only request the features.
+    // proof captured). M4 persistent Claude cutover: persistentClaude is now the requested
+    // default (six raw-lifecycle proofs passed 6/6 live after the INIT_TIMEOUT handshake fix).
+    // M5 Task 9 cutover: unifiedTaskIndex is the requested default. The not-yet-shipped
+    // shell/fork/work flags stay false. The server still clamps every resolved value to real
+    // runtime availability + applied truth, so these defaults only request the features.
     expect(DEFAULT_DEVHUB_FEATURE_FLAGS).toEqual({
       nativeCodex: true,
-      persistentClaude: false,
+      persistentClaude: true,
       unifiedTaskIndex: true,
       shellChrome: false,
       taskRail: false,

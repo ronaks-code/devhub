@@ -89,3 +89,94 @@ path and only then encode `NativeClaudeLifecycleEvidence` and wire it into
   model turn).
 - All throwaway probes and tmp dirs removed; tree left clean. No `lifecycleEvidence`
   wiring, no flag flips, no faked receipts.
+
+---
+
+# UPDATE 2026-07-15 (DEVHUB-M4-PROOFS): handshake fix reviewed, six proofs PASS 6/6, flag flipped
+
+The recommended readiness-handshake fix had already LANDED on `wip/devhub-background-runner`
+(commit `M4-HANDSHAKE-FIX`) but the security review, the six proofs, and the flag flip were
+explicitly deferred. This update closes all three. NO duplicate/competing fix was created —
+the existing fix was reviewed, found correct, and NOT re-applied.
+
+## Fix verification (the deadlock is genuinely broken)
+
+Driving the real `ClaudeCliProcess.start()` against the EXACT staged 2.1.207 arm64 binary
+with the scoped key sourced in-process (`set -a; . ~/.config/6thsense/devhub-agent.env; set +a`):
+`start()` RESOLVED in **~1150 ms** (phase `ready`), versus the previously-documented 5008 ms
+`INIT_TIMEOUT` rejection. Readiness now fires on the `control_request{subtype:"initialize"}`
+-> `control_response` handshake, matching the CLI's real protocol.
+
+## Adversarial security review (mandatory — this touches the auth/start machine): CLEAN
+
+I actively tried to break the change. Findings:
+
+1. **Auth (api-key requirement) is UNCHANGED and still fail-closed.** `ClaudePersistentSupervisor.acquire()`
+   calls `this.authorized()` -> `requireClaudeProgrammaticAuth(this.baseEnv)` at line 403,
+   BEFORE any spawn/`start()`. On failure it throws `UNAUTHORIZED_AUTH`. The handshake fix
+   never touched this gate. `createNativeClaudeRuntime` independently re-runs
+   `requireClaudeProgrammaticAuth` in `authorizedEnvironment()` and returns `null` (runtime
+   unavailable) if it fails. An unauthenticated session therefore cannot even be spawned, let
+   alone send a turn. The `initialize` handshake resolving readiness does NOT weaken this —
+   readiness has never been the api-key checkpoint (the key is enforced pre-spawn and again by
+   the CLI's own model turn).
+
+2. **Session-identity validation is DEFERRED, not SKIPPED.** `captureSessionId()` still runs on
+   every stdout envelope. When the first-turn `system/init` arrives with `expectedSessionId`
+   set, a non-match throws `MALFORMED_FRAME` (still fail-closed). Crucially, in `ingestStdout()`
+   the order is: `captureSessionId(envelope)` runs BEFORE `deliverEnvelope(envelope)`, and
+   `system/init` is the FIRST envelope of turn 1 (before any assistant/result content). So a
+   mismatched-session `system/init` throws -> `faultStdout` -> ingress stops -> process
+   terminates, and NO turn-1 assistant content is ever delivered downstream. The identity
+   guarantee holds; only its *timing* moved from a (permanently-deadlocking, in 2.1.207)
+   pre-turn gate to the turn-1 envelope.
+
+3. **No mis-identified session can produce usable output.** On resume/fork the first turn is
+   transmitted before identity is confirmed, but this is a session-CONTINUITY property, not an
+   AUTH property (the CLI authenticated with the same api key regardless of which session it
+   resumed). Its output is quarantined by finding (2): the first envelope validated is
+   `system/init`, and a mismatch kills the process before content flows.
+
+4. **The internal initialize handshake cannot be spoofed into an auth bypass.** The
+   `initialize` control_response is consumed internally (`tryConsumeInitializeResponse`,
+   correlated on the fixed `claude-cli-initialize` request id) and never delivered downstream.
+   It only flips readiness for a process we already spawned with a valid, pre-authorized key.
+
+**Verdict: no auth bypass, no weakening of the api-key requirement, identity still validated.
+Safe to flip.**
+
+## Six raw-lifecycle proofs — 6 / 6 PASS (live, billable, key in-process only)
+
+Driven against the EXACT staged 2.1.207 arm64 binary, model `claude-haiku-4-5`, scoped key
+sourced in-process (never printed/logged/written/committed):
+
+1. **multi-query** — PASS. Two `result{subtype:success}` turns on ONE persistent process,
+   phase stayed `ready`, session id stable.
+2. **resume** — PASS. Resumed the seeded session; continuity confirmed (recalled the secret
+   word planted in the prior process), `result subtype success`.
+3. **permission** — PASS. With `permissionMode:manual` + stdio prompt, the CLI emitted a
+   `can_use_tool` control_request; the harness answered over the control channel and the turn
+   settled with a `result`.
+4. **interrupt** — PASS. A correlated interrupt `control_response` was received for the
+   in-flight turn.
+5. **post-interrupt** — PASS. The SAME process accepted a fresh turn after the interrupt and
+   returned `result{subtype:success}` (phase `ready`).
+6. **fork** — PASS. `ClaudeSessionHelpers.forkSession()` returned a distinct valid session id
+   (no billable turn — local SDK storage op); resuming the fork carried the original history
+   (recalled the planted word), `result subtype success`.
+
+## Decision gate: PASSED -> flag flipped
+
+All 6 proofs genuinely passed AND the security review is clean, so:
+- `packages/engine/src/providers/feature-flags.ts`: `persistentClaude` requested-default -> `true`.
+- `packages/server/src/app.ts`: `NativeClaudeLifecycleEvidence` (all six fields, cliVersion
+  `2.1.207`) wired into the `createNativeClaudeRuntime` call, gating `canEnable()`.
+- Server still clamps resolved/applied to real runtime availability (compatible install +
+  programmatic auth + mutation token). `persistentClaude:false` remains the non-destructive rollback.
+
+## Tests / cleanliness
+
+- Engine suite 2206/2206 green; `claude-cli-process` 48/48 green; `tsc --noEmit` + provider-index
+  public-surface clean (pre-flip). Server suite re-run after the wiring/flip (see commit).
+- All proof harnesses were written under `/private/tmp` (outside the repo) and removed; the
+  tree carries only the source changes. Billable spend: ~7 tiny `claude-haiku-4-5` turns.

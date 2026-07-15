@@ -86,7 +86,16 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // runtime availability (a constructed native Codex runtime); an explicit stored
   // `nativeCodex: false` is the immediate, non-destructive rollback to history mode.
   nativeCodex: true,
-  persistentClaude: false,
+  // M4 persistent Claude cutover: the six raw-lifecycle proofs (multi-query / resume /
+  // permission / interrupt / post-interrupt / fork) all passed live against the EXACT
+  // staged 2.1.207 arm64 binary with the scoped programmatic key
+  // (evidence/m4/lifecycle-proof-rerun-2026-07-15-keyfile.md), after the INIT_TIMEOUT
+  // handshake deadlock was fixed, so persistent Claude is now the requested default.
+  // The server still clamps the resolved value to real runtime availability (a
+  // constructed native Claude runtime whose canEnable() requires the wired lifecycle
+  // evidence + a compatible 2.1.207 install + programmatic auth + a mutation token); an
+  // explicit stored `persistentClaude: false` is the immediate, non-destructive rollback.
+  persistentClaude: true,
   // M5 Task 9 cutover: the unified provider task index is the requested default after
   // every migration/rebuild/rollback/lease/compatibility gate passed. The server still
   // reports it available/applied ONLY when the shared store exists AND the coordinator

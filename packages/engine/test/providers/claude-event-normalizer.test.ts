@@ -624,10 +624,12 @@ describe("ClaudeEventNormalizer", () => {
     }
   });
 
-  it("leaves provider defaults and the persistent Claude feature claim disabled", () => {
+  it("leaves provider capability defaults disabled; persistent Claude is requested-on post-M4 cutover", () => {
     expect(DEFAULT_PROVIDER_CAPABILITIES.hooks).toBe(false);
     expect(DEFAULT_PROVIDER_CAPABILITIES.mcp).toBe(false);
-    expect(DEFAULT_DEVHUB_FEATURE_FLAGS.persistentClaude).toBe(false);
+    // M4 cutover: persistentClaude requested-default flipped ON after the six raw-lifecycle
+    // proofs passed 6/6 live. The server still clamps to real runtime availability.
+    expect(DEFAULT_DEVHUB_FEATURE_FLAGS.persistentClaude).toBe(true);
   });
 
   it("contains hostile constructor and context objects in value-free typed errors", () => {

@@ -102,8 +102,11 @@ describe("DevHub feature settings HTTP resolution", () => {
     });
     expect(response.statusCode).toBe(200);
     expect(handle.stored().devHubFeatures).toEqual(allEnabled);
+    // Resolved value is the backend-AVAILABLE intersection (availability seam only marks
+    // nativeCodex + unifiedTaskIndex available here), NOT the requested-defaults object.
+    // Base on allDisabled so a flipped default (e.g. persistentClaude) can't leak in.
     expect(response.json().devHubFeatures).toEqual({
-      ...DEFAULT_DEVHUB_FEATURE_FLAGS,
+      ...allDisabled,
       nativeCodex: true,
       unifiedTaskIndex: true,
     });
