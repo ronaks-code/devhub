@@ -48,7 +48,7 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
-- `wip/devhub-background-runner` at `this commit` — PAUSED handoff branch; STATUS-only pause checkpoint on tested `cdbff7d`. This is the sole resume target unless Ronak names another checkout.
+- `wip/devhub-background-runner` at `this commit` — PAUSED handoff branch (sole resume target unless Ronak names another checkout). Carries additive, un-promoted WIP built in the background runner: Task 3 M5 coordinator observation lanes (`observeListPage`/`observeTask`, bounded per-locator FIFO lanes, `maxObservationOperations` reservations, per-locator observation epochs). 589/589 provider-index tests, full engine 2083/2083, typecheck + public-surface + `git diff --check` clean. NOT promoted to `campaign/auto-improve`; no independent SPEC/QUALITY/SECURITY GO yet; `nativeCodex`/`persistentClaude`/`unifiedTaskIndex` remain false; no rebuild/read-through/server/flag work. The goal-level pause still stands.
 - `campaign/auto-improve` at `cdbff7d` — tested shared branch; M5 E/F plus the Task 3 native-missing, verified-legacy mapping, opaque observation, atomic-missing, and coordinator-foundation prerequisites are integrated after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
 - detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
 - detached `m5-f` at `4244c39` — historical reviewed F internal-foundation source; read-only and never replayed wholesale.
@@ -57,7 +57,7 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - detached `m5-task3-store` at `364d736` — exact reviewed verified-legacy mapping source retained read-only after promotion; current goal coordinator.
 - detached `m5-task3-observation` at `307c223` — exact reviewed Task 3 observation/atomic-missing source retained read-only after promotion; current goal coordinator.
 - detached `m5-task3-coordinator` at `1836785` — exact reviewed Task 3 coordinator foundation/initialization source retained read-only after promotion; no lanes/rebuild/read-through/server/flag scope.
-- `m5-task3-lanes` worktree — checked out on paused `wip/devhub-background-runner`; dependency install completed, owned paths clean, and no RED test or implementation began.
+- `m5-task3-lanes` worktree — checked out on `wip/devhub-background-runner`; RED-then-green landed for the M5 coordinator observation-lanes slice (`observeListPage`, `observeTask`, FIFO per-locator lanes, `maxObservationOperations` reservations released on all terminal paths, per-locator observation epochs). New test file `packages/engine/test/provider-index/coordinator-observe.test.ts` (12 tests); only `coordinator.ts` and that test changed. Owned paths clean.
 - `wip/devhub` at `641af8e` — remote-backed WIP with user-owned dirt and evidence; never merge wholesale.
 - detached `m5-c0-schema` at `377a724` and `m5-cursor` at `82a8b74` — stale; do not build on them.
 
