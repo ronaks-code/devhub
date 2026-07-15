@@ -73,6 +73,8 @@ rootProviderIndexStore.close();
 import type { ProviderIndexRegisteredHome } from "../../src/providers/index.js";
 // @ts-expect-error concrete backend store must not cross the providers package boundary
 import { ProviderTaskIndexStore } from "../../src/providers/index.js";
+// @ts-expect-error backend observation capability must not cross the providers package boundary
+import type { ProviderTaskObservationToken } from "../../src/providers/index.js";
 // @ts-expect-error backend normalized callback/config state is not public provider API
 import type { NormalizedProviderIndexStoreConfig } from "../../src/providers/index.js";
 // @ts-expect-error backend SQL row shape is not public provider API
@@ -114,6 +116,7 @@ import { providerTaskSnapshotReceiptKey as privateSnapshotReceiptKey } from "../
 
 type BackendOnly =
   | ProviderIndexRegisteredHome
+  | ProviderTaskObservationToken
   | NormalizedProviderIndexStoreConfig
   | ProviderEventCacheRow
   | PreparedProviderTaskSnapshot

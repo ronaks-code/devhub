@@ -37,16 +37,17 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
-- `campaign/auto-improve` — tested shared branch; M5 E/F plus the Task 3 native-missing and verified-legacy mapping prerequisites are integrated through this checkpoint after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
+- `campaign/auto-improve` — tested shared branch; M5 E/F plus the Task 3 native-missing, verified-legacy mapping, opaque observation, and atomic-missing prerequisites are integrated through this checkpoint after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
 - detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
 - detached `m5-f` at `4244c39` — historical reviewed F internal-foundation source; read-only and never replayed wholesale.
 - detached `m5-facade` at `6e1804c` — exact reviewed M5 F facade source retained read-only after promotion; current goal coordinator.
 - detached `m5-task3-contracts` at `537891d` — exact reviewed Task 3 native-missing source retained read-only after promotion; current goal coordinator.
 - detached `m5-task3-store` at `364d736` — exact reviewed verified-legacy mapping source retained read-only after promotion; current goal coordinator.
+- detached `m5-task3-observation` at `307c223` — exact reviewed Task 3 observation/atomic-missing source retained read-only after promotion; current goal coordinator.
 - `wip/devhub` at `641af8e` — remote-backed WIP with user-owned dirt and evidence; never merge wholesale.
 - detached `m5-c0-schema` at `377a724` and `m5-cursor` at `82a8b74` — stale; do not build on them.
 
 ## Recent checkpoints (last 3 tested commits on shared branch)
-- `this commit`  Task 3 verified-legacy mapping lookup promotion; 532/532 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
+- `this commit`  Task 3 opaque observation and atomic-missing promotion; 556/556 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
+- `ca9f180`  Task 3 verified-legacy mapping lookup promotion; 532/532 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
 - `256bb7a`  Task 3 native-task-missing prerequisite promotion; 351/351 affected tests plus exact-tip SPEC/QUALITY/SECURITY GO.
-- `69114ae`  M5 F local-state facade promotion; 526/526 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.

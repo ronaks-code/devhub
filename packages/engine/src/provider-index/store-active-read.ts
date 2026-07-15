@@ -41,6 +41,7 @@ import type {
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
 const HOME_FINGERPRINT = /^[0-9a-f]{64}$/u;
+const SNAPSHOT_RECEIPT_KEY = /^snapshot:v1:[0-9a-f]{64}$/u;
 
 type CacheRow = Readonly<Record<string, unknown>>;
 
@@ -234,6 +235,19 @@ function indexedSummary(
   });
 }
 
+export function readActiveProviderTaskSummary(
+  db: SqliteDatabase,
+  registration: ProviderIndexRegisteredHome,
+  locator: ProviderTaskLocator,
+  generation: number,
+  cacheDetail: "summary" | "snapshot",
+): Readonly<IndexedProviderTaskSummary> | null {
+  const row = activeTaskRow(db, locator, generation);
+  if (row === null) return null;
+  const decoded = preparedSummaryFromTaskRow(row, registration, locator, generation);
+  return indexedSummary(decoded.prepared, generation, decoded.observedAt, cacheDetail);
+}
+
 function indexedSnapshot(
   prepared: PreparedProviderTaskSnapshot,
   generation: number,
@@ -300,6 +314,31 @@ function queryTaskChildRows(
   }
 }
 
+export function decodeActiveProviderTaskReceiptAuthority(
+  row: Readonly<Record<string, unknown>>,
+  locator: ProviderTaskLocator,
+  generation: number,
+  eventCount: number,
+): Readonly<{
+  replayKey: string;
+  snapshotFingerprint: string;
+  observedAt: number;
+}> {
+  if (row.provider !== locator.provider ||
+    row.home_fingerprint !== locator.homeFingerprint ||
+    row.native_task_id !== locator.nativeTaskId ||
+    safeInteger(row.cache_generation) !== generation ||
+    safeInteger(row.event_count) !== eventCount ||
+    typeof row.replay_key !== "string" || !SNAPSHOT_RECEIPT_KEY.test(row.replay_key) ||
+    typeof row.snapshot_fingerprint !== "string" ||
+    !HOME_FINGERPRINT.test(row.snapshot_fingerprint)) return fail("CORRUPT_ROW");
+  return Object.freeze({
+    replayKey: row.replay_key,
+    snapshotFingerprint: row.snapshot_fingerprint,
+    observedAt: safeInteger(row.observed_at),
+  });
+}
+
 function storedTurnText(value: unknown, canonicalHome: string): string {
   if (typeof value !== "string" || value.length === 0 || value.includes("\u0000") ||
     sqliteTextLengthAtMost(value, 512) === null || !hasCanonicalUnicode(value) ||
@@ -343,14 +382,12 @@ function decodedSnapshotFromRows(
   );
   if (receipts.length !== 1) return fail("CORRUPT_ROW");
   const receipt = receipts[0]!;
-  if (receipt.provider !== locator.provider ||
-    receipt.home_fingerprint !== locator.homeFingerprint ||
-    receipt.native_task_id !== locator.nativeTaskId ||
-    safeInteger(receipt.cache_generation) !== generation ||
-    safeInteger(receipt.event_count) !== census.eventCount ||
-    typeof receipt.replay_key !== "string" ||
-    typeof receipt.snapshot_fingerprint !== "string") return fail("CORRUPT_ROW");
-  safeInteger(receipt.observed_at);
+  const receiptAuthority = decodeActiveProviderTaskReceiptAuthority(
+    receipt,
+    locator,
+    generation,
+    census.eventCount,
+  );
   const turns = queryTaskChildRows(
     db,
     "provider_turn_cache",
@@ -438,15 +475,15 @@ function decodedSnapshotFromRows(
   if (!verifyPreparedProviderTaskSnapshotForStore(
     decodedSummary.prepared,
     preparedTurns,
-    receipt.replay_key,
-    receipt.snapshot_fingerprint,
+    receiptAuthority.replayKey,
+    receiptAuthority.snapshotFingerprint,
   )) return fail("CORRUPT_ROW");
   const preparedSnapshot: PreparedProviderTaskSnapshot = Object.freeze({
     ...decodedSummary.prepared,
     turns: Object.freeze(preparedTurns),
     eventCount: census.eventCount,
-    snapshotFingerprint: receipt.snapshot_fingerprint,
-    receiptKey: receipt.replay_key,
+    snapshotFingerprint: receiptAuthority.snapshotFingerprint,
+    receiptKey: receiptAuthority.replayKey,
   });
   return indexedSnapshot(preparedSnapshot, generation, decodedSummary.observedAt);
 }

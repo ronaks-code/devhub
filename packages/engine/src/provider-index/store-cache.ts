@@ -404,10 +404,10 @@ export function retireOtherGenerationRows(
   if (row !== undefined) fail("CORRUPT_ROW");
 }
 
-export function deleteTaskEveryGeneration(
+export function deleteTaskEveryGenerationRows(
   db: SqliteDatabase,
   locator: ProviderTaskLocator,
-): boolean {
+): Readonly<GenerationCensus> {
   const before = taskEveryGenerationCensus(db, locator);
   const changesBefore = totalDatabaseChanges(db);
   try {
@@ -420,7 +420,14 @@ export function deleteTaskEveryGeneration(
   const after = taskEveryGenerationCensus(db, locator);
   if (censusRowCount(after) !== 0) fail("CORRUPT_ROW");
   requireDatabaseChangeDelta(db, changesBefore, censusRowCount(before));
-  return before.taskCount > 0;
+  return before;
+}
+
+export function deleteTaskEveryGeneration(
+  db: SqliteDatabase,
+  locator: ProviderTaskLocator,
+): boolean {
+  return deleteTaskEveryGenerationRows(db, locator).taskCount > 0;
 }
 
 interface ClearCensus extends ProviderCacheClearResult {

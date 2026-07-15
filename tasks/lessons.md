@@ -1,5 +1,18 @@
 # Reusable Lessons
 
+## 2026-07-14 - Match authority validation cost to the mutation decision
+
+- A CAS witness does not need to reconstruct every byte it fences. For atomic cache deletion, validate the bounded task summary needed to derive reviewed authority, validate and retain the exact bounded receipt plus aggregate child censuses, and let data-version/total-change fences detect replacement without decoding the transcript.
+- Never reuse a full read path merely because it is already trusted when the caller needs only bounded metadata. Export a narrow point-row decoder and keep full child validation on user-visible reads and writers that actually preserve or return those children.
+- Resource-bound tests should interpose at the SQL materialization boundary and cover both token issuance and commit revalidation. Permit bounded COUNT and point-row witnesses, but fail on child `.all()` or streaming so a future helper substitution cannot silently restore amplification.
+
+## 2026-07-14 - Fence asynchronous observations with one-shot store authority
+
+- A provider result is not current authority merely because its locator still matches. Capture peer `data_version`, same-connection `total_changes()`, scope sync state, every-generation target census, exact active task/receipt rows, and reconciliation state before the provider await, then recapture all of it inside the owned writer transaction before selecting a branch.
+- Keep observation capabilities opaque and instance-bound: a frozen property-free object held only in a per-store `WeakMap` gives clone, foreign-store, drop, and replay refusal without serializing authority or exposing it through the provider API barrel.
+- Prepare token-backed provider values from captured canonical-home authority without filesystem or database lookup. Invalid provider payloads may retain the token, but once a commit is admitted, consume it before `BEGIN`; drift, corruption, busy storage, trigger suppression, or capacity failure must never make a late result replayable.
+- Treat authoritative missing as one atomic cache-and-latch transition. Delete every cache generation, prove exact bigint changes and zero residual rows, preserve durable and foreign authority, and make only the exact already-missing plus empty-cache branch a zero-write idempotent return.
+
 ## 2026-07-14 - Preserve optional-field semantics during trusted reconstruction
 
 - Exact descriptor validation must distinguish an absent field, an accessor, and an own data field whose value is `undefined`. Public constructors may intentionally represent optional authority with the third form.
