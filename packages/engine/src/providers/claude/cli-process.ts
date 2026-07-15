@@ -3,9 +3,22 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { redactSecrets } from "../../redact.js";
 import { canonicalizeProviderHome } from "../task-key.js";
+import {
+  buildClaudeControlRequest,
+  classifyClaudeControlEnvelope,
+} from "./protocol/control-shapes.js";
 
 export const CLAUDE_CLI_DEFAULT_MAX_FRAME_BYTES = 4 * 1024 * 1024;
 export const CLAUDE_CLI_DEFAULT_STDERR_BYTES = 256 * 1024;
+
+/**
+ * The fixed correlation id for the one SDK `initialize` control_request every
+ * ClaudeCliProcess instance sends immediately after spawn. Readiness (start()
+ * resolving) is gated on the matching control_response, not on a pre-turn
+ * `system/init` stdout event — the installed CLI (2.1.207) only emits
+ * `system/init` once the first turn begins, well after this handshake.
+ */
+export const CLAUDE_CLI_INITIALIZE_REQUEST_ID = "claude-cli-initialize";
 
 export interface ClaudeCliIngressLimits {
   readonly maxItems: number;
@@ -49,6 +62,7 @@ export type ClaudeCliProcessErrorCode =
   | "SPAWN_FAILED"
   | "SPAWN_OUTCOME_TIMEOUT"
   | "INIT_TIMEOUT"
+  | "INIT_FAILED"
   | "CHILD_ERROR"
   | "CHILD_EXIT"
   | "CHILD_CLOSE"
@@ -597,8 +611,10 @@ export class ClaudeCliProcess {
   private spawnOutcomeTimedOut = false;
   private spawnOutcomeTimer: unknown;
   private spawnOutcomeTimerSet = false;
-  private initIdentityTimer: unknown;
-  private initIdentityTimerSet = false;
+  private initializeTimer: unknown;
+  private initializeTimerSet = false;
+  private awaitingInitializeResponse = false;
+  private readonly initializeEnvelopeBytes: Buffer;
   private shutdownRequested = false;
   private shutdownPromise: Promise<ClaudeCliTerminalResult> | null = null;
   private cleanupPromise: Promise<ClaudeCliTerminalResult> | null = null;
@@ -711,6 +727,9 @@ export class ClaudeCliProcess {
       options.spawnOutcomeTimeoutMs ?? DEFAULT_SPAWN_OUTCOME_TIMEOUT_MS,
     );
     this.terminated = this.terminalDeferred.promise;
+    this.initializeEnvelopeBytes = encodeOutboundEnvelope(
+      buildClaudeControlRequest(CLAUDE_CLI_INITIALIZE_REQUEST_ID, { subtype: "initialize" }),
+    );
   }
 
   get phase(): ClaudeCliProcessPhase {
@@ -812,7 +831,7 @@ export class ClaudeCliProcess {
       return this.shutdownPromise;
     }
     this.shutdownRequested = true;
-    this.clearInitIdentityDeadline();
+    this.clearInitializeDeadline();
     if (!this._terminalError) this._phase = "stopping";
     this.rejectStart(processError("SHUTDOWN", "Claude CLI shutdown requested"));
     const unavailable = processError("TERMINAL", "Claude CLI shutdown requested");
@@ -872,16 +891,7 @@ export class ClaudeCliProcess {
       return;
     }
     if (this._terminalError || this.shutdownRequested) return;
-    if (this.expectedSessionId === null) {
-      this._phase = "ready";
-      this.resolveStart();
-      return;
-    }
-    if (this._sessionId === this.expectedSessionId) {
-      this.confirmExpectedSessionIdentity();
-      return;
-    }
-    this.armInitIdentityDeadline();
+    this.beginInitializeHandshake();
   }
 
   private onExit(): void {
@@ -995,9 +1005,11 @@ export class ClaudeCliProcess {
       this.stdoutPending = Buffer.alloc(0);
       if (line.at(-1) === 0x0d) line = line.subarray(0, -1);
       const envelope = this.parseEnvelope(line);
-      this.captureSessionId(envelope);
-      if (this.onEnvelope) {
-        await this.deliverEnvelope(envelope);
+      if (!this.tryConsumeInitializeResponse(envelope)) {
+        this.captureSessionId(envelope);
+        if (this.onEnvelope) {
+          await this.deliverEnvelope(envelope);
+        }
       }
       if (this.stdoutFaulted) return;
       offset = newline + 1;
@@ -1116,7 +1128,6 @@ export class ClaudeCliProcess {
       throw processError("MALFORMED_FRAME", "Claude init session identity changed");
     }
     this._sessionId ??= received;
-    this.confirmExpectedSessionIdentity();
   }
 
   private deliverEnvelope(envelope: Readonly<Record<string, unknown>>): Promise<void> {
@@ -1281,7 +1292,7 @@ export class ClaudeCliProcess {
 
   private beginFailure(error: ClaudeCliProcessError, preserveIngress = false): void {
     if (this.terminalValue) return;
-    this.clearInitIdentityDeadline();
+    this.clearInitializeDeadline();
     if (!preserveIngress) this.stopIngressForTerminal();
     if (
       this._terminalError &&
@@ -1475,61 +1486,94 @@ export class ClaudeCliProcess {
     }
   }
 
-  private armInitIdentityDeadline(): void {
+  private beginInitializeHandshake(): void {
     if (
-      this.expectedSessionId === null ||
-      this._sessionId === this.expectedSessionId ||
-      this._terminalError !== null ||
-      this.shutdownRequested
-    ) return;
-    let fired = false;
-    const timeout = (): void => {
-      fired = true;
-      this.initIdentityTimerSet = false;
-      this.beginFailure(processError(
-        "INIT_TIMEOUT",
-        "Claude CLI init identity validation timed out",
-      ));
-    };
-    try {
-      const handle = this.setTimeoutFn(timeout, this.spawnOutcomeTimeoutMs);
-      this.initIdentityTimer = handle;
-      if (
-        fired ||
-        this._sessionId === this.expectedSessionId ||
-        this._terminalError !== null ||
-        this.shutdownRequested
-      ) {
-        this.safeClearTimer(handle);
-      } else {
-        this.initIdentityTimerSet = true;
-      }
-    } catch {
-      this.beginFailure(processError(
-        "TIMER_ERROR",
-        "Claude CLI init identity timer failed",
-      ));
-    }
-  }
-
-  private clearInitIdentityDeadline(): void {
-    if (!this.initIdentityTimerSet) return;
-    this.initIdentityTimerSet = false;
-    this.safeClearTimer(this.initIdentityTimer);
-  }
-
-  private confirmExpectedSessionIdentity(): void {
-    if (
-      this.expectedSessionId === null ||
-      this._sessionId !== this.expectedSessionId
-    ) return;
-    this.clearInitIdentityDeadline();
-    if (
-      !this.spawned ||
+      this.awaitingInitializeResponse ||
       this._terminalError !== null ||
       this.shutdownRequested ||
       this.terminalValue !== null
     ) return;
+    this.awaitingInitializeResponse = true;
+    this.armInitializeDeadline();
+    void this.writeChunk(this.initializeEnvelopeBytes).catch(() => {
+      if (!this.shutdownRequested) {
+        this.beginFailure(processError(
+          "INIT_TIMEOUT",
+          "Claude CLI initialize handshake write failed",
+        ));
+      }
+    });
+  }
+
+  private armInitializeDeadline(): void {
+    if (this._terminalError !== null || this.shutdownRequested) return;
+    let fired = false;
+    const timeout = (): void => {
+      fired = true;
+      this.initializeTimerSet = false;
+      this.beginFailure(processError(
+        "INIT_TIMEOUT",
+        "Claude CLI initialize handshake timed out",
+      ));
+    };
+    try {
+      const handle = this.setTimeoutFn(timeout, this.spawnOutcomeTimeoutMs);
+      this.initializeTimer = handle;
+      if (fired || this._terminalError !== null || this.shutdownRequested) {
+        this.safeClearTimer(handle);
+      } else {
+        this.initializeTimerSet = true;
+      }
+    } catch {
+      this.beginFailure(processError(
+        "TIMER_ERROR",
+        "Claude CLI initialize handshake timer failed",
+      ));
+    }
+  }
+
+  private clearInitializeDeadline(): void {
+    if (!this.initializeTimerSet) return;
+    this.initializeTimerSet = false;
+    this.safeClearTimer(this.initializeTimer);
+  }
+
+  private tryConsumeInitializeResponse(
+    envelope: Readonly<Record<string, unknown>>,
+  ): boolean {
+    if (!this.awaitingInitializeResponse || envelope.type !== "control_response") {
+      return false;
+    }
+    let classified;
+    try {
+      classified = classifyClaudeControlEnvelope(envelope);
+    } catch {
+      return false;
+    }
+    if (
+      classified.kind !== "control-response" ||
+      classified.response.requestId !== CLAUDE_CLI_INITIALIZE_REQUEST_ID
+    ) {
+      return false;
+    }
+    this.completeInitializeHandshake(classified.response.kind === "success");
+    return true;
+  }
+
+  private completeInitializeHandshake(succeeded: boolean): void {
+    if (!this.awaitingInitializeResponse) return;
+    this.awaitingInitializeResponse = false;
+    this.clearInitializeDeadline();
+    if (!succeeded) {
+      this.beginFailure(processError(
+        "INIT_FAILED",
+        "Claude CLI rejected the initialize handshake",
+      ));
+      return;
+    }
+    if (this._terminalError !== null || this.shutdownRequested || this.terminalValue !== null) {
+      return;
+    }
     this._phase = "ready";
     this.resolveStart();
   }

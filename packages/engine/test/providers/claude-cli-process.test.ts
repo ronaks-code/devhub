@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { StringDecoder } from "node:string_decoder";
 import { describe, expect, it, vi } from "vitest";
 import {
+  CLAUDE_CLI_INITIALIZE_REQUEST_ID,
   ClaudeCliProcess,
   ClaudeCliProcessError,
   type ClaudeCliChild,
@@ -177,17 +178,35 @@ const createHarness = (options: HarnessOptions = {}) => {
   };
 };
 
+/** The SDK control_response that acknowledges the `initialize` control_request every
+ * ClaudeCliProcess sends immediately after spawn. This — not a pre-turn `system/init` —
+ * is what start() now waits for. */
+const emitInitializeSuccess = (harness: ReturnType<typeof createHarness>): void => {
+  harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+    type: "control_response",
+    response: { subtype: "success", request_id: CLAUDE_CLI_INITIALIZE_REQUEST_ID },
+  })}\n`));
+};
+
 const startReady = async (harness: ReturnType<typeof createHarness>): Promise<void> => {
+  // The initialize control_request/response handshake writes to the same fake stdin
+  // tests configure (deferCallbacks/returns) for their own post-ready assertions. Run
+  // the handshake write against neutral stdin behavior, then erase its footprint and
+  // restore whatever the harness had configured before handing control to the test.
+  const stdin = harness.child.stdin;
+  const priorDeferCallbacks = stdin.deferCallbacks;
+  const priorReturns = stdin.returns.splice(0);
+  stdin.deferCallbacks = false;
+
   const starting = harness.process.start();
   harness.child.emit("spawn");
-  if (harness.expectedSessionId !== null) {
-    harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify({
-      type: "system",
-      subtype: "init",
-      session_id: harness.expectedSessionId,
-    })}\n`));
-  }
+  emitInitializeSuccess(harness);
   await starting;
+
+  stdin.writes.splice(0);
+  stdin.callbacks.splice(0);
+  stdin.deferCallbacks = priorDeferCallbacks;
+  stdin.returns.push(...priorReturns);
 };
 
 const closeFailedChild = async (
@@ -271,7 +290,17 @@ describe("ClaudeCliProcess", () => {
     }
 
     harness.child.emit("spawn");
+    expect(harness.child.stdin.writes.map(String)).toEqual([
+      `${JSON.stringify({
+        type: "control_request",
+        request_id: CLAUDE_CLI_INITIALIZE_REQUEST_ID,
+        request: { subtype: "initialize" },
+      })}\n`,
+    ]);
+    expect(harness.process.phase).toBe("starting");
+    emitInitializeSuccess(harness);
     await firstStart;
+    expect(harness.process.phase).toBe("ready");
   });
 
   it("appends only the exact allowlisted native launch profile", async () => {
@@ -329,25 +358,27 @@ describe("ClaudeCliProcess", () => {
     })).toThrow(/launch/i);
   });
 
-  it("faults when a native launch init confirms a different session", async () => {
+  it("faults turn 1 (not startup) when its system/init reports a session mismatch", async () => {
     const expected = "019f5b78-18c0-7b60-8f0c-6afc120ecd7d";
     const actual = "129f5b78-18c0-7b60-8f0c-6afc120ecd7d";
     const harness = createHarness({ launch: { kind: "resume", sessionId: expected } });
-    const starting = harness.process.start();
-    harness.child.emit("spawn");
+    await startReady(harness);
+    expect(harness.process.phase).toBe("ready");
+
     harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify({
       type: "system",
       subtype: "init",
       session_id: actual,
     })}\n`));
-    await expect(starting).rejects.toMatchObject({ code: "MALFORMED_FRAME" });
-    expect(harness.process.terminalError).toMatchObject({ code: "MALFORMED_FRAME" });
+    await vi.waitFor(() => expect(harness.process.terminalError).toMatchObject({
+      code: "MALFORMED_FRAME",
+    }));
     expect(harness.process.sessionId).toBeNull();
+    await closeFailedChild(harness);
   });
 
-  it("stays non-ready until native launch identity is validated", async () => {
-    const expected = "019f5b78-18c0-7b60-8f0c-6afc120ecd7d";
-    const harness = createHarness({ launch: { kind: "resume", sessionId: expected } });
+  it("stays non-ready until the SDK initialize control_response arrives", async () => {
+    const harness = createHarness({ launch: { kind: "resume", sessionId: "019f5b78-18c0-7b60-8f0c-6afc120ecd7d" } });
     const starting = harness.process.start();
     let settled = false;
     void starting.then(() => { settled = true; });
@@ -357,26 +388,20 @@ describe("ClaudeCliProcess", () => {
     await Promise.resolve();
 
     expect(settled).toBe(false);
+    expect(harness.process.phase).toBe("starting");
     await expect(harness.process.writeEnvelope({ type: "user" })).rejects.toMatchObject({
       code: "NOT_READY",
     });
+    expect(harness.process.sessionId).toBeNull();
 
-    harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify({
-      type: "system",
-      subtype: "init",
-      session_id: expected,
-    })}\n`));
+    emitInitializeSuccess(harness);
     await expect(starting).resolves.toBeUndefined();
-    expect(harness.process.sessionId).toBe(expected);
     expect(harness.process.phase).toBe("ready");
+    expect(harness.process.sessionId).toBeNull();
   });
 
-  it("bounds native launch identity validation after spawn", async () => {
-    const expected = "019f5b78-18c0-7b60-8f0c-6afc120ecd7d";
-    const harness = createHarness({
-      launch: { kind: "new", sessionId: expected },
-      spawnOutcomeTimeoutMs: 70,
-    });
+  it("bounds the initialize handshake deadline after spawn", async () => {
+    const harness = createHarness({ spawnOutcomeTimeoutMs: 70 });
     const starting = harness.process.start();
     harness.child.emit("spawn");
 
@@ -386,6 +411,43 @@ describe("ClaudeCliProcess", () => {
 
     await expect(starting).rejects.toMatchObject({ code: "INIT_TIMEOUT" });
     expect(harness.child.signals).toEqual([]);
+  });
+
+  it("fails closed when the CLI rejects the initialize handshake", async () => {
+    const harness = createHarness();
+    const starting = harness.process.start();
+    harness.child.emit("spawn");
+    harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify({
+      type: "control_response",
+      response: {
+        subtype: "error",
+        request_id: CLAUDE_CLI_INITIALIZE_REQUEST_ID,
+        error: "unsupported",
+      },
+    })}\n`));
+
+    await expect(starting).rejects.toMatchObject({ code: "INIT_FAILED" });
+    expect(harness.process.terminalError).toMatchObject({ code: "INIT_FAILED" });
+    expect(harness.process.phase).toBe("terminal");
+  });
+
+  it("ignores control_response frames that don't correlate to the initialize handshake", async () => {
+    const received: unknown[] = [];
+    const harness = createHarness({ onEnvelope: (value) => { received.push(value); } });
+    const starting = harness.process.start();
+    harness.child.emit("spawn");
+    const strayResponse = {
+      type: "control_response",
+      response: { subtype: "success", request_id: "some-other-request" },
+    };
+    harness.child.stdout.emit("data", Buffer.from(`${JSON.stringify(strayResponse)}\n`));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.process.phase).toBe("starting");
+    expect(received).toEqual([strayResponse]);
+
+    emitInitializeSuccess(harness);
+    await starting;
   });
 
   it("delivers raw JSON objects in wire order and captures only a valid init UUID", async () => {
@@ -491,8 +553,11 @@ describe("ClaudeCliProcess", () => {
     },
     {
       label: "an oversized pending frame",
-      maxFrameBytes: 16,
-      chunk: "x".repeat(17),
+      // Must comfortably fit the fixed initialize control_response frame that
+      // startReady() sends (97 bytes) while still being small enough for `chunk`
+      // to trivially exceed it.
+      maxFrameBytes: 128,
+      chunk: "x".repeat(129),
       code: "FRAME_TOO_LARGE",
     },
   ])("fails closed on $label", async ({ maxFrameBytes, chunk, code }) => {
