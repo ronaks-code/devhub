@@ -4,6 +4,7 @@ import { api, type AppSettings } from "../lib/api";
 import { PERMISSION_MODES, type PermissionMode } from "@devhub/engine/driver";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { cn } from "../lib/utils";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 import { Spinner } from "./ui";
 import { McpManager } from "./config/McpManager";
 import { HooksEditor } from "./config/HooksEditor";
@@ -189,15 +190,14 @@ export function requestSettingsReconciliation(
  * server — they describe how the browser reaches a server, so they can't live
  * there. Mirrors the SSR-guarded storage style used across the app.
  */
-const CONN_KEY = "claude-ui:conn";
+const CONN_KEY = "devhub:conn";
 interface ConnSettings {
   apiHost?: string;
   apiToken?: string;
 }
 function readConn(): ConnSettings {
-  if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(CONN_KEY);
+    const raw = readCompat(CONN_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" ? (parsed as ConnSettings) : {};
@@ -206,12 +206,7 @@ function readConn(): ConnSettings {
   }
 }
 function writeConn(c: ConnSettings): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(CONN_KEY, JSON.stringify(c));
-  } catch {
-    /* non-fatal */
-  }
+  writeCompat(CONN_KEY, JSON.stringify(c));
 }
 
 function Field({

@@ -275,9 +275,32 @@ export function providerResumeOverrides(
   });
 }
 
-/** Every browser-owned task identity includes the immutable provider dimension. */
+/**
+ * Fold a provider home (a raw filesystem path) into an opaque, path-free token
+ * used to namespace browser-owned state (draft keys, in-memory task identities).
+ * FNV-1a 32-bit → 8 hex chars: deterministic and stable, so the same home always
+ * maps to the same scope, while the literal path never appears in a storage key,
+ * URL, or DOM identity. NOT security-sensitive — it only scopes local UI state,
+ * not the server's canonical home (which stays backend-only behind fingerprints).
+ */
+export function pathFreeHomeToken(home: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < home.length; i++) {
+    hash ^= home.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Every browser-owned task identity includes the immutable provider dimension.
+ * The identity is opaque, path-free (the home is hashed, never embedded), and
+ * NUL-free (the native id is percent-encoded and the parts are dot-joined —
+ * `provider` and the hex home token never contain a dot, so the split stays
+ * unambiguous). Used only for in-memory de-dup and DOM keys.
+ */
 export function nativeTaskIdentity(key: NativeTaskKey): string {
-  return `${key.provider}\u0000${key.home}\u0000${key.nativeTaskId}`;
+  return `${key.provider}.${pathFreeHomeToken(key.home)}.${encodeURIComponent(key.nativeTaskId)}`;
 }
 
 export const MAX_CONNECT_BUFFER_EVENTS = 256;
@@ -470,16 +493,19 @@ function typedRpcId(value: string | number | null): string {
 }
 
 function identityKey(identity: Readonly<ProviderRequestIdentity>): string {
+  // In-memory timeline de-dup key. Path-free (the home is hashed) and NUL-free
+  // (every part is percent-encoded so no separator or filesystem path leaks, and
+  // the "|" join is unambiguous because encodeURIComponent never emits "|").
   return [
     identity.key.provider,
-    identity.key.home,
+    pathFreeHomeToken(identity.key.home),
     identity.key.nativeTaskId,
     String(identity.generation ?? "none"),
     nativePart(identity.turnId),
     typedRpcId(identity.requestId),
     nativePart(identity.itemId),
     typedRpcId(identity.approvalId),
-  ].join("\u0000");
+  ].map(encodeURIComponent).join("|");
 }
 
 function upsertTimeline(
@@ -1395,15 +1421,19 @@ export function CodexNativePane({
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const [discoveryNonce, setDiscoveryNonce] = useState(0);
   const [liveAnnouncement, setLiveAnnouncement] = useState<{ readonly id: number; readonly text: string } | null>(null);
+  // Draft scopes are path-free: the raw home is folded into an opaque token so no
+  // filesystem path ever lands in a localStorage key. The create-draft is scoped
+  // by that same token (a per-home scratch draft) rather than the raw home.
+  const homeToken = home ? pathFreeHomeToken(home) : null;
   const { draft, setDraft, clearDraft } = useDraft(
-    home ? `${presentation.draftNamespace}:${home}` : presentation.draftNamespace,
+    homeToken ? `${presentation.draftNamespace}:${homeToken}` : presentation.draftNamespace,
     selectedId,
   );
   const {
     draft: createPrompt,
     setDraft: setCreatePrompt,
     clearDraft: clearCreatePrompt,
-  } = useDraft(`${presentation.draftNamespace}:create`, home);
+  } = useDraft(`${presentation.draftNamespace}:create`, homeToken);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const loadedIdentityRef = useRef<string | null>(null);
   const listRequestRef = useRef(0);

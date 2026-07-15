@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * Light / dark / system theming. Mirrors the three-state shape of
@@ -27,7 +28,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 export type ThemePreference = "dark" | "light" | "system";
 
-const STORAGE_KEY = "claude-ui:theme";
+const STORAGE_KEY = "devhub:theme";
 const ROOT_ATTR = "data-theme";
 
 const PREFS: readonly ThemePreference[] = ["dark", "light", "system"];
@@ -38,22 +39,12 @@ function isThemePreference(v: unknown): v is ThemePreference {
 
 /** Read the persisted preference; tolerant of missing/garbage values. */
 function readPreference(): ThemePreference {
-  if (typeof window === "undefined") return "system";
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return isThemePreference(raw) ? raw : "system";
-  } catch {
-    return "system";
-  }
+  const raw = readCompat(STORAGE_KEY);
+  return isThemePreference(raw) ? raw : "system";
 }
 
 function writePreference(pref: ThemePreference): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, pref);
-  } catch {
-    /* storage unavailable / quota — non-fatal */
-  }
+  writeCompat(STORAGE_KEY, pref);
 }
 
 /** Whether the OS currently asks for a dark color scheme. SSR-safe (true). */

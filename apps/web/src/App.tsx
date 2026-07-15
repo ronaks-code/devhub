@@ -65,6 +65,7 @@ import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
 import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
 import { useTheme, type ThemePreference } from "./hooks/useTheme";
 import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
+import { readCompat, writeCompat } from "./lib/compat-storage";
 import { cn } from "./lib/utils";
 
 // Heavier, non-initial surfaces are code-split: each loads its own chunk the
@@ -139,7 +140,7 @@ type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "setting
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
-const UI_STATE_KEY = "claude-ui:ui";
+const UI_STATE_KEY = "devhub:ui";
 
 interface PersistedUiState {
   tab?: Tab;
@@ -150,9 +151,8 @@ interface PersistedUiState {
 }
 
 function readUiState(): PersistedUiState {
-  if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(UI_STATE_KEY);
+    const raw = readCompat(UI_STATE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     return parsed && typeof parsed === "object" ? (parsed as PersistedUiState) : {};
@@ -162,12 +162,7 @@ function readUiState(): PersistedUiState {
 }
 
 function writeUiState(state: PersistedUiState): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(UI_STATE_KEY, JSON.stringify(state));
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  writeCompat(UI_STATE_KEY, JSON.stringify(state));
 }
 
 const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history"];

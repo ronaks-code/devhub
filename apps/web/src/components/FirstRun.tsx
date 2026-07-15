@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * First-run / onboarding experience.
@@ -27,26 +28,18 @@ import { cn } from "../lib/utils";
  * it, and closing restores focus to wherever the user was.
  */
 
-const SEEN_KEY = "claude-ui:onboarded";
+const SEEN_KEY = "devhub:onboarded";
 
 /** Has the user dismissed onboarding before? SSR/quota guarded, like UI-state persistence. */
 export function hasSeenOnboarding(): boolean {
   if (typeof window === "undefined") return true; // SSR: never block render
-  try {
-    return window.localStorage.getItem(SEEN_KEY) === "1";
-  } catch {
-    return true; // storage unavailable — fail closed so we never nag
-  }
+  // A genuine new user has no stored flag (readCompat → null) → show onboarding.
+  return readCompat(SEEN_KEY) === "1";
 }
 
 /** Mark onboarding as seen so it never shows again. Non-fatal on storage errors. */
 export function markOnboardingSeen(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SEEN_KEY, "1");
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  writeCompat(SEEN_KEY, "1");
 }
 
 /** Selector matching every focusable node, for the focus trap (matches ShortcutOverlay). */

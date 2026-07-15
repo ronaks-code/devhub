@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Search, CornerDownLeft, Folder, Globe } from "lucide-react";
 import type { SearchHitWithSeq } from "../lib/types";
 import { cn } from "../lib/utils";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 import { Spinner } from "./ui";
 import { SearchDateFilter } from "./SearchDateFilter";
 
@@ -9,26 +10,16 @@ import { SearchDateFilter } from "./SearchDateFilter";
 type SearchScope = "global" | "project";
 
 /** Where the scope preference is remembered between opens. */
-const SCOPE_KEY = "claude-ui:search-scope";
+const SCOPE_KEY = "devhub:search-scope";
 
 /** Read the persisted scope (defaults to "global" — the original behavior). */
 function readScope(): SearchScope {
-  if (typeof window === "undefined") return "global";
-  try {
-    return window.localStorage.getItem(SCOPE_KEY) === "project" ? "project" : "global";
-  } catch {
-    return "global";
-  }
+  return readCompat(SCOPE_KEY) === "project" ? "project" : "global";
 }
 
 /** Persist the chosen scope. Non-fatal on storage errors. */
 function writeScope(scope: SearchScope): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(SCOPE_KEY, scope);
-  } catch {
-    /* storage unavailable or quota exceeded — non-fatal */
-  }
+  writeCompat(SCOPE_KEY, scope);
 }
 
 /** Render FTS snippet markers ([match]) as styled highlights. */

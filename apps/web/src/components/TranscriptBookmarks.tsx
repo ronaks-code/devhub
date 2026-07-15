@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bookmark, BookmarkCheck, X, ChevronUp, ChevronDown } from "lucide-react";
 import type { NormalizedMessage } from "../lib/types";
 import { cn } from "../lib/utils";
+import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
  * In-transcript bookmarks / jump markers. Mark any message (a small bookmark on
@@ -23,15 +24,14 @@ import { cn } from "../lib/utils";
  * like `onCopyLink`); {@link BookmarksPanel} is the jump list rail.
  */
 
-const STORAGE_KEY = "claude-ui:bookmarks";
+const STORAGE_KEY = "devhub:bookmarks";
 
 /** The full persisted map: sessionId → bookmarked message uuids (insertion order). */
 type BookmarkMap = Record<string, string[]>;
 
 function readMap(): BookmarkMap {
-  if (typeof window === "undefined") return {};
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = readCompat(STORAGE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return {};
@@ -47,12 +47,7 @@ function readMap(): BookmarkMap {
 }
 
 function writeMap(map: BookmarkMap): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* storage unavailable / quota — non-fatal */
-  }
+  writeCompat(STORAGE_KEY, JSON.stringify(map));
 }
 
 export interface TranscriptBookmarks {
