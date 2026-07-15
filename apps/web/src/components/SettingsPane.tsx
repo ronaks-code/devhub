@@ -57,6 +57,7 @@ export function completeDevHubFeatures(
     composerSurface: value?.composerSurface === true,
     inspectorDock: value?.inspectorDock === true,
     searchCommands: value?.searchCommands === true,
+    settingsSecondary: value?.settingsSecondary === true,
     codexStyleShell: value?.codexStyleShell === true,
     crossProviderFork: value?.crossProviderFork === true,
     workMode: value?.workMode === true,

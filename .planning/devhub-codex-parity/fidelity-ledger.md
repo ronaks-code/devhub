@@ -433,3 +433,75 @@ token system, reusing the existing `Skeleton` component for loading and a `role=
 region standing in for `Alert`; a full shadcn migration remains an unstarted, larger
 follow-up. `nativeCodex` / `persistentClaude` / `searchCommands` requested-defaults stay
 false.
+
+### M6 Task 8 - Settings + secondary utilities
+
+Date: 2026-07-15
+
+Governing sources: `design-lock.md` §8 (Settings uses accessible field groups for
+Appearance, Providers, Permissions; Ops/Inbox/Dashboard remain preserved secondary
+destinations), `component-state-matrix.md` §13, `surface-inventory.md` `RT-04`/
+`RT-05`/`RT-06`/`RT-07` (target owners `features/settings/SettingsRoute`,
+`features/ops/OpsRoute`, `features/inbox/InboxRoute`, `features/analytics/
+DashboardRoute`), `SF-20`, `L-settings`/`L-ops`/`L-inbox`/`L-dashboard` preserved
+copy. Evidence: `evidence/m6/settings-secondary/` (`qa-note.md`, `fixture.html`,
+`m6-settings-secondary-wide.png`) plus the unit/snapshot suites
+`apps/web/src/components/features/settings/SettingsRoute.test.ts` (19),
+`apps/web/src/components/features/settings/settings-ui.test.ts` (9),
+`apps/web/src/components/features/shell/SecondaryNav.test.ts` (5),
+`apps/web/src/components/features/ops/OpsRoute.test.ts` (2),
+`apps/web/src/components/features/inbox/InboxRoute.test.ts` (2), and
+`apps/web/src/components/features/analytics/DashboardRoute.test.ts` (2).
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Settings uses accessible field groups, never generic form cards | design-lock §8 / matrix §13 rest rule | exactly `Appearance`/`Providers`/`Budget`/`Permissions` `<section aria-labelledby>` groups, `border:0px none` (no card chrome) | Match. |
+| Every preserved workflow stays reachable | matrix §13 rest rule ("all current preferences, budgets, memory, MCP, hooks, webhooks, agents, skills, plugins, integrity, index, and archive workflows remain reachable") | `SETTINGS_TABS` keeps the legacy 10-section order; `RebuildIndex`/`IntegrityPanel`/`ArchiveTransfer`/`BudgetSettings`/`ClaudeMdEditor`/`McpManager`/`HooksEditor`/`WebhooksManager`/`PermissionsEditor`/`AgentsLibrary`/`SkillsManager`/`PluginsView` mounted UNCHANGED | Match. |
+| Ops/Inbox/Dashboard are secondary utilities, not task-home cards | matrix §13 rest rule / `RT-04`-`RT-06` | `OpsRoute`/`InboxRoute`/`DashboardRoute` each wrap the preserved pane in ONE `SecondaryNav` landmark with the correct `aria-current="page"` destination | Match. |
+| Never move dashboard cards into the task shell | `surface-inventory.md` `RT-06` | `DashboardRoute`'s own loading state (`aria-label="Loading dashboard"`) renders inside `SecondaryNav`, never a bare task-canvas mount | Match. |
+| Provider-specific fields are explicitly grouped/labeled | matrix §13 rest rule | `Providers` field group holds Default model + the `Native Codex`/`Persistent Claude` switches + a `Table` of resolved/requested provider-capability status, distinct from `Permissions`' default-permission-mode | Match. |
+| A browser-local save is labeled local, distinct from synced | matrix §13 disconnected rule ("Clearly distinguish `Saved in this browser` from `Not synced`") | `connectionSyncLabel` returns `Saved in this browser`/`Not saved` plus a separate `Not synced — stored only on this device, never sent to the server.` note, rendered next to the Connection `<fieldset>` | Match. |
+| Cache/database deletion never calls a provider delete; confirm high-impact ops; focus Cancel | matrix §13 destructive rule | `describeClearLocalDataConfirmation()` returns `callsProviderDelete:false`, `initialFocus:"cancel"`, `reversible:true`, and names the exact affected store (`devhub:conn`, this browser only); the confirming `Dialog` is absent until the user opens it | Match. |
+| No credentials in destructive summaries | matrix §13 destructive rule | confirmation body text asserted to never match `/Bearer|token=/i`; the API token value is never echoed | Match. |
+| Old key/env/schema readers preserved during migration | matrix §13 rest rule | `SettingsRoute` reuses `SettingsPane`'s own pure helpers (`completeDevHubFeatures`, `withNativeCodexPreference`, `withPersistentClaudePreference`, `settingsUpdatePayload`, `dirtySettingsUpdatePayload`, `mergeAuthoritativeSettings`, `deliverSettingsResponse`, `requestSettingsReconciliation`) rather than re-deriving the save/reconcile contract a second time | Match. |
+| Section navigation uses tab/list semantics; a real bound label per field | matrix §13 focus rule | `1` `role="tablist"` / `10` `role="tab"` in the Settings frame; every `Field` renders a real `<label for>` (`dh-settings-theme`, `dh-settings-default-model`, `dh-settings-permission-mode`, `dh-settings-monthly-budget`, ...) | Match. |
+| No provider/brand logos in the secondary destination list | design-lock §3 / invariant 9 | `0` `<svg>`/`<img>` inside the `SecondaryNav` destination `<ul>` across all 5 fixture frames | Match. |
+
+### Task 8 judgment
+
+`SettingsRoute` is the canonical provider-aware Settings surface: three named,
+accessible field groups (`Appearance`, `Providers`, `Permissions`, plus a small
+`Budget` group for the one quick preserved soft-cap field) built from the audited
+hand-rolled `Tabs`/`FieldGroup`/`Field`/`FieldSet`/`Select`/`Input`/`Switch`/
+`Button`/`Alert`/`Progress`/`Table`/`Dialog` primitive set (`settings-ui.tsx`),
+never a generic bordered form card, with every preserved maintenance/config
+workflow (Budget/Memory/MCP servers/Hooks/Webhooks/Permissions/Agents/Skills/
+Plugins, plus RebuildIndex/IntegrityPanel/ArchiveTransfer) reachable via the SAME
+components mounted unchanged, and the whole save/reconcile/dirty-field state
+machine reused from `SettingsPane` rather than re-derived. `OpsRoute`/`InboxRoute`/
+`DashboardRoute` route the preserved `LiveOpsBoard`/`InboxPane`/`DashboardPane`
+under the new shared `SecondaryNav` landmark instead of as primary task-home tabs,
+reusing each pane's content unchanged. A new, real, bounded destructive action —
+clearing the browser-local connection prefs via a focus-on-Cancel `Dialog`
+confirmation that states the exact affected store, is reversible, and never calls
+a provider delete — exercises the `Dialog` primitive honestly, since no equivalent
+control existed in the legacy panes. Ships behind the default-off
+`settingsSecondary` flag shared by all four routes (`resolveSettingsSecondaryMode`/
+`isSettingsSecondaryApplied`, mirroring `resolveSearchCommandsMode`): flag-off
+keeps the legacy `SettingsPane`/`LiveOpsBoard`/`InboxPane`/`DashboardPane` mounted
+exactly as today, so flag-off is a true no-op that instantiates none of the new
+routes. SCOPE (honest): this claims the Settings field-group PRESENTATION, the
+preserved-workflow reachability contract, the Ops/Inbox/Dashboard secondary-
+navigation placement, the local-vs-synced/destructive-confirmation copy, and flag
+safety only; live mounting into `App.tsx`'s primary-tab rail (replacing the
+`home`/`browse`/`settings`/`dashboard`/`ops`/`inbox` sibling tabs with
+`SecondaryNav`-routed destinations, wiring real handlers/routing) is a deferred
+data-wire staged for the Task 9 `codexStyleShell` cutover, mirroring how Tasks 1–7
+left their live mount as a later data-wire. TOOLING (honest): `design-lock.md`
+§7/§11 names the shadcn/Radix toolchain, but no M6 task (1–8) has installed
+shadcn/cmdk/Radix packages — this slice, like the rest of `apps/web` including the
+legacy panes it supersedes/routes, uses hand-rolled ARIA-correct primitives on the
+shared token system, reusing the existing `nextTabIndex` roving-focus helper from
+`InspectorDock`; a full shadcn migration remains an unstarted, larger follow-up.
+`nativeCodex` / `persistentClaude` / `searchCommands` / `settingsSecondary`
+requested-defaults stay false.

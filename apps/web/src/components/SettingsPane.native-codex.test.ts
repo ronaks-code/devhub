@@ -25,6 +25,7 @@ const FEATURES = {
   composerSurface: false,
   inspectorDock: false,
   searchCommands: false,
+  settingsSecondary: false,
   codexStyleShell: true,
   crossProviderFork: false,
   workMode: true,
@@ -67,11 +68,12 @@ describe("SettingsPane native Codex feature persistence", () => {
       composerSurface: false,
       inspectorDock: false,
       searchCommands: false,
+      settingsSecondary: false,
       codexStyleShell: false,
       crossProviderFork: false,
       workMode: false,
     });
-    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(13);
+    expect(Object.keys(completeDevHubFeatures(undefined))).toHaveLength(14);
   });
 
   it("changes only nativeCodex while retaining the other requested feature flags", () => {
