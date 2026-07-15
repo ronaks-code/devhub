@@ -1,5 +1,15 @@
 # Reusable Lessons
 
+## 2026-07-14 - Validate coordinator authority before side effects
+
+- Normalize the entire configured-home list before sampling a clock or registering the first home. Canonicalize aliases, reject malformed Unicode/SQLite bounds, deduplicate, sort, and freeze first so a late invalid entry cannot leave partial initialization authority.
+- Check trap-free proxy identity before operations such as `Array.isArray` that can throw on revoked proxies. Exact own-data validation must reject accessors and explicit `undefined` without executing caller code.
+- An exported concrete coordinator must not make its constructor a factory bypass. Require a module-private construction capability, retain the normalized dependencies for later slices, and guard initialization reentrancy before invoking the injected clock.
+- `instanceof` is not instance authority because `Object.create(Class.prototype)` passes. Brand real registry/store construction in module-owned weak sets and have factories validate that unforgeable membership after rejecting proxies.
+- A module-owned weak set is still bypassable when the factory reaches it through an exported writable class static. Capture the predicate through an internal module import binding, and test hostile static monkeypatching cannot replace the authority check.
+- Give configured authority lists a dedicated admission cap before canonicalization. Reusing a large runtime task cap can turn startup normalization into attacker-controlled synchronous path work.
+- A one-timestamp initialization contract spans retryable store failures. Retain the first valid timestamp until initialization succeeds so partial idempotent registrations and later retries cannot acquire mixed authority times.
+
 ## 2026-07-14 - Match authority validation cost to the mutation decision
 
 - A CAS witness does not need to reconstruct every byte it fences. For atomic cache deletion, validate the bounded task summary needed to derive reviewed authority, validate and retain the exact bounded receipt plus aggregate child censuses, and let data-version/total-change fences detect replacement without decoding the transcript.

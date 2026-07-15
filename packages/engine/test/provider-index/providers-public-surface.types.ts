@@ -75,6 +75,16 @@ import type { ProviderIndexRegisteredHome } from "../../src/providers/index.js";
 import { ProviderTaskIndexStore } from "../../src/providers/index.js";
 // @ts-expect-error backend observation capability must not cross the providers package boundary
 import type { ProviderTaskObservationToken } from "../../src/providers/index.js";
+// @ts-expect-error concrete coordinator must not cross the providers package boundary
+import { ProviderTaskIndexCoordinator } from "../../src/providers/index.js";
+// @ts-expect-error backend coordinator factory must not cross the providers package boundary
+import { createProviderTaskIndexCoordinator } from "../../src/providers/index.js";
+// @ts-expect-error raw-home coordinator input must not cross the providers package boundary
+import type { ConfiguredProviderHome } from "../../src/providers/index.js";
+// @ts-expect-error raw-home coordinator factory input must not cross the providers package boundary
+import type { ProviderTaskIndexCoordinatorFactoryInput } from "../../src/providers/index.js";
+// @ts-expect-error backend timer callbacks must not cross the providers package boundary
+import type { ProviderTaskIndexCoordinatorTimers } from "../../src/providers/index.js";
 // @ts-expect-error backend normalized callback/config state is not public provider API
 import type { NormalizedProviderIndexStoreConfig } from "../../src/providers/index.js";
 // @ts-expect-error backend SQL row shape is not public provider API
@@ -117,6 +127,9 @@ import { providerTaskSnapshotReceiptKey as privateSnapshotReceiptKey } from "../
 type BackendOnly =
   | ProviderIndexRegisteredHome
   | ProviderTaskObservationToken
+  | ConfiguredProviderHome
+  | ProviderTaskIndexCoordinatorFactoryInput
+  | ProviderTaskIndexCoordinatorTimers
   | NormalizedProviderIndexStoreConfig
   | ProviderEventCacheRow
   | PreparedProviderTaskSnapshot
@@ -139,7 +152,11 @@ void injectiveContentString;
 void privateSnapshotFingerprint;
 void privateSnapshotReceiptKey;
 void ProviderTaskIndexStore;
+void ProviderTaskIndexCoordinator;
+void createProviderTaskIndexCoordinator;
 
 declare const reconciliationStore: ProviderReconciliationStore;
 // @ts-expect-error canonical home resolution is backend-only
 reconciliationStore.resolveHome("openai", "a".repeat(64));
+// @ts-expect-error stage lease timing is backend coordinator authority only
+reconciliationStore.getStageLeaseMs();

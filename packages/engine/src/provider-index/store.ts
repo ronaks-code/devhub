@@ -2628,6 +2628,15 @@ function replacePreparedActiveSnapshotInsideOwnedTransaction(
   });
 }
 
+const providerTaskIndexStoreInstances = new WeakSet<object>();
+
+export function isProviderTaskIndexStoreInstance(
+  value: unknown,
+): value is ProviderTaskIndexStore {
+  return value !== null && (typeof value === "object" || typeof value === "function") &&
+    providerTaskIndexStoreInstances.has(value as object);
+}
+
 export class ProviderTaskIndexStore implements ProviderReconciliationStore {
   private readonly db: SqliteDatabase;
   private readonly config: Readonly<NormalizedProviderIndexStoreConfig>;
@@ -2641,6 +2650,11 @@ export class ProviderTaskIndexStore implements ProviderReconciliationStore {
     this.db = db;
     this.config = normalizeProviderIndexStoreOptions(options);
     this.mutationGuard = mutationGuardFor(db);
+    providerTaskIndexStoreInstances.add(this);
+  }
+
+  getStageLeaseMs(): number {
+    return this.config.stageLeaseMs;
   }
 
   issueTaskObservationToken(

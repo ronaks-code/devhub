@@ -929,6 +929,21 @@ export class Engine {
 
 export { TranscriptIndex } from "./index-db.js";
 export { ProviderTaskIndexStore } from "./provider-index/store.js";
+export {
+  PROVIDER_INDEX_COORDINATOR_DEFAULTS,
+  PROVIDER_INDEX_COORDINATOR_HARD_LIMITS,
+  ProviderTaskIndexCoordinator,
+  ProviderTaskIndexCoordinatorError,
+  createProviderTaskIndexCoordinator,
+} from "./provider-index/coordinator.js";
+export type {
+  ConfiguredProviderHome,
+  ProviderTaskIndexCoordinatorClock,
+  ProviderTaskIndexCoordinatorErrorCode,
+  ProviderTaskIndexCoordinatorFactoryInput,
+  ProviderTaskIndexCoordinatorOptions,
+  ProviderTaskIndexCoordinatorTimers,
+} from "./provider-index/coordinator.js";
 export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";
 export { parseSearchQuery, mergeFacets } from "./query-parser.js";

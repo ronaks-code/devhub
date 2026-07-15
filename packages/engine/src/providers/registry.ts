@@ -37,6 +37,7 @@ import type {
   Unsubscribe,
   UserInput,
 } from "./types.js";
+import { brandProviderRegistryInstance } from "./registry-instance.js";
 import {
   isProviderOperationErrorCode,
   ProviderOperationError,
@@ -362,6 +363,10 @@ export class ProviderRegistry {
     Set<SubscriptionRequestLedger>
   >();
   private readonly terminalRequests = new Set<string>();
+
+  constructor() {
+    brandProviderRegistryInstance(this);
+  }
 
   register(home: string, adapter: ProviderAdapter): void {
     const canonicalHome = canonicalizeProviderHome(home);
