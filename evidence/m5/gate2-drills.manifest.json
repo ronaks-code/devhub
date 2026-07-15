@@ -1,0 +1,215 @@
+{
+  "title": "M5 Task 9 gate-2 induced-failure drill suite",
+  "task": "m5-t9-drills",
+  "branch": "wip/devhub-background-runner",
+  "generatedBy": "M5-T9-DRILLS",
+  "workers": 2,
+  "flagsHeld": {
+    "nativeCodex": false,
+    "persistentClaude": false,
+    "unifiedTaskIndex": false
+  },
+  "notes": [
+    "No provider process is spawned by any drill (native runtimes are never enabled).",
+    "The gate-2 failure behaviors are proven by adversarial induced-failure tests that were written RED-first across the M5 slices. This manifest is the authoritative gate-2 -> test map; run-gate2-drills.sh executes the whole corpus green at <=2 workers and stages the JSON/text evidence next to this file.",
+    "packages/engine/test/provider-index/gate2-drills.test.ts is a NEW dependency-light drill file added by this task that reproduces the cross-cutting properties (v13 migration recovery, flag-rollback no-down-migration, DB-busy fail-closed, invalid/unknown-fingerprint locator, cursor scope abuse, path-free fingerprint) directly against the real engine APIs so the gate-2 intent is asserted in one legible place."
+  ],
+  "drills": [
+    {
+      "id": "v13-migration-interruption",
+      "gate2": "v13 migration interruption",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "recovers from an interrupted run by re-running migrations after user_version is reset to 13", "new": true},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "rolls back the v15 column and version when injected backfill authorization fails"},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "rolls back every earlier v14 object and the version on a mid-DDL conflict"},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "is idempotent when rerun, including after user_version is reset to 13"}
+      ]
+    },
+    {
+      "id": "db-busy-write-failure",
+      "gate2": "DB busy / write failure",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "rejects a store mutation while another transaction holds the connection, then recovers", "new": true},
+        {"file": "packages/engine/test/provider-index/store.test.ts", "test": "rejects caller-owned transactions before callbacks or changes"},
+        {"file": "packages/engine/test/provider-index/store.test.ts", "test": "maps closed, busy, and SQLite failures to value-free database errors"},
+        {"file": "packages/engine/test/provider-index/store-active-cache.test.ts", "test": "maps every E operation on a closed database to DATABASE_UNAVAILABLE"}
+      ]
+    },
+    {
+      "id": "duplicate-conflicting-replay",
+      "gate2": "duplicate/conflicting replay with null and repeated turn/item IDs",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "enforces one turn ordinal per task generation"},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "enforces one event ordinal across all turns in a task generation"},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "enforces one replay receipt per task generation"},
+        {"file": "packages/engine/test/provider-index/store-stage.test.ts", "test": "renews heartbeats, accepts an exact-time replay, and samples no token"}
+      ]
+    },
+    {
+      "id": "partial-staging-crash-takeover",
+      "gate2": "partial staging generation + hard-crash and expired-owner takeover",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/store-stage.test.ts", "test": "takes over exactly at expiry, deletes only abandoned cache, and survives reopen"},
+        {"file": "packages/engine/test/provider-index/store-stage.test.ts", "test": "aborts an expired exact stage and never reuses its generation with a repeated token"},
+        {"file": "packages/engine/test/provider-index/store-stage.test.ts", "test": "isolates expired takeover and abort from an identical generation and task in another scope"},
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "cancels a mid-run rebuild and aborts the stage"}
+      ]
+    },
+    {
+      "id": "cache-corruption",
+      "gate2": "cache corruption",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/store.test.ts", "test": "classifies a suppressed require write as persisted-row corruption"},
+        {"file": "packages/engine/test/provider-index/store-active-cache.test.ts", "test": "rejects unchanged active summary replacement when its preserved snapshot is corrupt"},
+        {"file": "packages/engine/test/provider-index/coordinator-readthrough.test.ts", "test": "lets cache corruption outrank the provider error on the degraded path"}
+      ]
+    },
+    {
+      "id": "failed-rebuild",
+      "gate2": "failed rebuild",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "aborts a mid-rebuild provider read failure and retains the prior generation"},
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "rejects an exact-repeat cursor and preserves the prior active generation"},
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "fails with CAPACITY when the page bound is exceeded"},
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "reports a stage-loss cleanup failure ahead of the cancel terminal"}
+      ]
+    },
+    {
+      "id": "native-deletion-no-gzip-resurrection",
+      "gate2": "native deletion without gzip resurrection",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/coordinator-readthrough.test.ts", "test": "marks an authoritative-missing task missing and never consults cache"},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "cascades only rebuildable cache children when a task generation is deleted"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "fails closed when a persisted task is deleted before a mutation"}
+      ]
+    },
+    {
+      "id": "unresolved-legacy-collision",
+      "gate2": "unresolved legacy collision",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/coordinator-readthrough.test.ts", "test": "leaves an unresolved provenance-only legacy session on the legacy path"},
+        {"file": "packages/engine/test/provider-index/coordinator-readthrough.test.ts", "test": "resolves a natively verified legacy session to its unified locator"}
+      ]
+    },
+    {
+      "id": "external-mutation",
+      "gate2": "external mutation",
+      "coverage": [
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "fails closed and latches when the native revision drifted since last review"},
+        {"file": "packages/engine/test/provider-index/store.test.ts", "test": "strictly rejects corrupt reconciliation rows"},
+        {"file": "packages/engine/test/providers/reconciliation-store.test.ts", "test": "delegates requireReconciliation with the exact minimal latch input"}
+      ]
+    },
+    {
+      "id": "stale-uncertain-respond",
+      "gate2": "stale/uncertain respond",
+      "coverage": [
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "routes respond through the fence and correlates the exact approval once"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "treats a stale approval respond as a fenced no-op that never latches or replays"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "latches and never replays when a dispatched mutation outcome is uncertain"}
+      ]
+    },
+    {
+      "id": "durable-latch-restart-relatch-cas",
+      "gate2": "durable latch restart + same-fingerprint relatch + CAS race",
+      "coverage": [
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "restores a durable latch on a fresh (restarted) adapter before any mutation"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "monotonically increments the durable latch revision across clear then same-fingerprint relatch"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "refuses a stale-revision acknowledge when a newer durable latch exists"},
+        {"file": "packages/engine/test/providers/reconciliation-store.test.ts", "test": "delegates acknowledgeReconciliation with the exact CAS arguments"}
+      ]
+    },
+    {
+      "id": "lease-loss",
+      "gate2": "lease loss",
+      "coverage": [
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "fails closed and never replays when the writer lease is lost"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "never dispatches a send before native contact when the writer lease is lost, and never replays"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "fails closed and releases the lease when the fenced write cannot start (heartbeat loss)"},
+        {"file": "packages/engine/test/providers/writer-lease.test.ts", "test": "*"}
+      ]
+    },
+    {
+      "id": "provider-restart",
+      "gate2": "provider restart",
+      "coverage": [
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "latches and never replays when a process generation change commits during a send"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "restores a durable latch on a fresh (restarted) adapter before any mutation"},
+        {"file": "packages/engine/test/providers/codex-native-adapter.test.ts", "test": "fails closed on a non-monotonic (ABA) writer epoch before any reread or dispatch"}
+      ]
+    },
+    {
+      "id": "flag-rollback-no-down-migration",
+      "gate2": "flag rollback (stored false -> instant legacy path, no schema down-migration)",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "never down-migrates the schema when the flag is rolled back after cutover", "new": true},
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "lets an explicit stored false override win over an on-default", "new": true},
+        {"file": "packages/engine/test/provider-index/migration.test.ts", "test": "does not downgrade or mutate a future user_version"},
+        {"file": "packages/engine/test/providers/feature-flags.test.ts", "test": "*"}
+      ]
+    },
+    {
+      "id": "invalid-unknown-fingerprint-locator",
+      "gate2": "invalid/unknown-fingerprint locator",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "round-trips a valid locator but rejects malformed serialized locators", "new": true},
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "resolves a registered home but returns null for an unknown fingerprint and rejects an invalid one", "new": true},
+        {"file": "packages/server/test/provider-index.test.ts", "test": "rejects an unparsable locator"},
+        {"file": "packages/engine/test/provider-index/identity.test.ts", "test": "*"}
+      ]
+    },
+    {
+      "id": "cursor-scope-abuse",
+      "gate2": "cursor scope abuse",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "parses a cursor under its own scope but rejects it under any different scope", "new": true},
+        {"file": "packages/engine/test/provider-index/gate2-drills.test.ts", "test": "rejects malformed and checksum-tampered cursors", "new": true},
+        {"file": "packages/engine/test/provider-index/cursor.test.ts", "test": "rejects cursor reuse under any different scope"},
+        {"file": "packages/engine/test/provider-index/cursor.test.ts", "test": "rejects a position outside its declared provider or home scope"},
+        {"file": "packages/server/test/provider-index.test.ts", "test": "rejects a home fingerprint without its provider scope"},
+        {"file": "packages/server/test/provider-index.test.ts", "test": "rejects a malformed cursor"}
+      ]
+    },
+    {
+      "id": "sse-inject-overflow-reconnect",
+      "gate2": "SSE events injected before/during/after snapshot + overflow + stale/foreign/malformed reconnect IDs",
+      "coverage": [
+        {"file": "packages/server/test/provider-index.test.ts", "test": "emits snapshot then live and takes the full path for any Last-Event-ID"}
+      ],
+      "note": "The subscribe-first-into-bounded-buffer -> authoritative snapshot -> drain-with-dedup -> live state machine (with resync-required overflow terminal and Last-Event-ID always ignored) lives in packages/server/src/routes/provider-index.ts and is driven end to end by this route test; the SSE frame body is scanned for raw-home/NUL leaks."
+    },
+    {
+      "id": "v1-quarantine-import",
+      "gate2": "v1 quarantine import",
+      "coverage": [
+        {"file": "packages/engine/test/portable.test.ts", "test": "v1 import NEVER overwrites a verified live mapping (quarantine skips provenance for it)"},
+        {"file": "packages/engine/test/portable.test.ts", "test": "golden v1 reader compat: restores sessions/text/meta + records archive-v1-import provenance"},
+        {"file": "packages/engine/test/portable.test.ts", "test": "exportLegacyV1Archive excludes RESOLVED sessions and rejects explicitly selecting one"}
+      ]
+    },
+    {
+      "id": "v2-orphan-mapped-collision-import",
+      "gate2": "v2 orphan and mapped-collision import",
+      "coverage": [
+        {"file": "packages/engine/test/portable.test.ts", "test": "v2 round-trips into a FRESH index: additive meta + provider links restore (as orphans, no cache row)"},
+        {"file": "packages/engine/test/portable.test.ts", "test": "rejects a conflicting source→two-targets mapping, collapses a duplicate identical entry"},
+        {"file": "packages/engine/test/portable.test.ts", "test": "rejects an unknown-target mapping BEFORE any write"},
+        {"file": "packages/engine/test/portable.test.ts", "test": "rejects a cyclic mapping"}
+      ]
+    },
+    {
+      "id": "v2-secret-path-scan",
+      "gate2": "v2 secret/path scan",
+      "coverage": [
+        {"file": "packages/engine/test/portable.test.ts", "test": "exports kind=devhub-archive/schemaVersion=2 with additive meta + provider links, NO session content/text/paths"}
+      ]
+    },
+    {
+      "id": "full-storage-deletion-byte-equivalent-rebuild",
+      "gate2": "full DevHub-storage deletion followed by byte-equivalent rebuild",
+      "coverage": [
+        {"file": "packages/engine/test/provider-index/coordinator-rebuild.test.ts", "test": "rebuilds byte-equivalent indexed tasks from a cleared DevHub DB without mutating native snapshots"}
+      ]
+    }
+  ]
+}
