@@ -245,6 +245,14 @@ export interface ThreadWorkspaceProps {
   placeholder?: string;
   /** Whether send is enabled. Presentation only; the swap never changes geometry. */
   canSend?: boolean;
+  /**
+   * Override the built-in geometry-proof composer slot with a real one (M6 Task 9,
+   * additive/optional). When omitted, the inert `ComposerSlot` renders exactly as
+   * before — the original byte-for-byte presentation-only contract. A host with a
+   * live `composerSurface` mount (the canonical `Composer`) supplies this instead of
+   * duplicating a second composer in the same view.
+   */
+  composerSlot?: ReactNode;
 }
 
 /**
@@ -304,6 +312,7 @@ export function ThreadWorkspace({
   sendState = "send",
   placeholder = THREAD_COPY.placeholder,
   canSend = false,
+  composerSlot,
 }: ThreadWorkspaceProps) {
   const isEmpty = items.length === 0;
   // The single polite, coarse live region for the whole workspace. It reflects the
@@ -350,7 +359,7 @@ export function ThreadWorkspace({
       </div>
 
       {/* The composer renders even when the transcript is empty. */}
-      <ComposerSlot sendState={sendState} placeholder={placeholder} canSend={canSend} />
+      {composerSlot ?? <ComposerSlot sendState={sendState} placeholder={placeholder} canSend={canSend} />}
     </div>
   );
 }

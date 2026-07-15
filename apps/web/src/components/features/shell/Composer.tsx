@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import {
   PERMISSION_FIELD_LABEL,
@@ -292,6 +292,17 @@ export interface ComposerProps {
   footer?: ComposerFooterInput;
   /** Placeholder override. */
   placeholder?: string;
+  /**
+   * Live data-wire hooks (M6 Task 9, additive/optional). When omitted the textarea
+   * stays exactly as before (an uncontrolled `defaultValue`) and the send button has
+   * no click handler — byte-for-byte the original presentation-only contract. A real
+   * host (e.g. the Chat-tab composer host) supplies these to make the draft/send
+   * affordance genuinely live without changing geometry or any existing prop's
+   * default behavior.
+   */
+  onDraftChange?: (value: string) => void;
+  onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSend?: () => void;
 }
 
 function FooterContext({ provider, footer }: { provider?: ProviderId; footer?: ComposerFooterInput }) {
@@ -326,6 +337,9 @@ export function Composer({
   connection = "connected",
   footer,
   placeholder,
+  onDraftChange,
+  onKeyDown,
+  onSend,
 }: ComposerProps): ReactNode {
   const isStop = sendState === "stop";
   // Stop is always actionable (a real interrupt path). Only a real Send can be blocked.
@@ -358,7 +372,16 @@ export function Composer({
         data-dh-composer-input=""
         data-dh-composer-new-task={isNewTask ? "" : undefined}
         placeholder={resolvedPlaceholder}
-        defaultValue={draft}
+        // Uncontrolled (defaultValue) when no live host wires onDraftChange — the
+        // original presentation-only contract, byte-for-byte. A real host supplies
+        // onDraftChange and switches this to a controlled value.
+        {...(onDraftChange
+          ? {
+              value: draft,
+              onChange: (e: ChangeEvent<HTMLTextAreaElement>) => onDraftChange(e.target.value),
+            }
+          : { defaultValue: draft })}
+        onKeyDown={onKeyDown}
         rows={2}
       />
 
@@ -377,6 +400,7 @@ export function Composer({
           data-dh-send-state={sendState}
           disabled={sendDisabled}
           aria-describedby={sendDisabled ? SEND_REASON_ID : undefined}
+          onClick={onSend}
         >
           {isStop ? COMPOSER_COPY.stopLabel : COMPOSER_COPY.sendLabel}
         </button>

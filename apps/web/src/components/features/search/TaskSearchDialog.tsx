@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { type ProviderId } from "../providers/provider-capabilities.js";
 import { Skeleton } from "../../Skeleton.js";
@@ -265,6 +265,18 @@ export interface TaskSearchDialogProps {
   label?: string;
   /** Navigate to a provider-locked result. Provider derives from the composite key. */
   onOpen?: (target: SearchNavigationTarget, result: SearchResult) => void;
+  /**
+   * Live data-wire hooks (M6 Task 9, additive/optional). Omitted keeps every input
+   * inert (`readOnly`, unclickable scope/date/retry) — the original presentation-only
+   * contract, byte-for-byte. A host wires these to make the dialog genuinely
+   * interactive without changing the dialog's own status/error precedence.
+   */
+  onQueryChange?: (query: string) => void;
+  onScopeChange?: (scope: SearchScope) => void;
+  onDateFacetChange?: (facet: SearchDateFacet | null) => void;
+  onRetry?: () => void;
+  /** Escape closes the dialog and restores focus to the invoker (host-owned). */
+  onClose?: () => void;
 }
 
 export function TaskSearchDialog({
@@ -279,6 +291,11 @@ export function TaskSearchDialog({
   activeIndex = 0,
   label = SEARCH_COPY.title,
   onOpen,
+  onQueryChange,
+  onScopeChange,
+  onDateFacetChange,
+  onRetry,
+  onClose,
 }: TaskSearchDialogProps): ReactNode {
   const projectScopeEnabled = Boolean(activeProjectId);
   const effectiveProject = scope === "project" && projectScopeEnabled;
@@ -303,6 +320,16 @@ export function TaskSearchDialog({
       role="dialog"
       aria-modal="true"
       aria-label={label}
+      onKeyDown={
+        onClose
+          ? (e: KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onClose();
+              }
+            }
+          : undefined
+      }
     >
       <h2 className="dh-sr-only" data-dh-search-title="">
         {label}
@@ -318,7 +345,10 @@ export function TaskSearchDialog({
           type="text"
           autoFocus
           value={query}
-          readOnly
+          readOnly={!onQueryChange}
+          onChange={
+            onQueryChange ? (e: ChangeEvent<HTMLInputElement>) => onQueryChange(e.target.value) : undefined
+          }
           aria-label={label}
           aria-controls="dh-search-results"
           placeholder={placeholder}
@@ -339,6 +369,7 @@ export function TaskSearchDialog({
             data-dh-search-scope-option="global"
             role="radio"
             aria-checked={scope === "global" ? "true" : "false"}
+            onClick={onScopeChange ? () => onScopeChange("global") : undefined}
           >
             {SEARCH_COPY.scopeGlobal}
           </button>
@@ -350,6 +381,7 @@ export function TaskSearchDialog({
             aria-checked={effectiveProject ? "true" : "false"}
             disabled={!projectScopeEnabled}
             title={projectScopeEnabled ? undefined : SEARCH_COPY.scopeProjectDisabledReason}
+            onClick={onScopeChange ? () => onScopeChange("project") : undefined}
           >
             {activeProjectName || SEARCH_COPY.scopeProjectFallback}
           </button>
@@ -370,6 +402,7 @@ export function TaskSearchDialog({
               data-dh-date-facet={f.id}
               role="radio"
               aria-checked={dateFacet === f.id ? "true" : "false"}
+              onClick={onDateFacetChange ? () => onDateFacetChange(f.id) : undefined}
             >
               {f.label}
             </button>
@@ -384,6 +417,7 @@ export function TaskSearchDialog({
             type="button"
             className="dh-search-date-clear"
             data-dh-date-control="clear"
+            onClick={onDateFacetChange ? () => onDateFacetChange(null) : undefined}
           >
             {SEARCH_COPY.dateControls.clearRange}
           </button>
@@ -407,7 +441,12 @@ export function TaskSearchDialog({
         // (rendered above); it NEVER renders `No results`. Offers a read retry.
         <div className="dh-search-error" data-dh-search-error="" role="alert">
           <p data-dh-search-error-message="">{SEARCH_COPY.states.error}</p>
-          <button type="button" className="dh-search-retry" data-dh-search-retry="">
+          <button
+            type="button"
+            className="dh-search-retry"
+            data-dh-search-retry=""
+            onClick={onRetry}
+          >
             {SEARCH_COPY.retry}
           </button>
         </div>

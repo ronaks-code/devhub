@@ -505,3 +505,52 @@ shared token system, reusing the existing `nextTabIndex` roving-focus helper fro
 `InspectorDock`; a full shadcn migration remains an unstarted, larger follow-up.
 `nativeCodex` / `persistentClaude` / `searchCommands` / `settingsSecondary`
 requested-defaults stay false.
+
+### M6 Task 9 (compose half, M6-T9-COMPOSE) - App.tsx composition + deferred data-wires
+
+Date: 2026-07-15
+
+Governing sources: `m6-implementation-plan.md` Task 9 ("App.tsx composition reduction,
+final review, and shell cutover" — this entry covers only the non-cutover data-wire
+half; the flag-flip/review/cleanup half is a separate, still-`[RONAK-GATE]`-held
+task). Evidence: `evidence/m6/task9-compose/qa-note.md`; unit suites
+`apps/web/src/lib/m6-compose.test.ts` (18), `apps/web/src/App.m6-t9.test.ts` (3), plus
+every Task 1-8 slice's own unmodified test file (all still green — see the note).
+
+No new visual reference applies here: every mounted component is the SAME,
+already-QA'd presentation from its own Task 1-8 slice (no geometry/copy/primitive
+changed), so this table's "M6 implementation evidence" column cites the WIRING
+(real props/state/fetch), not a new pixel measurement.
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| TaskRail rows are real session data, not an empty placeholder | Task 2's own deferred note ("native task rows are a later data-wire") | `buildTaskRailSections` builds `TaskRailModel.sections` from the active project's real, most-recent-first `sessions` (`lib/m6-compose.ts`, 4 tests) | Match. |
+| Browse's TaskHeader/ThreadWorkspace/InspectorDock mount with real data, independently flag-gated | Tasks 3/4/6's own deferred notes | `App.tsx` Browse branch swaps `ProjectDetailHeader`→`TaskHeader` (real title/provider), `TranscriptPane`→`ThreadWorkspace` (real `mapMessagesToThreadItems` mapping, `canSend=false` honestly), and adds `InspectorDock` (real `api.gitStatus` + `buildFileChanges` content) — each independently gated by its own flag | Match. |
+| The Chat tab's composer host is real, not simulated | Task 5's own deferred note ("composer host") | `ChatHost.tsx` opens a real `openChat` connection (same transport `ChatPane` uses), sends real `{t:"prompt",...}` frames, receives real `NormalizedMessage`s; mounts only when `resolveChatHostMode` sees `taskHeaderSetup`/`threadWorkspace`/`composerSurface` all `devhub` (conservative AND, `App.m6-t9.test.ts` 3 tests) | Match. |
+| Search results are real, Commands mounts for the first time | Tasks 7's own deferred note; legacy `CommandPalette` dead-code confirmed by grep | `TaskSearchDialog` backed by a real debounced `/api/search` fetch mapped via `searchHitToResult`; `CommandDialog` mounted with the 5 approved `DEFAULT_COMMANDS` wired to real handlers | Match. |
+| Settings/Ops/Inbox/Dashboard actually mount their Task 8 Route components | Task 8's own deferred note ("live mounting ... is a DEFERRED data-wire") | `App.tsx` swaps `SettingsPane`/`LiveOpsBoard`/`InboxPane`/`DashboardPane` for `SettingsRoute`/`OpsRoute`/`InboxRoute`/`DashboardRoute` in their own tabs, same props each already accepted | Match. |
+| No M6 row here relabels functional (M3/M4) evidence as new visual parity | ledger preamble | this entry cites ONLY composition/data-wire evidence, zero new screenshots claimed | Match. |
+| Flag-off is byte-for-byte the pre-existing legacy render | every slice's own instant-rollback contract | with every touched flag at its Task 1-8 default (`false`), `chatHostMode`/`taskRailMode`/etc. all resolve `"legacy"`, `devhubClaudePane` is `null` so `?? legacyClaudePane` renders unchanged, and `CommandDialog` never mounts (matching the pre-existing dead `CommandPalette` import) | Match. |
+
+### Task 9 (compose half) judgment
+
+The eight M6 slices' own components (Tasks 1-8) were built and unit-tested
+standalone but explicitly deferred their live `App.tsx` mount and real-data feed to
+Task 9 — every one of their STATUS/ledger entries says so in writing. This task
+completes that deferred wiring for `taskRail` (real rows), `taskHeaderSetup` /
+`threadWorkspace` / `inspectorDock` (real Browse mount), `searchCommands` (real
+search fetch + Commands' first-ever mount), and `settingsSecondary` (real
+Settings/Ops/Inbox/Dashboard mount) — each independently flag-gated exactly as
+designed. The Chat tab's `taskHeaderSetup`/`threadWorkspace`/`composerSurface`
+trio, which bundle one inseparable region inside the user-owned `ChatPane.tsx`,
+get a new sibling adapter (`ChatHost.tsx`, not user-owned) gated by a conservative
+AND rather than three independent OR-able mounts — an honest, documented narrowing
+of "independent flag" for the one region that structurally can't be split without
+editing a file this task must not touch. `Composer`/`ThreadWorkspace`/
+`InspectorDock`/`TaskSearchDialog`/`CommandDialog` each gained a small number of
+additive, optional interaction props (`onDraftChange`/`onSend`/`onSelectDestination`/
+`onQueryChange`/etc.) that were simply absent from their Task 1-8 presentation-only
+shells — every existing Task 1-8 test still passes unmodified, proving these
+additions are backward-compatible, not breaking changes. `codexStyleShell` stays
+false; `ui.tsx` is not removed; the full cutover drills/reviews are NOT run here —
+those remain the separate cutover task this entry explicitly does not claim.

@@ -35,6 +35,7 @@ import {
 } from "./lib/api";
 import type { CodexSession } from "./lib/types";
 import type {
+  GitStatus,
   ProjectSummary,
   SearchHitWithSeq,
   SessionMessagesPage,
@@ -63,6 +64,33 @@ import {
   resolveTaskRailMode,
   type TaskRailModel,
 } from "./components/features/shell/TaskRail";
+import { TaskHeader } from "./components/features/shell/TaskHeader";
+import { resolveTaskHeaderSetupMode } from "./components/features/providers/provider-capabilities";
+import { ThreadWorkspace, resolveThreadWorkspaceMode } from "./components/features/shell/ThreadWorkspace";
+import { resolveInspectorDockMode, InspectorDock } from "./components/features/inspectors/InspectorDock";
+import { ChatHost } from "./components/features/shell/ChatHost";
+import { resolveComposerSurfaceMode } from "./components/features/shell/Composer";
+import {
+  TaskSearchDialog,
+  resolveSearchCommandsMode,
+  type SearchDateFacet,
+  type SearchResult,
+  type SearchScope,
+} from "./components/features/search/TaskSearchDialog";
+import { CommandDialog, DEFAULT_COMMANDS } from "./components/features/commands/CommandDialog";
+import { resolveSettingsSecondaryMode } from "./components/features/settings/SettingsRoute";
+import { OpsRoute } from "./components/features/ops/OpsRoute";
+import { InboxRoute } from "./components/features/inbox/InboxRoute";
+import {
+  buildDiffContent,
+  buildEnvironmentSummary,
+  buildFilesContent,
+  buildTaskRailSections,
+  legacyDestinationForTarget,
+  mapMessagesToThreadItems,
+  searchHitToResult,
+} from "./lib/m6-compose";
+import { buildFileChanges } from "./components/FileChangeSummary";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
@@ -84,6 +112,16 @@ const DashboardPane = lazy(() =>
 );
 const SettingsPane = lazy(() =>
   import("./components/SettingsPane").then((m) => ({ default: m.SettingsPane })),
+);
+// M6 slice 8 (settingsSecondary, default off): the DevHub-styled replacements for
+// Settings/Dashboard, code-split exactly like their legacy owners so flag-off never
+// pulls their chunk. `DashboardRoute` wraps the SAME `DashboardPane` under
+// `SecondaryNav`, so it stays as lazy as the legacy tab.
+const SettingsRoute = lazy(() =>
+  import("./components/features/settings/SettingsRoute").then((m) => ({ default: m.SettingsRoute })),
+);
+const DashboardRoute = lazy(() =>
+  import("./components/features/analytics/DashboardRoute").then((m) => ({ default: m.DashboardRoute })),
 );
 // The Ops "grid" sub-view (watch/drive several live sessions) — only the board is
 // the Ops default, so the grid loads when first switched to:
@@ -185,6 +223,27 @@ export function resolveCodexShellMode(settings: AppSettings | null): CodexShellM
 /** Preserve the legacy chat path unless the server resolves the native runtime gate. */
 export function resolveClaudeShellMode(settings: AppSettings | null): ClaudeShellMode {
   return settings?.devHubFeatures?.persistentClaude === true ? "native" : "legacy";
+}
+
+/**
+ * The Chat tab's `taskHeaderSetup` + `threadWorkspace` + `composerSurface` slices
+ * bundle ONE inseparable region inside the legacy `ChatPane` (its header/
+ * transcript/composer can't be independently swapped without editing the
+ * user-owned file), so `ChatHost` mounts only when ALL THREE resolve `devhub`
+ * together. An explicit stored false on ANY ONE of them still restores
+ * `ChatPane` — the slice contract's own instant-rollback promise, honored
+ * conservatively (AND, not OR).
+ */
+export function resolveChatHostMode(
+  taskHeaderSetupMode: "devhub" | "legacy",
+  threadWorkspaceMode: "devhub" | "legacy",
+  composerSurfaceMode: "devhub" | "legacy",
+): "devhub" | "legacy" {
+  return taskHeaderSetupMode === "devhub" &&
+    threadWorkspaceMode === "devhub" &&
+    composerSurfaceMode === "devhub"
+    ? "devhub"
+    : "legacy";
 }
 
 /** Only the most recently issued settings request may change shell state. */
@@ -634,6 +693,20 @@ export default function App() {
   // tab; the board stays the default so the existing view is untouched.
   const [opsMode, setOpsMode] = useState<"board" | "grid">("board");
   const [commandOpen, setCommandOpen] = useState(false);
+  // M6 slice 7 (Task 9 data-wire): the devhub `TaskSearchDialog`'s own query/scope/
+  // date-facet/results state. Only read/updated while `searchCommandsMode==="devhub"`
+  // and `searchOpen`; the legacy `SearchPalette` owns its own state independently.
+  const [dhSearchQuery, setDhSearchQuery] = useState("");
+  const [dhSearchScope, setDhSearchScope] = useState<SearchScope>("global");
+  const [dhSearchDateFacet, setDhSearchDateFacet] = useState<SearchDateFacet | null>(null);
+  const [dhSearchResults, setDhSearchResults] = useState<SearchResult[]>([]);
+  const [dhSearchLoading, setDhSearchLoading] = useState(false);
+  const [dhSearchError, setDhSearchError] = useState(false);
+  // Bumped by the in-dialog error Alert's Retry, so the fetch effect below re-runs
+  // even when the query text itself is unchanged.
+  const [dhSearchRetryNonce, setDhSearchRetryNonce] = useState(0);
+  // The devhub `CommandDialog`'s own query filter state.
+  const [dhCommandQuery, setDhCommandQuery] = useState("");
   const [projectSwitcherOpen, setProjectSwitcherOpen] = useState(false);
   // Keyboard-shortcut cheat-sheet overlay (opened with "?").
   const [shortcutOpen, setShortcutOpen] = useState(false);
@@ -651,6 +724,16 @@ export default function App() {
   // Set once the /api/projects/:id/overview route 404s (older server), so we hide
   // the Overview affordance entirely rather than offer a button that can't work.
   const [overviewUnavailable, setOverviewUnavailable] = useState(false);
+  // M6 slice 6 (Task 9 data-wire): real git status for the Browse InspectorDock's
+  // Environment summary + branch row. Null means "no repo / not fetched yet" — the
+  // dock renders that honestly (an omitted row), never a placeholder value.
+  const [browseGitStatus, setBrowseGitStatus] = useState<GitStatus | null>(null);
+  const [browseInspectorSelected, setBrowseInspectorSelected] = useState<
+    "diff" | "files" | "terminal" | "browser" | "artifacts"
+  >("diff");
+  // The Commands `Toggle inspector` action (M6 slice 7) flips this; it only has an
+  // effect where `inspectorDock` is actually mounted (Browse/Chat).
+  const [inspectorVisible, setInspectorVisible] = useState(true);
   // Reduced-motion / perf mode: respects prefers-reduced-motion and a persisted
   // manual toggle, and sets data-reduce-motion on <html> for index.css to key off.
   const perf = useReducedMotion();
@@ -1049,6 +1132,26 @@ export default function App() {
     }
   };
 
+  // M6 slice 7 (Task 9 data-wire): the devhub TaskSearchDialog's own "open a result"
+  // handler. `target` is provider-LOCKED, derived only from the composite task key
+  // (`legacyDestinationForTarget`); this mirrors `onPickHit`'s navigation exactly, just
+  // over the new dialog's contract instead of the legacy `SearchHitWithSeq`.
+  const onOpenSearchResult = useCallback(
+    (target: ReturnType<typeof legacyDestinationForTarget>) => {
+      setSearchOpen(false);
+      setTab("browse");
+      setTailBytes(undefined);
+      setJumpTarget(typeof target.seq === "number" ? { seq: target.seq, nonce: Date.now() } : null);
+      if (target.projectId === projectId) {
+        setSessionId(target.sessionId);
+      } else {
+        pendingSessionRef.current = target.sessionId;
+        setProjectId(target.projectId);
+      }
+    },
+    [projectId],
+  );
+
   // Open a session in the Browse transcript from elsewhere (e.g. the dashboard's
   // Top Spenders, or a notification toast). Mirrors onPickHit's project-switch
   // handling but without a message jump: same project selects directly; a
@@ -1230,12 +1333,14 @@ export default function App() {
   // server resolves `taskRail` true; otherwise keep the legacy rail (default false, so
   // the shipping default is unchanged). The model is built ONLY in the devhub branch
   // below, so flag-off never constructs it or instantiates TaskRail. Secondary
-  // destinations are the reachable primary tabs; native task rows (with their provider
-  // identity) are a later data-wire, so the task list is empty (`No tasks`) for now.
+  // destinations are the reachable primary tabs. Task 9 data-wire: the row SECTION is
+  // now the active project's real (legacy Claude) sessions, most-recent-first — a
+  // native task row (a different provider's real task) is a separate, still-gated
+  // data-wire (native Codex/Claude live in `CodexNativePane`, not this legacy list).
   const taskRailMode = resolveTaskRailMode(settings);
   const taskRailModel = useMemo<TaskRailModel>(
     () => ({
-      sections: [],
+      sections: buildTaskRailSections(sessions, project?.name ?? "Sessions"),
       destinations: [
         { id: "home", label: "Home", current: tab === "home" },
         { id: "browse", label: "Browse", current: tab === "browse" },
@@ -1246,8 +1351,113 @@ export default function App() {
         { id: "settings", label: "Settings", current: tab === "settings" },
       ],
     }),
-    [tab],
+    [tab, sessions, project],
   );
+
+  // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
+  // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
+  // header otherwise. See `provider-capabilities.ts`.
+  const taskHeaderSetupMode = resolveTaskHeaderSetupMode(settings);
+  // M6 slice 4 (Task 9 data-wire): ThreadWorkspace mounts only for a server-resolved
+  // true `threadWorkspace`; legacy `TranscriptPane` otherwise.
+  const threadWorkspaceMode = resolveThreadWorkspaceMode(settings);
+  // M6 slice 6 (Task 9 data-wire): InspectorDock mounts only for a server-resolved
+  // true `inspectorDock`; legacy git/file panels otherwise.
+  const inspectorDockMode = resolveInspectorDockMode(settings);
+
+  // Real git status for the Browse InspectorDock, refetched whenever the active
+  // project's cwd changes. Only fetched while the dock is actually mounted, so
+  // flag-off never issues this request.
+  useEffect(() => {
+    if (inspectorDockMode !== "devhub" || !project?.cwd) {
+      setBrowseGitStatus(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .gitStatus(project.cwd)
+      .then((s) => {
+        if (!cancelled) setBrowseGitStatus(s);
+      })
+      .catch(() => {
+        if (!cancelled) setBrowseGitStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectorDockMode, project?.cwd]);
+  // M6 slice 7 (Task 9 data-wire): TaskSearchDialog + CommandDialog mount only for a
+  // server-resolved true `searchCommands`; legacy `SearchPalette` (Commands stays
+  // unmounted) otherwise.
+  const searchCommandsMode = resolveSearchCommandsMode(settings);
+  // M6 slice 8 (Task 9 data-wire): SettingsRoute/OpsRoute/InboxRoute/DashboardRoute
+  // mount only for a server-resolved true `settingsSecondary`; legacy
+  // SettingsPane/LiveOpsBoard/InboxPane/DashboardPane otherwise.
+  const settingsSecondaryMode = resolveSettingsSecondaryMode(settings);
+  // The Chat tab bundles TaskHeader + ThreadWorkspace + Composer into ONE region
+  // inside the legacy `ChatPane` (header/transcript/composer are inseparable there
+  // without editing the user-owned file), so `ChatHost` mounts only when ALL THREE
+  // slices are on together — an explicit stored false on ANY ONE of them restores
+  // `ChatPane`, satisfying each flag's own instant-rollback contract conservatively.
+  const composerSurfaceMode = resolveComposerSurfaceMode(settings);
+  const chatHostMode = resolveChatHostMode(taskHeaderSetupMode, threadWorkspaceMode, composerSurfaceMode);
+
+  // M6 slice 7 (Task 9 data-wire): debounced real search against the SAME
+  // `/api/search` endpoint the legacy `SearchPalette` calls, active only while the
+  // devhub dialog is open. Every result is mapped through `searchHitToResult`, so
+  // its provider is always the honest `anthropic` legacy-session encoding, never a
+  // guess. Flag-off (or dialog-closed) never fires this fetch.
+  useEffect(() => {
+    if (!searchOpen || searchCommandsMode !== "devhub") return;
+    const term = dhSearchQuery.trim();
+    if (!term) {
+      setDhSearchResults([]);
+      setDhSearchLoading(false);
+      setDhSearchError(false);
+      return;
+    }
+    const effectiveProject = dhSearchScope === "project" && projectId ? projectId : null;
+    setDhSearchLoading(true);
+    setDhSearchError(false);
+    let cancelled = false;
+    const t = setTimeout(() => {
+      const url =
+        `/api/search?q=${encodeURIComponent(term)}&limit=30` +
+        (effectiveProject ? `&projectId=${encodeURIComponent(effectiveProject)}` : "");
+      fetch(url, { headers: { accept: "application/json" } })
+        .then((r) => {
+          if (!r.ok) throw new Error(`search failed: ${r.status}`);
+          return r.json() as Promise<SearchHitWithSeq[]>;
+        })
+        .then((res) => {
+          if (cancelled) return;
+          const scoped = effectiveProject ? res.filter((h) => h.projectId === effectiveProject) : res;
+          setDhSearchResults(scoped.map(searchHitToResult));
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setDhSearchResults([]);
+            setDhSearchError(true);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setDhSearchLoading(false);
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [searchOpen, searchCommandsMode, dhSearchQuery, dhSearchScope, dhSearchRetryNonce, projectId]);
+
+  // Reset the devhub search dialog's own state each time it opens (mirrors the
+  // legacy `SearchPalette`'s own open-reset effect).
+  useEffect(() => {
+    if (!searchOpen) return;
+    setDhSearchQuery("");
+    setDhSearchResults([]);
+    setDhSearchError(false);
+  }, [searchOpen]);
 
   const startNewChat = useCallback(() => {
     setChatSeed(null);
@@ -1543,6 +1753,51 @@ export default function App() {
     </div>
   );
 
+  // M6 Task 9 "composer host" data-wire: taskHeaderSetup + threadWorkspace +
+  // composerSurface bundle one inseparable region inside the legacy `ChatPane`
+  // (its header/transcript/composer can't be independently swapped without
+  // editing the user-owned file), so this mounts only when ALL THREE resolve
+  // devhub together; any one of them false keeps `legacyClaudePane` above,
+  // unedited. `ChatHost` opens its OWN real `openChat` connection — the same
+  // transport `ChatPane` uses — so this is a real, not simulated, composer.
+  const devhubClaudePane =
+    chatHostMode === "devhub" ? (
+      <div className="flex min-h-0 flex-1">
+        <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
+        {project ? (
+          <ChatHost
+            key={activeSeed ? `${project.id}:${activeSeed.sessionId}` : `${project.id}:${chatNonce}`}
+            cwd={project.cwd}
+            projectId={project.id}
+            initialSessionId={activeSeed?.sessionId}
+            defaultModel={settings?.defaultModel}
+            defaultPermissionMode={settings?.defaultPermissionMode as PermissionMode | undefined}
+            title={
+              activeSeed
+                ? sessions.find((s) => s.sessionId === activeSeed.sessionId)?.title ?? "Resumed session"
+                : "New task"
+            }
+            showInspector={inspectorDockMode === "devhub" && inspectorVisible}
+            onFork={() =>
+              pushToast({
+                title: "Cross-provider fork not available yet",
+                body: "Fork support ships in a later milestone (M7).",
+                level: "info",
+              })
+            }
+          />
+        ) : (
+          <div className="flex-1 bg-zinc-950">
+            <EmptyState
+              icon={<MessagesSquare className="h-12 w-12" />}
+              title="Pick a project to chat"
+              hint="Select a project on the left to start a live Claude Code session in its working directory."
+            />
+          </div>
+        )}
+      </div>
+    ) : null;
+
   return (
     <AuthGate>
       <div className="flex h-full flex-col">
@@ -1688,18 +1943,36 @@ export default function App() {
             <HomePane onNewChat={startNewChat} />
           </Suspense>
         ) : tab === "settings" ? (
+          // M6 slice 8 (Task 9 data-wire): `SettingsRoute` replaces `SettingsPane` only
+          // for `settingsSecondary===true`; legacy pane otherwise. Same props contract.
           <Suspense fallback={<PaneFallback />}>
-            <SettingsPane
-              authoritativeSettings={settings}
-              onSettingsRequestStart={beginSettingsRequest}
-              onSettingsSaved={acceptSettingsResponse}
-              onSettingsReconcile={refreshSettings}
-              projectCwd={project?.cwd}
-            />
+            {settingsSecondaryMode === "devhub" ? (
+              <SettingsRoute
+                authoritativeSettings={settings}
+                onSettingsRequestStart={beginSettingsRequest}
+                onSettingsSaved={acceptSettingsResponse}
+                onSettingsReconcile={refreshSettings}
+                projectCwd={project?.cwd}
+              />
+            ) : (
+              <SettingsPane
+                authoritativeSettings={settings}
+                onSettingsRequestStart={beginSettingsRequest}
+                onSettingsSaved={acceptSettingsResponse}
+                onSettingsReconcile={refreshSettings}
+                projectCwd={project?.cwd}
+              />
+            )}
           </Suspense>
         ) : tab === "dashboard" ? (
+          // M6 slice 8 (Task 9 data-wire): `DashboardRoute` routes the SAME
+          // `DashboardPane` under `SecondaryNav` only for `settingsSecondary===true`.
           <Suspense fallback={<DashboardSkeleton />}>
-            <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
+            {settingsSecondaryMode === "devhub" ? (
+              <DashboardRoute onOpenSession={openSession} onOpenProject={openProject} />
+            ) : (
+              <DashboardPane onOpenSession={openSession} onOpenProject={openProject} />
+            )}
           </Suspense>
         ) : tab === "ops" ? (
           <div className="flex min-w-0 flex-1 flex-col">
@@ -1740,12 +2013,22 @@ export default function App() {
               <Suspense fallback={<PaneFallback />}>
                 <MultiSessionGrid />
               </Suspense>
+            ) : settingsSecondaryMode === "devhub" ? (
+              // M6 slice 8 (Task 9 data-wire): `OpsRoute` routes the SAME `LiveOpsBoard`
+              // under `SecondaryNav` only for `settingsSecondary===true`.
+              <OpsRoute onOpenSession={openSessionByCwd} />
             ) : (
               <LiveOpsBoard onOpenSession={openSessionByCwd} />
             )}
           </div>
         ) : tab === "inbox" ? (
-          <InboxPane onOpenSession={openSession} />
+          // M6 slice 8 (Task 9 data-wire): `InboxRoute` routes the SAME `InboxPane`
+          // under `SecondaryNav` only for `settingsSecondary===true`.
+          settingsSecondaryMode === "devhub" ? (
+            <InboxRoute onOpenSession={openSession} />
+          ) : (
+            <InboxPane onOpenSession={openSession} />
+          )
         ) : tab === "browse" ? (
           <ResponsiveShell
             stage={shell.stage}
@@ -1810,30 +2093,73 @@ export default function App() {
                   />
                 </Suspense>
               ) : (
-                <div className="flex min-w-0 flex-1 flex-col">
-                  {/* Rich project header atop the transcript area: branch, sessions,
-                      tokens + spend, last activity, favorite/archive toggles. */}
-                  {project ? (
-                    <ProjectDetailHeader
-                      project={project}
-                      onToggleFavorite={toggleProjectFavorite}
-                      onToggleArchive={toggleProjectArchive}
+                <div className="flex min-w-0 flex-1">
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    {/* M6 slice 3 (Task 9 data-wire): the devhub read-only TaskHeader
+                        replaces `ProjectDetailHeader` only for `taskHeaderSetup===true`;
+                        legacy header otherwise. Provider is always `anthropic` — Browse
+                        only ever shows legacy Claude sessions. */}
+                    {taskHeaderSetupMode === "devhub" && project ? (
+                      <TaskHeader
+                        title={sessionTitle ?? project.name}
+                        provider="anthropic"
+                        onFork={() =>
+                          pushToast({
+                            title: "Cross-provider fork not available yet",
+                            body: "Fork support ships in a later milestone (M7).",
+                            level: "info",
+                          })
+                        }
+                      />
+                    ) : project ? (
+                      <ProjectDetailHeader
+                        project={project}
+                        onToggleFavorite={toggleProjectFavorite}
+                        onToggleArchive={toggleProjectArchive}
+                      />
+                    ) : null}
+                    {/* M6 slice 4 (Task 9 data-wire): the devhub ThreadWorkspace replaces
+                        `TranscriptPane` only for `threadWorkspace===true`; legacy
+                        transcript otherwise. Browse is read-only history, so `canSend`
+                        stays false — an honest disabled composer, not a fake one, since
+                        this view genuinely has no live send capability (use Chat to
+                        continue a conversation). */}
+                    {threadWorkspaceMode === "devhub" ? (
+                      <ThreadWorkspace items={mapMessagesToThreadItems(page?.messages ?? [])} provider="anthropic" canSend={false} />
+                    ) : (
+                      <TranscriptPane
+                        page={page}
+                        loading={loadingPage}
+                        onLoadMore={handleLoadMore}
+                        onContinue={handleContinue}
+                        onCompare={setCompareSessionId}
+                        jumpTarget={jumpTarget}
+                        onToast={pushToast}
+                        onTagsApplied={(_sid, _tags) => {
+                          // The autotag apply wrote to the index sidecar; refresh the
+                          // project's session list so the row chips reflect the new set.
+                          if (projectId) void refreshSessions(projectId);
+                        }}
+                      />
+                    )}
+                  </div>
+                  {/* M6 slice 6 (Task 9 data-wire): the devhub InspectorDock absorbs the
+                      legacy `GitPanel`/`FileChangeSummary` (normally mounted inside
+                      `TranscriptPane`) only for `inspectorDock===true`. Terminal/Browser/
+                      Artifacts have no backing runtime in Browse, so they honestly render
+                      "Not available"/"No artifacts" — never a faked capability. */}
+                  {inspectorDockMode === "devhub" && inspectorVisible ? (
+                    <InspectorDock
+                      provider="anthropic"
+                      selected={browseInspectorSelected}
+                      onSelectDestination={setBrowseInspectorSelected}
+                      environment={buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? []))}
+                      content={{
+                        diff: buildDiffContent(buildFileChanges(page?.messages ?? [])),
+                        files: buildFilesContent(buildFileChanges(page?.messages ?? [])),
+                      }}
                     />
                   ) : null}
-                  <TranscriptPane
-                    page={page}
-                    loading={loadingPage}
-                    onLoadMore={handleLoadMore}
-                    onContinue={handleContinue}
-                    onCompare={setCompareSessionId}
-                    jumpTarget={jumpTarget}
-                    onToast={pushToast}
-                    onTagsApplied={(_sid, _tags) => {
-                      // The autotag apply wrote to the index sidecar; refresh the
-                      // project's session list so the row chips reflect the new set.
-                      if (projectId) void refreshSessions(projectId);
-                    }}
-                  />
                 </div>
               )
             }
@@ -1864,16 +2190,72 @@ export default function App() {
               fallback={legacyClaudePane}
             />
           </Suspense>
-        ) : legacyClaudePane}
+        ) : devhubClaudePane ?? legacyClaudePane}
       </AppShell>
 
-      <SearchPalette
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onPick={onPickHit}
-        activeProjectId={projectId}
-        activeProjectName={project?.name}
-      />
+      {/* M6 slice 7 (Task 9 data-wire): the devhub `TaskSearchDialog` replaces the
+          legacy `SearchPalette` only for `searchCommands===true`; legacy dialog
+          otherwise. Every result is real (`/api/search`, mapped honestly through
+          `searchHitToResult`), and opening one navigates via the SAME provider-locked
+          path as the legacy palette's `onPickHit`. */}
+      {searchCommandsMode === "devhub" ? (
+        searchOpen ? (
+          <TaskSearchDialog
+            query={dhSearchQuery}
+            scope={dhSearchScope}
+            activeProjectId={projectId}
+            activeProjectName={project?.name}
+            dateFacet={dhSearchDateFacet}
+            loading={dhSearchLoading}
+            error={dhSearchError}
+            results={dhSearchResults}
+            onOpen={(target) => onOpenSearchResult(legacyDestinationForTarget(target))}
+            onQueryChange={setDhSearchQuery}
+            onScopeChange={setDhSearchScope}
+            onDateFacetChange={setDhSearchDateFacet}
+            onRetry={() => setDhSearchRetryNonce((n) => n + 1)}
+            onClose={() => setSearchOpen(false)}
+          />
+        ) : null
+      ) : (
+        <SearchPalette
+          open={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          onPick={onPickHit}
+          activeProjectId={projectId}
+          activeProjectName={project?.name}
+        />
+      )}
+
+      {/* M6 slice 7 (Task 9 data-wire): the SEPARATE `CommandDialog` — the legacy
+          `CommandPalette` stays unmounted exactly as today (it always was, even
+          before M6). Only mounted while open AND `searchCommands===true`. */}
+      {searchCommandsMode === "devhub" && commandOpen ? (
+        <CommandDialog
+          query={dhCommandQuery}
+          commands={DEFAULT_COMMANDS}
+          onQueryChange={setDhCommandQuery}
+          onClose={() => setCommandOpen(false)}
+          onRun={(action) => {
+            setCommandOpen(false);
+            setDhCommandQuery("");
+            if (action.id === "new-task") startNewChat();
+            else if (action.id === "toggle-inspector") setInspectorVisible((v) => !v);
+            else if (action.id === "open-settings") {
+              setChatSeed(null);
+              setTab("settings");
+            } else if (action.id === "go-to-ops") {
+              setChatSeed(null);
+              setTab("ops");
+            }
+          }}
+          onSearchTasks={() => {
+            setCommandOpen(false);
+            setDhCommandQuery("");
+            setSearchOpen(true);
+          }}
+        />
+      ) : null}
 
       <ProjectSwitcher
         open={projectSwitcherOpen}

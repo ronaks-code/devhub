@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   isSearchCommandsApplied,
   resolveSearchCommandsMode,
@@ -182,6 +182,13 @@ export interface CommandDialogProps {
   onRun?: (action: CommandAction) => void;
   /** `Search tasks`: close Commands, then open the separate Search dialog. */
   onSearchTasks?: () => void;
+  /**
+   * Live data-wire hooks (M6 Task 9, additive/optional). Omitted keeps the query
+   * input `readOnly` — the original presentation-only contract, byte-for-byte.
+   */
+  onQueryChange?: (query: string) => void;
+  /** Escape closes the palette and restores focus to the invoker (host-owned). */
+  onClose?: () => void;
 }
 
 export function CommandDialog({
@@ -191,6 +198,8 @@ export function CommandDialog({
   label = COMMAND_COPY.title,
   onRun,
   onSearchTasks,
+  onQueryChange,
+  onClose,
 }: CommandDialogProps): ReactNode {
   const filtered = filterCommands(commands, query);
   const active = Math.min(Math.max(activeIndex, 0), Math.max(filtered.length - 1, 0));
@@ -213,6 +222,16 @@ export function CommandDialog({
       role="dialog"
       aria-modal="true"
       aria-label={label}
+      onKeyDown={
+        onClose
+          ? (e: KeyboardEvent<HTMLDivElement>) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onClose();
+              }
+            }
+          : undefined
+      }
     >
       <h2 className="dh-sr-only" data-dh-command-title="">
         {label}
@@ -227,7 +246,10 @@ export function CommandDialog({
           type="text"
           autoFocus
           value={query}
-          readOnly
+          readOnly={!onQueryChange}
+          onChange={
+            onQueryChange ? (e: ChangeEvent<HTMLInputElement>) => onQueryChange(e.target.value) : undefined
+          }
           aria-label={label}
           aria-controls="dh-command-list"
         />

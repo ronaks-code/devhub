@@ -1,4 +1,4 @@
-import { type ReactNode } from "react";
+import { type KeyboardEvent, type ReactNode } from "react";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { providerIdentity, type ProviderId } from "../providers/provider-capabilities.js";
 import { SHELL_GEOMETRY } from "../shell/DevHubShell.js";
@@ -258,6 +258,12 @@ export interface InspectorDockProps {
    * terminal and diff` disclosure, NOT the full tablist.
    */
   variant?: "dock" | "disclosure";
+  /**
+   * Switch the selected destination (M6 Task 9, additive/optional). When omitted the
+   * tabs render exactly as before — inert, presentation-only. A live host wires this
+   * (with `nextTabIndex` for Left/Right/Home/End roving) to make the tablist real.
+   */
+  onSelectDestination?: (id: DestinationId) => void;
 }
 
 const TAB_ID = (id: DestinationId) => `dh-inspector-tab-${id}`;
@@ -468,6 +474,7 @@ export function InspectorDock({
   content,
   label = "Task inspector",
   variant = "dock",
+  onSelectDestination,
 }: InspectorDockProps): ReactNode {
   // Narrow/PWA: an explicit disclosure, NOT the full desktop dock (no tablist/terminal).
   if (variant === "disclosure") {
@@ -515,6 +522,15 @@ export function InspectorDock({
       >
         {INSPECTOR_DESTINATIONS.map((d, i) => {
           const isSelected = d.id === selected;
+          const onKeyDown = onSelectDestination
+            ? (e: KeyboardEvent<HTMLButtonElement>) => {
+                const next = nextTabIndex(e.key, selectedIndex, INSPECTOR_DESTINATIONS.length);
+                if (next !== selectedIndex) {
+                  e.preventDefault();
+                  onSelectDestination(INSPECTOR_DESTINATIONS[next]!.id);
+                }
+              }
+            : undefined;
           return (
             <button
               key={d.id}
@@ -528,6 +544,8 @@ export function InspectorDock({
               // Roving focus: only the selected tab is in the tab order (0); Left/Right
               // move focus among tabs, Home/End jump (see `nextTabIndex`).
               tabIndex={i === selectedIndex ? 0 : -1}
+              onClick={onSelectDestination ? () => onSelectDestination(d.id) : undefined}
+              onKeyDown={onKeyDown}
             >
               {d.label}
             </button>
