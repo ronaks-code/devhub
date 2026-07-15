@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
+import { cn } from "@/lib/utils";
 
 /**
  * TaskRail — the Codex-style rail as an OPEN LIST (M6 slice 2).
@@ -170,7 +171,7 @@ function TaskRow({ task, selected, failed, roving, onSelect, registerRef }: Task
   return (
     <li
       role="listitem"
-      className={selected ? "dh-task-row dh-task-row--selected" : "dh-task-row"}
+      className={cn("dh-task-row", selected && "dh-task-row--selected")}
       data-dh-task-row=""
       data-dh-selected={selected ? "" : undefined}
       data-dh-task-failed={failed ? "" : undefined}

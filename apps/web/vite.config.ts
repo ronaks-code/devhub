@@ -1,9 +1,18 @@
+import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    // Canonical shadcn/ui alias — `@/` resolves to apps/web/src. Mirrored in
+    // tsconfig.json (paths) and vitest.config.ts (test resolve) so imports
+    // resolve identically under the app build, typecheck, and unit tests.
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   build: {
     // Keep the heavy markdown/katex/highlight chunks OUT of the entry's
     // <link rel="modulepreload"> list. They're only reachable through the lazy

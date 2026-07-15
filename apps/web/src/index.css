@@ -154,6 +154,38 @@
 }
 
 /*
+ * shadcn/ui semantic color tokens (Tailwind v4). Adopted as the app's sanctioned
+ * component-library layer. These are ADDITIVE: they generate the `bg-primary`,
+ * `text-*-foreground`, `border-border`, `ring-ring`, `bg-popover`, … utilities the
+ * `components/ui/*` primitives use, WITHOUT redefining the legacy `--accent`/`--border`
+ * custom properties (which stay clay/zinc for the existing components). The values are
+ * mapped to the existing dark palette so a shadcn primitive renders on-brand and
+ * nothing already on screen changes. The pixel-locked M6 `dh-*` slices do not consume
+ * these tokens — they keep their own `--dh-*` sources.
+ */
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--text);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--accent-fg);
+  --color-secondary: var(--elevated);
+  --color-secondary-foreground: var(--text);
+  --color-muted: var(--elevated);
+  --color-muted-foreground: var(--text-muted);
+  --color-accent: var(--elevated);
+  --color-accent-foreground: var(--text);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--dh-focus);
+}
+
+/*
  * DevHubShell frame (M6 slice 1). Locked container/geometry from design-lock §4
  * and design-system.md §3. Geometry reads the tokens above so measured values live
  * in one place. Mounted only behind the default-off `shellChrome` flag.
