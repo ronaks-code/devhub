@@ -5,13 +5,14 @@ import {
 } from "../../src/providers/feature-flags.js";
 
 describe("DevHub feature flags", () => {
-  it("defaults unifiedTaskIndex on after the M5 cutover, all other program flags off", () => {
-    // M5 Task 9 cutover: unifiedTaskIndex is the requested default; the two live-proof
-    // gated flags (nativeCodex, persistentClaude) and the not-yet-shipped shell/fork/work
-    // flags stay false. The server still clamps the resolved value to real runtime
-    // availability + applied truth, so this default only requests the feature.
+  it("defaults nativeCodex + unifiedTaskIndex on after the M3/M5 cutovers, other program flags off", () => {
+    // M3 native Codex cutover: nativeCodex is now the requested default (live resume
+    // proof captured). M5 Task 9 cutover: unifiedTaskIndex is the requested default.
+    // persistentClaude (its own live-proof gate) and the not-yet-shipped shell/fork/work
+    // flags stay false. The server still clamps every resolved value to real runtime
+    // availability + applied truth, so these defaults only request the features.
     expect(DEFAULT_DEVHUB_FEATURE_FLAGS).toEqual({
-      nativeCodex: false,
+      nativeCodex: true,
       persistentClaude: false,
       unifiedTaskIndex: true,
       shellChrome: false,
@@ -30,9 +31,9 @@ describe("DevHub feature flags", () => {
   });
 
   it("only enables explicit resolved overrides", () => {
-    expect(defineDevHubFeatureFlags({ nativeCodex: true })).toEqual({
+    expect(defineDevHubFeatureFlags({ persistentClaude: true })).toEqual({
       ...DEFAULT_DEVHUB_FEATURE_FLAGS,
-      nativeCodex: true,
+      persistentClaude: true,
     });
   });
 });

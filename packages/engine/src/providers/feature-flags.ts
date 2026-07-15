@@ -80,7 +80,12 @@ export interface DevHubFeatureFlags {
 }
 
 export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object.freeze({
-  nativeCodex: false,
+  // M3 native Codex cutover: the production-wrapper resume + continued-conversation
+  // live proof passed (evidence/m3/live-runtime-resume-proof.md), so native Codex is
+  // now the requested default. The server still clamps the resolved value to real
+  // runtime availability (a constructed native Codex runtime); an explicit stored
+  // `nativeCodex: false` is the immediate, non-destructive rollback to history mode.
+  nativeCodex: true,
   persistentClaude: false,
   // M5 Task 9 cutover: the unified provider task index is the requested default after
   // every migration/rebuild/rollback/lease/compatibility gate passed. The server still

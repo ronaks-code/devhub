@@ -273,7 +273,9 @@ describe("buildApp native Codex wiring", () => {
     const disabled = await app.inject({
       method: "PUT",
       url: "/api/settings",
-      payload: { devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS } },
+      // Post-M3 cutover: nativeCodex now defaults ON, so the rollback step must set it
+      // explicitly false to exercise the disable-triggers-shutdown path.
+      payload: { devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS, nativeCodex: false } },
     });
     expect(disabled.statusCode).toBe(200);
     expect(fake.shutdowns).toHaveBeenCalledTimes(1);
