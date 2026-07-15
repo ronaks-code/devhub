@@ -297,3 +297,67 @@ footer, keyboard/disabled-reason logic, and flag safety only; live mounting into
 canvas is a deferred data-wire (the live host is the user-owned `ChatPane.tsx`), mirroring
 Tasks 3–4 and staged for the Task 9 cutover. `nativeCodex` / `persistentClaude` /
 `composerSurface` requested-defaults stay false.
+
+### M6 Task 6 - InspectorDock
+
+Date: 2026-07-15
+
+Governing sources: `design-lock.md` §8 (InspectorDock destinations, terminal is
+provider-emitted, honest empty/gated/local states), `component-state-matrix.md` §11
+(Inspector dock), `surface-inventory.md` `SF-11`..`SF-17` + `T-inspectors` copy,
+REF-RICH / REF-ACTIVE (one 300-wide, content-height, rounded `#2d2d2d` surface, 12 top /
+16 right gutter, 199 sparse / 282 completed / 396 active heights), concept
+`04-inspector-dock` (C04). Evidence: `evidence/m6/inspector/` (`qa-note.md`,
+`fixture-{diff,terminal,browser-unavailable,artifacts-empty,disconnected,disclosure}.html`,
+`m6-inspector-{diff,terminal,browser-unavailable,disconnected}-wide.png`,
+`m6-inspector-disclosure-narrow.png`) plus the unit/snapshot suite
+`apps/web/src/components/features/inspectors/InspectorDock.test.ts` (31).
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Dock width 300 | manifest (`x=1484`, width `300`) / SF-11 | measured `300` live; `data-dh-inspector-width="300"` mirrors `SHELL_GEOMETRY.inspectorWidth` | Match. |
+| Content-height, NOT full-height IDE pane | design-lock §8 / matrix §11 ("not a permanent full-height IDE pane") | measured `321` in a `900` viewport (content-height); `data-dh-inspector-height-mode="content"`; no full-height rule | Match. |
+| `Environment` is a summary, not a tab | design-lock §8 / `T-inspectors` | Environment region renders ABOVE the tablist with `role`-free heading; exactly `5` `role="tab"` nodes; region byte-identical across selections | Match. |
+| Exactly five tabs (Diff/Files/Terminal/Browser/Artifacts) | design-lock §8 / `T-inspectors` | measured tab labels `["Diff","Files","Terminal","Browser","Artifacts"]`, `count(role="tab")===5`, one panel rendered | Match. |
+| `#2d2d2d` surface + ~16 radius | design-system §2 / manifest | measured `rgb(45,45,45)` = `#2d2d2d`, `border-radius: 16px`, `padding: 16px` | Match. |
+| Footer `Availability follows the task runtime` | `T-inspectors` | measured footer text verbatim | Match. |
+| Tablist roving + tabpanel entry | matrix §11 focus row (`role=tablist`, Left/Right/Home/End, Tab enters panel) | `role="tablist"` + `aria-orientation="horizontal"`; single roving `tabindex="0"` tab; tabpanel `tabindex="0"` + `aria-labelledby` the selected tab; `nextTabIndex` unit-asserted | Match. |
+| Gated destination `Not available for this task` (+ cause) | matrix §11 unsupported / design-lock §8 | Browser gated panel reads `Not available for this task`; with a cause reads `… — <cause>` | Match. |
+| Empty Artifacts `No artifacts` (distinct) | design-lock §8 / `T-inspectors` | Artifacts empty reads `No artifacts` with NO unavailable node present; distinct copy | Match. |
+| Terminal provider-emitted output only | design-lock §8 / SF-14 (never auto-invoke `thread/shellCommand`) | Terminal panel is a `<pre>` of provider output; no `<input>`/`<textarea>`/`<button>`; markup contains no `shellCommand`/`thread/shellCommand` | Match. |
+| Browser only from a real browser runtime | SF-15 / matrix §11 streaming | populated only with real activity; empty browser reads `Not available for this task` | Match. |
+| Disconnected reads cached | matrix §11 disconnected | disconnected diff shows `Showing cached data — reconnect to refresh.` with cached content still readable | Match. |
+| Destructive discard/unstage/worktree never in a tab | matrix §11 destructive / design-lock §8 | no `Discard`/`Unstage`/`Delete worktree` control inside ANY tabpanel; `describeDestructiveConfirmation` is a repository-utility contract (`rendersInTab:false`, focus on `Cancel`, names target, states provider task unaffected) | Match. |
+| ScrollArea only inside a bounded diff | SF-12 (`ScrollArea` allowed inside bounded non-virtualized diff only) | measured diff scroll region `overflow-y:auto; max-height:220px`; no other panel carries `data-dh-diff-scroll` | Match. |
+| Narrow/PWA disclosure | matrix §11 responsive / SF-11 | `disclosure` variant renders `Desktop required for terminal and diff` + title, no tablist/tabpanel | Match. |
+| No logos anywhere | design-lock §3 / invariant 9 | `0` `<svg>` and `0` `<img>` in every fixture | Match. |
+
+### Task 6 judgment
+
+`InspectorDock` is the canonical task inspector: ONE measured 300-wide, content-height,
+rounded `#2d2d2d` dock (16 padding, ~16 radius, mirroring `SHELL_GEOMETRY`) that is NOT a
+full-height IDE split pane. It opens with a persistent, compact, NON-TAB `Environment`
+summary (backed environment/repository/subagent/source rows only) that stays byte-identical
+across selections, followed by exactly five selectable destinations
+`Diff`/`Files`/`Terminal`/`Browser`/`Artifacts` on a `role="tablist"` with roving
+Left/Right/Home/End focus (`nextTabIndex` pure fn) and a `tabindex=0` tabpanel labelled by
+the selected tab, and the footer `Availability follows the task runtime`. Exactly one
+destination renders. Availability follows the real runtime, never the schema
+(`computeDestinationView`): a gated destination reads `Not available for this task` (with
+an appended cause when useful); empty-but-supported Artifacts reads `No artifacts` (a
+DISTINCT state); a disconnected panel reads cached with
+`Showing cached data — reconnect to refresh.`. Terminal is provider-emitted output only
+with no input/shell affordance and never references `thread/shellCommand`; Browser
+populates only from a real browser runtime. Destructive discard/unstage/worktree deletion
+is a repository-utility confirmation OUTSIDE any tab (`describeDestructiveConfirmation`,
+focus on `Cancel`, names the target, states the provider task is unaffected); the dock
+renders no destructive control inside a tabpanel. `ScrollArea` appears ONLY inside the
+bounded diff body. Narrow/PWA uses the titled `Desktop required for terminal and diff`
+disclosure, not the desktop dock. Ships behind the default-off `inspectorDock` flag;
+flag-off keeps the legacy diff/file/git panels (`resolveInspectorDockMode` returns `legacy`
+for false/undefined/missing, `isInspectorDockApplied` true only for an explicit true), so
+flag-off never instantiates the dock. SCOPE: this claims the inspector PRESENTATION,
+dock geometry, runtime-gated destination logic, keyboard/a11y, and flag safety only; live
+mounting into the shell + wiring real repository/provider events is a deferred data-wire
+staged for the Task 9 `codexStyleShell` cutover. `nativeCodex` / `persistentClaude` /
+`inspectorDock` requested-defaults stay false.

@@ -45,6 +45,15 @@ export interface DevHubFeatureFlags {
    * composer. Additive to the umbrella `codexStyleShell` cutover flag.
    */
   composerSurface: boolean;
+  /**
+   * M6 slice 6 (InspectorDock). Default false. When requested true AND the server
+   * reports it applied, the web app mounts the canonical content-height inspector dock
+   * (one measured 300-wide `#2d2d2d` surface: persistent non-tab `Environment` summary
+   * plus exactly five runtime-gated destinations Diff/Files/Terminal/Browser/Artifacts);
+   * an explicit stored false is the immediate, non-destructive rollback to the legacy
+   * diff/file/git panels. Additive to the umbrella `codexStyleShell` cutover flag.
+   */
+  inspectorDock: boolean;
   codexStyleShell: boolean;
   crossProviderFork: boolean;
   workMode: boolean;
@@ -62,12 +71,14 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // M6 slice flags are additive and default-off; each gates exactly one strangler
   // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
   // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3;
-  // threadWorkspace gates M6 Task 4; composerSurface gates M6 Task 5.
+  // threadWorkspace gates M6 Task 4; composerSurface gates M6 Task 5;
+  // inspectorDock gates M6 Task 6.
   shellChrome: false,
   taskRail: false,
   taskHeaderSetup: false,
   threadWorkspace: false,
   composerSurface: false,
+  inspectorDock: false,
   codexStyleShell: false,
   crossProviderFork: false,
   workMode: false,
