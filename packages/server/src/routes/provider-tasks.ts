@@ -14,6 +14,8 @@ import {
   createProviderRequestIdentity,
   type JsonRpcRequestId,
   type ListTasksInput,
+  type NativeTask,
+  type NativeTaskSummary,
   type ProviderEvent,
   type ProviderId,
   type ProviderRegistry,
@@ -22,6 +24,17 @@ import {
   type TaskOverrides,
   type UserInput,
 } from "@devhub/engine/providers";
+import type { ProviderTaskIndexCoordinator } from "@devhub/engine";
+
+/**
+ * Optional cache-warming seam. When the unified task index is applied (coordinator present),
+ * successful legacy reads/mutations are folded into the rebuildable cache so a later flag flip
+ * starts warm. This never changes the legacy response bytes and never throws into a response;
+ * when no coordinator exists (flag off) it is a no-op, preserving byte-compatibility.
+ */
+export interface ProviderTaskRouteOptions {
+  readonly getCoordinator?: () => ProviderTaskIndexCoordinator | null;
+}
 
 const PROVIDER_IDS = new Set<ProviderId>(["openai", "anthropic"]);
 
@@ -608,8 +621,24 @@ export function registerProviderTaskRoutes(
   app: FastifyInstance,
   registry: ProviderRegistry,
   mutationToken?: string,
+  options: ProviderTaskRouteOptions = {},
 ): void {
   let activeProviderStreams = 0;
+
+  const observeTaskIntoCache = (task: NativeTask): void => {
+    const coordinator = options.getCoordinator?.();
+    if (!coordinator) return;
+    void Promise.resolve()
+      .then(() => coordinator.observeTask(task))
+      .catch(() => undefined);
+  };
+  const observeListIntoCache = (items: readonly NativeTaskSummary[]): void => {
+    const coordinator = options.getCoordinator?.();
+    if (!coordinator || items.length === 0) return;
+    void Promise.resolve()
+      .then(() => coordinator.observeListPage({ items }))
+      .catch(() => undefined);
+  };
 
   app.get(
     "/api/providers",
@@ -660,7 +689,9 @@ export function registerProviderTaskRoutes(
       }
 
       try {
-        return await registry.listTasks(provider, input);
+        const page = await registry.listTasks(provider, input);
+        observeListIntoCache(page.items);
+        return page;
       } catch (error) {
         return sendProviderError(reply, error, provider);
       }
@@ -694,7 +725,9 @@ export function registerProviderTaskRoutes(
 
       try {
         const key = createNativeTaskKey(provider, req.query.home, req.params.nativeTaskId);
-        return await registry.readTask(key, req.query.includeTurns === true);
+        const task = await registry.readTask(key, req.query.includeTurns === true);
+        observeTaskIntoCache(task);
+        return task;
       } catch (error) {
         return sendProviderError(reply, error, provider);
       }
@@ -783,6 +816,7 @@ export function registerProviderTaskRoutes(
 
       try {
         const task = await registry.startTask(provider, req.body);
+        observeTaskIntoCache(task);
         return reply.code(201).send(task);
       } catch (error) {
         return sendProviderError(reply, error, provider);
@@ -816,10 +850,12 @@ export function registerProviderTaskRoutes(
       const provider = parseProvider(req.params.provider);
       if (!provider) return providerNotFound(reply, req.params.provider);
       try {
-        return await registry.resumeTask(
+        const task = await registry.resumeTask(
           taskKey(provider, req.body, req.params.nativeTaskId),
           pickOverrides(req.body),
         );
+        observeTaskIntoCache(task);
+        return task;
       } catch (error) {
         return sendProviderError(reply, error, provider);
       }
@@ -857,6 +893,7 @@ export function registerProviderTaskRoutes(
           taskKey(provider, req.body, req.params.nativeTaskId),
           req.body.lastTurnId,
         );
+        observeTaskIntoCache(task);
         return reply.code(201).send(task);
       } catch (error) {
         return sendProviderError(reply, error, provider);
