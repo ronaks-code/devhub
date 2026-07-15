@@ -2,7 +2,7 @@
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-14 by Codex goal 019f6268-781e-77a2-898c-2dadacae509f
+Last updated: 2026-07-15 by Claude (M5-T3A coordinator observation-lanes promotion)
 Goal: Deliver the mandatory M0-M8 DevHub goal as a provider-native Codex-quality environment for real Codex and Claude runtimes, with preservation, review, verification, and conditional gates reported honestly.
 
 Progress: 3 / 9 milestones done (33%) — denominator FROZEN at 9. Do not change it; partial M3-M8 work receives no percentage credit.
@@ -37,7 +37,8 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
-- `campaign/auto-improve` — tested shared branch; M5 E/F plus the Task 3 native-missing, verified-legacy mapping, opaque observation, atomic-missing, and coordinator-foundation prerequisites are integrated through this checkpoint after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
+- `campaign/auto-improve` — tested shared branch; M5 E/F plus the Task 3 native-missing, verified-legacy mapping, opaque observation, atomic-missing, coordinator-foundation, and coordinator observation-lanes (`observeListPage`/`observeTask`, bounded per-locator FIFO lanes, `maxObservationOperations` reservations, per-locator observation epochs) prerequisites are integrated through this checkpoint after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
+- `wip/devhub-background-runner` at `8281ef2` — remote-backed WIP that carries the exact reviewed M5 coordinator observation-lanes source; only its two engine files (`coordinator.ts` + `coordinator-observe.test.ts`) were promoted here, never its four user-owned paths. Do not merge wholesale.
 - detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
 - detached `m5-f` at `4244c39` — historical reviewed F internal-foundation source; read-only and never replayed wholesale.
 - detached `m5-facade` at `6e1804c` — exact reviewed M5 F facade source retained read-only after promotion; current goal coordinator.
@@ -49,6 +50,6 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - detached `m5-c0-schema` at `377a724` and `m5-cursor` at `82a8b74` — stale; do not build on them.
 
 ## Recent checkpoints (last 3 tested commits on shared branch)
-- `this commit`  Task 3 coordinator foundation/initialization promotion; 577/577 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
+- `this commit`  Task 3 M5 coordinator observation-lanes promotion (source `8281ef2`); 589/589 provider-index tests (15 files, incl. 12 new observe tests) plus exact-tip SPEC and separate QUALITY/SECURITY GO with zero P0-P3 findings.
+- `cdbff7d`  Task 3 coordinator foundation/initialization promotion; 577/577 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
 - `5e8303c`  Task 3 opaque observation and atomic-missing promotion; 556/556 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
-- `ca9f180`  Task 3 verified-legacy mapping lookup promotion; 532/532 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.

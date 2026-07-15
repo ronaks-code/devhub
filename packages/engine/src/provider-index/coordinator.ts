@@ -1,14 +1,28 @@
 import { types as utilTypes } from "node:util";
 import { MAX_PROVIDER_HOME_CHARS } from "../providers/native-id.js";
 import { canonicalizeProviderHome } from "../providers/task-key.js";
-import type { ProviderId } from "../providers/types.js";
+import type {
+  NativeTask,
+  NativeTaskKey,
+  NativeTaskSummary,
+  ProviderId,
+} from "../providers/types.js";
 import { ProviderRegistry } from "../providers/registry.js";
 import { isProviderRegistryInstance } from "../providers/registry-instance.js";
 import {
   ProviderTaskIndexStore,
   isProviderTaskIndexStoreInstance,
 } from "./store.js";
-import type { ProviderHomeRegistration } from "./store-types.js";
+import {
+  serializeTaskLocator,
+  taskLocator,
+  type ProviderTaskLocator,
+} from "./identity.js";
+import type {
+  IndexedProviderTask,
+  IndexedProviderTaskSummary,
+  ProviderHomeRegistration,
+} from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
 export const PROVIDER_INDEX_COORDINATOR_DEFAULTS = Object.freeze({
@@ -250,11 +264,86 @@ function normalizeTimers(value: unknown): Readonly<ProviderTaskIndexCoordinatorT
   });
 }
 
+type ObservedTaskResult =
+  | Readonly<IndexedProviderTask>
+  | Readonly<IndexedProviderTaskSummary>
+  | null;
+
+interface Observation {
+  readonly laneKey: string;
+  readonly apply: () => ObservedTaskResult;
+}
+
+interface ObservationLane {
+  tail: Promise<void>;
+  refCount: number;
+  epoch: number;
+}
+
+function requireObservationRecord(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value) ||
+    Array.isArray(value)) {
+    fail("INVALID_INPUT");
+  }
+  let prototype: object | null;
+  try {
+    prototype = Object.getPrototypeOf(value);
+  } catch {
+    return fail("INVALID_INPUT");
+  }
+  if (prototype !== Object.prototype && prototype !== null) fail("INVALID_INPUT");
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function ownDataValue(record: Readonly<Record<string, unknown>>, property: string): unknown {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(record, property);
+  } catch {
+    return fail("INVALID_INPUT");
+  }
+  if (descriptor === undefined || !("value" in descriptor)) fail("INVALID_INPUT");
+  return descriptor.value;
+}
+
+function ownDataDescriptorPresent(
+  record: Readonly<Record<string, unknown>>,
+  property: string,
+): boolean {
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(record, property);
+  } catch {
+    return fail("INVALID_INPUT");
+  }
+  if (descriptor === undefined) return false;
+  if (!("value" in descriptor)) fail("INVALID_INPUT");
+  return descriptor.value !== undefined;
+}
+
+function denseObservationArray(value: unknown, maximum: number): readonly unknown[] {
+  if (utilTypes.isProxy(value) || !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype || value.length > maximum) {
+    fail("INVALID_INPUT");
+  }
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || !keys.includes("length")) fail("INVALID_INPUT");
+  const output: unknown[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined || !("value" in descriptor)) fail("INVALID_INPUT");
+    output.push(descriptor.value);
+  }
+  return output;
+}
+
 export class ProviderTaskIndexCoordinator {
   private initialized: readonly Readonly<ProviderHomeRegistration>[] | null = null;
   private initializing = false;
   private initializationTimestamp: number | null = null;
   private lastNow: number | null = null;
+  private observationOperations = 0;
+  private readonly observationLanes = new Map<string, ObservationLane>();
 
   constructor(
     authority: typeof COORDINATOR_CONSTRUCTION,
@@ -268,7 +357,6 @@ export class ProviderTaskIndexCoordinator {
     if (authority !== COORDINATOR_CONSTRUCTION) fail("INVALID_INPUT");
     void this.registry;
     void this.timers;
-    void this.options;
   }
 
   initialize(): readonly Readonly<ProviderHomeRegistration>[] {
@@ -285,6 +373,165 @@ export class ProviderTaskIndexCoordinator {
     } finally {
       this.initializing = false;
     }
+  }
+
+  /**
+   * Fold an already-observed native list page into the additive active cache. Each summary is a
+   * separate per-locator observation that reserves one unit of the bounded observation budget and
+   * runs through its FIFO locator lane. Admission is atomic: an over-budget page fails `CAPACITY`
+   * before any store write. Before initial promotion the store replacement returns `null`, so no
+   * page fragment is exposed.
+   */
+  async observeListPage(
+    pageValue: Readonly<{
+      items: readonly NativeTaskSummary[];
+      nextCursor?: string | null;
+    }>,
+  ): Promise<readonly (Readonly<IndexedProviderTaskSummary> | null)[]> {
+    const input = exactOwnData(pageValue, ["items"], ["nextCursor"]);
+    const rawItems = denseObservationArray(
+      input.items,
+      PROVIDER_INDEX_COORDINATOR_HARD_LIMITS.maxObservationOperations,
+    );
+    const observations = rawItems.map((item) => this.prepareSummaryObservation(item));
+    this.reserveObservationOperations(observations.length);
+    try {
+      const results: (Readonly<IndexedProviderTaskSummary> | null)[] = [];
+      for (const observation of observations) {
+        results.push(
+          (await this.runInLocatorLane(observation.laneKey, observation.apply)) as
+            Readonly<IndexedProviderTaskSummary> | null,
+        );
+      }
+      return Object.freeze(results);
+    } finally {
+      this.releaseObservationOperations(observations.length);
+    }
+  }
+
+  /**
+   * Fold an already-observed native task into the additive active cache. A payload carrying `turns`
+   * replaces the complete snapshot; a summary-only payload updates task fields while the store
+   * preserves previously cached children. The observation reserves one unit of the bounded budget
+   * and runs through its FIFO locator lane. Before initial promotion the store returns `null`.
+   */
+  async observeTask(
+    taskValue: NativeTaskSummary | NativeTask,
+  ): Promise<ObservedTaskResult> {
+    const observation = this.prepareTaskObservation(taskValue);
+    this.reserveObservationOperations(1);
+    try {
+      return await this.runInLocatorLane(observation.laneKey, observation.apply);
+    } finally {
+      this.releaseObservationOperations(1);
+    }
+  }
+
+  /**
+   * Current observation epoch for a locator's live lane, or `0` when no lane is active. The epoch
+   * increments on each observation that mutates the active cache and is cleared with the lane after
+   * its last waiter settles.
+   */
+  observationEpoch(locatorValue: ProviderTaskLocator): number {
+    return this.observationLanes.get(this.laneKeyForLocator(locatorValue))?.epoch ?? 0;
+  }
+
+  private laneKeyForLocator(locatorValue: ProviderTaskLocator): string {
+    try {
+      return serializeTaskLocator(locatorValue);
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+  }
+
+  private laneKeyForKey(key: unknown): string {
+    try {
+      return serializeTaskLocator(taskLocator(key as NativeTaskKey));
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+  }
+
+  private prepareSummaryObservation(itemValue: unknown): Observation {
+    const record = requireObservationRecord(itemValue);
+    const key = ownDataValue(record, "key");
+    const laneKey = this.laneKeyForKey(key);
+    return {
+      laneKey,
+      apply: () => {
+        const observedAt = this.readNow();
+        const result = this.store.replaceActiveSummary(
+          key as NativeTaskKey,
+          record as unknown as NativeTaskSummary,
+          observedAt,
+        );
+        if (result !== null) this.bumpObservationEpoch(laneKey);
+        return result;
+      },
+    };
+  }
+
+  private prepareTaskObservation(taskValue: unknown): Observation {
+    const record = requireObservationRecord(taskValue);
+    const key = ownDataValue(record, "key");
+    const laneKey = this.laneKeyForKey(key);
+    const isSnapshot = ownDataDescriptorPresent(record, "turns");
+    return {
+      laneKey,
+      apply: () => {
+        const observedAt = this.readNow();
+        const result = isSnapshot
+          ? this.store.replaceActiveSnapshot(
+              key as NativeTaskKey,
+              record as unknown as NativeTask,
+              observedAt,
+            )
+          : this.store.replaceActiveSummary(
+              key as NativeTaskKey,
+              record as unknown as NativeTaskSummary,
+              observedAt,
+            );
+        if (result !== null) this.bumpObservationEpoch(laneKey);
+        return result;
+      },
+    };
+  }
+
+  private reserveObservationOperations(count: number): void {
+    if (this.observationOperations + count > this.options.maxObservationOperations) {
+      fail("CAPACITY");
+    }
+    this.observationOperations += count;
+  }
+
+  private releaseObservationOperations(count: number): void {
+    this.observationOperations -= count;
+  }
+
+  private bumpObservationEpoch(laneKey: string): void {
+    const lane = this.observationLanes.get(laneKey);
+    if (lane !== undefined) lane.epoch += 1;
+  }
+
+  private runInLocatorLane(laneKey: string, task: () => ObservedTaskResult): Promise<ObservedTaskResult> {
+    let lane = this.observationLanes.get(laneKey);
+    if (lane === undefined) {
+      if (this.observationLanes.size >= this.options.maxUniqueTasks) fail("CAPACITY");
+      lane = { tail: Promise.resolve(), refCount: 0, epoch: 0 };
+      this.observationLanes.set(laneKey, lane);
+    }
+    const activeLane = lane;
+    activeLane.refCount += 1;
+    const result = activeLane.tail.then(() => task());
+    activeLane.tail = result.then(() => undefined, () => undefined);
+    const settle = (): void => {
+      activeLane.refCount -= 1;
+      if (activeLane.refCount === 0 && this.observationLanes.get(laneKey) === activeLane) {
+        this.observationLanes.delete(laneKey);
+      }
+    };
+    result.then(settle, settle);
+    return result;
   }
 
   private readNow(): number {
