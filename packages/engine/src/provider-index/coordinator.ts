@@ -9,19 +9,27 @@ import type {
 } from "../providers/types.js";
 import { ProviderRegistry } from "../providers/registry.js";
 import { isProviderRegistryInstance } from "../providers/registry-instance.js";
+import { ProviderOperationError } from "../providers/operation-error.js";
 import {
   ProviderTaskIndexStore,
   isProviderTaskIndexStoreInstance,
 } from "./store.js";
 import {
+  projectNativeTaskSnapshotForIndex,
+  projectNativeTaskSummaryForIndex,
+} from "./store-codec.js";
+import {
   serializeTaskLocator,
   taskLocator,
   type ProviderTaskLocator,
 } from "./identity.js";
+import { ProviderIndexStoreError } from "./store-types.js";
 import type {
   IndexedProviderTask,
   IndexedProviderTaskSummary,
   ProviderHomeRegistration,
+  ProviderIndexRegisteredHome,
+  VerifiedLegacySessionResolution,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";
 
@@ -112,6 +120,27 @@ export interface ProviderTaskIndexCoordinatorFactoryInput {
   readonly timers?: ProviderTaskIndexCoordinatorTimers;
   readonly options?: ProviderTaskIndexCoordinatorOptions;
 }
+
+export type ProviderTaskReadThroughProjection = "summary" | "snapshot";
+
+export interface ProviderTaskReadThroughInput {
+  readonly locator: ProviderTaskLocator;
+  readonly projection: ProviderTaskReadThroughProjection;
+  readonly allowDegradedCache: boolean;
+}
+
+export type ProviderTaskReadThrough =
+  | Readonly<{
+      freshness: "native" | "cache";
+      projection: "summary";
+      task: Readonly<IndexedProviderTaskSummary>;
+    }>
+  | Readonly<{
+      freshness: "native" | "cache";
+      projection: "snapshot";
+      task: Readonly<IndexedProviderTask>;
+    }>
+  | Readonly<{ freshness: "missing"; locator: ProviderTaskLocator }>;
 
 const OPTION_KEYS = [
   "pageSize",
@@ -337,6 +366,43 @@ function denseObservationArray(value: unknown, maximum: number): readonly unknow
   return output;
 }
 
+function nativeSummaryView(task: NativeTask): NativeTaskSummary {
+  const summary: NativeTaskSummary = {
+    key: task.key,
+    title: task.title,
+    cwd: task.cwd,
+    model: task.model,
+    status: task.status,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    archived: task.archived,
+    source: task.source,
+  };
+  if (Object.hasOwn(task, "revision")) summary.revision = task.revision;
+  return summary;
+}
+
+function summaryFromIndexedTask(
+  cache: Readonly<IndexedProviderTask>,
+): Readonly<IndexedProviderTaskSummary> {
+  return Object.freeze({
+    locator: cache.locator,
+    title: cache.title,
+    cwd: cache.cwd,
+    cwdRedacted: cache.cwdRedacted,
+    model: cache.model,
+    status: cache.status,
+    createdAt: cache.createdAt,
+    updatedAt: cache.updatedAt,
+    archived: cache.archived,
+    source: cache.source,
+    revision: cache.revision,
+    cacheDetail: cache.cacheDetail,
+    cacheGeneration: cache.cacheGeneration,
+    observedAt: cache.observedAt,
+  });
+}
+
 export class ProviderTaskIndexCoordinator {
   private initialized: readonly Readonly<ProviderHomeRegistration>[] | null = null;
   private initializing = false;
@@ -355,7 +421,6 @@ export class ProviderTaskIndexCoordinator {
     private readonly options: Readonly<NormalizedCoordinatorOptions>,
   ) {
     if (authority !== COORDINATOR_CONSTRUCTION) fail("INVALID_INPUT");
-    void this.registry;
     void this.timers;
   }
 
@@ -434,6 +499,146 @@ export class ProviderTaskIndexCoordinator {
    */
   observationEpoch(locatorValue: ProviderTaskLocator): number {
     return this.observationLanes.get(this.laneKeyForLocator(locatorValue))?.epoch ?? 0;
+  }
+
+  /**
+   * Resolve a task to an authoritative native observation, falling back to the additive cache only
+   * when the caller permits degraded reads. Home resolution happens before any provider access, so an
+   * unregistered home surfaces the store's `UNKNOWN_HOME` and no provider is touched. An observation
+   * token is captured before provider access and validated atomically inside the store's owned
+   * transaction: a native success writes through under that token (drift fails
+   * `RECONCILIATION_CAS_MISMATCH`); an authoritative-missing result calls `markNativeTaskMissing`, which
+   * alone decides whether the exact latch/cache authority is idempotent or needs deletion/relatch, and
+   * never consults cache or gzip. Any other provider failure drops the token without mutation and, when
+   * degraded cache is allowed and eligible (a snapshot request requires `cacheDetail:"snapshot"`; a
+   * summary request may consume either), returns cache; otherwise the registry-sanitized provider error
+   * is rethrown, and cache corruption outranks it. A `RECONCILIATION_REQUIRED` failure (e.g. a Claude
+   * task that was previously observed persisted) is never routed into the missing transition.
+   */
+  async readThrough(value: ProviderTaskReadThroughInput): Promise<ProviderTaskReadThrough> {
+    const { locator, projection, allowDegradedCache } = this.normalizeReadThroughInput(value);
+    const canonicalHome = this.store.resolveHome(locator.provider, locator.homeFingerprint);
+    if (canonicalHome === null) throw new ProviderIndexStoreError("UNKNOWN_HOME");
+    const registration: Readonly<ProviderIndexRegisteredHome> = Object.freeze({
+      provider: locator.provider,
+      homeFingerprint: locator.homeFingerprint,
+      canonicalHome,
+    });
+    const key: Readonly<NativeTaskKey> = Object.freeze({
+      provider: locator.provider,
+      home: canonicalHome,
+      nativeTaskId: locator.nativeTaskId,
+    });
+    const token = this.store.issueTaskObservationToken(locator);
+    let tokenConsumed = false;
+    try {
+      let nativeTask: NativeTask;
+      try {
+        nativeTask = await this.registry.readTask(key, projection === "snapshot");
+      } catch (providerError) {
+        if (providerError instanceof ProviderOperationError &&
+          providerError.code === "NATIVE_TASK_MISSING") {
+          this.store.markNativeTaskMissing(token);
+          tokenConsumed = true;
+          return Object.freeze({ freshness: "missing", locator });
+        }
+        this.store.dropTaskObservationToken(token);
+        tokenConsumed = true;
+        return this.degradedCacheOrRethrow(locator, projection, allowDegradedCache, providerError);
+      }
+      const observedAt = this.readNow();
+      if (projection === "snapshot") {
+        const written = this.store.replaceObservedActiveSnapshot(token, nativeTask, observedAt);
+        tokenConsumed = true;
+        const task = written ??
+          projectNativeTaskSnapshotForIndex(registration, key, nativeTask, observedAt);
+        return Object.freeze({ freshness: "native", projection: "snapshot", task });
+      }
+      const summaryView = nativeSummaryView(nativeTask);
+      const written = this.store.replaceObservedActiveSummary(token, summaryView, observedAt);
+      tokenConsumed = true;
+      const task = written ??
+        projectNativeTaskSummaryForIndex(registration, key, summaryView, observedAt);
+      return Object.freeze({ freshness: "native", projection: "summary", task });
+    } finally {
+      if (!tokenConsumed) {
+        try {
+          this.store.dropTaskObservationToken(token);
+        } catch {
+          /* token already consumed on a commit path; nothing to release */
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolve a legacy `sessionId` to its unified locator, falling back through the store's verified
+   * mapping only after native verification recorded it. An unresolved provenance-only session stays on
+   * the legacy path (returns `null`) and can never be promoted by matching ID alone.
+   */
+  resolveVerifiedLegacySession(
+    sessionIdValue: string,
+  ): Readonly<VerifiedLegacySessionResolution> | null {
+    if (typeof sessionIdValue !== "string") fail("INVALID_INPUT");
+    return this.store.getVerifiedLegacySessionMapping(sessionIdValue);
+  }
+
+  private degradedCacheOrRethrow(
+    locator: ProviderTaskLocator,
+    projection: ProviderTaskReadThroughProjection,
+    allowDegradedCache: boolean,
+    providerError: unknown,
+  ): ProviderTaskReadThrough {
+    if (!allowDegradedCache) throw providerError;
+    // Cache corruption outranks the provider error: a throwing read propagates as-is.
+    const cache = this.store.read(locator);
+    if (cache === null) throw providerError;
+    if (projection === "snapshot") {
+      // A summary-only cache is ineligible for a snapshot request; never fabricate an empty transcript.
+      if (cache.cacheDetail !== "snapshot") throw providerError;
+      return Object.freeze({ freshness: "cache", projection: "snapshot", task: cache });
+    }
+    return Object.freeze({
+      freshness: "cache",
+      projection: "summary",
+      task: summaryFromIndexedTask(cache),
+    });
+  }
+
+  private normalizeReadThroughInput(value: unknown): {
+    readonly locator: ProviderTaskLocator;
+    readonly projection: ProviderTaskReadThroughProjection;
+    readonly allowDegradedCache: boolean;
+  } {
+    const input = exactOwnData(value, ["locator", "projection", "allowDegradedCache"]);
+    if (input.projection !== "summary" && input.projection !== "snapshot") fail("INVALID_INPUT");
+    if (typeof input.allowDegradedCache !== "boolean") fail("INVALID_INPUT");
+    return {
+      locator: this.normalizeReadThroughLocator(input.locator),
+      projection: input.projection,
+      allowDegradedCache: input.allowDegradedCache,
+    };
+  }
+
+  private normalizeReadThroughLocator(value: unknown): ProviderTaskLocator {
+    const record = exactOwnData(value, ["version", "provider", "homeFingerprint", "nativeTaskId"]);
+    if (record.version !== 1) fail("INVALID_INPUT");
+    const provider = providerId(record.provider);
+    if (typeof record.homeFingerprint !== "string" || typeof record.nativeTaskId !== "string") {
+      fail("INVALID_INPUT");
+    }
+    const locator = Object.freeze({
+      version: 1 as const,
+      provider,
+      homeFingerprint: record.homeFingerprint,
+      nativeTaskId: record.nativeTaskId,
+    });
+    try {
+      serializeTaskLocator(locator);
+    } catch {
+      return fail("INVALID_INPUT");
+    }
+    return locator;
   }
 
   private laneKeyForLocator(locatorValue: ProviderTaskLocator): string {
