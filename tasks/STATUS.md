@@ -3,7 +3,7 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-15 by M5-T4-ADVERSARIAL (remaining ~15 Task 4 adversarial writer-lease/reconciliation scenarios added to codex-native-adapter.test.ts; focused Codex+Claude lease suites green together; DONE, not promoted)
+Last updated: 2026-07-15 by M5-T8-ALIASES (new packages/engine/src/compat-identifiers.ts: DEVHUB_* preferred / exact CLAUDE_UI_* alias / conflict→DevHub-value + value-free diagnostic; DEVHUB_DATA+CLAUDE_UI_DATA via one resolver keeping legacy ~/.claude-ui default (M8 owns migration); paths.appDataDir + server buildApp token routed through it; child-provider scrub now shares isDevHubNamespaceKey; webhooks payloadVersion 1|2 — v1 byte-compatible source:"claude-ui", v2 source:"devhub"+schemaVersion:2+optional sourceAliases, buildWebhookPayloadFor emits exactly one version. engine 2194/2194 + server 236/236 green; engine+server typecheck + git diff --check clean; DONE, not promoted)
 Goal: Deliver the mandatory M0-M8 DevHub goal as a provider-native Codex-quality environment for real Codex and Claude runtimes, with preservation, review, verification, and conditional gates reported honestly.
 
 Pause authority: Ronak explicitly paused this goal for migration to a background runner. There are zero autonomous next-actions. No agent may resume a test, review, implementation, promotion, or cutover until Ronak explicitly resumes the goal and names the execution target.

@@ -11,6 +11,7 @@ import {
   watchTranscripts,
   startConfigWatcher,
   paths,
+  resolveCompatEnv,
   createProviderTaskIndexCoordinator,
   type ConfiguredProviderHome,
   type ProviderTaskIndexCoordinator,
@@ -128,7 +129,9 @@ export function buildApp(opts: BuildOptions = {}): {
   engine: Engine;
 } {
   const engine = opts.engine ?? new Engine();
-  const token = (opts.token ?? process.env.CLAUDE_UI_TOKEN)?.trim();
+  // Prefer DEVHUB_TOKEN; accept the exact CLAUDE_UI_TOKEN alias only when it's absent.
+  // On a conflict the DevHub value wins with a value-free diagnostic (no token in logs).
+  const token = (opts.token ?? resolveCompatEnv("DEVHUB_TOKEN", "CLAUDE_UI_TOKEN").value)?.trim();
   const openAIChatEnabled =
     opts.openAIChatEnabled ?? process.env.DEVHUB_ENABLE_OPENAI_CHAT === "1";
   const openAIOptions = {

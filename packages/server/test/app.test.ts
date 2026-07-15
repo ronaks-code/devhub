@@ -1376,3 +1376,71 @@ describe("server token auth", () => {
     expect(ok.statusCode).toBe(200);
   });
 });
+
+/**
+ * The mutation token env now resolves through the DEVHUB_* / CLAUDE_UI_* compat layer:
+ * DEVHUB_TOKEN is preferred, the CLAUDE_UI_TOKEN alias is accepted only when the DevHub
+ * form is absent, and on a conflict the DevHub value wins (value-free diagnostic only).
+ * No opts.token is passed here so buildApp reads the environment.
+ */
+describe("server mutation token env compat (DEVHUB_TOKEN / CLAUDE_UI_TOKEN)", () => {
+  let prevDevhub: string | undefined;
+  let prevAlias: string | undefined;
+
+  beforeEach(() => {
+    prevDevhub = process.env.DEVHUB_TOKEN;
+    prevAlias = process.env.CLAUDE_UI_TOKEN;
+    delete process.env.DEVHUB_TOKEN;
+    delete process.env.CLAUDE_UI_TOKEN;
+  });
+
+  afterEach(() => {
+    if (prevDevhub === undefined) delete process.env.DEVHUB_TOKEN;
+    else process.env.DEVHUB_TOKEN = prevDevhub;
+    if (prevAlias === undefined) delete process.env.CLAUDE_UI_TOKEN;
+    else process.env.CLAUDE_UI_TOKEN = prevAlias;
+  });
+
+  it("accepts a request bearing the DEVHUB_TOKEN value", async () => {
+    process.env.DEVHUB_TOKEN = "devhub-secret";
+    current = await makeApp();
+    const bad = await current.app.inject({ method: "GET", url: "/api/projects" });
+    expect(bad.statusCode).toBe(401);
+    const ok = await current.app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: "Bearer devhub-secret" },
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it("accepts the CLAUDE_UI_TOKEN alias only when DEVHUB_TOKEN is absent", async () => {
+    process.env.CLAUDE_UI_TOKEN = "legacy-secret";
+    current = await makeApp();
+    const ok = await current.app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: "Bearer legacy-secret" },
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it("prefers DEVHUB_TOKEN over CLAUDE_UI_TOKEN on a conflict", async () => {
+    process.env.DEVHUB_TOKEN = "devhub-secret";
+    process.env.CLAUDE_UI_TOKEN = "legacy-secret";
+    current = await makeApp();
+    // The DevHub value is authoritative; the legacy alias is ignored.
+    const legacy = await current.app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: "Bearer legacy-secret" },
+    });
+    expect(legacy.statusCode).toBe(401);
+    const devhub = await current.app.inject({
+      method: "GET",
+      url: "/api/projects",
+      headers: { authorization: "Bearer devhub-secret" },
+    });
+    expect(devhub.statusCode).toBe(200);
+  });
+});

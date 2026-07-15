@@ -48,6 +48,18 @@ export const WEBHOOK_EVENTS: readonly WebhookEvent[] = [
 
 const KNOWN_EVENTS = new Set<string>(WEBHOOK_EVENTS);
 
+/**
+ * The webhook wire payload version a subscription emits.
+ *  - `1` — LEGACY/default: byte-compatible `source:"claude-ui"` body (no version fields).
+ *  - `2` — DevHub: `source:"devhub"`, `schemaVersion:2`, opaque locators, optional
+ *          `sourceAliases:["claude-ui"]` for a receiver mid-migration.
+ * A subscription emits EXACTLY ONE version — never a duplicate v1+v2 delivery.
+ */
+export type WebhookPayloadVersion = 1 | 2;
+
+/** The default payload version for a legacy/absent config (keeps existing receivers working). */
+export const DEFAULT_WEBHOOK_PAYLOAD_VERSION: WebhookPayloadVersion = 1;
+
 /** A persisted webhook subscription. */
 export interface WebhookConfig {
   /** Caller-supplied stable id (trimmed; non-empty). Duplicate ids are de-duped, last write wins. */
@@ -58,6 +70,12 @@ export interface WebhookConfig {
   events: WebhookEvent[];
   /** Whether this subscription is active. A disabled webhook is stored but never matched. */
   enabled: boolean;
+  /**
+   * Wire payload version. Absent/legacy configs normalize to {@link DEFAULT_WEBHOOK_PAYLOAD_VERSION}
+   * (1) and keep the byte-compatible `source:"claude-ui"` body; 2 opts into the DevHub body.
+   * `normalizeWebhook` always populates this, so a normalized config always carries it.
+   */
+  payloadVersion?: WebhookPayloadVersion;
   /** Optional human label for the UI. */
   label?: string;
 }
@@ -74,6 +92,48 @@ export interface WebhookPayload {
   /** Constant provenance marker so a receiver can tell where the call came from. */
   source: "claude-ui";
   [key: string]: unknown;
+}
+
+/**
+ * The v2 (DevHub) body: same envelope as {@link WebhookPayload} but `source:"devhub"`,
+ * an explicit `schemaVersion:2`, and an optional `sourceAliases:["claude-ui"]` so a
+ * receiver migrating off the old name can still recognise the sender. Provider data must
+ * be OPAQUE (fingerprints/locators) — the envelope never carries a raw home path.
+ */
+export interface WebhookPayloadV2 {
+  event: WebhookEvent;
+  /** ISO-8601 instant the payload was built. */
+  timestamp: string;
+  /** DevHub provenance marker. */
+  source: "devhub";
+  /** Wire schema version for the DevHub body. */
+  schemaVersion: 2;
+  /** Optional former-name aliases for a receiver mid-migration (e.g. `["claude-ui"]`). */
+  sourceAliases?: string[];
+  [key: string]: unknown;
+}
+
+/** Either wire body — v1 (legacy) or v2 (DevHub). */
+export type AnyWebhookPayload = WebhookPayload | WebhookPayloadV2;
+
+/** Options for {@link buildWebhookPayload}. */
+export interface BuildWebhookPayloadOptions {
+  /** Which wire version to emit. Defaults to {@link DEFAULT_WEBHOOK_PAYLOAD_VERSION} (1). */
+  payloadVersion?: WebhookPayloadVersion;
+  /** v2-only: former-name aliases to advertise (omitted from the body when absent/empty). */
+  sourceAliases?: readonly string[];
+}
+
+/** Coerce/validate a raw payload version; throws with `label` context on an unknown value. */
+function normalizePayloadVersion(raw: unknown, label: string): WebhookPayloadVersion {
+  if (raw === undefined || raw === null) return DEFAULT_WEBHOOK_PAYLOAD_VERSION;
+  if (raw === 1 || raw === 2) return raw;
+  throw new Error(`webhook ${label}: payloadVersion must be 1 or 2`);
+}
+
+/** The payload version a subscription emits (default {@link DEFAULT_WEBHOOK_PAYLOAD_VERSION}). */
+export function webhookPayloadVersionFor(config: WebhookConfig): WebhookPayloadVersion {
+  return config.payloadVersion ?? DEFAULT_WEBHOOK_PAYLOAD_VERSION;
 }
 
 /** True for a string that parses as an http: or https: URL (no other scheme passes). */
@@ -127,6 +187,7 @@ export function normalizeWebhook(raw: unknown): WebhookConfig {
     url: url as string,
     events,
     enabled: w.enabled === undefined ? true : Boolean(w.enabled),
+    payloadVersion: normalizePayloadVersion(w.payloadVersion, id),
   };
   if (typeof w.label === "string" && w.label.trim()) out.label = w.label.trim();
   return out;
@@ -149,22 +210,63 @@ export function normalizeWebhooks(list: unknown): WebhookConfig[] {
 }
 
 /**
- * Build the JSON body to POST for `event`. PURE: spreads the event-specific `data`
- * onto a stable envelope (`event`, `timestamp`, `source: "claude-ui"`). The envelope
- * fields win over same-named `data` keys so provenance can't be spoofed. `timestamp`
- * is injectable for deterministic tests (defaults to now, ISO-8601).
+ * Build the JSON body to POST for `event`. PURE: spreads the event-specific `data` onto a
+ * stable envelope, then stamps the envelope fields LAST so they win over same-named `data`
+ * keys (provenance can't be spoofed). `timestamp` is injectable for deterministic tests.
+ *
+ *  - v1 (DEFAULT): byte-compatible with the legacy body — `source:"claude-ui"`, NO version
+ *    fields. Existing receivers keep working unchanged.
+ *  - v2: `source:"devhub"`, `schemaVersion:2`, and — when supplied — `sourceAliases`. The
+ *    envelope carries no raw home; callers must pass OPAQUE locators in `data`.
+ *
+ * A single call emits EXACTLY ONE version (the requested one) — never a merged v1+v2 body.
  */
 export function buildWebhookPayload(
   event: WebhookEvent,
   data: Record<string, unknown> = {},
   timestamp: Date = new Date(),
-): WebhookPayload {
+  options: BuildWebhookPayloadOptions = {},
+): AnyWebhookPayload {
+  const version = options.payloadVersion ?? DEFAULT_WEBHOOK_PAYLOAD_VERSION;
+  if (version === 2) {
+    const payload: WebhookPayloadV2 = {
+      ...data,
+      event,
+      timestamp: timestamp.toISOString(),
+      source: "devhub",
+      schemaVersion: 2,
+    };
+    const aliases = (options.sourceAliases ?? []).filter(
+      (a): a is string => typeof a === "string" && a.length > 0,
+    );
+    if (aliases.length > 0) payload.sourceAliases = [...aliases];
+    return payload;
+  }
   return {
     ...data,
     event,
     timestamp: timestamp.toISOString(),
     source: "claude-ui",
   };
+}
+
+/**
+ * Build the body a SUBSCRIPTION should emit — exactly one version, chosen by the config's
+ * {@link WebhookConfig.payloadVersion} (default 1). A v2 subscription advertises the
+ * `["claude-ui"]` alias so a receiver mid-migration still recognises the sender. This is
+ * the single call site that guarantees "one version per subscription, never both".
+ */
+export function buildWebhookPayloadFor(
+  config: WebhookConfig,
+  event: WebhookEvent,
+  data: Record<string, unknown> = {},
+  timestamp: Date = new Date(),
+): AnyWebhookPayload {
+  const payloadVersion = webhookPayloadVersionFor(config);
+  return buildWebhookPayload(event, data, timestamp, {
+    payloadVersion,
+    ...(payloadVersion === 2 ? { sourceAliases: ["claude-ui"] } : {}),
+  });
 }
 
 /**

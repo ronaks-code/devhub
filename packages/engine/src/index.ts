@@ -1172,13 +1172,24 @@ export type { SavedView, SaveViewInput } from "./saved-views.js";
 export {
   WebhookConfigStore,
   WEBHOOK_EVENTS,
+  DEFAULT_WEBHOOK_PAYLOAD_VERSION,
   isHttpUrl,
   normalizeWebhook,
   normalizeWebhooks,
   buildWebhookPayload,
+  buildWebhookPayloadFor,
+  webhookPayloadVersionFor,
   webhooksForEvent,
 } from "./webhooks.js";
-export type { WebhookConfig, WebhookEvent, WebhookPayload } from "./webhooks.js";
+export type {
+  WebhookConfig,
+  WebhookEvent,
+  WebhookPayload,
+  WebhookPayloadV2,
+  AnyWebhookPayload,
+  WebhookPayloadVersion,
+  BuildWebhookPayloadOptions,
+} from "./webhooks.js";
 export { AuditStore } from "./audit.js";
 export type { AuditDecision, AuditDecisionInput, AuditEntry } from "./audit.js";
 export { redactSecrets, redactDeep } from "./redact.js";
@@ -1190,6 +1201,20 @@ export { createLineSplitter, DEFAULT_MAX_LINE_BYTES } from "./driver/buffer.js";
 export type { LineSplitter, LineSplitterOptions } from "./driver/buffer.js";
 export * as config from "./config/index.js";
 export * as paths from "./paths.js";
+export {
+  resolveCompatEnv,
+  resolveAppDataDir,
+  isDevHubNamespaceKey,
+  DEVHUB_ENV_PREFIX,
+  CLAUDE_UI_ENV_PREFIX,
+  LEGACY_APP_DATA_DIRNAME,
+} from "./compat-identifiers.js";
+export type {
+  CompatEnv,
+  CompatDiagnostic,
+  CompatEnvSource,
+  CompatEnvResult,
+} from "./compat-identifiers.js";
 export * from "./types.js";
 export type * from "./driver/types.js";
 export { listCodexSessions, getCodexStats } from "./codex.js";

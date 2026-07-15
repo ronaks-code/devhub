@@ -8,7 +8,7 @@ import {
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { paths } from "@devhub/engine";
+import { paths, isDevHubNamespaceKey } from "@devhub/engine";
 import {
   ClaudeNativeAdapter,
   ClaudePersistentSupervisor,
@@ -342,8 +342,9 @@ const CROSS_PROVIDER_CREDENTIAL_KEYS = new Set([
 ]);
 
 function isDevHubOwnedOrCrossProviderSecret(key: string): boolean {
-  return key.startsWith("CLAUDE_UI_") || key.startsWith("DEVHUB_") ||
-    CROSS_PROVIDER_CREDENTIAL_KEYS.has(key);
+  // Both DevHub namespaces (DEVHUB_*, CLAUDE_UI_*) route through the one shared engine
+  // predicate so child-provider scrubbing can never drift between the two prefixes.
+  return isDevHubNamespaceKey(key) || CROSS_PROVIDER_CREDENTIAL_KEYS.has(key);
 }
 
 function selectedAuthKeys(

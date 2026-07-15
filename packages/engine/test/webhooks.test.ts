@@ -11,6 +11,8 @@ import path from "node:path";
 import { Engine } from "../src/index.js";
 import {
   buildWebhookPayload,
+  buildWebhookPayloadFor,
+  webhookPayloadVersionFor,
   webhooksForEvent,
   normalizeWebhook,
   normalizeWebhooks,
@@ -225,5 +227,110 @@ describe("webhooks pure helpers", () => {
     expect(now.source).toBe("claude-ui");
     expect(typeof now.timestamp).toBe("string");
     expect(now.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+describe("webhooks payloadVersion (v1 legacy / v2 devhub)", () => {
+  const ts = new Date("2026-09-09T09:09:09.000Z");
+
+  it("normalizeWebhook defaults payloadVersion to 1 when absent, keeps 2 when set", () => {
+    expect(normalizeWebhook(wh({ id: "a" })).payloadVersion).toBe(1);
+    expect(normalizeWebhook(wh({ id: "b", payloadVersion: 2 })).payloadVersion).toBe(2);
+    expect(normalizeWebhook(wh({ id: "c", payloadVersion: 1 })).payloadVersion).toBe(1);
+  });
+
+  it("normalizeWebhook rejects an unknown payloadVersion", () => {
+    expect(() => normalizeWebhook(wh({ id: "x", payloadVersion: 3 as 1 | 2 }))).toThrow(
+      /payloadVersion/,
+    );
+    expect(() =>
+      normalizeWebhook(wh({ id: "y", payloadVersion: "2" as unknown as 1 | 2 })),
+    ).toThrow(/payloadVersion/);
+  });
+
+  it("webhookPayloadVersionFor reads the config (default 1)", () => {
+    expect(webhookPayloadVersionFor(wh({ payloadVersion: 2 }))).toBe(2);
+    expect(webhookPayloadVersionFor(wh({}))).toBe(1);
+  });
+
+  it("v1 (default) payload is byte-compatible: source 'claude-ui', no version fields", () => {
+    const v1 = buildWebhookPayload("session.finished", { sessionId: "s1" }, ts, {
+      payloadVersion: 1,
+    });
+    expect(v1).toEqual({
+      event: "session.finished",
+      timestamp: "2026-09-09T09:09:09.000Z",
+      source: "claude-ui",
+      sessionId: "s1",
+    });
+    // No v2 markers ever leak into a v1 body.
+    expect(v1).not.toHaveProperty("schemaVersion");
+    expect(v1).not.toHaveProperty("sourceAliases");
+    // Omitting options is identical to explicit v1.
+    expect(buildWebhookPayload("session.finished", { sessionId: "s1" }, ts)).toEqual(v1);
+  });
+
+  it("v2 payload uses source 'devhub', schemaVersion 2, and optional sourceAliases", () => {
+    const v2 = buildWebhookPayload(
+      "session.finished",
+      { locator: "fp:abc123" },
+      ts,
+      { payloadVersion: 2, sourceAliases: ["claude-ui"] },
+    );
+    expect(v2).toEqual({
+      event: "session.finished",
+      timestamp: "2026-09-09T09:09:09.000Z",
+      source: "devhub",
+      schemaVersion: 2,
+      sourceAliases: ["claude-ui"],
+      locator: "fp:abc123",
+    });
+    // Envelope wins over spoofed data keys.
+    const spoof = buildWebhookPayload(
+      "turn.error",
+      { source: "evil", schemaVersion: 99 } as never,
+      ts,
+      { payloadVersion: 2 },
+    );
+    expect(spoof.source).toBe("devhub");
+    expect(spoof.schemaVersion).toBe(2);
+    // sourceAliases is omitted (not empty) when not supplied.
+    expect(spoof).not.toHaveProperty("sourceAliases");
+  });
+
+  it("v2 envelope carries NO raw home path (opaque locators only)", () => {
+    const v2 = buildWebhookPayload("session.finished", {}, ts, { payloadVersion: 2 });
+    const serialized = JSON.stringify(v2);
+    expect(serialized).not.toContain("/home/");
+    expect(serialized).not.toContain("/Users/");
+  });
+
+  it("buildWebhookPayloadFor emits EXACTLY the subscription's version, never both", () => {
+    const v1 = buildWebhookPayloadFor(wh({ payloadVersion: 1 }), "budget.over", { x: 1 }, ts);
+    expect(v1.source).toBe("claude-ui");
+    expect(v1).not.toHaveProperty("schemaVersion");
+
+    const v2 = buildWebhookPayloadFor(wh({ payloadVersion: 2 }), "budget.over", { x: 1 }, ts);
+    expect(v2.source).toBe("devhub");
+    expect(v2.schemaVersion).toBe(2);
+    expect(v2.sourceAliases).toEqual(["claude-ui"]);
+
+    // A legacy config with no explicit version emits v1 (never a duplicate v1+v2).
+    const legacy = buildWebhookPayloadFor(wh({}), "budget.over", { x: 1 }, ts);
+    expect(legacy.source).toBe("claude-ui");
+    expect(legacy).not.toHaveProperty("schemaVersion");
+  });
+
+  it("payloadVersion survives a config store round-trip", () => {
+    const dir = tmp();
+    const engine = new Engine(path.join(dir, "i.db"));
+    engine.setWebhooks([
+      wh({ id: "v2", url: "https://v2.example/hook", payloadVersion: 2 }),
+      wh({ id: "v1", url: "https://v1.example/hook" }),
+    ]);
+    const back = engine.getWebhooks();
+    expect(back.find((w) => w.id === "v2")?.payloadVersion).toBe(2);
+    expect(back.find((w) => w.id === "v1")?.payloadVersion).toBe(1);
+    engine.close();
   });
 });
