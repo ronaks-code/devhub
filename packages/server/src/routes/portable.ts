@@ -54,14 +54,17 @@ const IMPORT_BODY_LIMIT = 256 * 1024 * 1024;
  * does the authoritative `schemaVersion` check and the idempotent restore. We only guard
  * the envelope so a stray JSON object (or a non-archive document) is a clean 400.
  */
-function looksLikeBundle(body: unknown): body is { kind?: unknown; sessions?: unknown } {
+function looksLikeBundle(body: unknown): body is { kind?: unknown } {
   if (!body || typeof body !== "object" || Array.isArray(body)) return false;
   const b = body as Record<string, unknown>;
-  // `sessions` MUST be an array (the core payload). `kind`, when present, must be the
-  // archive marker — a present-but-wrong marker is a different document, so reject it.
-  if (!Array.isArray(b.sessions)) return false;
-  if (b.kind !== undefined && b.kind !== "claude-ui-archive") return false;
-  return true;
+  // A DevHub v2 bundle carries `devhub-archive` + a providerTaskMeta array; a legacy v1
+  // bundle carries `claude-ui-archive` + a sessions array. Accept either envelope; reject
+  // an unknown marker or a document with neither payload array.
+  if (b.kind === "devhub-archive") return Array.isArray(b.providerTaskMeta) && Array.isArray(b.legacyMeta);
+  if (b.kind === "claude-ui-archive") return Array.isArray(b.sessions);
+  // No/absent marker: fall back to the legacy shape gate (a bare sessions array).
+  if (b.kind === undefined) return Array.isArray(b.sessions);
+  return false;
 }
 
 /**
@@ -72,13 +75,18 @@ function looksLikeBundle(body: unknown): body is { kind?: unknown; sessions?: un
  */
 interface ArchiveEngine {
   exportArchive?: (opts?: Record<string, unknown>) => unknown;
+  exportLegacyV1Archive?: (opts?: Record<string, unknown>) => unknown;
   importArchive?: (bundle: unknown, opts?: Record<string, unknown>) => unknown;
 }
 
-/** Query params for selective export — both optional, both passed straight through. */
+/** The transport authority label for a legacy-v1 rollback export. */
+const LEGACY_ARCHIVE_AUTHORITY = "legacy-rebuildable-cache";
+
+/** Query params for selective export — all optional, all passed straight through. */
 interface ExportQuery {
   projectId?: string;
   sinceTs?: number;
+  format?: "legacy-v1";
 }
 
 const exportSchema = {
@@ -90,6 +98,8 @@ const exportSchema = {
     projectId: { type: "string", minLength: 1, maxLength: 256 },
     // Only sessions active at/after this epoch-ms timestamp (subset export).
     sinceTs: { type: "integer", minimum: 0 },
+    // Rollback ONLY: emit the legacy v1 bundle (unresolved legacy corpus). Never default.
+    format: { type: "string", enum: ["legacy-v1"] },
   },
 } as const;
 
@@ -102,9 +112,13 @@ export function registerPortableRoutes(app: FastifyInstance, engine: Engine): vo
     "/api/export/archive",
     { schema: { querystring: exportSchema } },
     async (req, reply) => {
-      const exportArchive = (engine as unknown as ArchiveEngine).exportArchive;
+      const asArchive = engine as unknown as ArchiveEngine;
+      const legacy = req.query.format === "legacy-v1";
+      // DEFAULT exports the DevHub v2 bundle; `format=legacy-v1` exports the legacy
+      // rollback bundle (unresolved legacy corpus only) via a distinct engine method.
+      const exportFn = legacy ? asArchive.exportLegacyV1Archive : asArchive.exportArchive;
       // Capability guard: an older engine without the method — 503, not a TypeError.
-      if (typeof exportArchive !== "function") {
+      if (typeof exportFn !== "function") {
         return reply.code(503).send({ error: "archive export not supported by this engine" });
       }
 
@@ -117,24 +131,28 @@ export function registerPortableRoutes(app: FastifyInstance, engine: Engine): vo
 
       let bundle: unknown;
       try {
-        bundle = exportArchive.call(engine, opts);
+        bundle = exportFn.call(engine, opts);
       } catch (err) {
-        // A genuine engine failure on a valid request — 500 with the message.
-        const message = err instanceof Error ? err.message : String(err);
+        // A legacy export that names a resolved session is BAD INPUT → 400 (the engine
+        // throws ArchiveValidationError). Any other throw on a valid request is a 500.
+        const e = err as { name?: string; code?: unknown; message?: string };
+        const message = e?.message ?? String(err);
+        if (e?.name === "ArchiveValidationError") {
+          return reply.code(400).send({ error: `invalid archive export: ${message}` });
+        }
         return reply.code(500).send({ error: `archive export failed: ${message}` });
       }
 
-      // Filename carries the session count so a face can label the download. The bundle
-      // is our own document shape, so `sessions` is an array; guard anyway.
-      const count = Array.isArray((bundle as { sessions?: unknown })?.sessions)
-        ? (bundle as { sessions: unknown[] }).sessions.length
-        : 0;
-      const filename = `claude-ui-archive-${count}-sessions.json`;
+      const b = bundle as Record<string, unknown> | undefined;
+      const filename = legacy
+        ? `devhub-archive-legacy-v1-${Array.isArray(b?.sessions) ? (b!.sessions as unknown[]).length : 0}-sessions.json`
+        : `devhub-archive-v2.json`;
       reply
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Content-Disposition", `attachment; filename="${filename}"`);
-      // Serialize once: the bundle is already in memory (the engine assembled it), so
-      // there's nothing to stream incrementally here — return the JSON string.
+      // Label a legacy rollback export as a rebuildable cache, never authority.
+      if (legacy) reply.header("X-DevHub-Archive-Authority", LEGACY_ARCHIVE_AUTHORITY);
+      // Serialize once: the bundle is already in memory (the engine assembled it).
       return JSON.stringify(bundle);
     },
   );
@@ -177,24 +195,33 @@ export function registerPortableRoutes(app: FastifyInstance, engine: Engine): vo
         const incompatibleVersion =
           e?.name === "ArchiveVersionError" ||
           (typeof e?.found === "number" && typeof e?.expected === "number");
+        // A schema/mapping/bounds violation (ArchiveValidationError) is BAD INPUT → 400.
+        const invalidInput = e?.name === "ArchiveValidationError";
         const message = e?.message ?? String(err);
         if (incompatibleVersion) {
           return reply.code(400).send({ error: `incompatible archive: ${message}` });
         }
+        if (invalidInput) {
+          return reply.code(400).send({ error: `invalid archive: ${message}` });
+        }
         return reply.code(500).send({ error: `archive import failed: ${message}` });
       }
 
-      // Summarize what was written. The engine's result keys `sessions` as the count of
-      // restored sessions; surface it as `importedSessions` (the route's stable name)
-      // and pass the rest of the breakdown through verbatim.
+      // Summarize exactly what was written. `sessions` (v1 only) surfaces as the route's
+      // stable `importedSessions`; the rest of the exact-count breakdown passes through.
       const r = (result ?? {}) as Record<string, unknown>;
-      const importedSessions = typeof r.sessions === "number" ? r.sessions : 0;
+      const n = (k: string) => (typeof r[k] === "number" ? (r[k] as number) : 0);
       return {
-        importedSessions,
-        meta: typeof r.meta === "number" ? r.meta : 0,
-        textRows: typeof r.textRows === "number" ? r.textRows : 0,
-        savedViews: typeof r.savedViews === "number" ? r.savedViews : 0,
-        audit: typeof r.audit === "number" ? r.audit : 0,
+        importedSessions: n("sessions"),
+        meta: n("meta"),
+        textRows: n("textRows"),
+        savedViews: n("savedViews"),
+        audit: n("audit"),
+        providerMeta: n("providerMeta"),
+        forkLinks: n("forkLinks"),
+        mappedLocators: n("mappedLocators"),
+        orphanedLocators: n("orphanedLocators"),
+        legacyProvenance: n("legacyProvenance"),
       };
     },
   );
