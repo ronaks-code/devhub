@@ -943,6 +943,9 @@ export type {
   ProviderTaskIndexCoordinatorFactoryInput,
   ProviderTaskIndexCoordinatorOptions,
   ProviderTaskIndexCoordinatorTimers,
+  ProviderTaskReadThrough,
+  ProviderTaskReadThroughInput,
+  ProviderTaskReadThroughProjection,
 } from "./provider-index/coordinator.js";
 export { MessageSearch } from "./search.js";
 export type { SearchFacets } from "./search.js";

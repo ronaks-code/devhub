@@ -40,6 +40,8 @@ import {
   PROVIDER_INDEX_STORE_DEFAULTS,
   PROVIDER_INDEX_STORE_HARD_LIMITS,
   ProviderIndexStoreError,
+  type IndexedProviderTask,
+  type IndexedProviderTaskSummary,
   type NormalizedProviderIndexStoreConfig,
   type PreparedProviderEvent,
   type PreparedProviderTaskSnapshot,
@@ -1107,6 +1109,78 @@ export function prepareProviderTaskSnapshot(
   const result = prepareProviderTaskSnapshotResult(registration, methodKey, task, config);
   if (result.status === "failed") throw new ProviderIndexStoreError(result.code);
   return result.value;
+}
+
+/**
+ * Assemble a frozen, path-free indexed summary from an already-prepared native summary. A native
+ * read-through projection carries `cacheGeneration: 0` because it never publishes a cache generation;
+ * post-promotion write-through results carry the real active generation through the store instead.
+ */
+function indexedSummaryProjection(
+  prepared: PreparedProviderTaskSummary,
+  observedAt: number,
+  cacheDetail: "summary" | "snapshot",
+): Readonly<IndexedProviderTaskSummary> {
+  return Object.freeze({
+    locator: prepared.locator,
+    title: prepared.title,
+    cwd: prepared.cwd,
+    cwdRedacted: prepared.cwdRedacted,
+    model: prepared.model,
+    status: prepared.status,
+    createdAt: prepared.createdAt,
+    updatedAt: prepared.updatedAt,
+    archived: prepared.archived,
+    source: prepared.source,
+    revision: prepared.revision,
+    cacheDetail,
+    cacheGeneration: 0,
+    observedAt,
+  });
+}
+
+/**
+ * Shared backend-only native-to-indexed summary projector. Reuses the store codec's registered-home,
+ * containment, redaction, identity, and fingerprint rules through `prepareProviderTaskSummary`. A
+ * malformed native summary fails `INVALID_INPUT`; over-capacity fails `CAPACITY`.
+ */
+export function projectNativeTaskSummaryForIndex(
+  registration: ProviderIndexRegisteredHome,
+  methodKey: NativeTaskKey,
+  summary: NativeTaskSummary,
+  observedAt: number,
+): Readonly<IndexedProviderTaskSummary> {
+  return indexedSummaryProjection(
+    prepareProviderTaskSummary(registration, methodKey, summary),
+    observedAt,
+    "summary",
+  );
+}
+
+/**
+ * Shared backend-only native-to-indexed snapshot projector. Reuses the store codec's registered-home,
+ * containment, redaction, identity, and fingerprint rules through `prepareProviderTaskSnapshot`, then
+ * projects each prepared turn/event to its path-free indexed shape.
+ */
+export function projectNativeTaskSnapshotForIndex(
+  registration: ProviderIndexRegisteredHome,
+  methodKey: NativeTaskKey,
+  task: NativeTask,
+  observedAt: number,
+  config: NormalizedProviderIndexStoreConfig = normalizeProviderIndexStoreOptions(),
+): Readonly<IndexedProviderTask> {
+  const prepared = prepareProviderTaskSnapshot(registration, methodKey, task, config);
+  return Object.freeze({
+    ...indexedSummaryProjection(prepared, observedAt, "snapshot"),
+    turns: Object.freeze(prepared.turns.map((turn) => Object.freeze({
+      id: turn.id,
+      status: turn.status,
+      startedAt: turn.startedAt,
+      completedAt: turn.completedAt,
+      ordinal: turn.ordinal,
+      events: Object.freeze(turn.events.map((event) => event.event)),
+    }))),
+  });
 }
 
 export function verifyPreparedProviderTaskSnapshotForStore(

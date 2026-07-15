@@ -6,7 +6,15 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import path from "node:path";
-import { Engine, watchTranscripts, startConfigWatcher, paths } from "@devhub/engine";
+import {
+  Engine,
+  watchTranscripts,
+  startConfigWatcher,
+  paths,
+  createProviderTaskIndexCoordinator,
+  type ConfiguredProviderHome,
+  type ProviderTaskIndexCoordinator,
+} from "@devhub/engine";
 import type { EngineEvent } from "@devhub/engine/types";
 import { ProviderRegistry } from "@devhub/engine/providers";
 import {
@@ -137,6 +145,33 @@ export function buildApp(opts: BuildOptions = {}): {
         isEnabled: nativeClaudeRequested,
       })
     : null;
+  // Provider task index coordinator. It is created and initialized lazily on a
+  // false->true effective unifiedTaskIndex transition and never eagerly: TranscriptIndex
+  // owns the shared ProviderTaskIndexStore, and the coordinator reuses that exact store.
+  // Its registered homes come from the same trusted runtime configuration used to build
+  // the adapters (installed-runtime discovery or explicit BuildOptions) — no new raw-home
+  // registry accessor is introduced, and canonical homes stay backend-only.
+  const registeredProviderHomes: readonly ConfiguredProviderHome[] = Object.freeze([
+    ...(nativeCodexRuntime === null
+      ? []
+      : [{ provider: "openai", home: nativeCodexRuntime.installation.home } as const]),
+    ...(nativeClaudeRuntime === null
+      ? []
+      : [{ provider: "anthropic", home: nativeClaudeRuntime.installation.home } as const]),
+  ]);
+  let providerTaskIndexCoordinator: ProviderTaskIndexCoordinator | null = null;
+  const syncProviderTaskIndex = (unifiedTaskIndex: boolean): void => {
+    if (!unifiedTaskIndex || providerTaskIndexCoordinator !== null) return;
+    const coordinator = createProviderTaskIndexCoordinator({
+      registry: providerRegistry,
+      store: engine.index.providerIndex,
+      registeredHomes: registeredProviderHomes,
+      clock: { now: () => Date.now() },
+    });
+    coordinator.initialize();
+    providerTaskIndexCoordinator = coordinator;
+  };
+
   const app = Fastify({ logger: false });
 
   app.addHook("onClose", async () => {
@@ -146,6 +181,9 @@ export function buildApp(opts: BuildOptions = {}): {
     ]);
   });
   app.addHook("onReady", async () => {
+    if (engine.getSettings().devHubFeatures?.unifiedTaskIndex === true) {
+      syncProviderTaskIndex(true);
+    }
     if (
       nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable() &&
       nativeClaudeRequested()
@@ -212,14 +250,18 @@ export function buildApp(opts: BuildOptions = {}): {
       nativeCodex: nativeCodexRuntime !== null,
       persistentClaude:
         hasMutationToken && nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable(),
+      unifiedTaskIndex: true,
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
     }),
-    onDevHubFeaturesChanged: () => settleProviderRuntimeOperations([
-      ...(nativeCodexRuntime === null ? [] : [() => nativeCodexRuntime.refreshEnabled()]),
-      ...(nativeClaudeRuntime === null ? [] : [() => nativeClaudeRuntime.refreshEnabled()]),
-    ]),
+    onDevHubFeaturesChanged: (features) => {
+      syncProviderTaskIndex(features.unifiedTaskIndex === true);
+      return settleProviderRuntimeOperations([
+        ...(nativeCodexRuntime === null ? [] : [() => nativeCodexRuntime.refreshEnabled()]),
+        ...(nativeClaudeRuntime === null ? [] : [() => nativeClaudeRuntime.refreshEnabled()]),
+      ]);
+    },
   });
 
   registerGitRoutes(app, engine);
