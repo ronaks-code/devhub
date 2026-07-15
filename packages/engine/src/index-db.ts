@@ -55,9 +55,11 @@ import { scanSubagents, SUBAGENT_ROLE } from "./subagents.js";
 import type { SubagentSearchText } from "./subagents.js";
 import { dailyUsage } from "./rollups.js";
 import type { DailyUsage, DailyUsageOptions } from "./rollups.js";
-import { exportArchive, importArchive } from "./portable.js";
+import { exportArchive, exportLegacyV1Archive, importArchive } from "./portable.js";
 import type {
   ArchiveBundle,
+  AnyArchiveBundle,
+  LegacyArchiveBundleV1,
   ExportArchiveOptions,
   ImportArchiveOptions,
   ImportArchiveResult,
@@ -658,13 +660,22 @@ export class TranscriptIndex {
   }
 
   /**
+   * Export the LEGACY v1 bundle for ROLLBACK ONLY — a rebuildable legacy cache carrying
+   * only the unresolved legacy corpus (sessions with no verified unified mapping). Never
+   * the default. See {@link exportLegacyV1Archive}.
+   */
+  exportLegacyV1Archive(opts: ExportArchiveOptions = {}): LegacyArchiveBundleV1 {
+    return exportLegacyV1Archive(this.db, opts);
+  }
+
+  /**
    * Restore a {@link ArchiveBundle} into THIS index, idempotently — re-importing the
    * same bundle never duplicates rows (the mirrored text reuses the W23 stable-rowid
    * path; session/sidecar rows upsert by identity). A bundle with an unreadable
    * `schemaVersion` throws (or no-ops in non-strict mode). NEVER writes to ~/.claude —
    * only this index DB. See {@link importArchive}.
    */
-  importArchive(bundle: ArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
+  importArchive(bundle: AnyArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
     const res = importArchive(this.db, bundle, opts);
     // Imported sessions changed token/activity totals — drop the memoized rollups so
     // the next getProjects/getStats recomputes against the restored data.

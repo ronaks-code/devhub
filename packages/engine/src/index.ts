@@ -62,6 +62,8 @@ import type { ProjectOverview } from "./project-overview.js";
 import type { IntegrityReport, RepairOptions, RepairResult } from "./integrity.js";
 import type {
   ArchiveBundle,
+  AnyArchiveBundle,
+  LegacyArchiveBundleV1,
   ExportArchiveOptions,
   ImportArchiveOptions,
   ImportArchiveResult,
@@ -774,13 +776,22 @@ export class Engine {
   }
 
   /**
+   * Export the LEGACY v1 bundle for ROLLBACK ONLY — a rebuildable legacy cache carrying
+   * only the unresolved legacy corpus. Never the default; explicitly selecting a
+   * resolved session throws. See {@link exportLegacyV1Archive}.
+   */
+  exportLegacyV1Archive(opts: ExportArchiveOptions = {}): LegacyArchiveBundleV1 {
+    return this.index.exportLegacyV1Archive(opts);
+  }
+
+  /**
    * Restore a {@link ArchiveBundle} into THIS index, idempotently — re-importing the
    * same bundle never duplicates rows (mirrored text reuses the W23 stable-rowid path;
    * session/sidecar rows upsert by identity). A bundle with an unreadable
    * `schemaVersion` throws {@link ArchiveVersionError} (or no-ops in non-strict mode).
    * NEVER writes to ~/.claude — only the index DB.
    */
-  importArchive(bundle: ArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
+  importArchive(bundle: AnyArchiveBundle, opts: ImportArchiveOptions = {}): ImportArchiveResult {
     return this.index.importArchive(bundle, opts);
   }
 
@@ -1064,12 +1075,25 @@ export {
   exportArchive,
   exportArchiveForProject,
   exportArchiveChunks,
+  exportLegacyV1Archive,
   importArchive,
   ArchiveVersionError,
+  ArchiveValidationError,
   ARCHIVE_SCHEMA_VERSION,
+  DEVHUB_ARCHIVE_SCHEMA_VERSION,
+  LEGACY_ARCHIVE_SCHEMA_VERSION,
+  LEGACY_ARCHIVE_AUTHORITY,
 } from "./portable.js";
 export type {
   ArchiveBundle,
+  AnyArchiveBundle,
+  DevHubArchiveBundleV2,
+  LegacyArchiveBundleV1,
+  ArchiveLegacyMeta,
+  ArchiveProviderTaskMeta,
+  ArchiveProviderForkLink,
+  ArchiveHomeMapping,
+  ArchiveHomeMappingEntry,
   ArchiveSession,
   ArchiveTextRow,
   ArchiveSavedView,
