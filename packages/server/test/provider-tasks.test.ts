@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { Engine } from "@devhub/engine";
 import {
+  ProviderCapabilityError,
   ProviderOperationError,
   ProviderRegistry,
   createNativeTaskKey,
@@ -358,6 +359,132 @@ describe("provider task HTTP seam", () => {
       includeTurns: true,
     }]);
     expect(anthropic.calls.read).toEqual([]);
+  });
+
+  it("maps native-task-missing to an exact value-free provider 404", async () => {
+    const registry = new ProviderRegistry();
+    const openai = makeAdapter(
+      "openai",
+      defineProviderCapabilities({ read: true }),
+      {
+        read: async () => {
+          throw new ProviderOperationError(
+            "NATIVE_TASK_MISSING",
+            "thread not loaded: secret-native-task-id",
+            { cause: new Error(`secret home ${OPENAI_HOME}`) },
+          );
+        },
+      },
+    );
+    registry.register(OPENAI_HOME, openai.adapter);
+    const app = await makeApp(registry);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks/secret-native-task-id?home=${encodeURIComponent(OPENAI_HOME)}`,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({
+      error: "provider_task_not_found",
+      code: "NATIVE_TASK_MISSING",
+      provider: "openai",
+    });
+    expect(response.body).not.toContain("secret-native-task-id");
+    expect(response.body).not.toContain(OPENAI_HOME);
+    expect(response.body).not.toContain("secret home");
+  });
+
+  it("contains a malformed typed provider failure before HTTP projection", async () => {
+    let accessorReads = 0;
+    const hostile = Object.create(ProviderCapabilityError.prototype) as Record<string, unknown>;
+    Object.defineProperties(hostile, {
+      code: {
+        configurable: true,
+        enumerable: true,
+        value: "PROVIDER_CAPABILITY_UNAVAILABLE",
+      },
+      message: {
+        configurable: true,
+        enumerable: true,
+        value: "secret-native-task-id /secret/provider-home raw trap message",
+      },
+      provider: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "secret-provider"; },
+      },
+      capability: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "secret-capability"; },
+      },
+      home: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "/secret/provider-home"; },
+      },
+      cause: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return new Error("secret cause"); },
+      },
+    });
+    const registry = new ProviderRegistry();
+    const openai = makeAdapter(
+      "openai",
+      defineProviderCapabilities({ read: true }),
+      { read: async () => { throw hostile; } },
+    );
+    registry.register(OPENAI_HOME, openai.adapter);
+    const app = await makeApp(registry);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks/secret-native-task-id?home=${encodeURIComponent(OPENAI_HOME)}`,
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({
+      error: "provider_unavailable",
+      code: "PROVIDER_ADAPTER_FAILURE",
+      provider: "openai",
+    });
+    expect(accessorReads).toBe(0);
+    for (const secret of [
+      "secret-native-task-id",
+      "/secret/provider-home",
+      "secret-provider",
+      "secret-capability",
+      "raw trap message",
+      "secret cause",
+    ]) expect(response.body).not.toContain(secret);
+  });
+
+  it("maps a legitimate provider-omitted capability failure with the invoked provider", async () => {
+    const raw = new ProviderCapabilityError("read");
+    const registry = new ProviderRegistry();
+    const openai = makeAdapter(
+      "openai",
+      defineProviderCapabilities({ read: true }),
+      { read: async () => { throw raw; } },
+    );
+    registry.register(OPENAI_HOME, openai.adapter);
+    const app = await makeApp(registry);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks/native-task-7?home=${encodeURIComponent(OPENAI_HOME)}`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toEqual({
+      error: "provider_capability_unavailable",
+      code: "PROVIDER_CAPABILITY_UNAVAILABLE",
+      provider: "openai",
+      capability: "read",
+    });
+    expect(response.body).not.toContain(raw.message);
   });
 
   it("returns 404 for an unknown provider without invoking an adapter", async () => {

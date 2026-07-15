@@ -466,6 +466,12 @@ function sendProviderError(
           code: error.code,
           provider: fallbackProvider,
         });
+      case "NATIVE_TASK_MISSING":
+        return reply.code(404).send({
+          error: "provider_task_not_found",
+          code: error.code,
+          provider: fallbackProvider,
+        });
       case "MUTATION_UNCERTAIN":
         return reply.code(409).send({
           error: "provider_mutation_uncertain",

@@ -53,6 +53,7 @@ import {
   type CodexNativeTurnMetadata,
 } from "./native-shapes.js";
 import type { CodexRpcNotification, CodexRpcRequest } from "./protocol/index.js";
+import { CodexRemoteRpcError } from "./protocol/rpc-peer.js";
 import { CodexRequestBroker } from "./request-broker.js";
 import { buildCodexNativeRevision } from "./revision.js";
 import {
@@ -80,6 +81,7 @@ export type CodexNativeAdapterErrorCode =
   | "DISPOSED"
   | "INVALID_INPUT"
   | "MUTATION_UNCERTAIN"
+  | "NATIVE_TASK_MISSING"
   | "OWNERSHIP"
   | "PARTIAL_FORK"
   | "PARTIAL_START"
@@ -136,6 +138,25 @@ function adapterError(
   options?: { readonly cause?: unknown; readonly task?: Readonly<NativeTask> },
 ): CodexNativeAdapterError {
   return new CodexNativeAdapterError(code, message, options);
+}
+
+async function readCodexThread<T>(
+  nativeTaskId: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      error instanceof CodexRemoteRpcError &&
+      error.code === -32600 &&
+      error.message === `thread not loaded: ${nativeTaskId}` &&
+      error.data === undefined
+    ) {
+      throw adapterError("NATIVE_TASK_MISSING", "Provider native task is missing");
+    }
+    throw error;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -594,10 +615,10 @@ export class CodexNativeAdapter implements ProviderAdapter {
       throw adapterError("INVALID_INPUT", "includeTurns must be a boolean");
     }
     const lease = await this.getLease();
-    const raw = await lease.call("thread/read", {
+    const raw = await readCodexThread(owned.nativeTaskId, () => lease.call("thread/read", {
       threadId: owned.nativeTaskId,
       includeTurns,
-    });
+    }));
     const parsed = parseCodexThreadReadResult(raw);
     if (parsed.thread.id !== owned.nativeTaskId) {
       throw adapterError("OWNERSHIP", "Codex read returned a different task");
@@ -660,10 +681,10 @@ export class CodexNativeAdapter implements ProviderAdapter {
     const owned = this.assertKey(key);
     const mode = assertNoUnsafeOverrides(overrides);
     const lease = await this.getLease();
-    const rawRead = await lease.call("thread/read", {
+    const rawRead = await readCodexThread(owned.nativeTaskId, () => lease.call("thread/read", {
       threadId: owned.nativeTaskId,
       includeTurns: true,
-    });
+    }));
     const current = parseCodexThreadReadResult(rawRead);
     if (current.thread.id !== owned.nativeTaskId) {
       throw adapterError("OWNERSHIP", "Codex read returned a different task");
@@ -695,10 +716,10 @@ export class CodexNativeAdapter implements ProviderAdapter {
     const owned = this.assertKey(key);
     if (lastTurnId !== undefined) this.nativeId(lastTurnId, "Last turn id");
     const lease = await this.getLease();
-    const rawRead = await lease.call("thread/read", {
+    const rawRead = await readCodexThread(owned.nativeTaskId, () => lease.call("thread/read", {
       threadId: owned.nativeTaskId,
       includeTurns: false,
-    });
+    }));
     const current = parseCodexThreadReadResult(rawRead);
     if (current.thread.id !== owned.nativeTaskId) {
       throw adapterError("OWNERSHIP", "Codex read returned a different task");
@@ -881,10 +902,11 @@ export class CodexNativeAdapter implements ProviderAdapter {
     }
     for (const state of [...this.subscriptions.values()]) {
       if (context.signal.aborted) throw adapterError("DISABLED", "Codex reconciliation was cancelled");
-      const rawRead = await context.rpc.call("thread/read", {
-        threadId: state.key.nativeTaskId,
-        includeTurns: false,
-      });
+      const rawRead = await readCodexThread(state.key.nativeTaskId, () =>
+        context.rpc.call("thread/read", {
+          threadId: state.key.nativeTaskId,
+          includeTurns: false,
+        }));
       const current = parseCodexThreadReadResult(rawRead);
       if (current.thread.id !== state.key.nativeTaskId) {
         throw adapterError("OWNERSHIP", "Codex reconciliation returned a different task");

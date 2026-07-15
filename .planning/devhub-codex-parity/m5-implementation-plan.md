@@ -451,13 +451,149 @@ class ProviderTaskIndexStore {
 
 ## Task 3: Provider index coordinator, rebuild, dedupe, and rollback read path
 
+### Frozen Task 3 prerequisite and coordinator resolver
+
+The following decisions close the implementation gaps discovered after the reviewed Task 2 E/F
+facades. They are part of Task 3 and must land as serial TDD checkpoints before or with the
+coordinator surface; they do not change the frozen milestone denominator or enable a feature flag.
+
+- Add the stable provider-operation code `NATIVE_TASK_MISSING` with the value-free message
+  `Provider native task is missing`. Registries strip provider messages, causes, homes, and task IDs;
+  missing errors never carry a task. Claude may emit it only when the official session helper returns
+  `null` on an existing-task read or the pre-read for resume, fork, lazy send, existing-task subscribe,
+  or revision validation. Helper rejection/malformed/wrong-session results remain `OWNERSHIP`; null CWD
+  is not missing; previously persisted deletion remains `RECONCILIATION_REQUIRED`; and partial start,
+  partial fork, or a not-yet-initialized new-task subscription retains its current semantics.
+- Codex may classify only a rejected `thread/read`, never a mutation RPC. The retained cleanup artifact
+  proves code `-32600` plus exact message `thread not loaded: <requested native task id>` for two deleted
+  tasks. The predicate additionally requires `instanceof CodexRemoteRpcError` and
+  `error.data === undefined` as a conservative guard (the artifact does not record `data`). Every other
+  code, message, requested-ID mismatch, data value, class, transport/protocol fault, malformed success,
+  or missing-looking mutation error remains unclassified; mutation uncertainty semantics are unchanged.
+  Provider HTTP routes map the new code to status `404` and exact value-free body
+  `{error:"provider_task_not_found",code:"NATIVE_TASK_MISSING",provider}`. The web safe-code and public
+  error-tag allowlists retain that code/body without reflecting task ID, home, remote message, or cause.
+- Add `getVerifiedLegacySessionMapping(sessionId)` returning one frozen, path-free
+  `VerifiedLegacySessionResolution | null`, where the result is exactly
+  `{sessionId,locator,mappingSource:"live-provider-observation",verifiedAt}`. Session ID uses the existing
+  canonical bounded native-ID grammar; locator uses the frozen locator grammar; `verifiedAt` is a safe
+  nonnegative integer. The PK `.get()` remains readable for orphan homes, never infers authority from
+  unresolved provenance, and maps invalid input/SQL/malformed persisted state to
+  `INVALID_INPUT`/`DATABASE_UNAVAILABLE`/`CORRUPT_ROW`. No mapping is `null`, never `UNKNOWN_HOME`, and no
+  provenance-read facade is added in Task 3.
+- Add a backend-only opaque `ProviderTaskObservationToken` issued by the store before provider access.
+  The token snapshots `PRAGMA main.data_version`, the exact scope sync authority, target task census,
+  active task row, receipt authority, and reconciliation row/latch needed to distinguish an unchanged
+  observation from peer-process replacement, promotion, deletion, reconciliation, or ABA. It is a
+  private, one-shot capability issued by the exact store instance and connection: it is not constructible
+  or inspectable through the providers barrel, and a clone, foreign-store token, or replay is
+  `INVALID_INPUT`. Every native read-through success replacement and authoritative-missing transition
+  validates its token atomically in the owned writer transaction before selecting a branch or mutating
+  any row; authority drift fails `RECONCILIATION_CAS_MISMATCH` without mutation, so a late provider result
+  cannot overwrite or delete newer indexed authority. A token is consumed on any commit attempt and is
+  explicitly dropped without mutation when provider failure takes no store commit path.
+- Add `markNativeTaskMissing(observationToken)` as one owned transaction; callers supply neither a locator
+  nor fingerprint authority. After validating the opaque token and sampling one clock before
+  `BEGIN IMMEDIATE`, the store atomically revalidates the token, derives the locator and
+  `reviewedFingerprint` from its exact active cached task revision fingerprint (null when the observed
+  authority had no active cached row/revision), fixes `nativeFingerprint:null`, `writerEpoch:0`, and reason
+  `NATIVE_TASK_MISSING`. After exact token validation, an existing required `NATIVE_TASK_MISSING` latch
+  plus an already-empty cache returns that exact reconciliation row with four zero deletion counts and
+  does not relatch. Otherwise the same transaction deletes the locator from every cache generation and
+  inserts or relatches the durable reconciliation row. It proves zero remaining cache rows and an exact
+  bigint change delta of deleted task + turn + event + receipt rows plus exactly zero reconciliation
+  writes for the idempotent branch or one reconciliation INSERT/UPDATE for every transition/relatch. It
+  returns exact frozen `{reconciliation,cache}` where `cache` is the four deleted counts. It remains usable
+  for orphan locators and preserves sync/epoch, homes, metadata, forks, mappings, provenance, and foreign
+  cache rows. Caller transactions, stale observation tokens, corrupt active authority, overflow, or any
+  delta/trigger failure roll back the whole transition. Errors are limited to `INVALID_INPUT`,
+  `CORRUPT_ROW`, `DATABASE_UNAVAILABLE`, `CLOCK_FAILURE`, `CAPACITY`, and
+  `RECONCILIATION_CAS_MISMATCH`.
+- `ProviderTaskIndexCoordinator` uses exact own-data config defaults
+  `{pageSize:200,maxPages:5000,maxUniqueTasks:100000,maxRebuildMs:900000,maxObservationOperations:256}`
+  with hard caps
+  `{pageSize:200,maxPages:5000,maxUniqueTasks:1000000,maxRebuildMs:3600000,maxObservationOperations:1024}`.
+  Its stable value-free coordinator codes include `INVALID_INPUT`, `CAPACITY`, `CLOCK_FAILURE`,
+  `REBUILD_BUSY`, `REBUILD_TIMEOUT`, `CANCELLED`, and `STALE_OBSERVATION`. One rebuild may run per exact
+  provider/home; other scopes may overlap only through the store's existing serialized synchronous
+  mutations. Every admitted request, waiter, and provider operation counts separately against
+  `maxObservationOperations`, including multiple same-locator requests serialized through one lane. The
+  first over-cap admission fails `CAPACITY`; success, failure, cancellation, timeout, and late provider
+  settlement release every operation reservation on all terminal paths.
+- The store exposes its normalized stage lease duration only to the backend coordinator. Heartbeat
+  cadence is derived as `max(250, floor(stageLeaseMs / 3))`, always below the lease. The injected `now`
+  is the sole deadline authority and must return monotonic safe integers; throw, invalid value, or
+  regression is `CLOCK_FAILURE`. Host timers only wake one non-overlapping synchronous heartbeat while
+  provider awaits are pending; cancellation/promotion clears the timer and waits for the callback to
+  leave before abort/promotion. Synchronous heartbeats run before and after each provider call and before
+  every stage write/promotion. False/throw/expiry invalidates the run; no late result may write.
+  Pre-aborted work fails before `beginStage`; mid-run cancellation/deadline races non-cancellable provider
+  promises, invalidates a run token, drains the heartbeat, aborts the exact stage, ignores late results,
+  and reports cleanup/stage-loss failure ahead of `CANCELLED` or `REBUILD_TIMEOUT` when invisibility is
+  unproven.
+- Rebuild pages with `includeArchived:true`, `limit:pageSize`, rejects oversized pages, page/deadline/task
+  bounds, foreign keys, and any next cursor that is not canonical Unicode text of 1..4096 UTF-8 bytes.
+  Cursors are opaque: retain their exact full history in the bounded page set and reject an exact repeat;
+  do not infer progress from their content. Rebuild calls no provider mutation API.
+  Duplicate summary winner is greatest non-null revision `updatedAt`; a tie uses the later page then
+  later item. Every final unique locator is point-read with `includeTurns:true` in serialized-locator
+  order, so a successful rebuild is full-snapshot only:
+  `taskCount = snapshotCount = receiptCount = unique locators`, with turn/event totals recomputed from
+  final snapshots rather than accumulated observations. Provider version is `null` until a trusted
+  runtime-version seam exists. Any failure best-effort aborts the stage and preserves the previous active
+  generation plus all durable rows.
+- Coordinator operations use a bounded per-locator observation lane covering native completion and the
+  corresponding cache/missing store mutation. Rebuild records each final locator's observation epoch and
+  rechecks every epoch before promotion; a newer read/observation makes the rebuild `STALE_OBSERVATION`
+  and aborts the stage, so an older missing/read result can never delete or replace newer authority.
+  Lane/epoch state is bounded by `maxUniqueTasks` during rebuild and removed after the last waiter/run.
+- Add a shared backend-only native-to-indexed projector that reuses the store codec's registered-home,
+  containment, redaction, identity, and fingerprint rules. Native `readThrough` success before initial
+  promotion returns this frozen path-free projection without publishing a partial cache generation.
+  Input is exact `{locator,projection:"summary"|"snapshot",allowDegradedCache}`. Frozen output is exactly
+  `{freshness:"native"|"cache",projection:"summary",task:IndexedProviderTaskSummary}` or
+  `{freshness:"native"|"cache",projection:"snapshot",task:IndexedProviderTask}` or
+  `{freshness:"missing",locator}`. Home resolution occurs before provider access and store `UNKNOWN_HOME`
+  wins. Native success wins. Authoritative missing calls the atomic missing transition and never uses
+  cache or gzip. Other failures use cache only when explicitly allowed; snapshot requests require
+  `cacheDetail:"snapshot"`, while summary requests may consume either detail. Absent/ineligible cache
+  rethrows the original registry-sanitized provider error; cache corruption outranks it. Before provider
+  access, read-through captures the store-issued observation token used by either native-success
+  replacement or authoritative-missing invalidation. For every authoritative missing result, including a
+  repeat, the coordinator calls `markNativeTaskMissing(observationToken)`; only that owned transaction may
+  decide whether the exact unchanged latch/cache authority is idempotent or needs deletion/relatch. A
+  Claude task that was previously observed persisted continues to fail in the adapter as
+  `RECONCILIATION_REQUIRED` and never enters this missing transition.
+- Server composition passes the coordinator factory an exact frozen `registeredHomes` array of
+  `{provider,home}` from the same trusted runtime configuration used to construct adapters; no new raw-home
+  registry accessor is added. The factory rejects extras, duplicates, and exotic inputs, snapshots each
+  entry, then sorts by provider and raw-home ASCII. Coordinator initialization samples one registration timestamp,
+  calls `store.registerHome` for each, and returns frozen path-free
+  `{provider,homeFingerprint,registeredAt}` records in that order. Canonical homes remain backend-only.
+  The coordinator/factory is created and initialized lazily in server composition on each false-to-true
+  effective `unifiedTaskIndex` transition; `TranscriptIndex` retains ownership of the shared store but
+  never eagerly constructs a coordinator. The root engine may export the concrete coordinator/factory;
+  the providers barrel exports only path-free new types and must not expose the store, configured-home
+  input, raw-home carrier, stage lease, or projector.
+
 **Files**
 
+- Modify `packages/engine/src/providers/operation-error.ts`
+- Modify `packages/engine/src/providers/claude/native-adapter.ts`
+- Modify `packages/engine/src/providers/codex/native-adapter.ts`
+- Extend `packages/engine/test/providers/registry.test.ts`
+- Modify `packages/engine/src/provider-index/store-local-state.ts`
+- Modify `packages/engine/src/provider-index/store-cache.ts`
+- Modify `packages/engine/src/provider-index/store-types.ts`
+- Modify `packages/engine/src/provider-index/store.ts`
 - Create `packages/engine/src/provider-index/coordinator.ts`
+- Create or extend the focused engine adapter/registry/store prerequisite tests
 - Create `packages/engine/test/provider-index/coordinator.test.ts`
 - Modify `packages/engine/src/index-db.ts`
 - Modify `packages/engine/src/index.ts`
 - Modify `packages/engine/src/providers/index.ts`
+- Modify `packages/server/src/routes/provider-tasks.ts` and its focused tests
+- Modify `apps/web/src/lib/provider-api.ts` and its focused tests
 
 **Contract**
 
@@ -474,6 +610,20 @@ class ProviderTaskIndexStore {
 
 **TDD gate**
 
+- Prove the missing-error slice across Claude-null allowed/excluded branches, exact rejected Codex
+  `thread/read` code/message/ID/undefined-data matrices, registry task/cause/message sanitization, mutation
+  uncertainty retention, exact server 404 DTO, and web safe-code/public-tag retention.
+- Prove verified mapping lookup for mapped, mapped-plus-provenance, provenance-only, orphan, corrupt,
+  invalid, closed, immutable, and raw-home-free cases. Prove atomic missing deletion/latch counts, relatch,
+  overflow, every cache generation, durable/foreign preservation, caller transaction, clock/reentrancy,
+  closed/busy DB, trigger rollback, and exact total-change deltas. Prove private one-shot store-issued
+  observation tokens reject clone/foreign/replay as `INVALID_INPUT`; reject peer-process data-version,
+  sync, task, receipt, reconciliation, promotion, replacement, deletion, and ABA races as
+  `RECONCILIATION_CAS_MISMATCH`; are consumed on every commit attempt; and are dropped without mutation
+  after non-commit provider failure. Prove repeated same-latch missing still enters the atomic store method
+  and returns idempotently without a relatch, while different/no latch takes the transition. Prove every
+  admitted request, waiter, and provider operation, including serialized same-locator waiters, consumes
+  the bounded `maxObservationOperations` budget and releases it on all terminal paths.
 - Fake adapters prove pagination dedupe, overlapping pages, duplicate items, changed revisions, mid-rebuild failure, provider deletion, foreign-scope isolation, zero-task rebuild, cache fallback labeling, verified-vs-unresolved legacy mapping, native deletion without gzip resurrection, and zero native mutations during rebuild.
 - Prove clearing the entire DevHub DB leaves fake native snapshots unchanged and a fresh DB rebuilds byte-equivalent indexed tasks.
 

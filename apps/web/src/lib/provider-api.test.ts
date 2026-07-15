@@ -584,6 +584,40 @@ describe("providerApi browser HTTP contract", () => {
     await expect(unsafe).rejects.not.toThrow("SK_LIVE_ARBITRARY_SECRET");
   });
 
+  it("retains the value-free native-task-missing code and public error tag", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({
+        error: "provider_task_not_found",
+        code: "NATIVE_TASK_MISSING",
+        provider: "openai",
+        remote: "thread not loaded: secret-native-task-id",
+        home: KEY.home,
+        cause: "sk-live-arbitrary-secret",
+      }, 404))
+      .mockResolvedValueOnce(json({
+        error: "provider_task_not_found",
+        provider: "openai",
+      }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const coded = providerApi.read(KEY);
+    await expect(coded).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 404,
+      code: "NATIVE_TASK_MISSING",
+    });
+    await expect(coded).rejects.not.toThrow(KEY.home);
+    await expect(coded).rejects.not.toThrow(KEY.nativeTaskId);
+    await expect(coded).rejects.not.toThrow("sk-live-arbitrary-secret");
+
+    await expect(providerApi.read(KEY)).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 404,
+      code: "provider_task_not_found",
+    });
+  });
+
   it("keeps unauthorized errors free of task homes and native ids", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ error: "unauthorized" }, 401)));
 

@@ -387,6 +387,461 @@ describe("ProviderRegistry dispatch", () => {
     expect(JSON.stringify(error)).not.toContain("adapter-secret-never-expose");
   });
 
+  it("projects native-task-missing without exposing adapter detail, cause, or task identity", async () => {
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => {
+          throw new ProviderOperationError(
+            "NATIVE_TASK_MISSING",
+            "thread not loaded: secret-native-task-id",
+            { cause: new Error("Bearer adapter-secret-never-expose") },
+          );
+        },
+      }),
+    );
+
+    const error = await registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "secret-native-task-id"),
+    ).catch((reason: unknown) => reason) as ProviderOperationError;
+
+    expect(error).toBeInstanceOf(ProviderOperationError);
+    expect(error).toMatchObject({
+      code: "NATIVE_TASK_MISSING",
+      message: "Provider native task is missing",
+    });
+    expect(error.task).toBeUndefined();
+    expect(error.cause).toBeUndefined();
+    expect(JSON.stringify(error)).not.toContain("secret-native-task-id");
+    expect(JSON.stringify(error)).not.toContain("adapter-secret-never-expose");
+  });
+
+  it("contains a native-task-missing failure that carries a task projection", async () => {
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => {
+          throw new ProviderOperationError(
+            "NATIVE_TASK_MISSING",
+            "raw provider failure",
+            { task: task("openai", "/tmp/provider-home", "must-never-project") },
+          );
+        },
+      }),
+    );
+
+    await expect(registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "task-1"),
+    )).rejects.toBeInstanceOf(ProviderAdapterError);
+  });
+
+  it("contains a provider operation error with an accessor code without invoking it", async () => {
+    const hostile = new ProviderOperationError("INVALID_INPUT", "raw provider failure");
+    let codeReads = 0;
+    Object.defineProperty(hostile, "code", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        codeReads += 1;
+        return "PARTIAL_START";
+      },
+    });
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { start: true }, {
+        startTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.startTask("openai", {
+      home: "/tmp/provider-home",
+      cwd: "/work",
+    }).catch((reason: unknown) => reason);
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(codeReads).toBe(0);
+    expect(failure).not.toHaveProperty("task");
+  });
+
+  it("contains a task accessor that mutates its error code before a forged partial projection", async () => {
+    const hostile = new ProviderOperationError("INVALID_INPUT", "raw provider failure");
+    const projected = {
+      ...task("openai", "/tmp/provider-home", "must-never-project"),
+      cwd: "/secret/project-home",
+    };
+    let taskReads = 0;
+    Object.defineProperty(hostile, "task", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        taskReads += 1;
+        (hostile as unknown as { code: string }).code = "PARTIAL_START";
+        return taskReads === 1 ? undefined : projected;
+      },
+    });
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { start: true }, {
+        startTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.startTask("openai", {
+      home: "/tmp/provider-home",
+      cwd: "/work",
+    }).catch((reason: unknown) => reason);
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(taskReads).toBe(0);
+    expect(failure).not.toHaveProperty("task");
+    expect(JSON.stringify(failure)).not.toContain("must-never-project");
+    expect(JSON.stringify(failure)).not.toContain("/secret/project-home");
+  });
+
+  it("contains a provider operation proxy whose descriptor trap throws", async () => {
+    let descriptorReads = 0;
+    const hostile = new Proxy(
+      new ProviderOperationError("INVALID_INPUT", "raw provider failure"),
+      {
+        getOwnPropertyDescriptor() {
+          descriptorReads += 1;
+          throw new Error("descriptor secret must never escape");
+        },
+      },
+    );
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { start: true }, {
+        startTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.startTask("openai", {
+      home: "/tmp/provider-home",
+      cwd: "/work",
+    }).catch((reason: unknown) => reason);
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(descriptorReads).toBe(0);
+    expect(failure).not.toHaveProperty("task");
+    expect(JSON.stringify(failure)).not.toContain("descriptor secret");
+  });
+
+  it.each([
+    ["throwing getPrototypeOf", () => {
+      const trap = new Error("prototype trap secret must never escape");
+      const target = new ProviderOperationError(
+        "PARTIAL_START",
+        "raw missing task must-never-project",
+        {
+          cause: new Error("raw cause secret must never escape"),
+          task: {
+            ...task("openai", "/secret/provider-home", "secret-native-task-id"),
+            cwd: "/secret/project-home",
+          },
+        },
+      );
+      return {
+        hostile: new Proxy(target, {
+          getPrototypeOf() { throw trap; },
+        }),
+        rawCause: trap,
+      };
+    }],
+    ["revoked", () => {
+      const rawCause = new Error("revoked proxy cause secret must never escape");
+      const revocable = Proxy.revocable(
+        new ProviderOperationError(
+          "PARTIAL_START",
+          "raw revoked task must-never-project",
+          {
+            cause: rawCause,
+            task: {
+              ...task("openai", "/secret/provider-home", "secret-native-task-id"),
+              cwd: "/secret/project-home",
+            },
+          },
+        ),
+        {},
+      );
+      revocable.revoke();
+      return { hostile: revocable.proxy, rawCause };
+    }],
+  ] as const)("contains a %s provider operation proxy before typed classification", async (_name, create) => {
+    const { hostile, rawCause } = create();
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { start: true }, {
+        startTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.startTask("openai", {
+      home: "/tmp/provider-home",
+      cwd: "/work",
+    }).catch((reason: unknown) => reason) as ProviderAdapterError;
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(failure).not.toBe(rawCause);
+    expect(failure.cause).toBeInstanceOf(TypeError);
+    expect(failure.cause).not.toBe(rawCause);
+    expect((failure.cause as Error).message)
+      .toBe("provider operation failure classification is invalid");
+    expect((failure.cause as Error).cause).toBeUndefined();
+    expect(failure).not.toHaveProperty("task");
+    const projected = `${failure.message}\n${(failure.cause as Error).message}\n${JSON.stringify(failure)}`;
+    for (const secret of [
+      "prototype trap secret",
+      "raw cause secret",
+      "revoked proxy cause secret",
+      "must-never-project",
+      "secret-native-task-id",
+      "/secret/provider-home",
+      "/secret/project-home",
+    ]) expect(projected).not.toContain(secret);
+  });
+
+  it.each([
+    ["capability", ProviderCapabilityError.prototype],
+    ["registry-not-found", ProviderRegistryNotFoundError.prototype],
+    ["adapter", ProviderAdapterError.prototype],
+  ] as const)("contains a provider operation proxy that spoofs the %s prototype", async (_name, prototype) => {
+    const rawCause = new Error("spoofed prototype cause secret must never escape");
+    const hostile = new Proxy(
+      new ProviderOperationError(
+        "PARTIAL_START",
+        "spoofed prototype task must-never-project",
+        {
+          cause: rawCause,
+          task: {
+            ...task("openai", "/secret/provider-home", "secret-native-task-id"),
+            cwd: "/secret/project-home",
+          },
+        },
+      ),
+      { getPrototypeOf: () => prototype },
+    );
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { start: true }, {
+        startTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.startTask("openai", {
+      home: "/tmp/provider-home",
+      cwd: "/work",
+    }).catch((reason: unknown) => reason) as ProviderAdapterError;
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(failure).not.toBe(hostile);
+    expect(failure.cause).toBeInstanceOf(TypeError);
+    expect(failure.cause).not.toBe(rawCause);
+    expect((failure.cause as Error).message)
+      .toBe("provider operation failure classification is invalid");
+    expect((failure.cause as Error).cause).toBeUndefined();
+    expect(failure).not.toHaveProperty("task");
+    const projected = `${failure.message}\n${(failure.cause as Error).message}\n${JSON.stringify(failure)}`;
+    for (const secret of [
+      "spoofed prototype cause secret",
+      "must-never-project",
+      "secret-native-task-id",
+      "/secret/provider-home",
+      "/secret/project-home",
+    ]) expect(projected).not.toContain(secret);
+  });
+
+  it.each([
+    ["capability", ProviderCapabilityError.prototype, "PROVIDER_CAPABILITY_UNAVAILABLE"],
+    ["registry-not-found", ProviderRegistryNotFoundError.prototype, "PROVIDER_ADAPTER_NOT_FOUND"],
+    ["adapter", ProviderAdapterError.prototype, "PROVIDER_ADAPTER_FAILURE"],
+  ] as const)("contains a non-proxy object with the foreign %s prototype", async (_name, prototype, code) => {
+    let accessorReads = 0;
+    const hostile = Object.create(prototype) as Record<string, unknown>;
+    Object.defineProperties(hostile, {
+      code: { configurable: true, enumerable: true, value: code },
+      message: {
+        configurable: true,
+        enumerable: true,
+        value: "foreign prototype secret-native-task-id /secret/provider-home",
+      },
+      capability: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "secret-capability"; },
+      },
+      provider: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "secret-provider"; },
+      },
+      home: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return "/secret/provider-home"; },
+      },
+      cause: {
+        configurable: true,
+        enumerable: true,
+        get() { accessorReads += 1; return new Error("foreign cause secret"); },
+      },
+    });
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "task-1"),
+    ).catch((reason: unknown) => reason) as ProviderAdapterError;
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(failure).not.toBe(hostile);
+    expect(failure.cause).toBeInstanceOf(TypeError);
+    expect((failure.cause as Error).message)
+      .toBe("provider classified failure is invalid");
+    expect((failure.cause as Error).cause).toBeUndefined();
+    expect(accessorReads).toBe(0);
+    expect(failure).not.toHaveProperty("task");
+    const projected = `${failure.message}\n${(failure.cause as Error).message}\n${JSON.stringify(failure)}`;
+    for (const secret of [
+      "secret-native-task-id",
+      "/secret/provider-home",
+      "secret-capability",
+      "secret-provider",
+      "foreign cause secret",
+    ]) expect(projected).not.toContain(secret);
+  });
+
+  it.each([
+    ["capability", () => {
+      const error = new ProviderCapabilityError("read", "openai");
+      return { error, field: "capability" };
+    }],
+    ["registry-not-found", () => {
+      const error = new ProviderRegistryNotFoundError("openai", "/tmp/provider-home");
+      return { error, field: "home" };
+    }],
+    ["adapter", () => {
+      const error = new ProviderAdapterError(
+        "openai",
+        "/tmp/provider-home",
+        new Error("raw adapter cause secret"),
+      );
+      return { error, field: "provider" };
+    }],
+  ] as const)("contains a real %s failure with an accessor classification field", async (_name, create) => {
+    const { error: hostile, field } = create();
+    let accessorReads = 0;
+    Object.defineProperty(hostile, field, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        accessorReads += 1;
+        return field === "home" ? "/secret/provider-home" : "secret-classification-value";
+      },
+    });
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => { throw hostile; },
+      }),
+    );
+
+    const failure = await registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "task-1"),
+    ).catch((reason: unknown) => reason) as ProviderAdapterError;
+
+    expect(failure).toBeInstanceOf(ProviderAdapterError);
+    expect(failure).not.toBe(hostile);
+    expect(failure.cause).toBeInstanceOf(TypeError);
+    expect((failure.cause as Error).message)
+      .toBe("provider classified failure is invalid");
+    expect((failure.cause as Error).cause).toBeUndefined();
+    expect(accessorReads).toBe(0);
+    const projected = `${failure.message}\n${(failure.cause as Error).message}\n${JSON.stringify(failure)}`;
+    for (const secret of [
+      "secret-classification-value",
+      "/secret/provider-home",
+      "raw adapter cause secret",
+    ]) expect(projected).not.toContain(secret);
+  });
+
+  it.each([
+    [
+      "capability",
+      () => new ProviderCapabilityError("read", "openai"),
+      ProviderCapabilityError,
+      { code: "PROVIDER_CAPABILITY_UNAVAILABLE", capability: "read", provider: "openai" },
+    ],
+    ["registry-not-found", () =>
+      new ProviderRegistryNotFoundError("openai", "/tmp/provider-home"),
+    ProviderRegistryNotFoundError,
+    { code: "PROVIDER_ADAPTER_NOT_FOUND", provider: "openai", home: "/tmp/provider-home" }],
+    ["adapter", () =>
+      new ProviderAdapterError("openai", "/tmp/provider-home", new Error("raw cause secret")),
+    ProviderAdapterError,
+    { code: "PROVIDER_ADAPTER_FAILURE", provider: "openai", home: "/tmp/provider-home" }],
+  ] as const)("reconstructs a legitimate non-proxy %s failure", async (_name, create, ErrorClass, fields) => {
+    const expected = create();
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => { throw expected; },
+      }),
+    );
+
+    const failure = await registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "task-1"),
+    ).catch((reason: unknown) => reason) as Error;
+
+    expect(failure).toBeInstanceOf(ErrorClass);
+    expect(failure).not.toBe(expected);
+    expect(failure).toMatchObject(fields);
+    if (failure instanceof ProviderAdapterError) {
+      expect(failure.cause).toBeInstanceOf(TypeError);
+      expect(failure.cause).not.toBe(expected.cause);
+      expect((failure.cause as Error).message).toBe("Provider adapter failure");
+      expect((failure.cause as Error).cause).toBeUndefined();
+    }
+    expect(`${failure.message}\n${JSON.stringify(failure)}`).not.toContain("raw cause secret");
+  });
+
+  it("fills the invoked provider into a legitimate capability failure that omits it", async () => {
+    const expected = new ProviderCapabilityError("read");
+    const registry = new ProviderRegistry();
+    registry.register(
+      "/tmp/provider-home",
+      fakeAdapter("openai", { read: true }, {
+        readTask: async () => { throw expected; },
+      }),
+    );
+
+    const failure = await registry.readTask(
+      createNativeTaskKey("openai", "/tmp/provider-home", "task-1"),
+    ).catch((reason: unknown) => reason) as ProviderCapabilityError;
+
+    expect(failure).toBeInstanceOf(ProviderCapabilityError);
+    expect(failure).not.toBe(expected);
+    expect(failure).toMatchObject({
+      code: "PROVIDER_CAPABILITY_UNAVAILABLE",
+      capability: "read",
+      provider: "openai",
+    });
+  });
+
   it("ownership-validates and snapshots a partial task for non-retryable recovery", async () => {
     const partial = task("openai", "/tmp/provider-home", "created-task");
     const registry = new ProviderRegistry();

@@ -1,5 +1,41 @@
 # Reusable Lessons
 
+## 2026-07-14 - Preserve optional-field semantics during trusted reconstruction
+
+- Exact descriptor validation must distinguish an absent field, an accessor, and an own data field whose value is `undefined`. Public constructors may intentionally represent optional authority with the third form.
+- Accept only the documented optional value or exact invoked authority, then reconstruct with the invoked provider. This preserves compatibility without allowing foreign values or raw-object reuse.
+- Pair registry tests with the HTTP projection whenever a typed error's optional fields affect status or fallback-provider behavior.
+
+## 2026-07-14 - Reconstruct typed failures from exact invoked authority
+
+- A non-proxy object can inherit an exported error prototype without running its constructor, and a real instance can replace its classification fields with accessors. `instanceof` plus proxy rejection is therefore not a trust boundary.
+- Snapshot only the bounded own data descriptors needed for the classified kind and validate them against the exact invoked provider, home, and capability. Never invoke accessors, and never reuse the source error's message or cause.
+- Even valid typed failures should be reconstructed fresh after validation. Invalid shapes collapse to one fixed generic adapter failure, while exact legitimate kinds preserve only their safe class and invoked-authority fields.
+
+## 2026-07-14 - Detect proxies before guarded instanceof classification
+
+- Catching prototype traps is insufficient: a proxy can successfully spoof a trusted class prototype and enter a raw-rethrow branch. Use Node's trap-free proxy detector on object and function inputs before every `instanceof` classification.
+- Reject all adapter-thrown proxies at the registry boundary, including revoked proxies and proxies over otherwise legitimate exported errors. Only ordinary non-proxy typed errors retain exact identity.
+- An earlier descriptor test may become a zero-call proof after a stronger outer boundary lands. Update it to assert the hostile proxy never reaches prototype-sensitive field or descriptor logic.
+
+## 2026-07-14 - Guard typed classification before field snapshotting
+
+- `instanceof` is executable behavior for proxies because prototype lookup can trap or fail after revocation. Put the entire typed-error classification chain behind one catch boundary before reading descriptors or fields.
+- Do not retain a hostile prototype trap as the public adapter failure cause. Collapse it to a stable classification and create a fresh value-free internal TypeError so raw trap text, causes, task IDs, and paths cannot cross the registry boundary.
+- Keep successful classification and field validation separate: first return a stable error kind, then permit only the operation kind to enter the bounded own-data-descriptor snapshot.
+
+## 2026-07-14 - Snapshot typed error fields before classification
+
+- An exported error class proves only its prototype, not stable field values. Treat adapter-thrown instances as hostile: capture the exact own data descriptors needed for classification, reject accessors and descriptor failures, validate each captured value once, and never reread the source object after control flow begins.
+- Lifecycle exceptions cannot outrank persisted authority. When a helper reports absence, consult the durable in-memory persistence/reconciliation state before allowing an initialized or new-task shortcut.
+- Keep hostile-error containment value-free. A malformed typed error becomes the registry's generic adapter failure and must never project its task, native ID, working directory, raw message, or cause.
+
+## 2026-07-14 - Classify native absence only from exact provider evidence
+
+- A provider-native missing classification must come from one exact non-mutation evidence shape: an official helper's `null` or the documented remote error class/code/message/data tuple. Fuzzy message matching, mutation errors, malformed success, and transport failures retain their existing conservative classifications.
+- Absence before persistence and disappearance after persistence are different authority states. The former may be safely reported as missing; the latter must retain reconciliation semantics so a stale observation cannot erase durable history.
+- Project missing errors through one value-free code/message at registry, server, and browser boundaries. Strip provider detail and causes, forbid task projections, and test the public HTTP body and browser allowlists independently.
+
 ## 2026-07-14 - Bootstrap the durable status board before implementation
 
 - A fresh goal chat must create and commit `tasks/STATUS.md` plus the root `AGENTS.md` before starting milestone work when the restart playbook requires them.

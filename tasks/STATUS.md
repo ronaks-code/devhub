@@ -37,14 +37,15 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
-- `campaign/auto-improve` — tested shared branch; M5 E and F are integrated through this checkpoint after exact mainline provider-index gates, engine/public-surface typecheck, and independent SPEC/QUALITY/SECURITY GO.
+- `campaign/auto-improve` — tested shared branch; M5 E/F plus the first Task 3 native-missing prerequisite are integrated through this checkpoint after exact mainline gates and independent SPEC/QUALITY/SECURITY GO.
 - detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
 - detached `m5-f` at `4244c39` — historical reviewed F internal-foundation source; read-only and never replayed wholesale.
 - detached `m5-facade` at `6e1804c` — exact reviewed M5 F facade source retained read-only after promotion; current goal coordinator.
+- detached `m5-task3-contracts` at `537891d` — exact reviewed Task 3 native-missing source retained read-only after promotion; current goal coordinator.
 - `wip/devhub` at `641af8e` — remote-backed WIP with user-owned dirt and evidence; never merge wholesale.
 - detached `m5-c0-schema` at `377a724` and `m5-cursor` at `82a8b74` — stale; do not build on them.
 
 ## Recent checkpoints (last 3 tested commits on shared branch)
-- `this commit`  M5 F local-state facade promotion; 526/526 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
+- `this commit`  Task 3 native-task-missing prerequisite promotion; 351/351 affected tests plus exact-tip SPEC/QUALITY/SECURITY GO.
+- `69114ae`  M5 F local-state facade promotion; 526/526 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
 - `213c95e`  M5 E active cache promotion; 387/387 targeted mainline tests plus exact-tip SPEC/QUALITY/SECURITY GO.
-- `6b2293b`  M5 D staged promotion dual-review approval; tested main checkpoint.

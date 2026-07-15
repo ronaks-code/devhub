@@ -3,6 +3,7 @@ import {
   CodexNativeAdapter,
   CodexNativeAdapterError,
 } from "../../src/providers/codex/native-adapter.js";
+import { CodexRemoteRpcError } from "../../src/providers/codex/protocol/rpc-peer.js";
 import type {
   AppServerReconcileContext,
   CodexAppServerLease,
@@ -129,7 +130,71 @@ const adapter = (supervisor = new FakeSupervisor(), enabled = true) => ({
   supervisor,
 });
 
+const nativeKey = (nativeTaskId = "thread-1") => ({
+  provider: "openai" as const,
+  home: HOME,
+  nativeTaskId,
+});
+
+const missingRemoteError = (
+  nativeTaskId: string,
+  overrides: { readonly code?: number; readonly message?: string; readonly data?: unknown } = {},
+) => new CodexRemoteRpcError({
+  code: overrides.code ?? -32600,
+  message: overrides.message ?? `thread not loaded: ${nativeTaskId}`,
+  ...(Object.prototype.hasOwnProperty.call(overrides, "data") ? { data: overrides.data } : {}),
+});
+
 describe("CodexNativeAdapter native task projection", () => {
+  it.each([
+    ["read", (h: ReturnType<typeof adapter>) => h.native.readTask(nativeKey(), false)],
+    ["resume pre-read", (h: ReturnType<typeof adapter>) =>
+      h.native.resumeTask(nativeKey(), { permissionMode: "read-only" })],
+    ["fork pre-read", (h: ReturnType<typeof adapter>) => h.native.forkTask(nativeKey())],
+    ["existing-task subscription", (h: ReturnType<typeof adapter>) =>
+      h.native.subscribe(nativeKey(), () => undefined)],
+  ] as const)("classifies an exact rejected thread/read during %s as native-task-missing", async (_name, invoke) => {
+    const h = adapter();
+    h.supervisor.lease.enqueue("thread/read", async () => {
+      throw missingRemoteError("thread-1");
+    });
+
+    await expect(invoke(h)).rejects.toMatchObject({
+      code: "NATIVE_TASK_MISSING",
+      message: "Provider native task is missing",
+    });
+  });
+
+  it.each([
+    ["wrong code", () => missingRemoteError("thread-1", { code: -32601 })],
+    ["wrong requested id", () => missingRemoteError("different-thread")],
+    ["inexact message", () => missingRemoteError("thread-1", {
+      message: "thread not loaded: thread-1 (deleted)",
+    })],
+    ["defined data", () => missingRemoteError("thread-1", { data: null })],
+    ["wrong error class", () => Object.assign(new Error("thread not loaded: thread-1"), {
+      code: -32600,
+      data: undefined,
+    })],
+  ] as const)("does not classify a %s thread/read rejection as missing", async (_name, createCause) => {
+    const h = adapter();
+    const cause = createCause();
+    h.supervisor.lease.enqueue("thread/read", async () => { throw cause; });
+
+    await expect(h.native.readTask(nativeKey(), false)).rejects.toBe(cause);
+  });
+
+  it("keeps an exact missing-looking mutation rejection mutation-uncertain", async () => {
+    const h = adapter();
+    h.supervisor.lease.enqueue("thread/read", { thread: nativeThread("thread-1") });
+    h.supervisor.lease.enqueue("thread/resume", async () => {
+      throw missingRemoteError("thread-1");
+    });
+
+    await expect(h.native.resumeTask(nativeKey(), { permissionMode: "read-only" }))
+      .rejects.toMatchObject({ code: "MUTATION_UNCERTAIN" });
+  });
+
   it("lists both bounded lanes without dropping fetched rows and reconstructs safe history", async () => {
     const h = adapter();
     h.supervisor.lease.enqueue("thread/list", (params) => ({
@@ -597,6 +662,30 @@ describe("CodexNativeAdapter live dispatch", () => {
 
     expect(calls.map(({ method }) => method)).toEqual(["thread/read", "thread/resume"]);
     expect(calls.some(({ method }) => method === ("turn/start" as never))).toBe(false);
+    await unsubscribe();
+  });
+
+  it("classifies an exact rejected reconciliation thread/read as native-task-missing", async () => {
+    const h = adapter();
+    h.supervisor.lease.enqueue("thread/read", { thread: nativeThread("thread-1") });
+    h.supervisor.lease.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    const unsubscribe = await h.native.subscribe(nativeKey(), vi.fn());
+    const rpc = {
+      async call<T>(method: "thread/list" | "thread/read" | "thread/resume"): Promise<T> {
+        if (method === "thread/read") throw missingRemoteError("thread-1");
+        throw new Error(`unexpected reconciliation method ${method}`);
+      },
+    };
+
+    await expect(h.native.reconcile({
+      home: HOME,
+      generation: 2,
+      signal: new AbortController().signal,
+      rpc,
+    } satisfies AppServerReconcileContext)).rejects.toMatchObject({
+      code: "NATIVE_TASK_MISSING",
+      message: "Provider native task is missing",
+    });
     await unsubscribe();
   });
 

@@ -257,6 +257,89 @@ describe("ClaudeNativeAdapter", () => {
     }));
   });
 
+  it.each([
+    ["read", (h: ReturnType<typeof harness>) => h.adapter.readTask(key(FORK), false)],
+    ["resume pre-read", (h: ReturnType<typeof harness>) => resumeWithPlan(h, key(FORK))],
+    ["fork pre-read", (h: ReturnType<typeof harness>) => h.adapter.forkTask(key(FORK))],
+    ["existing-task subscription", (h: ReturnType<typeof harness>) =>
+      h.adapter.subscribe(key(FORK), () => undefined)],
+    ["revision validation", (h: ReturnType<typeof harness>) =>
+      h.adapter.rename(key(FORK), "rename missing task")],
+  ] as const)("classifies an official-helper null during %s as native-task-missing", async (_name, invoke) => {
+    const h = harness();
+
+    await expect(invoke(h)).rejects.toMatchObject({
+      code: "NATIVE_TASK_MISSING",
+      message: "Provider native task is missing",
+    });
+  });
+
+  it.each([
+    ["rejection", async () => { throw new Error("helper unavailable"); }],
+    ["wrong session", async () => summary({ sessionId: FORK })],
+    ["malformed summary", async () => ({ ...summary(), cwd: 42 })],
+  ] as const)("keeps official-helper %s classified as ownership failure", async (_name, result) => {
+    const h = harness();
+    h.helpers.getSessionInfo.mockImplementationOnce(result as never);
+
+    await expect(h.adapter.readTask(key(), false)).rejects.toMatchObject({ code: "OWNERSHIP" });
+  });
+
+  it("keeps a null Claude working directory classified as ownership failure", async () => {
+    const h = harness();
+    h.helpers.getSessionInfo.mockResolvedValueOnce({ ...summary(), cwd: null } as never);
+
+    await expect(resumeWithPlan(h)).rejects.toMatchObject({ code: "OWNERSHIP" });
+  });
+
+  it("does not classify a not-yet-initialized new-task subscription as missing", async () => {
+    const h = harness();
+    const pendingAcquire = deferred<FakeRuntimeLease>();
+    h.supervisor.acquire.mockImplementationOnce(async () => pendingAcquire.promise);
+    const starting = startWithPlan(h, {
+      home: HOME,
+      cwd: CWD,
+      input: { text: "start while subscribing" },
+    });
+    await vi.waitFor(() => expect(h.supervisor.acquire).toHaveBeenCalledTimes(1));
+
+    await expect(h.adapter.subscribe(key(FORK), () => undefined))
+      .rejects.toMatchObject({ code: "INVALID_INPUT" });
+
+    pendingAcquire.reject(new Error("stop pending start"));
+    await expect(starting).rejects.toMatchObject({ code: "OWNERSHIP" });
+  });
+
+  it("rejects subscription when an initialized persisted task disappears", async () => {
+    const h = harness();
+    await resumeWithPlan(h);
+    h.sessionRows.splice(0, 1);
+    const sink = vi.fn();
+
+    await expect(h.adapter.subscribe(key(), sink)).rejects.toMatchObject({
+      code: "RECONCILIATION_REQUIRED",
+    });
+    h.emit({
+      provider: "anthropic",
+      key: key(),
+      occurredAt: UPDATED,
+      type: "status",
+      scope: "task",
+      status: "deleted",
+    });
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("keeps helper disappearance after a persisted observation reconciliation-required", async () => {
+    const h = harness();
+    await h.adapter.readTask(key(), false);
+    h.sessionRows.splice(0, 1);
+
+    await expect(h.adapter.rename(key(), "must reconcile"))
+      .rejects.toMatchObject({ code: "RECONCILIATION_REQUIRED" });
+    expect(h.helpers.renameSession).not.toHaveBeenCalled();
+  });
+
   it("lists all-project official-helper history with bounded cursor pagination", async () => {
     const h = harness();
     h.sessionRows.push(summary({ sessionId: FORK, updatedAt: CREATED }));
@@ -2153,7 +2236,7 @@ describe("ClaudeNativeAdapter", () => {
   it("rolls back failed subscription validation and permits a later valid retry", async () => {
     const h = harness();
     await expect(h.adapter.subscribe(key(FORK), () => undefined)).rejects.toMatchObject({
-      code: "INVALID_INPUT",
+      code: "NATIVE_TASK_MISSING",
     });
     h.sessionRows.push(summary({ sessionId: FORK }));
 

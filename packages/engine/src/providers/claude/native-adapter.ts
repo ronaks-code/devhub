@@ -614,7 +614,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       throw adapterError("INVALID_INPUT", "Claude read projection is invalid");
     }
     const snapshot = await this.loadSnapshot(owned, false);
-    if (snapshot === null) throw adapterError("INVALID_INPUT", "Claude native task was not found");
+    if (snapshot === null) throw this.nativeTaskMissingError(owned.nativeTaskId);
     this.observeRevision(owned.nativeTaskId, snapshot.revision.fingerprint, true);
     const task = this.taskFromSnapshot(snapshot, includeTurns);
     const state = includeTurns ? this.states.get(owned.nativeTaskId) : undefined;
@@ -772,7 +772,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     return this.serializeMutation(state, async () => {
       const snapshot = await this.loadSnapshot(owned, false);
       if (snapshot === null) {
-        throw adapterError("INVALID_INPUT", "Claude native task was not found");
+        throw this.nativeTaskMissingError(owned.nativeTaskId);
       }
       if (snapshot.summary.cwd === null) {
         throw adapterError("OWNERSHIP", "Claude task working directory is unavailable");
@@ -829,7 +829,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     return this.serializeMutation(state, async () => {
       const sourceSnapshot = await this.loadSnapshot(owned, false);
       if (sourceSnapshot === null) {
-        throw adapterError("INVALID_INPUT", "Claude native task was not found");
+        throw this.nativeTaskMissingError(owned.nativeTaskId);
       }
       if (boundary !== undefined) {
         if (!sourceSnapshot.messages.some((message) =>
@@ -931,8 +931,9 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     return this.serializeMutation(state, async () => {
       if (!state!.runtime) {
         const snapshot = await this.loadSnapshot(owned, false);
-        if (snapshot === null || snapshot.summary.cwd === null) {
-          throw adapterError("INVALID_INPUT", "Claude native task was not found");
+        if (snapshot === null) throw this.nativeTaskMissingError(owned.nativeTaskId);
+        if (snapshot.summary.cwd === null) {
+          throw adapterError("OWNERSHIP", "Claude task working directory is unavailable");
         }
         await this.ensureRuntime(
           state!,
@@ -1079,8 +1080,16 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     subscription.sinks.set(id, subscriber);
     try {
       const snapshot = await this.loadSnapshot(owned, true);
-      if (snapshot === null && runtimeState?.nativeInitialized !== true) {
-        throw adapterError("INVALID_INPUT", "Claude native task was not found");
+      if (snapshot === null) {
+        if (this.revisions.get(owned.nativeTaskId)?.everPersisted) {
+          throw this.nativeTaskMissingError(owned.nativeTaskId);
+        }
+        if (runtimeState?.nativeInitialized !== true) {
+          if (runtimeState?.initialLaunch === "new") {
+            throw adapterError("INVALID_INPUT", "Claude native task is not initialized");
+          }
+          throw this.nativeTaskMissingError(owned.nativeTaskId);
+        }
       }
       if (snapshot !== null) {
         this.observeRevision(
@@ -1343,6 +1352,18 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       : Object.freeze({ exists: true, fingerprint: snapshot.revision.fingerprint });
   }
 
+  private nativeTaskMissingError(nativeTaskId: string): ClaudeNativeAdapterError {
+    const revision = this.revisions.get(nativeTaskId);
+    if (revision?.everPersisted) {
+      if (!revision.reconciliationRequired) this.latchRevision(nativeTaskId, true);
+      return adapterError(
+        "RECONCILIATION_REQUIRED",
+        "Claude native task requires authoritative reconciliation",
+      );
+    }
+    return adapterError("NATIVE_TASK_MISSING", "Provider native task is missing");
+  }
+
   private async refreshRevision(key: Readonly<NativeTaskKey>): Promise<void> {
     const current = await this.currentFingerprint(key);
     if (this.disposed) return;
@@ -1558,7 +1579,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       );
     }
     if (!current.exists && !allowMissing) {
-      throw adapterError("INVALID_INPUT", "Claude native task was not found");
+      throw this.nativeTaskMissingError(state.key.nativeTaskId);
     }
     if (previous && previous.fingerprint !== current.fingerprint) {
       this.latchRevision(state.key.nativeTaskId, true);

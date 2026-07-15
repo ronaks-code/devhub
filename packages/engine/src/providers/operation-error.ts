@@ -5,6 +5,7 @@ export type ProviderOperationErrorCode =
   | "DISPOSED"
   | "INVALID_INPUT"
   | "MUTATION_UNCERTAIN"
+  | "NATIVE_TASK_MISSING"
   | "OWNERSHIP"
   | "PARTIAL_FORK"
   | "PARTIAL_START"
@@ -19,6 +20,7 @@ const CODES: ReadonlySet<string> = new Set<ProviderOperationErrorCode>([
   "DISPOSED",
   "INVALID_INPUT",
   "MUTATION_UNCERTAIN",
+  "NATIVE_TASK_MISSING",
   "OWNERSHIP",
   "PARTIAL_FORK",
   "PARTIAL_START",
@@ -59,6 +61,7 @@ export function safeProviderOperationMessage(code: ProviderOperationErrorCode): 
   switch (code) {
     case "INVALID_INPUT": return "Provider input is invalid";
     case "MUTATION_UNCERTAIN": return "Provider mutation outcome is uncertain; do not retry automatically";
+    case "NATIVE_TASK_MISSING": return "Provider native task is missing";
     case "UNSAFE_OVERRIDE": return "Provider override is not allowed";
     case "POLICY_MISMATCH": return "Provider did not preserve the requested policy";
     case "RECONCILIATION_REQUIRED": return "Provider state must be reconciled before another mutation";

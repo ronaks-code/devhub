@@ -1,3 +1,4 @@
+import { types as utilTypes } from "node:util";
 import { redactSecrets } from "../redact.js";
 import {
   DEFAULT_PROVIDER_CAPABILITIES,
@@ -37,8 +38,10 @@ import type {
   UserInput,
 } from "./types.js";
 import {
+  isProviderOperationErrorCode,
   ProviderOperationError,
   safeProviderOperationMessage,
+  type ProviderOperationErrorCode,
 } from "./operation-error.js";
 
 export class ProviderRegistryNotFoundError extends Error {
@@ -122,6 +125,119 @@ function checkedCapabilities(value: ProviderCapabilities): Readonly<ProviderCapa
 function safeErrorMessage(reason: unknown): string {
   const message = reason instanceof Error ? reason.message : String(reason);
   return redactSecrets(message).slice(0, 512);
+}
+
+interface ProviderOperationErrorSnapshot {
+  readonly code: ProviderOperationErrorCode;
+  readonly task: Readonly<NativeTask> | undefined;
+}
+
+function snapshotProviderOperationError(
+  error: ProviderOperationError,
+): Readonly<ProviderOperationErrorSnapshot> {
+  const codeDescriptor = Object.getOwnPropertyDescriptor(error, "code");
+  const taskDescriptor = Object.getOwnPropertyDescriptor(error, "task");
+  if (
+    codeDescriptor === undefined || !("value" in codeDescriptor) ||
+    !isProviderOperationErrorCode(codeDescriptor.value)
+  ) {
+    throw new TypeError("provider operation failure has an invalid code");
+  }
+  if (taskDescriptor !== undefined && !("value" in taskDescriptor)) {
+    throw new TypeError("provider operation failure has an invalid task projection");
+  }
+  return Object.freeze({
+    code: codeDescriptor.value,
+    task: taskDescriptor?.value as Readonly<NativeTask> | undefined,
+  });
+}
+
+type ProviderFailureClassification =
+  | "capability"
+  | "registry-not-found"
+  | "adapter"
+  | "operation"
+  | "other"
+  | "hostile";
+
+function classifyProviderFailure(error: unknown): ProviderFailureClassification {
+  try {
+    if (
+      ((typeof error === "object" && error !== null) || typeof error === "function") &&
+      utilTypes.isProxy(error)
+    ) return "hostile";
+    if (error instanceof ProviderCapabilityError) return "capability";
+    if (error instanceof ProviderRegistryNotFoundError) return "registry-not-found";
+    if (error instanceof ProviderAdapterError) return "adapter";
+    if (error instanceof ProviderOperationError) return "operation";
+    return "other";
+  } catch {
+    return "hostile";
+  }
+}
+
+function ownDataValue(error: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(error, key);
+  if (descriptor === undefined || !("value" in descriptor)) {
+    throw new TypeError("provider classified failure is invalid");
+  }
+  return descriptor.value;
+}
+
+function invalidClassifiedProviderFailure(
+  provider: ProviderId,
+  home: string,
+): ProviderAdapterError {
+  return new ProviderAdapterError(
+    provider,
+    home,
+    new TypeError("provider classified failure is invalid"),
+  );
+}
+
+function reconstructClassifiedProviderFailure(
+  error: unknown,
+  classification: "capability" | "registry-not-found" | "adapter",
+  provider: ProviderId,
+  home: string,
+  capability: ProviderCapability,
+): ProviderCapabilityError | ProviderRegistryNotFoundError | ProviderAdapterError {
+  try {
+    const source = error as object;
+    const code = ownDataValue(source, "code");
+    switch (classification) {
+      case "capability": {
+        const reportedProvider = ownDataValue(source, "provider");
+        if (
+          code !== "PROVIDER_CAPABILITY_UNAVAILABLE" ||
+          ownDataValue(source, "capability") !== capability ||
+          (reportedProvider !== undefined && reportedProvider !== provider)
+        ) throw new TypeError("provider classified failure is invalid");
+        return new ProviderCapabilityError(capability, provider);
+      }
+      case "registry-not-found":
+        if (
+          code !== "PROVIDER_ADAPTER_NOT_FOUND" ||
+          ownDataValue(source, "provider") !== provider ||
+          ownDataValue(source, "home") !== home
+        ) throw new TypeError("provider classified failure is invalid");
+        return new ProviderRegistryNotFoundError(provider, home);
+      case "adapter":
+        if (
+          code !== "PROVIDER_ADAPTER_FAILURE" ||
+          ownDataValue(source, "provider") !== provider ||
+          ownDataValue(source, "home") !== home
+        ) throw new TypeError("provider classified failure is invalid");
+        ownDataValue(source, "cause");
+        return new ProviderAdapterError(
+          provider,
+          home,
+          new TypeError("Provider adapter failure"),
+        );
+    }
+  } catch {
+    return invalidClassifiedProviderFailure(provider, home);
+  }
 }
 
 function nonEmptyNativeId(value: string, label: string): string {
@@ -504,43 +620,60 @@ export class ProviderRegistry {
     try {
       return await operation(adapter);
     } catch (error) {
-      if (
-        error instanceof ProviderCapabilityError ||
-        error instanceof ProviderRegistryNotFoundError ||
-        error instanceof ProviderAdapterError
-      ) {
-        throw error;
+      const classification = classifyProviderFailure(error);
+      switch (classification) {
+        case "capability":
+        case "registry-not-found":
+        case "adapter":
+          throw reconstructClassifiedProviderFailure(
+            error,
+            classification,
+            provider,
+            home,
+            capability,
+          );
+        case "hostile":
+          throw new ProviderAdapterError(provider, home, new TypeError(
+            "provider operation failure classification is invalid",
+          ));
       }
-      if (error instanceof ProviderOperationError) {
-        const partial = error.code === "PARTIAL_START" || error.code === "PARTIAL_FORK";
+      if (classification === "operation") {
+        let operationError: Readonly<ProviderOperationErrorSnapshot>;
+        try {
+          operationError = snapshotProviderOperationError(error as ProviderOperationError);
+        } catch (snapshotError) {
+          throw new ProviderAdapterError(provider, home, snapshotError);
+        }
+        const { code, task: rawTask } = operationError;
+        const partial = code === "PARTIAL_START" || code === "PARTIAL_FORK";
         const partialForOperation =
-          (error.code === "PARTIAL_START" && capability === "start") ||
-          (error.code === "PARTIAL_FORK" && capability === "fork");
-        if (partial !== (error.task !== undefined) || (partial && !partialForOperation)) {
+          (code === "PARTIAL_START" && capability === "start") ||
+          (code === "PARTIAL_FORK" && capability === "fork");
+        if (partial !== (rawTask !== undefined) || (partial && !partialForOperation)) {
           throw new ProviderAdapterError(provider, home, new TypeError(
             "provider partial-operation failure has an invalid task projection",
           ));
         }
         let task: Readonly<NativeTask> | undefined;
-        if (error.task !== undefined) {
+        if (rawTask !== undefined) {
           try {
-            this.assertOwnership(error.task.key, provider, home);
-            if (error.code === "PARTIAL_FORK") {
+            this.assertOwnership(rawTask.key, provider, home);
+            if (code === "PARTIAL_FORK") {
               if (
                 options.partialForkSourceTaskId === undefined ||
-                error.task.key.nativeTaskId === options.partialForkSourceTaskId
+                rawTask.key.nativeTaskId === options.partialForkSourceTaskId
               ) {
                 throw new TypeError("provider partial fork did not prove a distinct task id");
               }
             }
-            task = snapshotTask(error.task);
+            task = snapshotTask(rawTask);
           } catch (projectionError) {
             throw new ProviderAdapterError(provider, home, projectionError);
           }
         }
         throw new ProviderOperationError(
-          error.code,
-          safeProviderOperationMessage(error.code),
+          code,
+          safeProviderOperationMessage(code),
           task === undefined ? {} : { task },
         );
       }
