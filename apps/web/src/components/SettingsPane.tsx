@@ -53,6 +53,7 @@ export function completeDevHubFeatures(
     shellChrome: value?.shellChrome === true,
     taskRail: value?.taskRail === true,
     taskHeaderSetup: value?.taskHeaderSetup === true,
+    threadWorkspace: value?.threadWorkspace === true,
     codexStyleShell: value?.codexStyleShell === true,
     crossProviderFork: value?.crossProviderFork === true,
     workMode: value?.workMode === true,

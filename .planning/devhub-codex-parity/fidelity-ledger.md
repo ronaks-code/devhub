@@ -194,3 +194,56 @@ into the task canvas is a later data-wire (the per-task canvas header lives in t
 user-owned `ChatPane.tsx`, off-limits to this slice), mirroring how Tasks 1–2 left
 slots/rows as later data-wires. `nativeCodex`/`persistentClaude`/`taskHeaderSetup`
 requested-defaults stay false.
+
+### Task 4 - ThreadWorkspace + ActivityTimeline (`threadWorkspace`)
+
+Date: 2026-07-15
+
+Governing sources: REF-EMPTY / REF-RICH / REF-SPARSE / REF-ACTIVE for the transcript
+column, the empty existing-task canvas, and the active/streaming state; concepts C02
+(active plan/tools) and C04 (transcript-is-the-task) for the vertical-narrative model;
+`design-lock.md` §4 (task canvas / surfaces reserved for requests, user bubbles, compact
+controls, composer, inspector — everything else unframed) and §6 (stable composer);
+`design-system.md` §2–§4 tokens (`--dh-user-bubble` `#242424`, `--dh-control` `#262626`,
+`--dh-surface` `#2d2d2d`, `--dh-user-bubble-max` 566, composer 736x98 / r21 / 16 gutter);
+`component-state-matrix.md` §8 (thread workspace + activity timeline); `surface-inventory.md`
+`T-thread`/`T-active`/`T-intervention`. Evidence: `evidence/m6/thread/`
+(`qa-note.md`, `fixture-{empty,sparse,active,complete}.html`, `m6-thread-wide.png`,
+`m6-thread-active-wide.png`) plus the unit/snapshot suites
+`apps/web/src/components/features/shell/ThreadWorkspace.test.ts` (21) and
+`apps/web/src/components/features/shell/ActivityTimeline.test.ts` (9).
+
+| Comparison | Governing reference | M6 implementation evidence | Finding / disposition |
+| --- | --- | --- | --- |
+| Assistant prose is UNFRAMED | design-lock §4 / invariant 4 | measured `background: rgba(0,0,0,0)`, `border: none`, `border-radius: 0`; `data-dh-unframed` present on `.dh-thread-assistant` | Match. |
+| User bubble fill `#242424`, max ~566 | design-system §2 / manifest | measured `rgb(36,36,36)` = `#242424`, `max-width: 566px` (`data-dh-bubble-max="566"`), right-aligned surface (`justify-content: flex-end`) | Match. |
+| Empty existing task is a blank canvas (no hero/SVG/suggestions) | design-lock §4 / REF-EMPTY | `fixture-empty`: transcript `children=0` / `textContent=""`, `0` `<h1..h3>`, `0` `<svg>`, `0` `<img>`, only the composer button | Match. |
+| Composer persists on the empty canvas | design-lock §6 | `fixture-empty` composer renders at `height: 98px` with the transcript empty | Match. |
+| Inline request pill `#262626`, surfaced, NOT modal | design-lock §5 / invariant 2 | measured `rgb(38,38,38)` = `#262626`, `data-dh-surface` present, `role="group"`, no `role="dialog"` / `aria-modal` | Match. |
+| Stable composer geometry (736x98 / r21 / 16 gutter / `#2d2d2d`) | design-lock §4/§6 | measured width `736`, height `98`, radius `21`, `margin-bottom: 16`, fill `rgb(45,45,45)`=`#2d2d2d`; Send↔Stop swaps label only (`data-dh-send-state`) with no geometry shift | Match. |
+| Transcript column width 736 | manifest | measured `736px` | Match. |
+| Single polite live region | component-state-matrix §8 | exactly one `[data-dh-live-region]` `role="status"` `aria-live="polite"` (streaming carries none of its own) | Match. |
+| Raw unknown events bounded + control-stripped | design-lock §4 (never a fabricated tool) | `boundRawDiagnostic` caps at `RAW_DIAGNOSTIC_MAX` 2048 and strips C0/DEL (unit-tested) | Match. |
+| No logos anywhere | design-lock §3 / invariant 9 | `0` `<svg>` and `0` `<img>` across all four fixtures | Match. |
+
+### Task 4 judgment
+
+`ThreadWorkspace` renders the transcript-is-the-task canvas: completed and active work
+share ONE vertical narrative (assistant/user/activity/request/streaming/raw items), with
+surfaces reserved for the user bubble (`#242424`, right-aligned, capped at 566), inline
+requests (`#262626`, non-modal, per-turn actions only — `sanitizeRequestActions` drops any
+`Always allow`), and the geometry-stable 736x98 composer; everything else (assistant prose,
+activity rows, streaming deltas, bounded raw diagnostics) is UNFRAMED. The empty existing
+task is a genuinely blank canvas (zero children/SVG/hero/suggestions) while the composer and
+a single polite live region still render. `ActivityTimeline` renders the compact
+inline plan/activity delegate. Ships behind the default-off `threadWorkspace` flag;
+flag-off keeps the legacy `TranscriptPane`/renderers chat (`resolveThreadWorkspaceMode`
+returns `legacy` for false/undefined/missing, `isThreadWorkspaceApplied` true only for an
+explicit true). SCOPE: this claims the workspace PRESENTATION, surface/unframed
+discipline, non-modal request rules, stable-composer geometry, and flag safety only; live
+mounting into the task canvas — mapping native events to `ThreadItem[]` — is a deferred
+data-wire because the live transcript canvas is owned by the user-owned `ChatPane.tsx`
+(off-limits) and `CodexNativePane`, mirroring exactly how Task 3 deferred the header
+data-wire. The flag gate + resolver land here; the App composition mount is staged for the
+Task 9 `codexStyleShell` cutover integration. `nativeCodex` / `persistentClaude` /
+`threadWorkspace` requested-defaults stay false.

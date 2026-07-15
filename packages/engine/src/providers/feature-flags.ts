@@ -26,6 +26,17 @@ export interface DevHubFeatureFlags {
    * header / setup. Additive to the umbrella `codexStyleShell` cutover flag.
    */
   taskHeaderSetup: boolean;
+  /**
+   * M6 slice 4 (ThreadWorkspace + ActivityTimeline). Default false. When requested
+   * true AND the server reports it applied, the web app renders the Codex-style
+   * transcript workspace — the transcript IS the task (active work in the same
+   * vertical narrative as completed work), assistant prose/normal activity unframed,
+   * surfaces reserved for requests/user bubbles/compact controls/composer/inspector,
+   * and a geometry-stable composer slot; an explicit stored false is the immediate,
+   * non-destructive rollback to the legacy `TranscriptPane`/renderers chat. Additive
+   * to the umbrella `codexStyleShell` cutover flag.
+   */
+  threadWorkspace: boolean;
   codexStyleShell: boolean;
   crossProviderFork: boolean;
   workMode: boolean;
@@ -42,10 +53,12 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   unifiedTaskIndex: true,
   // M6 slice flags are additive and default-off; each gates exactly one strangler
   // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
-  // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3.
+  // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3;
+  // threadWorkspace gates M6 Task 4.
   shellChrome: false,
   taskRail: false,
   taskHeaderSetup: false,
+  threadWorkspace: false,
   codexStyleShell: false,
   crossProviderFork: false,
   workMode: false,
