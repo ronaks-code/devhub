@@ -55,7 +55,10 @@ import {
   type ProviderRequestResponse,
   type StartTaskInput,
 } from "../lib/provider-api.js";
+import { isUnifiedTaskIndexApplied } from "../lib/provider-index-api.js";
+import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { Markdown } from "./Markdown";
+import { ProviderHomeSetup } from "./ProviderHomeSetup";
 import { EmptyState, IconButton, Spinner } from "./ui";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -1379,10 +1382,39 @@ export interface CodexNativePaneProps {
   preferredTaskId?: string;
   fallback?: ReactNode;
   provider?: ProviderId;
+  /** Resolved DevHub feature flags. When `unifiedTaskIndex` is applied true the setup
+   *  runs through the path-free provider-index facade; otherwise the direct key-based
+   *  pane below renders unchanged (the preserved rollback surface). */
+  features?: Partial<DevHubFeatureFlags>;
+  /** Preferred home fingerprint used only by the flag-on locator setup (opaque, never a path). */
+  preferredHomeFingerprint?: string;
+}
+
+/**
+ * Provider task pane entry point. Consumes the `unifiedTaskIndex` locator transport seam:
+ * when the flag is applied true the setup is a PublicProviderHome-only view over the
+ * path-free facade; when it is off the direct key-based pane renders byte-for-byte as
+ * before (instant rollback). The branch is a component swap so each side owns its own
+ * hooks and neither leaks state across a flag flip.
+ */
+export function CodexNativePane(props: CodexNativePaneProps) {
+  if (isUnifiedTaskIndexApplied(props.features)) {
+    return (
+      <ProviderHomeSetup
+        features={props.features}
+        provider={props.provider ?? "openai"}
+        {...(props.preferredHomeFingerprint !== undefined
+          ? { preferredHomeFingerprint: props.preferredHomeFingerprint }
+          : {})}
+        fallback={props.fallback}
+      />
+    );
+  }
+  return <CodexNativeDirectPane {...props} />;
 }
 
 /** Feature-flagged native Codex vertical slice inside the preserved DevHub shell. */
-export function CodexNativePane({
+export function CodexNativeDirectPane({
   client = providerApi,
   preferredHome,
   preferredTaskId,

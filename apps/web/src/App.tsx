@@ -1813,6 +1813,7 @@ export default function App() {
             <Suspense fallback={<PaneFallback />}>
               <CodexNativePane
                 key={nativePaneRouteKey("openai")}
+                features={settings?.devHubFeatures}
                 fallback={<CodexHistoryPane />}
               />
             </Suspense>
@@ -1824,6 +1825,7 @@ export default function App() {
             <CodexNativePane
               key={nativePaneRouteKey("anthropic")}
               provider="anthropic"
+              features={settings?.devHubFeatures}
               preferredTaskId={nativeClaudePreferredTaskId(activeSeed)}
               fallback={legacyClaudePane}
             />

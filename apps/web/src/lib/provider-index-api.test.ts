@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { taskLocator, createNativeTaskKey } from "@devhub/engine/providers";
+import {
+  taskLocator,
+  createNativeTaskKey,
+  serializeTaskLocator,
+} from "@devhub/engine/providers";
 import {
   createProviderIndexApiClient,
   isUnifiedTaskIndexApplied,
@@ -98,6 +102,19 @@ describe("ProviderIndexApiClient", () => {
     );
     vi.stubGlobal("fetch", failing);
     await expect(client.archive(LOCATOR)).rejects.toBeInstanceOf(ProviderIndexHttpError);
+  });
+
+  it("serializes locator paths with the exact engine grammar (browser-safe mirror, path-free)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createProviderIndexApiClient();
+    await client.archive(LOCATOR);
+    const url = fetchMock.mock.calls[0]![0] as string;
+    // The browser mirror must produce byte-identical output to the Node engine serializer
+    // so the server parser accepts it; and the raw home never appears in the path.
+    expect(url).toContain(encodeURIComponent(serializeTaskLocator(LOCATOR)));
+    expect(url).not.toContain(".codex");
+    expect(url).not.toContain("/Users/");
   });
 
   it("uses PATCH for additive meta", async () => {

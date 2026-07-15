@@ -21,11 +21,58 @@ import type {
   ProviderTaskMetaPatch,
   UserInput,
 } from "@devhub/engine/providers";
-import { serializeTaskLocator } from "@devhub/engine/providers";
 import { getToken, UnauthorizedError } from "./api.js";
 
 const JSON_ACCEPT = "application/json";
 const SSE_ACCEPT = "text/event-stream";
+
+// Locator grammar mirror (kept in sync with the engine's `serializeTaskLocator`).
+const LOCATOR_PREFIX = "pt1";
+const LOCATOR_VERSION = 1;
+const MAX_SERIALIZED_LOCATOR_CHARS = 1_024;
+const FINGERPRINT = /^[0-9a-f]{64}$/u;
+const LOCATOR_CONTROL_CHARS = /[\u0000-\u001f\u007f]/u;
+
+/** Base64url of a UTF-8 string using only Web APIs (matches Node's `base64url`). */
+function base64UrlUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+}
+
+/**
+ * Browser-safe mirror of the engine's `serializeTaskLocator`. The web bundle must never
+ * import the engine locator module (it pulls `node:fs`/`realpathSync` via task-key), so this
+ * reproduces the exact `pt1.<provider>.<64-hex fingerprint>.<base64url(nativeTaskId)>` grammar
+ * the server parser accepts, using only Web APIs. It is path-free by construction and throws
+ * a `TypeError` for a malformed locator, exactly like the engine serializer.
+ */
+function serializeTaskLocator(locator: ProviderTaskLocator): string {
+  const { version, provider, homeFingerprint, nativeTaskId } = locator;
+  if (
+    version !== LOCATOR_VERSION ||
+    (provider !== "openai" && provider !== "anthropic") ||
+    typeof homeFingerprint !== "string" ||
+    !FINGERPRINT.test(homeFingerprint) ||
+    typeof nativeTaskId !== "string" ||
+    nativeTaskId.length === 0 ||
+    nativeTaskId.trim() !== nativeTaskId ||
+    LOCATOR_CONTROL_CHARS.test(nativeTaskId)
+  ) {
+    throw new TypeError("provider task locator is invalid");
+  }
+  const serialized = [
+    LOCATOR_PREFIX,
+    provider,
+    homeFingerprint,
+    base64UrlUtf8(nativeTaskId),
+  ].join(".");
+  if (serialized.length > MAX_SERIALIZED_LOCATOR_CHARS) {
+    throw new TypeError("provider task locator is invalid");
+  }
+  return serialized;
+}
 
 export interface PublicProviderHome {
   readonly provider: ProviderId;
