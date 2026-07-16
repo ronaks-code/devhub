@@ -4,6 +4,9 @@
  * assistant/user lines, so the chat UI renders identically to the history viewer.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { accessSync, constants as fsConstants, realpathSync, statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { normalizeLine, usageFromMessage } from "../parser.js";
 import { createLineSplitter } from "./buffer.js";
 import { gracefulInterrupt } from "./interrupt.js";
@@ -19,7 +22,93 @@ import type {
   TurnResult,
 } from "./types.js";
 
-const CLAUDE_BIN = process.env.CLAUDE_UI_CLAUDE_BIN?.trim() || "claude";
+/** Options for {@link resolveClaudeBin}, overridable for hermetic tests. */
+export interface ResolveClaudeBinOptions {
+  env?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  homedir?: string;
+}
+
+/**
+ * A candidate is trusted only if it's an absolute path that resolves (through
+ * symlinks) to a real, executable file. Mirrors the same validation the native
+ * Claude runtime discovery already applies (packages/server/src/native-claude-runtime.ts
+ * `executableFile`) — kept as a small local copy here because engine must not
+ * depend on server (wrong direction of the dependency graph).
+ */
+function validatedExecutable(candidate: string, platform: NodeJS.Platform): string | null {
+  if (
+    typeof candidate !== "string" || candidate.length === 0 ||
+    candidate.trim() !== candidate || candidate.includes("\u0000") ||
+    !path.isAbsolute(candidate)
+  ) return null;
+  try {
+    const resolved = realpathSync(candidate);
+    if (!statSync(resolved).isFile()) return null;
+    if (platform !== "win32") accessSync(resolved, fsConstants.X_OK);
+    return resolved;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the `claude` CLI binary to spawn for chat turns (CliDriver/PersistentSession
+ * below), deterministically rather than trusting an ambient shell PATH lookup at spawn
+ * time. A bare command name handed to `spawn()` still gets resolved by the OS against
+ * whatever `process.env.PATH` happens to be at that moment — same nondeterminism this
+ * task's audit is closing for the sidecar/health/provider-discovery surfaces.
+ *
+ * Resolution order:
+ *  1. `CLAUDE_UI_CLAUDE_BIN`, if set — an explicit power-user/test override, trusted
+ *     as-is with no validation (same behavior as before this fix; it's an intentional
+ *     escape hatch, not ambient discovery).
+ *  2. Each absolute directory on PATH, plus the same well-known install locations the
+ *     native Claude runtime discovery trusts (`~/.local/bin`, `~/.claude/bin`,
+ *     `~/.claude/local`, and the platform's Homebrew/`/usr/local`/`/usr` bin dirs) —
+ *     first candidate that resolves to a real, executable file wins.
+ *  3. If nothing validates, fall back to the bare name "claude" — preserving the
+ *     exact prior behavior for setups a validated scan can't anticipate (e.g. shell
+ *     shims/functions), rather than refusing to spawn at all.
+ */
+export function resolveClaudeBin(options: ResolveClaudeBinOptions = {}): string {
+  const env = options.env ?? process.env;
+
+  const explicit = env.CLAUDE_UI_CLAUDE_BIN?.trim();
+  if (explicit) return explicit;
+
+  const platform = options.platform ?? process.platform;
+  const homedir = options.homedir ?? os.homedir();
+  const executableName = platform === "win32" ? "claude.exe" : "claude";
+  const delimiter = platform === "win32" ? ";" : ":";
+
+  const candidates: string[] = [];
+  for (const entry of (env.PATH ?? "").split(delimiter)) {
+    if (entry.length > 0 && path.isAbsolute(entry)) candidates.push(path.join(entry, executableName));
+  }
+  candidates.push(
+    path.join(homedir, ".local", "bin", executableName),
+    path.join(homedir, ".claude", "bin", executableName),
+    path.join(homedir, ".claude", "local", executableName),
+  );
+  if (platform === "darwin") {
+    candidates.push("/opt/homebrew/bin/claude", "/usr/local/bin/claude");
+  } else if (platform !== "win32") {
+    candidates.push("/usr/local/bin/claude", "/usr/bin/claude");
+  }
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    const validated = validatedExecutable(candidate, platform);
+    if (validated) return validated;
+  }
+
+  return "claude";
+}
+
+const CLAUDE_BIN = resolveClaudeBin();
 
 /** Coerce a usage field to a non-negative integer (0 for missing/garbage). */
 function usageNum(v: unknown): number {

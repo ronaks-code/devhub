@@ -29,6 +29,17 @@ import { paths, type Engine } from "@devhub/engine";
 const VERSION_TIMEOUT_MS = 3000;
 
 /**
+ * Strict identity string returned by GET /api/health (see app.ts) and echoed here.
+ * A bare 2xx on a port proves nothing — any process, including a stale/foreign
+ * server another tool happens to have bound there, can answer with `ok: true`.
+ * Callers that need to confirm "this port is THE DevHub server" (the Tauri desktop
+ * shell's spawn-or-reuse probe, `apps/desktop/src-tauri/src/lib.rs`) must check this
+ * exact field/value, not just the HTTP status. Never change this string casually —
+ * it's a cross-language contract with the Rust health probe.
+ */
+export const DEVHUB_SERVER_SERVICE_ID = "devhub-server" as const;
+
+/**
  * Spawn `claude --version` (no shell) and return the trimmed first line, or null on
  * any failure — missing binary, non-zero exit, or timeout. Best-effort by design.
  */
@@ -110,7 +121,7 @@ function indexedMessageCount(engine: Engine): number | null {
  * from src/routes/). Read once at startup and memoized; "unknown" when unreadable.
  */
 let cachedVersion: string | undefined;
-async function serverVersion(): Promise<string> {
+export async function serverVersion(): Promise<string> {
   if (cachedVersion !== undefined) return cachedVersion;
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));

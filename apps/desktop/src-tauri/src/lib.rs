@@ -81,9 +81,41 @@ fn port_open(host: &str, port: u16) -> bool {
     TcpStream::connect_timeout(&sockaddr, Duration::from_millis(300)).is_ok()
 }
 
+/// The exact identity string `GET /api/health` echoes (see
+/// `packages/server/src/routes/health.ts`'s `DEVHUB_SERVER_SERVICE_ID` and
+/// `packages/server/src/app.ts`'s `/api/health` handler — this is the Rust half of
+/// that cross-language contract). A bare 2xx on a port proves nothing: any process,
+/// including a foreign/stale server that happens to be bound there, can answer with
+/// its own `ok: true`. We only trust a response that also carries this identity.
+const DEVHUB_SERVER_SERVICE_ID: &str = "devhub-server";
+
+/// Cap on the bytes we'll read from a health probe response. The real body is a
+/// small flat JSON object; this is generous headroom while still bounding a
+/// pathological/chatty responder.
+const HEALTH_PROBE_READ_CAP: usize = 8192;
+
+/// Read up to `cap` bytes from `stream` (which the caller already gave a read
+/// timeout), stopping early on EOF/short reads. Best-effort: a read error just
+/// means we stop with whatever we already have.
+fn read_capped(stream: &mut TcpStream, cap: usize) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(cap.min(4096));
+    let mut chunk = [0u8; 1024];
+    while buf.len() < cap {
+        match stream.read(&mut chunk) {
+            Ok(0) => break, // EOF — server closed (expected for HTTP/1.0 Connection: close)
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+    buf
+}
+
 /// Minimal, dependency-free HTTP GET against the server health endpoint. Returns
-/// true only when the server answers with a 2xx — i.e. the engine is up and the
-/// API is serving, not just that the port is bound.
+/// true only when the server answers with a 2xx status AND a body that carries our
+/// strict `service: "devhub-server"` identity — not merely that *some* process is
+/// listening and happens to return 2xx. This is what lets `ensure_server` safely
+/// skip spawning only when it has proven the DevHub server (not an unrelated
+/// process, e.g. another tool that grabbed the same port) is already up.
 fn health_ok(host: &str, port: u16) -> bool {
     let addr = format!("{host}:{port}");
     let Ok(mut addrs) = addr.to_socket_addrs() else {
@@ -104,14 +136,61 @@ fn health_ok(host: &str, port: u16) -> bool {
     if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
-    let mut buf = Vec::with_capacity(256);
-    // Read just the status line region; cap the read so a chatty body can't hang us.
-    let mut chunk = [0u8; 256];
-    if let Ok(n) = stream.read(&mut chunk) {
-        buf.extend_from_slice(&chunk[..n]);
+    let buf = read_capped(&mut stream, HEALTH_PROBE_READ_CAP);
+    response_proves_devhub_identity(&buf)
+}
+
+/// Pure check over a raw HTTP response byte buffer: 2xx status line AND a body that
+/// contains BOTH `"service"` and our exact identity value. Checking the two
+/// substrings independently (rather than one fixed-spacing JSON fragment) tolerates
+/// any valid JSON formatting the server's serializer chooses to use.
+fn response_proves_devhub_identity(buf: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(buf);
+    let is_2xx = text.starts_with("HTTP/1.0 2") || text.starts_with("HTTP/1.1 2");
+    is_2xx && text.contains("\"service\"") && text.contains(DEVHUB_SERVER_SERVICE_ID)
+}
+
+#[cfg(test)]
+mod health_probe_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_a_2xx_response_carrying_the_devhub_identity() {
+        let body = "{\"ok\":true,\"ready\":true,\"sessionCount\":0,\"service\":\"devhub-server\",\"version\":\"0.1.0\"}";
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        assert!(response_proves_devhub_identity(resp.as_bytes()));
     }
-    let head = String::from_utf8_lossy(&buf);
-    head.starts_with("HTTP/1.0 2") || head.starts_with("HTTP/1.1 2")
+
+    #[test]
+    fn rejects_a_2xx_response_from_an_unrelated_process_on_the_same_port() {
+        // This is exactly the failure mode a bare-2xx check can't catch: some other
+        // tool (a static file server, another app's dev server, ...) happens to be
+        // bound to the probed port and answers 200, but it is NOT the DevHub server.
+        let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello world";
+        assert!(!response_proves_devhub_identity(resp.as_bytes()));
+    }
+
+    #[test]
+    fn rejects_a_2xx_json_response_missing_the_service_field_entirely() {
+        let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
+        assert!(!response_proves_devhub_identity(resp.as_bytes()));
+    }
+
+    #[test]
+    fn rejects_a_non_2xx_status_even_with_the_right_body() {
+        let resp = "HTTP/1.1 500 Internal Server Error\r\n\r\n{\"service\":\"devhub-server\"}";
+        assert!(!response_proves_devhub_identity(resp.as_bytes()));
+    }
+
+    #[test]
+    fn accepts_regardless_of_json_key_order_or_spacing() {
+        let resp = "HTTP/1.0 200 OK\r\n\r\n{ \"version\" : \"0.1.0\" , \"service\" : \"devhub-server\" }";
+        assert!(response_proves_devhub_identity(resp.as_bytes()));
+    }
 }
 
 /// Walk up from `start` looking for the monorepo root (the dir holding

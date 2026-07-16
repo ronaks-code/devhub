@@ -3,7 +3,55 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-LINT-TASK (DIRECTED TASK on
+Last updated: 2026-07-16 by M8-SIDECAR-HEALTH-DISCOVERY-AUDIT (DIRECTED TASK on
+`wip/devhub-background-runner` — audits + closes M8 checklist item 2:
+"deterministic sidecar/IPC/API base, strict health identity, PATH-independent
+provider discovery" from `.planning/devhub-codex-parity/implementation-plan.md`
+line 424; tray/hotkey/notification is out of scope, unrelated code paths).
+(a) API base + sidecar spawn command: EVIDENCE-PRESENT, already correct — the
+M8-DESKTOP-BUILD `@devhub/server` filter fix is still in place in `lib.rs`,
+and the web app only ever calls same-origin relative `/api/...` (one
+deterministic origin, no separate API-base URL to drift). (b) `/api/health`
+strict identity: REAL GAP, fixed — it returned only `{ ok, ready, sessionCount }`,
+a bare 2xx any process could plausibly answer with (exactly the shape of the
+STATUS.md M8-hardening incident below, where a prior task session mistook a
+different agent's real DevHub server on :8787 for its own scratch target).
+Added `service: "devhub-server"` (`DEVHUB_SERVER_SERVICE_ID`,
+`packages/server/src/routes/health.ts`) + `version` to the response, and made
+`apps/desktop/src-tauri/src/lib.rs`'s `health_ok()` read the full body (was
+truncated to 256 bytes, status-line-only) and require BOTH a 2xx AND those
+identity markers before treating a port as "the real server already up" —
+this is the actual mechanism `ensure_server()`'s spawn-or-reuse decision
+relies on for determinism. (c) PATH-independent provider discovery: Codex
+(`native-codex-runtime.ts`) and the flag-gated native Claude adapter
+(`native-claude-runtime.ts`) were EVIDENCE-PRESENT/already correct — both
+validate every candidate to an absolute, realpath'd, `X_OK` executable file,
+never handing a bare name to `spawn()`. REAL GAP found and fixed in the
+driver actually used for every live chat turn today: `CliDriver`/
+`PersistentSession` (`packages/engine/src/driver/cli.ts`, wired into
+`ws.ts`/`routes/{git,pr,summary}.ts` via `createDriver()`) resolved its binary
+as `CLAUDE_UI_CLAUDE_BIN || "claude"` and spawned the bare string — an
+ambient PATH lookup at spawn time, live on the default (non-gated) path.
+Added `resolveClaudeBin()` mirroring the same validated pattern (kept as a
+local copy in engine — engine must not depend on server); explicit env
+override still trusted as-is (unchanged, intentional escape hatch), otherwise
+validates PATH + the same well-known install dirs the native runtime
+discovery trusts, falling back to the bare name only when nothing validates.
+New tests: `packages/engine/test/driver/resolve-claude-bin.test.ts` (7 tests,
+real temp dirs, no fs mocking — including a case proving a relative PATH
+entry is never trusted); `packages/server/test/app.test.ts` gains one
+`/api/health` identity assertion; `apps/desktop/src-tauri/src/lib.rs` gains
+this crate's FIRST Rust unit tests, 5 tests in `health_probe_tests`
+(including the exact incident-shaped case: a 2xx from an unrelated process on
+the same port must be rejected). Full evidence + rationale:
+`evidence/m8/hardening.md`. Gate: engine 82 files/2243 tests green (+7),
+server 16 files/270 tests green (+1), web 44 files/586 tests unchanged;
+`tsc --noEmit` clean on all three; `vite build` clean; `pnpm lint` 0/0 across
+all four packages (unchanged); `cargo test --lib` 5/5 passed (new);
+`cargo build --release` clean, no warnings; `git diff --check` clean. Landed
+on `wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M8-LINT-TASK (DIRECTED TASK on
 `wip/devhub-background-runner` — introduces a REAL monorepo lint task, killing
 the zero-task `turbo run lint` no-op: `turbo.json` had a `"lint": {}` task but
 no package defined a `lint` script, so every prior `pnpm lint` "pass" was

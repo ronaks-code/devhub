@@ -60,7 +60,7 @@ import { registerToolStatsRoutes } from "./routes/tool-stats.js";
 import { registerFileChangesRoutes } from "./routes/file-changes.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
-import { registerHealthRoutes } from "./routes/health.js";
+import { registerHealthRoutes, DEVHUB_SERVER_SERVICE_ID, serverVersion } from "./routes/health.js";
 import { registerReindexRoutes } from "./routes/reindex.js";
 import { registerBudgetRoutes } from "./routes/budget.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
@@ -299,10 +299,18 @@ export function buildApp(opts: BuildOptions = {}): {
     }
   });
 
+  // Strict identity, not just liveness: a 2xx alone proves nothing about WHICH
+  // process is on this port (any tool, including a foreign/stale server, can
+  // answer `ok: true`). `service`/`version` let callers — chiefly the desktop
+  // shell's spawn-or-reuse probe (lib.rs) — confirm this is actually the DevHub
+  // server before trusting it or skipping their own spawn. See health.ts's
+  // DEVHUB_SERVER_SERVICE_ID doc comment for the cross-language contract.
   app.get("/api/health", async () => ({
     ok: true,
     ready: engine.ready,
     sessionCount: engine.index.getSessionCount(),
+    service: DEVHUB_SERVER_SERVICE_ID,
+    version: await serverVersion(),
   }));
 
   // Live-chat WebSocket. Registered inside a child plugin so it loads AFTER the

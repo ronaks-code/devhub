@@ -103,6 +103,17 @@ describe("server REST endpoints (no token)", () => {
     expect(body.sessionCount).toBe(3);
   });
 
+  it("GET /api/health carries a strict identity — a 2xx alone doesn't prove which server answered", async () => {
+    // Guards the desktop shell's spawn-or-reuse contract (lib.rs `health_ok`): it
+    // must be able to tell THIS response apart from any other process that happens
+    // to be listening on the probed port and answers with its own unrelated 2xx body.
+    const res = await current!.app.inject({ method: "GET", url: "/api/health" });
+    const body = res.json();
+    expect(body.service).toBe("devhub-server");
+    expect(typeof body.version).toBe("string");
+    expect(body.version.length).toBeGreaterThan(0);
+  });
+
   it("GET /api/projects lists the seeded projects, newest-activity first", async () => {
     const res = await current!.app.inject({ method: "GET", url: "/api/projects" });
     expect(res.statusCode).toBe(200);
