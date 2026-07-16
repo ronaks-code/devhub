@@ -29,6 +29,7 @@ import { TagStore, parseTags } from "./tags.js";
 import { SavedViewStore } from "./saved-views.js";
 import type { SavedView, SaveViewInput } from "./saved-views.js";
 import { AuditStore } from "./audit.js";
+import { WorkModeTaskStore } from "./work-mode-store.js";
 import { MessageSearch } from "./search.js";
 import type { SearchFacets } from "./search.js";
 import { relatedSessions } from "./related.js";
@@ -166,6 +167,13 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(toolName);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(sessionId);
+
+CREATE TABLE IF NOT EXISTS work_mode_tasks (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  createdAt INTEGER NOT NULL,
+  updatedAt INTEGER NOT NULL
+);
 `;
 
 const SELECT_COLS = `
@@ -240,6 +248,8 @@ export class TranscriptIndex {
   readonly savedViews: SavedViewStore;
   /** Permission-decision audit log (permission_audit table), sharing this DB. */
   readonly audit: AuditStore;
+  /** Restart-durable Work-mode task store (work_mode_tasks table), sharing this DB. */
+  readonly workModeTasks: WorkModeTaskStore;
   /** Which search backend is active: FTS5 virtual table, or a plain LIKE-scanned table. */
   readonly searchMode: "fts5" | "like";
   /**
@@ -275,6 +285,7 @@ export class TranscriptIndex {
     this.tags = new TagStore(this.db);
     this.savedViews = new SavedViewStore(this.db);
     this.audit = new AuditStore(this.db);
+    this.workModeTasks = new WorkModeTaskStore(this.db);
     const store = this.initSearchStore();
     this.searchMode = store.mode;
     this.ftsTokenizer = store.tokenizer;

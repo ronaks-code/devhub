@@ -3,7 +3,50 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-SYNC-AUDIT (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-WORKMODE-PERSIST (DIRECTED TASK on
+`wip/devhub-background-runner` — replaces Work mode's closure-scoped in-memory
+`Map` with a real restart-durable store. New
+`packages/engine/src/work-mode-store.ts` (`WorkModeTaskStore`) mirrors the other
+small per-concern stores that share `TranscriptIndex`'s single `node:sqlite`
+handle (`SavedViewStore`, `ProjectMetaStore`, `AuditStore`) — no second
+connection, no separate file. It reads/writes a new `work_mode_tasks` table
+(`id TEXT PRIMARY KEY, data TEXT, createdAt, updatedAt`) added to the base
+`SCHEMA` in `index-db.ts` (`CREATE TABLE IF NOT EXISTS`, so it's created for
+both fresh DBs and pre-existing ones on next open — no separate migration
+needed) and round-trips the full `WorkModeTask` as one JSON blob per row
+(`get`/`has`/`put`, upsert-by-id, `createdAt` set once on first insert).
+Exposed as `TranscriptIndex.workModeTasks`, so `Engine.index.workModeTasks` is
+the durable store — same pattern as `Engine.index.providerIndex`/`.audit`.
+`packages/server/src/routes/work-mode.ts` now reads/writes through
+`engine.index.workModeTasks` instead of the old `new Map()`; every existing
+flag-recheck/folder-scope/permission guard is untouched (same
+`isFlagEnabled()`/`assertPathInFolderScope`/`assertActionPermitted` calls, same
+403/404/409/400 responses). One tolerance kept for hermetic tests that build
+`buildApp` with a partial/mocked `Engine` lacking `.index` (several
+`native-codex-runtime.test.ts`/`native-claude-runtime.test.ts` cases do this,
+mirroring `app.ts`'s own `engine.index?.providerIndex ?? null` pattern):
+`registerWorkModeRoutes`'s `engine` param takes `index` as optional and falls
+back to an ephemeral `InMemoryWorkModeTaskFallback` (a tiny `Map`-backed
+class with the same `get`/`has`/`put` shape) only when `index` is absent — a
+real `Engine` always has `index.workModeTasks` and gets real persistence; the
+fallback never runs in a real server process. RED-first test added in
+`packages/server/test/work-mode.test.ts` ("a task created before a simulated
+server restart is still readable after"): builds two fully independent
+`Engine`/Fastify app pairs pointed at the SAME db file (no in-process sharing,
+i.e. a real simulated restart) — creates a task + advances its progress on the
+first, closes both, then reads it back on the second and confirms the flag
+re-check / 403-while-off behavior is unchanged on the restarted process too.
+Confirmed RED against the old `Map`-based route file (reverted to the
+pre-task version, ran the test, got 404 instead of 200, documented, then
+restored the fix) before landing. Full engine suite: 81 files / 2236 tests
+green (unchanged — no new engine test file, only the new `work-mode-store.ts`
++ its wiring into `index-db.ts`); `tsc --noEmit` clean; provider-index
+public-surface tsc target clean. Full server suite: 14 files / 261 tests green
+(was 260, +1); `tsc --noEmit` clean. No existing test file's assertions
+changed. No flag default changed (`workMode` stays `false` in
+`DEFAULT_DEVHUB_FEATURE_FLAGS`). Landed on `wip/devhub-background-runner` only,
+per task instructions — NOT `origin/main`.
+PRIOR: M7-SYNC-AUDIT (DIRECTED TASK on
 `wip/devhub-background-runner` — audits the M7 synchronization leg against
 `.planning/devhub-codex-parity/synchronization-contract.md` (SYNC-1/2/3) and closes the
 one real gap found. Findings per tier:

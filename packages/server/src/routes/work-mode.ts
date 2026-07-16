@@ -1,14 +1,20 @@
 /**
- * M7-WORKMODE-WIRING: the HTTP boundary over the engine's Work-mode task model
- * (`@devhub/engine/providers/work-mode.ts`). Work mode is a DISTINCT product mode
- * from Code mode — never "Cowork", never implied background/subagent execution —
- * so every route here re-checks the `workMode` feature flag itself, straight off
- * `engine.getSettings()`, and never trusts a client-supplied flag value.
+ * M7-WORKMODE-WIRING / M7-WORKMODE-PERSIST: the HTTP boundary over the engine's
+ * Work-mode task model (`@devhub/engine/providers/work-mode.ts`). Work mode is a
+ * DISTINCT product mode from Code mode — never "Cowork", never implied
+ * background/subagent execution — so every route here re-checks the `workMode`
+ * feature flag itself, straight off `engine.getSettings()`, and never trusts a
+ * client-supplied flag value.
  *
- * Storage is a simple in-memory map keyed by task id (mirroring the ephemeral
- * preview store in `cross-provider-fork.ts`) — Work mode has no persistence layer
- * of its own yet, so this file is purely the wiring: real engine model in, real
- * engine model out, flag-gated at every entry point.
+ * Storage is `engine.index.workModeTasks` (`WorkModeTaskStore`,
+ * `packages/engine/src/work-mode-store.ts`) — a table in the SAME durable SQLite
+ * file every other engine store shares (`work_mode_tasks`, added to the base
+ * schema), so a task created here survives a server restart: a fresh `Engine`
+ * pointed at the same db file rehydrates the same row. Previously this was a
+ * closure-scoped in-memory `Map` (mirroring the ephemeral preview store in
+ * `cross-provider-fork.ts`) that lost every task on restart; the wiring below is
+ * otherwise unchanged — real engine model in, real engine model out, flag-gated
+ * at every entry point.
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Engine } from "@devhub/engine";
@@ -252,6 +258,26 @@ const deliverableBodySchema = {
 } as const;
 
 /**
+ * Ephemeral fallback used ONLY when `engine.index` is absent (a partial/mocked
+ * `Engine` in a hermetic test that never exercises Work mode itself — the same
+ * `engine.index?.foo ?? null` tolerance `app.ts` already applies for the provider
+ * index). A real `Engine` always has `index.workModeTasks` and gets real
+ * restart-durable persistence; this fallback never runs in a real server process.
+ */
+class InMemoryWorkModeTaskFallback {
+  private readonly map = new Map<string, WorkModeTask>();
+  get(id: string): WorkModeTask | null {
+    return this.map.get(id) ?? null;
+  }
+  has(id: string): boolean {
+    return this.map.has(id);
+  }
+  put(task: WorkModeTask): void {
+    this.map.set(task.id, task);
+  }
+}
+
+/**
  * Register the Work-mode HTTP boundary: GET .../status (always answers, never
  * gated — it's the flag probe itself), and the CRUD surface over the real engine
  * model, every one of which re-checks `workMode` off `engine.getSettings()` before
@@ -259,9 +285,9 @@ const deliverableBodySchema = {
  */
 export function registerWorkModeRoutes(
   app: FastifyInstance,
-  engine: Pick<Engine, "getSettings">,
+  engine: Pick<Engine, "getSettings"> & { index?: Pick<Engine["index"], "workModeTasks"> },
 ): void {
-  const tasks = new Map<string, WorkModeTask>();
+  const tasks = engine.index?.workModeTasks ?? new InMemoryWorkModeTaskFallback();
   const isFlagEnabled = (): boolean => engine.getSettings().devHubFeatures?.workMode === true;
   const flags = { get workMode() {
     return isFlagEnabled();
@@ -290,7 +316,7 @@ export function registerWorkModeRoutes(
           folderScope: req.body.folderScope,
           permissionProfile: req.body.permissionProfile,
         });
-        tasks.set(task.id, task);
+        tasks.put(task);
         return reply.code(201).send({ task });
       } catch (error) {
         return sendWorkModeError(reply, error);
@@ -319,7 +345,7 @@ export function registerWorkModeRoutes(
       if (!task) return taskNotFound(reply);
       try {
         const next = updateWorkModeProgress(flags, task, req.body);
-        tasks.set(next.id, next);
+        tasks.put(next);
         return reply.code(200).send({ task: next });
       } catch (error) {
         return sendWorkModeError(reply, error);
@@ -337,7 +363,7 @@ export function registerWorkModeRoutes(
       if (!task) return taskNotFound(reply);
       try {
         const next = recordWorkModeArtifact(flags, task, req.body);
-        tasks.set(next.id, next);
+        tasks.put(next);
         return reply.code(200).send({ task: next });
       } catch (error) {
         return sendWorkModeError(reply, error);
@@ -359,7 +385,7 @@ export function registerWorkModeRoutes(
           description: req.body.description,
           satisfiedByArtifactPaths: req.body.satisfiedByArtifactPaths ?? [],
         });
-        tasks.set(next.id, next);
+        tasks.put(next);
         return reply.code(200).send({ task: next });
       } catch (error) {
         return sendWorkModeError(reply, error);

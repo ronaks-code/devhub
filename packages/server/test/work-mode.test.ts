@@ -17,6 +17,14 @@ function makeApp(): { app: FastifyInstance; engine: Engine } {
   return { app, engine };
 }
 
+/** Build a second app/engine pointed at the SAME db file — a simulated server restart. */
+function makeAppAt(dbPath: string): { app: FastifyInstance; engine: Engine } {
+  const engine = new Engine(dbPath);
+  const app = Fastify();
+  registerWorkModeRoutes(app, engine);
+  return { app, engine };
+}
+
 afterEach(() => {
   while (roots.length > 0) {
     const root = roots.pop();
@@ -146,6 +154,51 @@ describe("work-mode routes", () => {
       payload: { id: "x", description: "x", satisfiedByArtifactPaths: ["/never/recorded"] },
     });
     expect(deliverable.statusCode).toBe(400);
+  });
+
+  it("M7-WORKMODE-PERSIST: a task created before a simulated server restart is still readable after", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "devhub-work-mode-restart-test-"));
+    roots.push(root);
+    const dbPath = path.join(root, "index.db");
+
+    // "Before restart": a fresh Engine/app pair, flag on, create the task.
+    const before = makeAppAt(dbPath);
+    before.engine.setSettings({ devHubFeatures: { workMode: true } as never });
+    const created = await before.app.inject({
+      method: "POST",
+      url: "/api/work-mode/tasks",
+      payload: CREATE_BODY,
+    });
+    expect(created.statusCode).toBe(201);
+    await before.app.inject({
+      method: "POST",
+      url: "/api/work-mode/tasks/work-task-1/progress",
+      payload: { status: "in-progress", summary: "underway before restart" },
+    });
+    await before.engine.index.close();
+    await before.app.close();
+
+    // "After restart": a BRAND NEW Engine/app pointed at the same db file — nothing
+    // shared in-process with `before`, exactly like a real process restart. The task
+    // (and its progress update) must still be readable, and the flag must still be
+    // re-read from the SAME durable settings store (still on, since it's the same db).
+    const after = makeAppAt(dbPath);
+    const read = await after.app.inject({ method: "GET", url: "/api/work-mode/tasks/work-task-1" });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().task).toMatchObject({
+      id: "work-task-1",
+      progress: { status: "in-progress", summary: "underway before restart" },
+    });
+
+    // The existing 403-while-off behavior is unchanged by persistence: flip the flag
+    // off on the SAME restarted process and confirm the route still 403s.
+    after.engine.setSettings({ devHubFeatures: { workMode: false } as never });
+    const afterFlagOff = await after.app.inject({
+      method: "GET",
+      url: "/api/work-mode/tasks/work-task-1",
+    });
+    expect(afterFlagOff.statusCode).toBe(403);
+    await after.app.close();
   });
 
   it("400s an invalid provider and an artifact path outside the folder scope", async () => {
