@@ -282,6 +282,39 @@ afterEach(async () => {
   }
 });
 
+describe("M5-CUTOVER-FINALIZE: legacy provider routes stay byte-compatible across the flag", () => {
+  it("returns byte-identical GET /api/providers/:provider/tasks responses whether unifiedTaskIndex is explicit-false (rollback) or true (cutover)", async () => {
+    // Two independent harnesses (own temp DB/home), one rolled back via an explicit
+    // stored false, one on the applied M5 default. The legacy list route only ever
+    // warms the coordinator cache as a side effect (see provider-tasks.ts
+    // observeListIntoCache) and must never change the response bytes it returns.
+    const off = await harness({ enableFlag: false });
+    const on = await harness({ enableFlag: true });
+
+    const offRes = await off.app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks?home=${encodeURIComponent(off.codexHome)}`,
+    });
+    const onRes = await on.app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks?home=${encodeURIComponent(on.codexHome)}`,
+    });
+
+    expect(offRes.statusCode).toBe(200);
+    expect(onRes.statusCode).toBe(200);
+    // Byte-for-byte: same raw response body text, not just deep-equal JSON.
+    expect(offRes.body).toBe(onRes.body);
+    expect(offRes.body).toBe(JSON.stringify({ items: [], nextCursor: null }));
+
+    // Confirm the flag state actually differed between the two harnesses, so this
+    // is a real rollback comparison and not an accidental no-op.
+    const offSettings = await off.app.inject({ method: "GET", url: "/api/settings" });
+    const onSettings = await on.app.inject({ method: "GET", url: "/api/settings" });
+    expect(offSettings.json().devHubFeatures.unifiedTaskIndex).toBe(false);
+    expect(onSettings.json().devHubFeatures.unifiedTaskIndex).toBe(true);
+  });
+});
+
 describe("indexed routes: flag gating", () => {
   it("reports the feature disabled on every route while the flag is off", async () => {
     const h = await harness({ enableFlag: false });
