@@ -9,12 +9,14 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Engine } from "@devhub/engine";
+import { Engine } from "@devhub/engine";
 import type { AppSettings } from "@devhub/engine/types";
 import {
   AppServerProcessError,
   DEFAULT_DEVHUB_FEATURE_FLAGS,
   ProviderRegistry,
+  createNativeTaskKey,
+  taskLocator,
   type CodexSupervisorProcess,
   type CodexSupervisorProcessFactory,
 } from "@devhub/engine/providers";
@@ -303,5 +305,80 @@ describe("buildApp native Codex wiring", () => {
     await injected.ready();
     expect((await injected.inject({ method: "GET", url: "/api/providers" })).json()).toEqual([]);
     await injected.close();
+  });
+});
+
+// SYNC-2 (synchronization-contract.md): "compare revision before every write after
+// idle/reconnect; invalidate projection and reread or refuse". This durable-latch
+// enforcement lives in CodexNativeAdapter (`guardReconciliation`/`fencedExistingMutation`)
+// but is only ACTIVE when a `reconciliationStore` is actually wired
+// (`fencingActive()` requires both it and `writerLeases` non-null). Proves `buildApp`
+// wires the real `engine.index.providerIndex` in by DEFAULT — no explicit
+// `nativeCodex.reconciliationStore` override — so a durably-latched task is refused
+// through the real HTTP mutation surface, not just at the unit level.
+describe("buildApp wires the default SYNC-2 reconciliation store (no explicit override)", () => {
+  it("refuses an existing-task mutation over HTTP once the durable latch is seeded directly on the engine's provider index", async () => {
+    const root = temporaryRoot();
+    const executable = path.join(root, "codex");
+    const home = path.join(root, "home");
+    writeFileSync(executable, "binary", { mode: 0o755 });
+    mkdirSync(home);
+    const fake = fakeProcesses();
+    const dbPath = path.join(root, "index.db");
+    const engine = new Engine(dbPath);
+    engine.setSettings({
+      devHubFeatures: { ...DEFAULT_DEVHUB_FEATURE_FLAGS, nativeCodex: true },
+    });
+    const token = "sync2-mutation-token";
+    const { app } = buildApp({
+      engine,
+      token,
+      nativeCodex: {
+        installation: { executable, home },
+        processFactory: fake.factory,
+        cursorSecret: "0123456789abcdef0123456789abcdef",
+        clientVersion: "test",
+      },
+    });
+    await app.ready();
+
+    // Spawn the (fake) app-server process by exercising a real read first, exactly
+    // like the sibling wiring test above — never assume a live process.
+    const tasks = await app.inject({
+      method: "GET",
+      url: `/api/providers/openai/tasks?home=${encodeURIComponent(home)}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(tasks.statusCode).toBe(200);
+    expect(fake.creations).toHaveBeenCalledTimes(1);
+
+    // Seed the durable latch directly on the SAME store `buildApp` should have wired
+    // as the adapter's default `reconciliationStore` — never through the adapter/HTTP
+    // surface itself, so this is a true independent-writer proof.
+    const key = createNativeTaskKey("openai", home, "task-1");
+    engine.index.providerIndex.requireReconciliation(taskLocator(key), {
+      reviewedFingerprint: null,
+      nativeFingerprint: null,
+      writerEpoch: 0,
+      reason: "NATIVE_REVISION_MISMATCH",
+    });
+
+    const renamed = await app.inject({
+      method: "POST",
+      url: "/api/providers/openai/tasks/task-1/rename",
+      headers: { authorization: `Bearer ${token}` },
+      payload: { home, name: "renamed" },
+    });
+    expect(renamed.statusCode).toBe(409);
+    expect(renamed.json()).toMatchObject({
+      error: "provider_reconciliation_required",
+      code: "RECONCILIATION_REQUIRED",
+    });
+    // The refusal happened before any provider dispatch: the fake process only ever
+    // answered the earlier `thread/list` read.
+    expect(fake.creations).toHaveBeenCalledTimes(1);
+
+    await app.close();
+    engine.close();
   });
 });

@@ -3,7 +3,98 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-WORKMODE-WIRING (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-SYNC-AUDIT (DIRECTED TASK on
+`wip/devhub-background-runner` — audits the M7 synchronization leg against
+`.planning/devhub-codex-parity/synchronization-contract.md` (SYNC-1/2/3) and closes the
+one real gap found. Findings per tier:
+
+SYNC-1 (native continuity — a DevHub-created native session persists/lists/reads,
+survives provider-process restart, resumes under the same native ID, accepts later
+work). SHIPPED for both providers. Codex: `CodexAppServerSupervisor` +
+`CodexNativeAdapter` (`packages/engine/src/providers/codex/native-adapter.ts`,
+`codex-supervisor.ts`) — proven by
+`packages/engine/test/providers/codex-supervisor.test.ts` /
+`codex-supervisor-boundaries.test.ts` (restart/reacquire) and
+`codex-native-adapter.test.ts` (list/read/resume same native id, interrupt, fork).
+Claude: `ClaudeNativeAdapter`/`ClaudeCliProcess`
+(`packages/engine/src/providers/claude/native-adapter.ts`) — proven by
+`claude-native-adapter.test.ts` (SDK list/read, same-UUID resume, native interrupt,
+rename/fork/delete) and `claude-supervisor.test.ts` (restart). Harness-restart
+discovery for the unified index itself (a second process/`buildApp` boot
+rediscovering the same registered home) is proven at
+`packages/engine/test/provider-index/gate2-drills.test.ts` ("v13 migration
+interruption + idempotent recovery") plus `packages/server/test/provider-index.test.ts`.
+No RED/gap found; no code change needed for SYNC-1.
+
+SYNC-2 (DevHub continuity — a second DevHub process safely resumes only after
+acquiring the local writer lease; heartbeat 5s / expiry 15s per the contract;
+compares native revision before every write after idle/reconnect; invalidates or
+refuses on external mutation). The LEASE half was fully shipped and proven:
+`packages/engine/src/providers/writer-lease.ts` (`NATIVE_TASK_WRITER_HEARTBEAT_MS`=5000,
+`NATIVE_TASK_WRITER_EXPIRY_MS`=15000, SQLite-backed, monotonic epoch fence) — proven
+by `packages/engine/test/providers/writer-lease.test.ts` ("grants exactly one lease
+across barriered simultaneous Node processes", "takes over at deterministic expiry
+after a child exits without release"). The REVISION-COMPARE/refuse-reread-reconcile
+half was also fully IMPLEMENTED in both adapters
+(`guardReconciliation`/`fencedExistingMutation`/`durableRequire` in
+`codex/native-adapter.ts`; the equivalent revision/reconciliation path in
+`claude/native-adapter.ts`) over the durable seam
+`packages/engine/src/providers/reconciliation-store.ts`
+(`createAdapterReconciliationStore`, fail-closed on any store fault), backed by
+`ProviderTaskIndexStore` (`packages/engine/src/provider-index/store.ts`, implements
+`ProviderReconciliationStore`) — proven at the unit level by
+`codex-native-adapter.test.ts` / `claude-native-adapter.test.ts` (dozens of
+`RECONCILIATION_REQUIRED` assertions, incl. "restores a durable latch on a fresh
+(restarted) adapter before any mutation" / "restores a durable latch before
+accepting a post-restart mutation").
+
+THE GAP: `packages/server/src/app.ts` (`buildApp`) constructed both native runtimes
+via `createNativeCodexRuntime`/`createNativeClaudeRuntime` WITHOUT ever passing
+`reconciliationStore`, even though it already builds `providerIndexStore =
+engine.index?.providerIndex ?? null` for the unified-index coordinator right below.
+Both adapters gate real fencing on `writerLeases !== null && reconciliationStore !==
+null` (`fencingActive()`); `writerLeases` was already always-real (both native
+runtimes open a real `NativeTaskWriterLeaseStore` SQLite file by default), so with
+`reconciliationStore` permanently null, `fencingActive()` was permanently `false` in
+every real DevHub process — the shipped revision-compare/refuse logic was
+reachable code with no live caller, i.e. dead in production despite being fully
+tested in isolation. RED test added first
+(`packages/server/test/native-codex-runtime.test.ts`, "buildApp wires the default
+SYNC-2 reconciliation store (no explicit override)"): seeds a durable
+`requireReconciliation` latch directly on `engine.index.providerIndex` for a task,
+then hits the real `POST /api/providers/openai/tasks/:id/rename` HTTP mutation route
+and expects `409 provider_reconciliation_required`; before the fix it failed with
+`409 provider_mutation_uncertain` instead (fencing off, so the adapter attempted the
+real `thread/name/set` dispatch against the fake process and got an uncertain
+outcome) — confirmed by reverting the fix and re-running (documented, not
+committed). THE FIX (minimal, `packages/server/src/app.ts` only): hoisted the
+existing `providerIndexStore` read above the two runtime-construction call sites and
+added `...(providerIndexStore === null ? {} : { reconciliationStore:
+providerIndexStore })` as a DEFAULT (before the `opts.nativeCodex`/`opts.nativeClaude`
+spread, so any test's explicit override — including hermetic omission — still wins,
+preserving all existing hermetic seams). Verified inert for every pre-existing test
+(all 259 pre-existing server tests still pass unchanged) and now exercised end-to-end
+through the real HTTP surface by the new test (260th). Full engine suite: 81 files /
+2236 tests green (unchanged); `tsc --noEmit` clean; provider-index public-surface
+tsc clean. Full server suite: 14 files / 260 tests green (was 259, +1); `tsc
+--noEmit` clean. No existing test file's assertions changed, only the new describe
+block appended to `native-codex-runtime.test.ts`.
+
+SYNC-3 (first-party GUI visibility — conditional, never blocks). No DevHub code path
+enforces or depends on this tier by design (the contract states it "never blocks
+DevHub startup or normal use"); it is proven only by a live spike against the
+actually-installed Codex/Claude desktop GUI apps, recorded directly in the contract
+table (Codex app `26.707.51957 (5175)` verified-direct-navigation; Claude app
+`1.17377.2` unsupported-by-documented-contract). That evidence predates this worktree
+and its underlying `evidence/m1`/`evidence/m4` artifacts are not present in this
+branch's history — re-verifying it requires operating the real installed Codex/Claude
+GUI applications, which is HARDWARE/host-app territory beyond this sandbox. HELD, not
+faked: no software gap exists to close for SYNC-3; the only remaining action is a
+live-GUI re-spike, which is out of scope for a software-only task.
+
+Landed on `wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M7-WORKMODE-WIRING (DIRECTED TASK on
 `wip/devhub-background-runner` — wires the M7-WORKMODE-ENGINE model (below) all the
 way through server + web, behind the SAME default-off `workMode` flag (flag value
 itself UNCHANGED, still `false`). New `packages/server/src/routes/work-mode.ts`

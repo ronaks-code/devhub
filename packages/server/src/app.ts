@@ -168,10 +168,19 @@ export function buildApp(opts: BuildOptions = {}): {
     engine.getSettings().devHubFeatures?.nativeCodex === true;
   const nativeClaudeRequested = (): boolean =>
     hasMutationToken && engine.getSettings().devHubFeatures?.persistentClaude === true;
+  // SYNC-2 (synchronization-contract.md): the same durable ProviderTaskIndexStore backs
+  // `provider_reconciliation_state` and implements `ProviderReconciliationStore`. Read here
+  // (engine already exists) so BOTH native adapters get the real durable
+  // require/acknowledge-reconciliation seam by default instead of the reconciliation logic
+  // being dead code behind an always-null runtime option. An explicit `reconciliationStore`
+  // (including `undefined`) in `opts.nativeCodex`/`opts.nativeClaude` still overrides this,
+  // preserving existing hermetic test seams.
+  const providerIndexStore = engine.index?.providerIndex ?? null;
   const shouldCreateNativeCodex = opts.nativeCodex !== false &&
     (opts.providerRegistry === undefined || opts.nativeCodex !== undefined);
   const nativeCodexRuntime = shouldCreateNativeCodex
     ? createNativeCodexRuntime({
+        ...(providerIndexStore === null ? {} : { reconciliationStore: providerIndexStore }),
         ...(typeof opts.nativeCodex === "object" ? opts.nativeCodex : {}),
         registry: providerRegistry,
         isEnabled: nativeCodexRequested,
@@ -189,6 +198,7 @@ export function buildApp(opts: BuildOptions = {}): {
         // programmatic auth, and a mutation token, and an explicit
         // `nativeClaude`/`lifecycleEvidence` override in BuildOptions wins over it.
         lifecycleEvidence: NATIVE_CLAUDE_LIFECYCLE_EVIDENCE,
+        ...(providerIndexStore === null ? {} : { reconciliationStore: providerIndexStore }),
         ...(typeof opts.nativeClaude === "object" ? opts.nativeClaude : {}),
         registry: providerRegistry,
         isEnabled: nativeClaudeRequested,
@@ -224,8 +234,8 @@ export function buildApp(opts: BuildOptions = {}): {
   );
   // The unified task index needs the shared store; a partial/mocked engine without it makes the
   // feature unavailable (the coordinator can never initialize there). unifiedTaskIndex is reported
-  // available only when this store exists.
-  const providerIndexStore = engine.index?.providerIndex ?? null;
+  // available only when this store exists. (`providerIndexStore` itself is declared earlier,
+  // before the native runtimes, so it can also be wired as their default `reconciliationStore`.)
   let providerTaskIndexCoordinator: ProviderTaskIndexCoordinator | null = null;
   const syncProviderTaskIndex = (unifiedTaskIndex: boolean): void => {
     if (!unifiedTaskIndex || providerTaskIndexCoordinator !== null) return;
