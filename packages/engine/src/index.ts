@@ -251,7 +251,7 @@ export class Engine {
     const servers = await listMcpServers(scopeCwd);
     // A project-scoped entry of the same name takes precedence over the global one.
     const match =
-      servers.filter((s) => s.name === name).sort((a, b) => (a.scope === "project" ? -1 : 1))[0];
+      servers.filter((s) => s.name === name).sort((a, _b) => (a.scope === "project" ? -1 : 1))[0];
     if (!match) return { ok: false, error: `no MCP server named "${name}"` };
     return testMcpServer(match);
   }

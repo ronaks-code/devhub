@@ -372,7 +372,7 @@ export class CodexRpcPeer {
       this.decoder.finish();
       this.close(this.ingressEndingReason);
       while (this.serverTasks.size > 0) {
-        await Promise.all([...this.serverTasks]);
+        await Promise.all(this.serverTasks);
       }
     } catch (error) {
       const fault = error instanceof CodexProtocolFault
@@ -405,7 +405,7 @@ export class CodexRpcPeer {
   async idle(): Promise<void> {
     if (this.ingressDrain) await this.ingressDrain;
     while (this.serverTasks.size > 0) {
-      await Promise.all([...this.serverTasks]);
+      await Promise.all(this.serverTasks);
     }
     await this.writer.idle();
   }

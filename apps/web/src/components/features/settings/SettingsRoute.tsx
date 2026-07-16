@@ -22,7 +22,6 @@ import {
   dirtySettingsUpdatePayload,
   mergeAuthoritativeSettings,
   requestSettingsReconciliation,
-  settingsUpdatePayload,
   withNativeCodexPreference,
   withPersistentClaudePreference,
 } from "../../SettingsPane.js";

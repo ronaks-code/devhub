@@ -189,7 +189,7 @@ async function listFiles(dir: string, suffix: string): Promise<string[]> {
 }
 
 /** Recursively list `*.md` files under `dir` (commands may nest). */
-async function listMdRecursive(dir: string, base = dir): Promise<string[]> {
+async function listMdRecursive(dir: string): Promise<string[]> {
   let entries;
   try {
     entries = await readdir(dir, { withFileTypes: true });
@@ -200,7 +200,7 @@ async function listMdRecursive(dir: string, base = dir): Promise<string[]> {
   for (const e of entries) {
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
-      out.push(...(await listMdRecursive(full, base)));
+      out.push(...(await listMdRecursive(full)));
     } else if (e.isFile() && e.name.endsWith(".md")) {
       out.push(full);
     }

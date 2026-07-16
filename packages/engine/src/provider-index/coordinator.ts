@@ -33,7 +33,6 @@ import type {
   ProviderIndexCompletion,
   ProviderIndexPromotion,
   ProviderIndexRegisteredHome,
-  ProviderIndexStage,
   VerifiedLegacySessionResolution,
 } from "./store-types.js";
 import { hasCanonicalUnicode, sqliteTextLengthAtMost } from "./text-boundary.js";

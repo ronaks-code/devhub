@@ -8,7 +8,8 @@
     "dev": "tsx src/cli.tsx",
     "start": "tsx src/cli.tsx",
     "smoke": "tsx src/smoke.tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src"
   },
   "dependencies": {
     "@devhub/engine": "workspace:*",

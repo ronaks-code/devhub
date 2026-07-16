@@ -1,0 +1,20 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // M8-LINT-TASK: real linter for the monorepo (`pnpm lint` used to be a zero-task
+  // turbo no-op). oxlint's default rule set (eslint correctness + unicorn + oxc) runs
+  // for real here; everything it surfaced was either fixed in this same task or is
+  // explicitly baselined below with a reason, never silently ignored.
+  "rules": {
+    // DevHub's Claude/Codex provider adapters parse real terminal/ANSI byte streams
+    // (control-code stripping, cursor-movement scrubbing, secret-redaction gates).
+    // Matching control characters in a regex is the actual job there, not a mistake
+    // — baselined repo-wide rather than sprinkling ~20 identical inline disables.
+    "no-control-regex": "off",
+    // Style-only micro-perf nits (`[...iterable]` before `Promise.all`/`for…of`,
+    // and `new Array(n)`): correct and safe as written, no behavior difference.
+    // The handful of instances --fix already rewrote (this same commit) prove the
+    // rule works; the rest are baselined to keep this task scoped to real bugs.
+    "unicorn/no-useless-spread": "off",
+    "unicorn/no-new-array": "off"
+  }
+}

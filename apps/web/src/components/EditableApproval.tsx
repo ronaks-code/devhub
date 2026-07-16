@@ -3,9 +3,6 @@ import { Braces, Check, FileDiff, Pencil, RotateCcw, Terminal } from "lucide-rea
 import { DiffView, parseEditInput } from "./DiffView";
 import { cn } from "../lib/utils";
 
-/** The Edit-family tools whose primary content we let the user revise. */
-const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-
 /**
  * Which single field of a tool input is the load-bearing, human-editable value,
  * and how to splice an edited value back into a fresh input object. We only ever

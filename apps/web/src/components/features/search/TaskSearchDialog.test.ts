@@ -378,7 +378,7 @@ describe("TaskSearchDialog — live interaction (mounted DOM)", () => {
 
     function Harness() {
       const [query, setQuery] = useState("");
-      const [activeIndex, setActiveIndex] = useState(0);
+      const [activeIndex, _setActiveIndex] = useState(0);
       const results = query ? [codexResult, claudeResult] : [];
       return createElement(TaskSearchDialog, {
         query,

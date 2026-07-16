@@ -21,11 +21,6 @@ import {
 } from "./Composer.js";
 import { SHELL_GEOMETRY } from "./DevHubShell.js";
 
-/** Count non-overlapping occurrences of a substring. */
-function count(haystack: string, needle: string): number {
-  return haystack.split(needle).length - 1;
-}
-
 function render(props: Parameters<typeof Composer>[0]): string {
   return renderToStaticMarkup(createElement(Composer, props));
 }

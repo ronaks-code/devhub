@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { Bell, CheckCircle2, Info, AlertTriangle, XCircle, X } from "lucide-react";
 import { cn } from "../lib/utils";
 

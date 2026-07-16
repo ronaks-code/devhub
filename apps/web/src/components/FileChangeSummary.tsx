@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { FileDiff, X } from "lucide-react";
+import { FileDiff } from "lucide-react";
 import type { NormalizedMessage } from "../lib/types";
 import { parseEditInput, countEditLines } from "./DiffView";
 import { OpenInEditor } from "./OpenInEditor";

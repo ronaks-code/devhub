@@ -1195,7 +1195,7 @@ async function getValidated<T>(
       headers: authHeaders(JSON_ACCEPT),
       ...(signal === undefined ? {} : { signal }),
     });
-  } catch (error) {
+  } catch  {
     if (signal?.aborted) {
       throw new DOMException("The operation was aborted", "AbortError");
     }

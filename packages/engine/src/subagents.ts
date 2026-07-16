@@ -18,7 +18,6 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { streamRawLines } from "./parser.js";
 import { renderableText, toolTexts } from "./parse-session.js";
-import type { SearchText } from "./parse-session.js";
 
 /** Mirrored role marking a row as subagent text (vs. the main transcript's roles). */
 export const SUBAGENT_ROLE = "subagent";

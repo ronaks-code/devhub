@@ -13,8 +13,7 @@
  * ({@link normalizeTags}: trim → lower-case → de-dupe), so they group cleanly with
  * user-assigned tags and the `tag` search facet.
  */
-import { existsSync, readdirSync } from "node:fs";
-import path from "node:path";
+import { readdirSync } from "node:fs";
 import { normalizeTags } from "./tags.js";
 
 /** Default branches we DON'T turn into a `branch:` tag (every other branch becomes one). */

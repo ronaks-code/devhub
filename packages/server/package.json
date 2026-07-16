@@ -11,7 +11,8 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "tsc"
+    "build": "tsc",
+    "lint": "oxlint src"
   },
   "dependencies": {
     "@devhub/engine": "workspace:*",

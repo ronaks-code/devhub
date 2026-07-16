@@ -1644,11 +1644,9 @@ export function CodexNativeDirectPane({
     setSelectedTask(null);
     setTimeline(EMPTY_TIMELINE);
     setConnection("connecting");
-    void loadList(home, {
-      ...(preferredTaskIdRef.current
+    void loadList(home, (preferredTaskIdRef.current
         ? { preferredTaskId: preferredTaskIdRef.current }
-        : {}),
-    }).then((loaded) => {
+        : {})).then((loaded) => {
       if (!active) return;
       if (!loaded) setConnection("disconnected");
       else if (!selectedIdRef.current) {

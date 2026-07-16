@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Check, Loader2, Sparkles, Tag, X } from "lucide-react";
 import { api, NotImplementedError } from "../lib/api";
 import { cn } from "../lib/utils";

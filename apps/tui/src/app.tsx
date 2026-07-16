@@ -5,7 +5,7 @@
 import React, { useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { Engine } from "@devhub/engine";
-import type { ProjectSummary, SearchHit, SessionSummary } from "@devhub/engine/types";
+import type { ProjectSummary, SessionSummary } from "@devhub/engine/types";
 import { Chat } from "./screens/Chat.js";
 import { Search } from "./screens/Search.js";
 import { Dashboard } from "./screens/Dashboard.js";

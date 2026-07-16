@@ -93,7 +93,7 @@ function buildPayload(event: HookEvent, cwd: string, input?: Record<string, unkn
     cwd,
     hook_event_name: event,
   };
-  return JSON.stringify({ ...base, ...(input ?? {}) });
+  return JSON.stringify({ ...base, ...input });
 }
 
 /**

@@ -476,7 +476,7 @@ export class CodexAppServerSupervisor {
 
   releaseLease(lease: CodexLease): Promise<void> {
     if (lease.inFlight.size === 0) return this.finishLeaseRelease(lease);
-    return Promise.allSettled([...lease.inFlight]).then(() => this.finishLeaseRelease(lease));
+    return Promise.allSettled(lease.inFlight).then(() => this.finishLeaseRelease(lease));
   }
 
   private finishLeaseRelease(lease: CodexLease): Promise<void> {

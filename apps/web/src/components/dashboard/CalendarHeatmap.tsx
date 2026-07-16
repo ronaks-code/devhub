@@ -19,12 +19,6 @@ function ymd(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
-/** Parse a `YYYY-MM-DD` into a local Date at midnight (avoids TZ drift). */
-function parseYmd(s: string): Date {
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y ?? 1970, (m ?? 1) - 1, d ?? 1);
-}
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Five GitHub-style buckets (index 0 = none). Tailwind clay tints. */

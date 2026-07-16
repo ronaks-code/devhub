@@ -1,10 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
-  Archive,
   Bot,
   Command as CommandIcon,
-  Cpu,
-  DatabaseZap,
   Folder,
   Gauge,
   Hexagon,
@@ -13,23 +10,17 @@ import {
   Inbox,
   Keyboard,
   LayoutDashboard,
-  MessageSquarePlus,
   MessagesSquare,
-  Moon,
   Radio,
   Search,
   Settings,
-  ShieldCheck,
   Sparkles,
-  Sun,
   Trash2,
   Zap,
 } from "lucide-react";
 import {
   api,
   codexApi,
-  exportArchiveUrl,
-  NotImplementedError,
   subscribeEvents,
   type AppSettings,
 } from "./lib/api";
@@ -50,11 +41,9 @@ import { ChatPane } from "./components/ChatPane";
 import { LiveOpsBoard } from "./components/LiveOpsBoard";
 import { InboxPane } from "./components/InboxPane";
 import { SearchPalette } from "./components/SearchPalette";
-import { CommandPalette, type Command } from "./components/CommandPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
-import { ErrorBoundary } from "./components/ErrorBoundary";
 import { SessionCostBadge } from "./components/SessionCostBadge";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
 import { AppShell } from "./components/features/shell/AppShell";
@@ -174,13 +163,6 @@ export function PaneFallback() {
 }
 
 const BASE_TAIL = 2 * 1024 * 1024;
-
-const CHAT_MODELS = [
-  "claude-opus-4-8",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "claude-fable-5",
-] as const;
 
 type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings" | "openai-chat" | "codex-history";
 
@@ -1341,9 +1323,6 @@ export default function App() {
   // The open session's title for the transcript breadcrumb crumb (when loaded).
   const sessionTitle = page?.session.title ?? null;
 
-  // Effective chat model: explicit palette choice → settings default → built-in.
-  const effectiveModel = chatModel ?? settings?.defaultModel ?? CHAT_MODELS[0];
-
   // M6 slice 1: mount the measured Codex-style DevHubShell only when the server
   // resolves the `shellChrome` flag true; otherwise keep the legacy chrome. Default
   // false, so the shipping default renders the current shell unchanged.
@@ -1484,251 +1463,6 @@ export default function App() {
     setChatNonce((n) => n + 1);
     setTab("chat");
   }, []);
-
-  // ── Command-palette ACTIONS that hit endpoints ───────────────────────────
-  // Each reuses an existing api.ts client fn and surfaces a toast on success /
-  // failure. The *Maybe-backed calls map an older server's missing route to a
-  // NotImplementedError, which we report as a quiet "not available" toast rather
-  // than letting it bubble — mirroring how the Settings controls degrade.
-
-  // Force a full re-index (POST /api/reindex). The 202 ack only means the pass
-  // STARTED; live progress streams over the existing SSE the header already shows.
-  const runReindex = useCallback(async () => {
-    try {
-      await api.reindex();
-      pushToast({ title: "Rebuilding index…", body: "Progress shows in the top bar.", level: "info" });
-    } catch (err) {
-      pushToast(
-        err instanceof NotImplementedError
-          ? { title: "Rebuild index unavailable", body: "This server doesn't support reindex yet.", level: "warning" }
-          : { title: "Couldn't start rebuild", body: err instanceof Error ? err.message : String(err), level: "error" },
-      );
-    }
-  }, [pushToast]);
-
-  // Read-only index-health audit (GET /api/maintenance/integrity). Reports the
-  // verdict as a toast; the full per-issue list lives in Settings → Index health.
-  const checkIndexHealth = useCallback(async () => {
-    try {
-      const r = await api.maintenanceIntegrity();
-      pushToast(
-        r.ok
-          ? { title: "Index healthy", body: "No issues found.", level: "success" }
-          : {
-              title: `${r.issues.length} index ${r.issues.length === 1 ? "issue" : "issues"} found`,
-              body: "Open Settings → Index health to review and repair.",
-              level: "warning",
-            },
-      );
-    } catch (err) {
-      pushToast(
-        err instanceof NotImplementedError
-          ? { title: "Index health unavailable", body: "This server doesn't support the health check yet.", level: "warning" }
-          : { title: "Couldn't check index", body: err instanceof Error ? err.message : String(err), level: "error" },
-      );
-    }
-  }, [pushToast]);
-
-  // Export the portable archive — a real file download. A plain anchor click
-  // streams it straight from the server (the big bundle never lives in memory),
-  // exactly like ArchiveTransfer's Download button. SSR-guarded.
-  const downloadArchive = useCallback(() => {
-    if (typeof document === "undefined") return;
-    const a = document.createElement("a");
-    a.href = exportArchiveUrl();
-    a.download = "";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    pushToast({ title: "Exporting archive…", body: "Your browser will download the .json file.", level: "info" });
-  }, [pushToast]);
-
-  // Build the command palette actions from current app state. Memoized so the
-  // list is stable between renders unless its inputs change.
-  const commands = useMemo<Command[]>(() => {
-    const list: Command[] = [
-      {
-        id: "tab-home",
-        title: "Go to Home",
-        group: "Navigate",
-        icon: <Home className="h-3.5 w-3.5" />,
-        run: () => setTab("home"),
-      },
-      {
-        id: "tab-browse",
-        title: "Go to Browse",
-        group: "Navigate",
-        icon: <Folder className="h-3.5 w-3.5" />,
-        run: () => setTab("browse"),
-      },
-      {
-        id: "tab-chat",
-        title: "Go to Chat",
-        group: "Navigate",
-        icon: <Sparkles className="h-3.5 w-3.5" />,
-        run: () => setTab("chat"),
-      },
-      {
-        id: "tab-ops",
-        title: "Go to Live Ops",
-        group: "Navigate",
-        keywords: "running sessions monitor live board",
-        icon: <Radio className="h-3.5 w-3.5" />,
-        run: () => setTab("ops"),
-      },
-      {
-        id: "tab-inbox",
-        title: "Go to Inbox",
-        group: "Navigate",
-        keywords: "triage unsorted untagged sessions",
-        icon: <Inbox className="h-3.5 w-3.5" />,
-        run: () => setTab("inbox"),
-      },
-      {
-        id: "tab-dashboard",
-        title: "Go to Dashboard",
-        group: "Navigate",
-        icon: <LayoutDashboard className="h-3.5 w-3.5" />,
-        run: () => setTab("dashboard"),
-      },
-      {
-        id: "open-settings",
-        title: "Open Settings",
-        group: "Navigate",
-        icon: <Settings className="h-3.5 w-3.5" />,
-        run: () => setTab("settings"),
-      },
-      {
-        id: "new-chat",
-        title: "New chat",
-        group: "Chat",
-        icon: <MessageSquarePlus className="h-3.5 w-3.5" />,
-        run: startNewChat,
-      },
-      {
-        id: "focus-search",
-        title: "Search sessions",
-        group: "Find",
-        hint: "⌘K",
-        keywords: "find filter",
-        icon: <Search className="h-3.5 w-3.5" />,
-        run: () => setSearchOpen(true),
-      },
-      {
-        id: "toggle-theme",
-        title: `Toggle theme (now: ${theme.preference})`,
-        group: "Theme",
-        keywords: "dark light system appearance",
-        icon:
-          theme.preference === "light" ? (
-            <Sun className="h-3.5 w-3.5" />
-          ) : (
-            <Moon className="h-3.5 w-3.5" />
-          ),
-        run: cycleTheme,
-      },
-      // ── Actions: run real app behavior straight from the palette ───────────
-      {
-        id: "toggle-perf",
-        title: `Toggle reduced motion (now: ${perf.preference})`,
-        group: "Actions",
-        keywords: "perf performance animation accessibility motion calm snappy",
-        icon: perf.reduced ? <Zap className="h-3.5 w-3.5" /> : <Gauge className="h-3.5 w-3.5" />,
-        run: perf.cyclePreference,
-      },
-      {
-        id: "open-shortcuts",
-        title: "Keyboard shortcuts",
-        group: "Actions",
-        hint: "?",
-        keywords: "help cheat sheet hotkeys bindings",
-        icon: <Keyboard className="h-3.5 w-3.5" />,
-        run: () => setShortcutOpen(true),
-      },
-      {
-        id: "rebuild-index",
-        title: "Rebuild index",
-        group: "Actions",
-        keywords: "reindex re-index refresh backfill analytics",
-        icon: <DatabaseZap className="h-3.5 w-3.5" />,
-        run: () => void runReindex(),
-      },
-      {
-        id: "check-index-health",
-        title: "Check index health",
-        group: "Actions",
-        keywords: "integrity audit repair maintenance",
-        icon: <ShieldCheck className="h-3.5 w-3.5" />,
-        run: () => void checkIndexHealth(),
-      },
-      {
-        id: "export-archive",
-        title: "Export archive",
-        group: "Actions",
-        keywords: "backup download portable transfer json",
-        icon: <Archive className="h-3.5 w-3.5" />,
-        run: downloadArchive,
-      },
-    ];
-
-    for (const m of CHAT_MODELS) {
-      list.push({
-        id: `model-${m}`,
-        title: `Use model ${m}`,
-        group: "Model",
-        hint: effectiveModel === m ? "current" : undefined,
-        keywords: "change model llm",
-        icon: <Cpu className="h-3.5 w-3.5" />,
-        run: () => {
-          setChatModel(m);
-          setTab("chat");
-        },
-      });
-    }
-
-    for (const p of projects) {
-      list.push({
-        id: `project-${p.id}`,
-        title: `Jump to ${p.name}`,
-        group: "Project",
-        keywords: p.cwd,
-        icon: <Folder className="h-3.5 w-3.5" />,
-        run: () => {
-          setChatSeed(null);
-          setProjectId(p.id);
-          setTab("browse");
-        },
-      });
-    }
-
-    // Recently-opened sessions — a jump-back list straight in the palette.
-    for (const r of recents) {
-      list.push({
-        id: `recent-${r.sessionId}`,
-        title: `Reopen ${r.title}`,
-        group: "Recent",
-        keywords: "recent jump back history session",
-        icon: <History className="h-3.5 w-3.5" />,
-        run: () => openSession(r.projectId, r.sessionId),
-      });
-    }
-
-    return list;
-  }, [
-    projects,
-    theme.preference,
-    effectiveModel,
-    cycleTheme,
-    startNewChat,
-    recents,
-    openSession,
-    perf.preference,
-    perf.reduced,
-    perf.cyclePreference,
-    runReindex,
-    checkIndexHealth,
-    downloadArchive,
-  ]);
 
   // A single resolved mode drives both nav chrome and route content so the
   // shell cannot label the legacy parser as native (or vice versa).

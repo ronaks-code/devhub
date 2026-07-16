@@ -2,7 +2,6 @@ import { spawn as nodeSpawn } from "node:child_process";
 import path from "node:path";
 import { canonicalizeProviderHome } from "../task-key.js";
 import {
-  CodexProtocolFault,
   CodexRpcPeer,
   RedactedCodexStderrRing,
   type CodexClientCallOptions,

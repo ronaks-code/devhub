@@ -3,7 +3,6 @@ import { UnauthorizedError } from "./api.js";
 import {
   ProviderHttpError,
   ProviderMutationUncertainError,
-  ProviderProtocolError,
   ProviderReconciliationRequiredError,
   ProviderStreamError,
   createProviderApiClient,

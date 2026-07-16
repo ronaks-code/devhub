@@ -10,7 +10,6 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
-import { cn } from "../lib/utils";
 import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**

@@ -16,6 +16,10 @@ import { cn } from "../../lib/utils.js";
 
 describe("cn (tailwind-merge + clsx)", () => {
   it("joins truthy classes and drops falsy ones", () => {
+    // `false && "b"` is intentionally constant: it's the exact shape a real
+    // conditional class produces when its condition is false, and this proves
+    // cn() drops it.
+    // oxlint-disable-next-line no-constant-binary-expression
     expect(cn("a", false && "b", undefined, "c")).toBe("a c");
   });
 

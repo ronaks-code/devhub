@@ -3,7 +3,55 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-NAMING (DIRECTED TASK on
+Last updated: 2026-07-16 by M8-LINT-TASK (DIRECTED TASK on
+`wip/devhub-background-runner` — introduces a REAL monorepo lint task, killing
+the zero-task `turbo run lint` no-op: `turbo.json` had a `"lint": {}` task but
+no package defined a `lint` script, so every prior `pnpm lint` "pass" was
+`WARNING No tasks were executed as part of this run` — 0 tasks is not evidence
+of a clean tree, it's evidence the check never ran). Added `oxlint@1.74.0` as a
+root devDependency (single Rust binary, no eslint plugin sprawl — the
+lightweight choice) plus a root `.oxlintrc.json` (auto-discovered from any
+workspace subdir) that runs oxlint's real default rule set (eslint-compat
+correctness + `unicorn` + `oxc` plugins) and baselines exactly 3 rules with an
+inline rationale: `no-control-regex` (DevHub's Claude/Codex provider adapters
+genuinely parse terminal/ANSI control bytes — matching control chars in a
+regex IS the job, ~20 sites), and `unicorn/no-useless-spread`/`no-new-array`
+(style-only micro-perf nits, zero behavior difference — the unambiguous subset
+`oxlint --fix` could safely rewrite was fixed in this same commit, proving the
+rule works; the rest stay baselined rather than touching ~20 more call sites
+for a lint-infra task). Added a real `"lint": "oxlint src"` script to
+`@devhub/engine`, `@devhub/server`, `@devhub/web`, and `@devhub/tui` (the 4
+packages named in the task's DoD; `@devhub/desktop` is a Tauri/Rust shell with
+no `src/**/*.ts` of its own, same as it already has no `test` script). Fixed
+every REAL issue oxlint surfaced instead of silently baselining it: 4
+unnecessary `[...iterable]`-before-`Promise.all` spreads (`--fix`, reviewed);
+~25 genuinely dead imports/vars/functions (dead `parseYmd` helper, two dead
+validation constants in `provider-index.ts`'s route, a dead test `count()`
+helper, an unused sort-comparator param renamed `_b`, a `base` param in
+`config/index.ts`'s `listMdRecursive` that was only ever threaded through
+recursive calls and never read); one intentionally-constant test expression
+(`false && "b"`, proving `cn()` drops falsy classes) got a single-line
+disable-with-reason, a real false positive not a real bug. The one substantial
+removal: `apps/web/src/App.tsx` had a ~185-line `useMemo` building the OLD,
+permanently-unmounted `CommandPalette`'s action list (fully superseded by
+`DEFAULT_COMMANDS`/`CommandDialog` — the file already documented that
+`CommandPalette` "stays unmounted... even before M6"). Deleted the dead block
+plus its 4 feeder callbacks (`runReindex`, `checkIndexHealth`,
+`downloadArchive`, `effectiveModel`) and ~13 icon/type imports that existed
+only to feed it, after verifying each had zero other call site — the
+equivalent real features (reindex, index health, archive export) have their
+own live UI in Settings' `RebuildIndex`/`IntegrityPanel`/`ArchiveTransfer`
+panels, so no user-facing behavior changed. `pnpm lint` now runs 92 real rules
+across 394 files (129 engine + 50 server + 208 web + 7 tui) and exits 0 for a
+real reason. Full gate: `pnpm typecheck` 5/5 packages clean; engine 81
+files/2236 tests green (one `writer-lease.test.ts` timing test flaked once
+under full-suite parallel load, reproduced green in isolation and in a clean
+full-suite rerun — untouched by this task's diff, not a regression); server
+16/269 green; web 44/586 green; tui has no test script (pre-existing).
+Evidence (before/after lint output, full rationale) at `evidence/m8/lint.md`.
+Landed on `wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M8-NAMING (DIRECTED TASK on
 `wip/devhub-background-runner` — DevHub in-app branding/naming pass; folder/repo
 rename stays deferred per the settled decision). Made the user-facing product
 name "DevHub" everywhere it renders, without touching the `claude-ui` folder/repo

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bot, Cpu, MessageSquarePlus } from "lucide-react";
-import { api, codexApi, NotImplementedError } from "../lib/api";
+import { api, codexApi } from "../lib/api";
 import type { SessionSummary } from "../lib/types";
 import type { CodexSession, CodexStats } from "../lib/types";
 import { Spinner } from "./ui";
