@@ -247,6 +247,25 @@ export function resolveChatHostMode(
     : "legacy";
 }
 
+/**
+ * M7-WORKMODE-CUTOVER: the Work-mode surface mounts only for a server-resolved
+ * true `workMode` flag AND an active project with a real `cwd` (the folder
+ * scope Work mode needs to create/fetch its task against) — the exact same AND
+ * gate every other cutover flag uses, extracted so the cutover default flip
+ * (`workMode: false -> true`) is covered by a pure, App-level test independent
+ * of any DOM render. Flipping the default never bypasses this: without a real
+ * project, the surface still never mounts, and once mounted, `WorkModePanel`'s
+ * own no-fabrication gate (renders nothing without a real backing task) is the
+ * second, independent line of defense.
+ */
+export function shouldMountWorkModeSurface(
+  settings: AppSettings | null,
+  project: { cwd?: string | null } | null,
+): boolean {
+  return settings?.devHubFeatures?.workMode === true &&
+    typeof project?.cwd === "string" && project.cwd.length > 0;
+}
+
 /** Only the most recently issued settings request may change shell state. */
 export function isLatestSettingsResponse(
   requestVersion: number,
@@ -2198,7 +2217,7 @@ export default function App() {
           mode, never "Cowork" — see concepts/07-work-mode-corrected.png. Flag-off
           (default) OR no active project renders nothing; the server independently
           re-checks `workMode` on every request this surface issues. */}
-      {settings?.devHubFeatures?.workMode === true && project?.cwd ? (
+      {shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
         <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[420px] max-w-[calc(100vw-2rem)]">
           <div className="pointer-events-auto">
             <WorkModeSurface

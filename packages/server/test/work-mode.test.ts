@@ -44,6 +44,9 @@ const CREATE_BODY = {
 describe("work-mode routes", () => {
   it("GET /api/work-mode/status always answers, reflecting the real stored flag", async () => {
     const { app, engine } = makeApp();
+    // M7-WORKMODE-CUTOVER flipped the requested default to true, so explicitly
+    // store the off value here to exercise the flag-off branch.
+    engine.setSettings({ devHubFeatures: { workMode: false } as never });
     const off = await app.inject({ method: "GET", url: "/api/work-mode/status" });
     expect(off.statusCode).toBe(200);
     expect(off.json()).toEqual({ enabled: false });
@@ -54,7 +57,10 @@ describe("work-mode routes", () => {
   });
 
   it("rejects every mutating/reading route with 403 when the flag is off, even with a valid body", async () => {
-    const { app } = makeApp();
+    const { app, engine } = makeApp();
+    // M7-WORKMODE-CUTOVER flipped the requested default to true, so explicitly
+    // store the off value here to exercise the flag-off rejection branch.
+    engine.setSettings({ devHubFeatures: { workMode: false } as never });
     const create = await app.inject({ method: "POST", url: "/api/work-mode/tasks", payload: CREATE_BODY });
     expect(create.statusCode).toBe(403);
     expect(create.json()).toEqual({ error: "work_mode_disabled" });
@@ -64,7 +70,11 @@ describe("work-mode routes", () => {
   });
 
   it("never trusts a client-supplied flag value in the body — the real (off) flag still wins", async () => {
-    const { app } = makeApp();
+    const { app, engine } = makeApp();
+    // M7-WORKMODE-CUTOVER flipped the requested default to true, so explicitly
+    // store the off value here — the point of this test is the real stored flag
+    // (off) beating a client-smuggled `workMode: true` in the body.
+    engine.setSettings({ devHubFeatures: { workMode: false } as never });
     const create = await app.inject({
       method: "POST",
       url: "/api/work-mode/tasks",

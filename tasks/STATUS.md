@@ -3,7 +3,46 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-WORKMODE-PERSIST (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-WORKMODE-CUTOVER (DIRECTED TASK on
+`wip/devhub-background-runner` — cuts `workMode` default-on now that
+M7-WORKMODE-PERSIST landed the durable store). `DEFAULT_DEVHUB_FEATURE_FLAGS.workMode`
+flips `false -> true` in `packages/engine/src/providers/feature-flags.ts` (same
+pattern as every prior M3-M7 cutover: requested-default flip, server still clamps to
+real availability). `packages/server/src/app.ts`'s `availableDevHubFeatures`/
+`appliedDevHubFeatures` both add `workMode: engine.index?.workModeTasks !==
+undefined` — available/applied ONLY when the real, durable `WorkModeTaskStore`
+exists on the engine's index (a real `Engine` always has it; a partial/mocked
+`Engine` without `.index` — same tolerance the provider index already uses —
+reports the feature unavailable/unapplied instead of falsely claiming durable
+persistence). `packages/engine/test/providers/feature-flags.test.ts` updated to
+expect `workMode: true` in the defaults; `packages/engine/test/providers/work-mode.test.ts`'s
+one default-value assertion updated to expect `true` (its flag-off REJECTION
+assertions are untouched — they still prove an explicit stored `false` rejects
+every entry point regardless of default). New
+`packages/server/test/m7-workmode-cutover.test.ts` (4 tests, real `buildApp`
+wiring, mirrors `m7-fork-cutover.test.ts`'s pattern): default resolves true with a
+real Engine, `/api/work-mode/status` reflects it, an explicit stored `false`
+instantly rolls back workMode alone (codexStyleShell/unifiedTaskIndex untouched),
+and a partial Engine lacking a real `.index` clamps to false. Three pre-existing
+`packages/server/test/work-mode.test.ts` cases that implicitly relied on the OLD
+`workMode: false` default now explicitly `engine.setSettings({ devHubFeatures: {
+workMode: false } })` before asserting the flag-off branch — behavior unchanged,
+only the now-necessary explicit setup added. Added a new `shouldMountWorkModeSurface`
+pure export to `apps/web/src/App.tsx` (extracted from the inline JSX gate at the
+one `WorkModeSurface` mount site — same logic, same AND of resolved flag + real
+`project.cwd`) and a new `apps/web/src/App.workmode-cutover.test.ts`: proves the
+mount gate stays false without a real project even with the now-default-true
+flag, AND — using the exact props `App.tsx` passes at its one mount site — that
+`WorkModeSurface`/`WorkModePanel`'s independent no-fabrication gate (renders
+NOTHING without a real backing task from the server) survives the default flip
+unchanged. Full engine suite: 81 files / 2236 tests green (one pre-existing,
+unrelated flake in the config-watcher test — passes in isolation, confirmed not
+caused by this change); `tsc --noEmit` clean. Full server suite: 16 files / 269
+tests green (was 15/266, +1 file / +3 tests); `tsc --noEmit` clean. Full web
+suite: 40 files / 568 tests green (was 39/565, +1 file / +3 tests); `tsc --noEmit`
+clean; `vite build` clean. Landed on `wip/devhub-background-runner` only, per
+task instructions — NOT `origin/main`.
+PRIOR: M7-WORKMODE-PERSIST (DIRECTED TASK on
 `wip/devhub-background-runner` — replaces Work mode's closure-scoped in-memory
 `Map` with a real restart-durable store. New
 `packages/engine/src/work-mode-store.ts` (`WorkModeTaskStore`) mirrors the other

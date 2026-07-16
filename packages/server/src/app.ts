@@ -358,6 +358,12 @@ export function buildApp(opts: BuildOptions = {}): {
       codexStyleShell: true,
       // M7 fork cutover: honest availability — a fork target must actually exist.
       crossProviderFork: hasCrossProviderForkTarget,
+      // M7-WORKMODE-CUTOVER: available only when the real, durable Work-mode
+      // store exists (`engine.index?.workModeTasks`) — a partial/mocked Engine
+      // in a hermetic test without it (routes fall back to the ephemeral
+      // in-memory map in work-mode.ts) reports the feature unavailable rather
+      // than falsely claiming durable persistence.
+      workMode: engine.index?.workModeTasks !== undefined,
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
@@ -383,6 +389,11 @@ export function buildApp(opts: BuildOptions = {}): {
       // persistentClaude/unifiedTaskIndex); applied truth mirrors the same honest
       // discovered-target availability check.
       crossProviderFork: hasCrossProviderForkTarget,
+      // M7-WORKMODE-CUTOVER: applied truth mirrors availability — no separate
+      // async activation step exists for Work mode; the durable store either
+      // exists on this Engine (a real one always has it) or it doesn't (the
+      // ephemeral fallback, hermetic-test-only).
+      workMode: engine.index?.workModeTasks !== undefined,
     }),
     onDevHubFeaturesChanged: (features) => {
       syncProviderTaskIndex(features.unifiedTaskIndex === true);

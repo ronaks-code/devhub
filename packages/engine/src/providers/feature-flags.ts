@@ -130,7 +130,17 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // rather than exposing a fork into nothing. An explicit stored `false` is still
   // the immediate, non-destructive rollback.
   crossProviderFork: true,
-  workMode: false,
+  // M7 workMode cutover: the durable Work-mode store (M7-WORKMODE-PERSIST,
+  // `WorkModeTaskStore` in `work-mode-store.ts`) landed and every route already
+  // re-checks this exact flag itself before touching real data, so workMode is
+  // now the requested default. The server still clamps available/applied to a
+  // real, initialized durable store (`engine.index?.workModeTasks !==
+  // undefined`) — a partial/mocked Engine without it reports the feature
+  // unavailable/unapplied, and an explicit stored `workMode: false` is still the
+  // immediate, non-destructive rollback. `WorkModePanel`'s own no-fabrication
+  // gate (renders nothing without a real backing task) is unchanged and
+  // independent of this flag's default.
+  workMode: true,
 });
 
 export function defineDevHubFeatureFlags(

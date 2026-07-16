@@ -67,10 +67,14 @@ describe("work-mode: flag-off rejection at every entry point", () => {
     ).toThrow(WorkModeDisabledError);
   });
 
-  it("the default flag value stays false", () => {
+  it("the default flag value is now true after M7-WORKMODE-CUTOVER, but an explicit stored false still rejects", () => {
+    // M7-WORKMODE-CUTOVER flipped the REQUESTED default to true (the durable
+    // Work-mode store landed), but every entry point here still re-checks the
+    // resolved flag itself — an explicit stored `workMode: false` is still the
+    // immediate, non-destructive rollback, regardless of the default.
     const defaults = defineDevHubFeatureFlags();
-    expect(defaults.workMode).toBe(false);
-    expect(() => createWorkModeTask(defaults, baseInput())).toThrow(WorkModeDisabledError);
+    expect(defaults.workMode).toBe(true);
+    expect(() => createWorkModeTask(disabledFlags, baseInput())).toThrow(WorkModeDisabledError);
   });
 });
 
