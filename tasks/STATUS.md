@@ -3,7 +3,12 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by DEVHUB-A11Y-NESTED-INTERACTIVE (closed the
+Last updated: 2026-07-16 by DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV (closed
+the `--text-dim`/`--text-muted` zinc-500 color-contrast follow-up logged in
+`evidence/m8/a11y/a11y.md`'s "found and NOT fixed" table). See that section
+below for detail.
+
+Previously, 2026-07-16 by DEVHUB-A11Y-NESTED-INTERACTIVE (closed the
 `nested-interactive` follow-up logged in `evidence/m8/a11y/a11y.md`'s
 M8-PERF-A11Y audit). `SessionsPane` (`apps/web/src/components/SessionsPane.tsx`)
 switched from the `listbox`/`option` ARIA pattern to `grid`/`row`/`gridcell`:
@@ -1314,6 +1319,48 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
   engine/server/web typecheck clean, `apps/web` `vite build` clean, `oxlint
   src` exit 0 with no findings. Existing `ThreadWorkspace.test.ts` suite (28
   pre-existing tests) unchanged and still green.
+- HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised.
+
+## DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV (2026-07-16)
+- CLOSED the `color-contrast` follow-up logged in `evidence/m8/a11y/a11y.md`'s
+  "found and NOT fixed" table: Tailwind's `text-zinc-500` (`#71717a`/
+  `#71717b` — the "text-dim" shade) on the M6 secondary-nav / tab-strip
+  controls measured **3.67:1 against `--panel`/`bg-zinc-900` (#18181b)** and
+  **4.12:1 against `--bg`/`bg-zinc-950` (#09090b)** — both below WCAG AA's
+  4.5:1 floor for normal text. Two spots: `App.tsx`'s `TopBar` (the "Primary
+  views" nav + search/command/perf/shortcuts/settings icon buttons, mounted
+  on every route) and the Ops-view `board`/`grid` `role="tab"` toggle.
+- FIX — swapped `text-zinc-500` for `text-zinc-400` (`#a1a1aa`, already the
+  app's `--text-muted` token; the palette's next step up) at both spots: 6
+  occurrences in `TopBar` (incl. the `TOP_BAR_SECONDARY_CLASS` constant) and
+  1 in the Ops board/grid toggle. **After**: `text-zinc-400` measures
+  **6.93:1 against `--panel`** and **7.78:1 against `--bg`** — both well
+  clear of 4.5:1. Smallest available visual diff: one Tailwind zinc step,
+  reusing an already-vetted design token rather than inventing a new hex.
+- NEW test `apps/web/src/lib/contrast-tokens.test.ts` (`top-bar tab-strip
+  text color vs. --panel/--bg` describe block): pins zinc-500 failing and
+  zinc-400 passing against the real `--panel`/`--bg` tokens read from
+  `index.css`, so a future edit can't silently reintroduce the failing
+  shade.
+- RE-RAN axe-core (real `axe-core@4.10.2`, same isolated-scratch-server +
+  `vite build` + static/proxy shim method as `evidence/m8/a11y/a11y.md`,
+  ports 8891/8892, torn down after capture) with `data-theme` forced
+  `"dark"` on Browse, Ops, and Chat: **0 `color-contrast` violations for the
+  zinc-500/`--panel`/`--bg` tab-strip pair on all three surfaces** (confirmed
+  the Ops `role="tab"` node specifically disappeared after the fix). Other,
+  UNRELATED `color-contrast` nodes remain on all three surfaces (an
+  `<h2 class="...uppercase...text-zinc-500">` sidebar section heading, and
+  zinc-600 empty-state copy) — different component/token, out of this
+  task's scope, not touched.
+- Spot-checked a screenshot of the Ops tab-strip + top bar post-fix: text
+  reads slightly lighter but otherwise visually unchanged, no layout/spacing
+  regression.
+- GATES GREEN — `turbo run typecheck test --filter=@devhub/engine
+  --filter=@devhub/server --filter=@devhub/web --force`: engine **2230/2230**
+  (80 files), server **270/270** (16 files), web **597/597** (45 files, +3
+  new contrast-token tests); typecheck clean on all three. `vite build`
+  clean. `oxlint src` exit 0.
 - HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
   exercised.
 

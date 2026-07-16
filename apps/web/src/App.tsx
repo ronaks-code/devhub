@@ -292,8 +292,14 @@ export function nativeLoadFailureMessage(provider: NativePaneProvider): string {
 }
 
 /** Secondary utilities yield at the minimum desktop width so primary navigation stays bounded. */
+// DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV: zinc-500 (#71717a) on the
+// zinc-900/zinc-950 top-bar surfaces measures ~3.7:1/~4.1:1 — below WCAG AA's
+// 4.5:1 for normal text (see apps/web/src/lib/contrast-tokens.test.ts). Bumped
+// to zinc-400 (#a1a1aa, the palette's next step up, already the app's
+// `--text-muted` token) which clears 4.5:1 on both surfaces with the
+// smallest available visual diff.
 export const TOP_BAR_SECONDARY_CLASS =
-  "ml-auto hidden items-center gap-3 text-[11px] text-zinc-500 lg:flex";
+  "ml-auto hidden items-center gap-3 text-[11px] text-zinc-400 lg:flex";
 
 /**
  * A small "Recent" jump-back dropdown in the header: the last sessions the user
@@ -570,7 +576,7 @@ function TopBar({
               "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
               tab === t
                 ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-                : "text-zinc-500 hover:text-zinc-300",
+                : "text-zinc-400 hover:text-zinc-300",
             )}
           >
             {t}
@@ -580,7 +586,7 @@ function TopBar({
 
       <button
         onClick={onOpenSearch}
-        className="ml-2 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+        className="ml-2 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
         title="Search sessions (⌘K)"
       >
         <Search className="h-3.5 w-3.5" />
@@ -590,7 +596,7 @@ function TopBar({
 
       <button
         onClick={onOpenCommands}
-        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-500 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
         title="Command palette (⌘⇧P)"
         aria-label="Command palette (⌘⇧P)"
       >
@@ -607,7 +613,7 @@ function TopBar({
             "inline-flex items-center gap-1.5 rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
             perfReduced
               ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-500 hover:text-zinc-300",
+              : "text-zinc-400 hover:text-zinc-300",
           )}
           title={PERF_META[perfPreference].title}
           aria-label={PERF_META[perfPreference].label}
@@ -625,7 +631,7 @@ function TopBar({
         {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
         <button
           onClick={onOpenShortcuts}
-          className="rounded-md p-1 text-zinc-500 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+          className="rounded-md p-1 text-zinc-400 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
           title="Keyboard shortcuts (?)"
           aria-label="Keyboard shortcuts"
         >
@@ -659,7 +665,7 @@ function TopBar({
             "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
             tab === "settings"
               ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-500 hover:text-zinc-300",
+              : "text-zinc-400 hover:text-zinc-300",
           )}
           title="Settings"
           aria-label="Settings"
@@ -1750,7 +1756,9 @@ export default function App() {
                       "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
                       opsMode === m
                         ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-                        : "text-zinc-500 hover:text-zinc-300",
+                        // DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV: zinc-500 measured
+                        // 3.67:1 against this tab-strip's zinc-900 pill — below AA.
+                        : "text-zinc-400 hover:text-zinc-300",
                     )}
                     title={
                       m === "grid"
