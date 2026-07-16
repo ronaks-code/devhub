@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -335,4 +337,71 @@ describe("ThreadWorkspace — live interaction (mounted DOM)", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(onSend).toHaveBeenCalledTimes(1);
   });
+});
+
+// --- Narrow/768 + 1024 viewport — no horizontal overflow (M6-NARROW-VIEWPORT) ------
+//
+// Prior evidence (`tasks/STATUS.md` M6-SLICE-EVIDENCE) showed a 768 screenshot
+// overflowing, but traced that live to the DEMO FIXTURE's own harness wrapper —
+// `evidence/m6/thread/fixture-*.html` inlines `.dh-canvas-frame{width:900px}`, a
+// selector that exists ONLY in that fixture's own `<style>`, never in the shipped
+// `apps/web/src/index.css`. This suite mounts the REAL `ThreadWorkspace` (no
+// fixture wrapper at all) with the real stylesheet and proves its own geometry can
+// never force horizontal overflow at either breakpoint.
+describe("ThreadWorkspace — narrow (768) + 1024 viewport: no horizontal overflow", () => {
+  const realCss = readFileSync(path.resolve(__dirname, "../../../index.css"), "utf8");
+
+  it("the fixture-only overflow selectors are absent from the shipped stylesheet", () => {
+    // `.dh-canvas-frame` (900px) is the demo harness's own wrapper, never part of
+    // the product. If this selector ever leaked into index.css, the shipped shell
+    // would inherit its fixed-px overflow — this pins that it never does.
+    expect(realCss).not.toContain(".dh-canvas-frame");
+    // Bare `.frame` (696-820px in various fixtures) is likewise fixture-only.
+    expect(realCss).not.toMatch(/(^|[^-\w])\.frame\s*\{/);
+  });
+
+  it("every geometry constant the real component renders with is narrower than 768 (and so also 1024)", () => {
+    // These are the ONLY fixed pixel widths ThreadWorkspace's own markup ever
+    // carries (as `max-width`, never `width` — see below), transcribed from
+    // `reference-capture-manifest.md`. All three sit comfortably under 768, so
+    // neither breakpoint can ever be forced to overflow by the component's own
+    // intrinsic geometry.
+    expect(THREAD_GEOMETRY.transcriptWidth).toBeLessThan(768);
+    expect(THREAD_GEOMETRY.composerWidth).toBeLessThan(768);
+    expect(THREAD_GEOMETRY.userBubbleMax).toBeLessThan(768);
+  });
+
+  for (const viewport of [768, 1024] as const) {
+    it(`mounted at ${viewport}px: the transcript and composer are fluid (width:100%), capped by max-width only`, () => {
+      const style = document.createElement("style");
+      style.textContent = realCss;
+      document.head.appendChild(style);
+      const container = document.createElement("div");
+      container.style.width = `${viewport}px`;
+      document.body.appendChild(container);
+
+      try {
+        rtlRender(createElement(ThreadWorkspace, { items: richItems }), { container });
+        const workspace = container.querySelector(".dh-thread-workspace")!;
+        const transcript = container.querySelector(".dh-thread-transcript")!;
+        const composer = container.querySelector(".dh-thread-composer")!;
+        expect(workspace).toBeTruthy();
+
+        // Fluid width — the real component NEVER declares a fixed `width: <px>`
+        // that could exceed the viewport; it fills its ancestor and is only
+        // ever CAPPED (via `max-width`), which can only shrink, never overflow.
+        expect(getComputedStyle(transcript).width).toBe("100%");
+        expect(getComputedStyle(transcript).maxWidth).toBe("var(--dh-transcript-width)");
+        expect(getComputedStyle(composer).width).toBe("100%");
+        expect(getComputedStyle(composer).maxWidth).toBe("var(--dh-composer-width)");
+
+        // The demo-fixture wrapper classes are never present on the real tree.
+        expect(container.querySelector(".dh-canvas-frame")).toBeNull();
+        expect(container.querySelector(".frame")).toBeNull();
+      } finally {
+        document.head.removeChild(style);
+        document.body.removeChild(container);
+      }
+    });
+  }
 });

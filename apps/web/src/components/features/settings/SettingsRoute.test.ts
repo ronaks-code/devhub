@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { createElement } from "react";
 import { render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -335,4 +337,80 @@ describe("SettingsRoute — live interaction (mounted DOM)", () => {
     await user.type(hostInput, "https://my-machine:5179");
     expect(hostInput).toHaveValue("https://my-machine:5179");
   });
+});
+
+// --- Narrow/768 + 1024 viewport — no horizontal overflow (M6-NARROW-VIEWPORT) ------
+//
+// Prior evidence (`tasks/STATUS.md` M6-SLICE-EVIDENCE) showed a 768 screenshot
+// overflowing, but traced that live to the DEMO FIXTURE's own harness wrapper —
+// `evidence/m6/settings-secondary/fixture.html` inlines `.frame{width:820px}`, a
+// selector that exists ONLY in that fixture's own `<style>`, never in the shipped
+// `apps/web/src/index.css`. This suite mounts the REAL `SettingsRoute` (no
+// fixture wrapper) with the real stylesheet and proves its own geometry can never
+// force horizontal overflow at either breakpoint — Task 8's DoD explicitly names
+// "no horizontal overflow" at narrow as an acceptance line.
+describe("SettingsRoute — narrow (768) + 1024 viewport: no horizontal overflow", () => {
+  const realCss = readFileSync(path.resolve(__dirname, "../../../index.css"), "utf8");
+
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network disabled in this DOM viewport test")),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("the fixture-only overflow selectors are absent from the shipped stylesheet", () => {
+    // Bare `.frame` (696-820px across the M6 evidence fixtures) is the demo
+    // harness's own wrapper, never part of the product. If it ever leaked into
+    // index.css, the shipped route would inherit its fixed-px overflow.
+    expect(realCss).not.toMatch(/(^|[^-\w])\.frame\s*\{/);
+    expect(realCss).not.toContain(".dh-canvas-frame");
+  });
+
+  it("the real route's own max-width (720px) sits under both breakpoints", () => {
+    const match = realCss.match(/\.dh-settings-route\s*\{[^}]*max-width:\s*(\d+)px/);
+    expect(match).not.toBeNull();
+    const maxWidth = Number(match![1]);
+    expect(maxWidth).toBeLessThan(768);
+  });
+
+  for (const viewport of [768, 1024] as const) {
+    it(`mounted at ${viewport}px: the real route has no fixed-px width wider than the viewport and no fixture wrapper`, () => {
+      const style = document.createElement("style");
+      style.textContent = realCss;
+      document.head.appendChild(style);
+      const container = document.createElement("div");
+      container.style.width = `${viewport}px`;
+      document.body.appendChild(container);
+
+      try {
+        rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }), { container });
+        const route = container.querySelector(".dh-settings-route")!;
+        expect(route).toBeTruthy();
+
+        // No `width: <px>` anywhere on the real route root or its direct
+        // children exceeds the viewport — it is either unset (auto/fluid) or
+        // capped via `max-width`, which can only shrink, never overflow.
+        const candidates = [route, ...Array.from(route.children)];
+        for (const el of candidates) {
+          const cs = getComputedStyle(el);
+          const widthPx = /^(\d+(?:\.\d+)?)px$/.exec(cs.width);
+          if (widthPx) {
+            expect(Number(widthPx[1])).toBeLessThanOrEqual(viewport);
+          }
+        }
+
+        // The demo-fixture wrapper classes are never present on the real tree.
+        expect(container.querySelector(".dh-canvas-frame")).toBeNull();
+        expect(container.querySelector(".frame")).toBeNull();
+      } finally {
+        document.head.removeChild(style);
+        document.body.removeChild(container);
+      }
+    });
+  }
 });

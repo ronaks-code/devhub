@@ -3,7 +3,33 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M6-INTERACTION-TESTS (DIRECTED TASK on
+Last updated: 2026-07-16 by M6-NARROW-VIEWPORT (DIRECTED TASK on
+`wip/devhub-background-runner` — closed the narrow/768+1024 viewport-coverage gap the
+M6-SLICE-EVIDENCE audit flagged for `ThreadWorkspace` (Task 4) and `SettingsRoute` (Task
+8): that audit traced the 768 screenshot overflow to the DEMO FIXTURE's own harness
+wrapper (`.dh-canvas-frame{width:900px}` in `evidence/m6/thread/fixture-*.html`,
+`.frame{width:820px}` in `evidence/m6/settings-secondary/fixture.html`) and explicitly
+called out Task 8's DoD line naming "no horizontal overflow" at narrow as unverified.
+Added a `narrow (768) + 1024 viewport: no horizontal overflow` describe block to each
+component's existing test file — mounts the REAL component (RTL `render`, no fixture
+wrapper) with the REAL `apps/web/src/index.css` injected via a `<style>` tag into
+`document.head`, inside a container sized to exactly 768px/1024px, then asserts via
+`getComputedStyle` that every geometry-bearing element is fluid (`width: 100%`/auto)
+and only ever CAPPED by `max-width` (ThreadWorkspace's transcript/composer via
+`var(--dh-transcript-width)`/`var(--dh-composer-width)`, both 736px per `THREAD_GEOMETRY`;
+SettingsRoute's route root via a literal `720px`) — a cap can only shrink, never force
+overflow, at either breakpoint (both constants sit under 768). Each file also asserts
+directly against the real stylesheet source that the fixture-only selectors
+(`.dh-canvas-frame`, bare `.frame`) are ABSENT from `index.css` — they exist only inside
+the evidence fixtures' own inlined `<style>` blocks — which is the actual proof that the
+prior overflow observation came from the demo harness, not the shipped component.
+SettingsRoute's viewport tests reuse the existing `fetch`/`EventSource` stubs (the
+preserved `RebuildIndex`/`IntegrityPanel`/`ArchiveTransfer` maintenance widgets mount
+unconditionally in the preferences tab and already catch network failures internally).
+Zero source/behavior changes — diff is tests-only in `ThreadWorkspace.test.ts` (+4 tests)
+and `SettingsRoute.test.ts` (+4 tests); no component, CSS, or flag touched. Full web
+suite: 35 files / 543 tests green (was 535); `tsc --noEmit` clean.
+PRIOR: M6-INTERACTION-TESTS (DIRECTED TASK on
 `wip/devhub-background-runner` — closed the M6 live-DOM interaction-test debt for
 slices 3-9: `TaskHeader`/`TaskSetup`/`ThreadWorkspace`/`Composer`/`InspectorDock`/
 `TaskSearchDialog`/`CommandDialog`/`SettingsRoute`/`SecondaryNav` were previously
