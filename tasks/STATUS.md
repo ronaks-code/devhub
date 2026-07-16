@@ -766,6 +766,56 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - HELD (unchanged) — `origin/main` merge and the production default-on promotion/live M1
   cutover remain [RONAK-GATE] human actions. Lands on `wip/devhub-background-runner` only.
 
+## M8-PRESERVATION-MATRIX (2026-07-16)
+- VERIFICATION TASK, no flag defaults changed — every M3-M7 flag (`nativeCodex`,
+  `persistentClaude`, `unifiedTaskIndex`, all 8 M6 slices + `codexStyleShell`,
+  `crossProviderFork`, `workMode`) was already default `true` from the prior
+  cutover tasks recorded above; this task proves that state, per the M0
+  `surface-inventory.md` route/surface contract, is still fully preserved.
+- FULL SUITES GREEN at the exact wip tip with every flag at its new default:
+  engine 2236/2236 (81 files), server 269/269 (16 files), web 579/579 (41 files,
+  +11 new). `turbo run typecheck --force` PASS on all three. `vite build` PASS.
+  TUI (`apps/tui`, no vitest suite): `pnpm --filter @devhub/tui run smoke`
+  (ink-testing-library first-frame render against a real read-only Engine, no
+  crash) + `tsc --noEmit` PASS — the TUI's own equivalent to a test suite.
+- NEW AUTOMATED PRESERVATION TEST — `apps/web/src/App.preservation-routes.test.ts`
+  (11/11): a cheap source-static guard (no full `<App/>` DOM mount — that would
+  need the whole fetch/WebSocket surface mocked from scratch, judged NOT cheap)
+  that asserts `ROUTE_TABS` (the router's URL contract) still has exactly the 9
+  `RT-01`..`RT-09` surface-inventory route values, that `App.tsx`'s tab switch
+  still has a literal `tab === "<value>"` mount branch for each of the 8 explicit
+  ones, that the 9th (`chat`) implicit else-branch dispatch is still present, and
+  that `App.tsx`'s own `Tab` union type has not drifted from `ROUTE_TABS`.
+- FRESH ISOLATED-SCRATCH BROWSER QA — real `buildApp`/`tsx src/index.ts` +
+  real `vite build` bundle, `HOME`/`CLAUDE_CONFIG_DIR`/`DEVHUB_DATA` all under a
+  `mktemp -d` scratch dir (real `~/.claude/projects`/`~/.codex` never scanned),
+  one tiny synthetic PROVISIONAL Claude session. Rolled `nativeCodex` back to its
+  explicit-false non-destructive rollback for the duration of this read-only walk
+  (a real Codex CLI on this machine's `PATH` resolved it true on discovery;
+  navigation-only QA has no reason to risk a live process). Captured Home,
+  Browse (+session), Search (empty + query + 1 result), Dashboard, Settings,
+  Inbox, Ops, the `codex-history` degraded fallback, the `openai-chat` quarantine
+  (exact required title + warning copy verbatim), and a 768px narrow Home — 0 new
+  console errors across the whole walkthrough (the only entry throughout is one
+  benign `/api/work-mode/tasks/...` 404, which is the M7 `WorkModeSurface`'s own
+  documented no-fabrication contract working as designed against a task-less
+  synthetic project, not a defect). `WorkModeSurface` (M7) is visible live on
+  Home/Browse/narrow-Home with honest `0/0` outcome. `crossProviderFork` (M7)
+  correctly resolves `false` in this single-provider scratch environment (proven
+  live via an in-page `fetch('/api/settings')`, matching the existing
+  `m7-fork-cutover.test.ts` 4/4 zero/one/two-home matrix) — not re-created with a
+  second fake provider home, since that would simulate a runtime rather than
+  prove the real gating contract. Screenshots + full route/surface mapping table:
+  `evidence/m8/preservation-matrix.md`, `evidence/m8/qa-screenshots/`,
+  `evidence/m8/qa-live-settings.json`. All QA processes/scratch dirs killed and
+  removed after capture (`lsof -i :8792 -i :5193` empty).
+- CLEANLINESS — `git diff --check` clean; only 2 new paths added
+  (`apps/web/src/App.preservation-routes.test.ts`, `evidence/m8/`); the four
+  user-owned preservation paths (`.gitignore`, `AGENTS.md`, `ChatPane.tsx`,
+  `SlashPalette.tsx`) untouched.
+- HELD (unchanged) — `origin/main` merge and the first-party `com.openai.codex`
+  Computer-Use QA remain [RONAK-GATE]/hard-gate, not exercised.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
