@@ -946,10 +946,13 @@ html[data-reduce-motion="true"] {
   overflow-x: hidden;
 }
 
+/* Virtualized (@tanstack/react-virtual, the pattern legacy TranscriptPane.tsx
+ * uses): items are absolutely positioned within this relative container, sized
+ * to the virtualizer's measured total height. `list-style` stays reset;
+ * `padding-bottom` on the item (not a flex `gap`) supplies the inter-item
+ * spacing so it's included in each item's own measured/estimated size. */
 .dh-thread-items {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  position: relative;
   list-style: none;
   margin: 0;
   padding: var(--dh-shell-gutter) 0;
@@ -957,6 +960,7 @@ html[data-reduce-motion="true"] {
 
 .dh-thread-item {
   list-style: none;
+  padding-bottom: 16px;
 }
 
 /* Unframed assistant prose: no background, no border, no radius. */

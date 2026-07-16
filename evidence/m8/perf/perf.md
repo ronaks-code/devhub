@@ -124,3 +124,45 @@ dedicated follow-up task: **virtualize `ThreadWorkspace`'s message list**.
   number is still a real, reproducible, honestly-labeled measurement of what a
   user opening a link to a large session experiences).
 - Did not touch any hardware, real user data, or `origin/main`.
+
+## 4. Follow-up closed — `ThreadWorkspace` virtualized (2026-07-16, DEVHUB-PERF-VIRTUALIZE-THREADWORKSPACE)
+
+`ThreadWorkspace.tsx`'s `<ol>` now windows its message list through
+`@tanstack/react-virtual` (`apps/web/src/components/features/shell/ThreadWorkspace.tsx`)
+— the exact pattern legacy `TranscriptPane.tsx` already used, closing the gap logged
+in §3 above. Re-measured the same 600-message cold-render scenario with a fresh
+isolated scratch harness (new `mktemp -d`, fresh synthetic 600-line Claude-format
+transcript at `/synthetic/perf-virt-project`/`session-m8-perf-virt`, never real user
+data; real `tsx packages/server/src/index.ts` on an unused scratch port `8823`;
+the already-built `apps/web/dist` served + `/api`+`/ws`-proxied by a throwaway
+static+proxy shim on port `8824`, kept out of the repo, deleted after capture; both
+processes and the scratch dir torn down immediately after measuring — confirmed via
+`lsof -i:8823 -i:8824` returning nothing post-cleanup).
+
+Methodology: `playwright-cli goto` to
+`?tab=browse&project=<id>&session=session-m8-perf-virt` (fresh cold nav each rep,
+same as §3), then in-page `performance.now()` measuring from
+`performance.getEntriesByType("navigation")[0].startTime` until
+`document.querySelectorAll('[data-dh-thread-item]').length > 0` first goes positive
+(the old §3 metric — "time until `data-dh-thread-item` count reaches 600" — no
+longer applies: with virtualization the count never reaches 600, so "first items
+present" is the correct like-for-like "render is up" signal now).
+
+| Rep | Time to first windowed items rendered | Rendered `[data-dh-thread-item]` count |
+| --- | ---: | ---: |
+| 1 | 2,077 ms | 12 |
+| 2 | 1,671 ms | 12 |
+| 3 | 973 ms | 12 |
+
+**Result**: ~1-2s, down from the §3 baseline's ~11s — roughly a **6-11x**
+improvement, and the remaining time is now bundle/API-load dominated (matching the
+§1/§2 numbers for this same harness class), not render work. The rendered DOM node
+count for the full 600-message session stays at **12** (well under the DoD's <120
+bar, and under the M3/M4 evidence's own precedent of "17-29 nodes" for a smaller
+demo-fixture width) — confirmed directly via `document.querySelectorAll` in the
+real mounted app, not inferred. Scrolling the transcript (verified separately in
+`ThreadWorkspace.test.ts`'s new virtualization suite) brings later messages into the
+windowed set without ever mounting all 600 at once.
+
+**Scope**: did not re-run the initial-load/task-switch (§1/§2) measurements — those
+paths don't touch `ThreadWorkspace`'s message list and are unaffected by this change.

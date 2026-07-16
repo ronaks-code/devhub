@@ -2,10 +2,10 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createElement } from "react";
-import { render as rtlRender, screen } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   RAW_DIAGNOSTIC_MAX,
   THREAD_COPY,
@@ -404,4 +404,93 @@ describe("ThreadWorkspace — narrow (768) + 1024 viewport: no horizontal overfl
       }
     });
   }
+});
+
+// --- Virtualized message list (DEVHUB-PERF-VIRTUALIZE-THREADWORKSPACE) -----------
+//
+// M8-PERF-A11Y's evidence (`evidence/m8/perf/perf.md`) measured an ~11s cold render
+// for a 600-message synthetic fixture and traced it to `ThreadWorkspace`'s `<ol>`
+// materializing every message as a live DOM node via a plain `.map()` — unlike
+// legacy `TranscriptPane.tsx`, which windows via `@tanstack/react-virtual`. This
+// suite mounts the REAL component (no fixture wrapper) and proves the `<ol>` is
+// now windowed the same way.
+describe("ThreadWorkspace — virtualized message list", () => {
+  // jsdom performs no real layout: every element's `offsetWidth`/`offsetHeight` is
+  // permanently `0` (confirmed: this jsdom version has no `ResizeObserver` either,
+  // so `@tanstack/react-virtual`'s only synchronous fallback is these two
+  // properties). Left unmocked, the virtualizer would see a permanent zero-height
+  // viewport, which is not representative of a real mounted browser. Mock a
+  // realistic transcript viewport (800px) and a realistic per-item height (60px)
+  // scoped to just this suite so the windowing math below is deterministic.
+  let restoreHeight: (() => void) | null = null;
+  let restoreWidth: (() => void) | null = null;
+
+  beforeEach(() => {
+    const heightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight");
+    const widthDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth");
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        if (this.classList?.contains("dh-thread-transcript")) return 800;
+        if (this.hasAttribute?.("data-dh-thread-item")) return 60;
+        return 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return 736;
+      },
+    });
+    restoreHeight = () => {
+      if (heightDesc) Object.defineProperty(HTMLElement.prototype, "offsetHeight", heightDesc);
+    };
+    restoreWidth = () => {
+      if (widthDesc) Object.defineProperty(HTMLElement.prototype, "offsetWidth", widthDesc);
+    };
+  });
+
+  afterEach(() => {
+    restoreHeight?.();
+    restoreWidth?.();
+  });
+
+  function bigFixture(total: number): ThreadItem[] {
+    return Array.from({ length: total }, (_, i) => ({
+      id: `m${i}`,
+      kind: "assistant" as const,
+      content: `message #${i}`,
+    }));
+  }
+
+  it("renders only the visible+overscan window for a 600-message fixture, not all 600", () => {
+    rtlRender(createElement(ThreadWorkspace, { items: bigFixture(600) }));
+    const rendered = document.querySelectorAll("[data-dh-thread-item]");
+    // Windowed: some items render (the transcript isn't blank)...
+    expect(rendered.length).toBeGreaterThan(0);
+    // ...but well under the full 600, and comfortably under the DoD's <120 bar.
+    expect(rendered.length).toBeLessThan(120);
+    expect(rendered.length).toBeLessThan(600);
+    // The early messages (inside the initial viewport) are the ones present.
+    expect(screen.getByText("message #0")).toBeTruthy();
+    // A message far past the initial visible+overscan window is NOT rendered.
+    expect(screen.queryByText("message #590")).toBeNull();
+  });
+
+  it("scrolling the transcript reveals later messages that were not initially rendered", () => {
+    rtlRender(createElement(ThreadWorkspace, { items: bigFixture(600) }));
+    expect(screen.queryByText("message #599")).toBeNull();
+
+    const transcript = document.querySelector(".dh-thread-transcript") as HTMLElement;
+    expect(transcript).toBeTruthy();
+    // A scrollTop far past any possible total content height just clamps to the
+    // end of the list — landing on the very last message regardless of the exact
+    // (estimated-vs-measured) per-item size math.
+    fireEvent.scroll(transcript, { target: { scrollTop: Number.MAX_SAFE_INTEGER } });
+
+    // Scrolling to the end brings the last message into the windowed set, without
+    // ever mounting all 600 at once.
+    expect(screen.getByText("message #599")).toBeTruthy();
+    expect(document.querySelectorAll("[data-dh-thread-item]").length).toBeLessThan(120);
+  });
 });

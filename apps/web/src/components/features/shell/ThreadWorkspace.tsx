@@ -1,4 +1,5 @@
-import { type ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import {
   ActivityTimeline,
@@ -306,6 +307,13 @@ function ComposerSlot({
   );
 }
 
+/**
+ * Rough initial-guess size (px) for an unmeasured item, before the virtualizer's
+ * `measureElement` ref reports its real rendered height. Only affects the very
+ * first paint / SSR fallback — every mounted item is re-measured immediately.
+ */
+const ESTIMATED_ITEM_SIZE = 96;
+
 export function ThreadWorkspace({
   items,
   provider,
@@ -315,6 +323,21 @@ export function ThreadWorkspace({
   composerSlot,
 }: ThreadWorkspaceProps) {
   const isEmpty = items.length === 0;
+  // The native-scroll transcript container (`overflow-y: auto`, never a shadcn
+  // ScrollArea — invariant 8) doubles as the virtualizer's scroll element, exactly
+  // the pattern legacy `TranscriptPane.tsx` uses. `initialRect` gives the
+  // virtualizer a sane pre-measurement window (matters for `renderToStaticMarkup`
+  // and any pre-layout paint, where no ResizeObserver has reported a real rect
+  // yet) so a normal-size transcript still renders in full before the first real
+  // measurement lands.
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => transcriptRef.current,
+    estimateSize: () => ESTIMATED_ITEM_SIZE,
+    overscan: 10,
+    initialRect: { width: THREAD_GEOMETRY.transcriptWidth, height: 800 },
+  });
   // The single polite, coarse live region for the whole workspace. It reflects the
   // anchored streaming item's acknowledged elapsed label — never per-token, never a
   // fabricated estimate. Empty (but present) when nothing is streaming.
@@ -330,6 +353,7 @@ export function ThreadWorkspace({
     <div className="dh-thread-workspace" data-dh-thread-workspace="" data-dh-provider={provider}>
       {/* Transcript column at the measured 736 width. Native scroll — NOT ScrollArea. */}
       <div
+        ref={transcriptRef}
         className="dh-thread-transcript"
         data-dh-transcript=""
         data-dh-transcript-width={THREAD_GEOMETRY.transcriptWidth}
@@ -337,12 +361,37 @@ export function ThreadWorkspace({
         {/* Empty existing task: a blank canvas with ZERO children/SVG/hero. The region
             element exists (so layout holds) but renders no content. */}
         {isEmpty ? null : (
-          <ol role="list" className="dh-thread-items" data-dh-thread-items="">
-            {items.map((item) => (
-              <li key={item.id} role="listitem" className="dh-thread-item" data-dh-thread-item="">
-                <ThreadItemView item={item} />
-              </li>
-            ))}
+          <ol
+            role="list"
+            className="dh-thread-items"
+            data-dh-thread-items=""
+            style={{ position: "relative", height: virtualizer.getTotalSize() }}
+          >
+            {/* Windowed: only the visible slice (+ overscan) becomes a live DOM
+                node — a 600-message transcript renders well under 120 `<li>`s
+                instead of all 600 (the M8-PERF-A11Y cold-render regression). */}
+            {virtualizer.getVirtualItems().map((vi) => {
+              const item = items[vi.index]!;
+              return (
+                <li
+                  key={item.id}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  role="listitem"
+                  className="dh-thread-item"
+                  data-dh-thread-item=""
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vi.start}px)`,
+                  }}
+                >
+                  <ThreadItemView item={item} />
+                </li>
+              );
+            })}
           </ol>
         )}
       </div>

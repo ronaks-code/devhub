@@ -1239,6 +1239,44 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
   exercised. Apple code-signing/notarization remains a hard gate, not
   attempted; desktop build above is the unsigned artifact only.
 
+## DEVHUB-PERF-VIRTUALIZE-THREADWORKSPACE (2026-07-16)
+- CLOSED the M8-PERF-A11G follow-up logged in `evidence/m8/perf/perf.md` §3:
+  `ThreadWorkspace.tsx`'s `<ol>` now windows its message list via
+  `@tanstack/react-virtual` (already a dep), the exact pattern legacy
+  `TranscriptPane.tsx` already used — instead of a plain `.map()` over every
+  row. The scroll container (`.dh-thread-transcript`, still native
+  `overflow-y: auto`, never a shadcn `ScrollArea`) doubles as the virtualizer's
+  scroll element; items are absolutely positioned via `measureElement` +
+  `translateY`, with `initialRect: { width: 736, height: 800 }` so a normal-size
+  transcript still renders in full before the first real measurement lands
+  (matters for the file's own `renderToStaticMarkup`-based tests, which run
+  with no commit phase / no ResizeObserver). `.dh-thread-items`/`.dh-thread-item`
+  CSS swapped its flex `gap` for a per-item `padding-bottom` (included in each
+  item's own measured size) since absolute-positioned children can't use flex
+  gap.
+- VERIFIED with the 600-message synthetic fixture: `document.querySelectorAll
+  ('[data-dh-thread-item]').length` is **12** (well under the DoD's <120 bar,
+  and under 600), and scrolling the transcript to the end brings message #599
+  into the windowed set without ever mounting all 600 — both proven in two new
+  `ThreadWorkspace.test.ts` tests (jsdom has no `ResizeObserver` and does no
+  real layout, so the suite mocks `offsetHeight`/`offsetWidth` on
+  `HTMLElement.prototype`, scoped to just that describe block via
+  `beforeEach`/`afterEach`, to get deterministic windowing math instead of a
+  permanent zero-height viewport).
+- RE-MEASURED the M8-PERF-A11Y evidence/m8/perf harness's exact 600-message
+  cold-render scenario on a fresh isolated scratch server+shim (new `mktemp -d`,
+  fresh synthetic transcript, scratch ports `8823`/`8824`, torn down after
+  capture): **~1-2s** (973-2077ms across 3 reps), down from the prior **~11s**
+  baseline — a ~6-11x improvement, now bundle/API-load dominated rather than
+  render-dominated. Full writeup + methodology in `evidence/m8/perf/perf.md`
+  §4.
+- GATES GREEN — web **588/588** (was 586/586; +2 new virtualization tests),
+  engine/server/web typecheck clean, `apps/web` `vite build` clean, `oxlint
+  src` exit 0 with no findings. Existing `ThreadWorkspace.test.ts` suite (28
+  pre-existing tests) unchanged and still green.
+- HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
