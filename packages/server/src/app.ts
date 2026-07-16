@@ -232,6 +232,14 @@ export function buildApp(opts: BuildOptions = {}): {
       });
     }),
   );
+  // M7 fork cutover: crossProviderFork is honestly available/applied only when the OTHER
+  // shipping provider actually has a discovered home — i.e. a genuine handoff target
+  // exists. With a single provider discovered (or none), reporting it unavailable keeps
+  // the requested/available/applied AND-clamp resolved false instead of exposing a fork
+  // control that would hand off into nothing.
+  const hasCrossProviderForkTarget =
+    new Set(registeredProviderHomes.map((home) => home.provider)).size >= 2;
+
   // The unified task index needs the shared store; a partial/mocked engine without it makes the
   // feature unavailable (the coordinator can never initialize there). unifiedTaskIndex is reported
   // available only when this store exists. (`providerIndexStore` itself is declared earlier,
@@ -348,6 +356,8 @@ export function buildApp(opts: BuildOptions = {}): {
       searchCommands: true,
       settingsSecondary: true,
       codexStyleShell: true,
+      // M7 fork cutover: honest availability — a fork target must actually exist.
+      crossProviderFork: hasCrossProviderForkTarget,
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
@@ -369,6 +379,10 @@ export function buildApp(opts: BuildOptions = {}): {
       searchCommands: true,
       settingsSecondary: true,
       codexStyleShell: true,
+      // No separate async activation step exists for cross-provider fork (unlike
+      // persistentClaude/unifiedTaskIndex); applied truth mirrors the same honest
+      // discovered-target availability check.
+      crossProviderFork: hasCrossProviderForkTarget,
     }),
     onDevHubFeaturesChanged: (features) => {
       syncProviderTaskIndex(features.unifiedTaskIndex === true);

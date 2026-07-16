@@ -698,6 +698,35 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - HELD (unchanged) — `origin/main` merge and the first-party Computer-Use QA remain
   [RONAK-GATE]/hard-gate. STATE stays ACTIVE.
 
+## M7-FORK-CUTOVER (2026-07-16)
+- FLIP — `DEFAULT_DEVHUB_FEATURE_FLAGS.crossProviderFork` false->true in
+  `packages/engine/src/providers/feature-flags.ts`, mirroring the M3/M4/M5/M6 default-on
+  pattern. `packages/server/src/app.ts` adds `crossProviderFork` to BOTH
+  `availableDevHubFeatures` and `appliedDevHubFeatures`, computed once as
+  `hasCrossProviderForkTarget = new Set(registeredProviderHomes.map(h => h.provider)).size >= 2`
+  — i.e. available/applied only when the OTHER shipping provider (openai/codex,
+  anthropic/claude) actually has a discovered home. With zero or one provider
+  discovered, the requested/available/applied AND-clamp in `registerSettingsRoutes`
+  keeps the resolved value false rather than exposing a fork control with nothing to
+  hand off into.
+- TEST FALLOUT FIXED — `feature-flags.test.ts` default-object expectation updated
+  (`crossProviderFork: true`); two engine `cross-provider-fork.test.ts` cases that relied
+  on the bare `defineDevHubFeatureFlags()` returning off-by-default were switched to an
+  explicit `{ crossProviderFork: false }` override (same pattern as the M3 nativeCodex
+  fallout fix), preserving each test's real "flag off" intent.
+- NEW COVERAGE — `packages/server/test/m7-fork-cutover.test.ts` (4/4, real `buildApp`
+  wiring via the `providerHomes` test seam, no runtime spawned): default-on resolves
+  true with two distinct discovered provider homes; resolves false with one home; resolves
+  false with zero homes; an explicit stored `crossProviderFork:false` instantly rolls back
+  in isolation (unrelated `codexStyleShell` stays true).
+- GATES GREEN — full suites via `turbo run test --force`: engine 2236/2236 (81 files),
+  server 265/265 (15 files, +4 new), web 565/565 (39 files, unaffected — existing
+  crossProviderFork test fixtures use explicit literals, not the engine default).
+  `turbo run typecheck --force` PASS on all three packages; `vite build` (web) clean.
+  `git diff --check` clean.
+- HELD (unchanged) — `origin/main` merge and the production default-on promotion/live M1
+  cutover remain [RONAK-GATE] human actions. Lands on `wip/devhub-background-runner` only.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.

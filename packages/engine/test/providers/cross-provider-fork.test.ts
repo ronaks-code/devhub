@@ -154,8 +154,11 @@ function buildRegistry(sourceTask: NativeTask, targetProvider: ProviderId) {
 }
 
 describe("cross-provider fork handoff (crossProviderFork flag)", () => {
-  it("stays default-off: every entry point rejects when the flag is not explicitly true", () => {
-    const offFlags = defineDevHubFeatureFlags();
+  it("rejects when the flag is explicitly false, even though it is the M7 requested default", () => {
+    // M7 fork cutover flipped the requested default to true, but the server still clamps
+    // the resolved value to real availability (a genuine handoff target); an explicit
+    // stored false — modeled directly here — is the immediate, non-destructive rollback.
+    const offFlags = defineDevHubFeatureFlags({ crossProviderFork: false });
     expect(offFlags.crossProviderFork).toBe(false);
     const source = adversarialSourceTask("anthropic");
     expect(() =>
@@ -285,7 +288,9 @@ describe("cross-provider fork handoff (crossProviderFork flag)", () => {
 
   it("rejects commit when the flag flips back off between preview and commit", async () => {
     const onFlags = defineDevHubFeatureFlags({ crossProviderFork: true });
-    const offFlags = defineDevHubFeatureFlags();
+    // M7 fork cutover: crossProviderFork is now the requested default, so this "flipped
+    // back off" state must be modeled with an explicit override, not the bare default.
+    const offFlags = defineDevHubFeatureFlags({ crossProviderFork: false });
     const source = adversarialSourceTask("anthropic");
     const { registry } = buildRegistry(source, "openai");
     const preview = buildCrossProviderHandoffPreview(onFlags, source, {

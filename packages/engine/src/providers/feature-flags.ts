@@ -122,7 +122,14 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   searchCommands: true,
   settingsSecondary: true,
   codexStyleShell: true,
-  crossProviderFork: false,
+  // M7 fork cutover: cross-provider fork handoff is now the requested default. The
+  // server still clamps the resolved value to real availability — it reports the
+  // feature available/applied ONLY when the other shipping provider actually has a
+  // discovered home (a genuine handoff target exists); with a single provider
+  // discovered, the requested/available/applied AND-clamp keeps it resolved false
+  // rather than exposing a fork into nothing. An explicit stored `false` is still
+  // the immediate, non-destructive rollback.
+  crossProviderFork: true,
   workMode: false,
 });
 
