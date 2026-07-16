@@ -10,6 +10,7 @@ export * from "./registry.js";
 export * from "./writer-lease.js";
 export * from "./reconciliation-store.js";
 export * from "./cross-provider-fork.js";
+export * from "./work-mode.js";
 export {
   assertLocatorMatchesKey,
   cachedEventItemId,

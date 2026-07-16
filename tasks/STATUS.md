@@ -3,7 +3,60 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-FORK-WEB-UI (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-WORKMODE-ENGINE (DIRECTED TASK on
+`wip/devhub-background-runner` — RED-first Work-mode engine foundation, gated on
+the existing default-off `workMode` feature flag (flag itself UNCHANGED, still
+`false` in `DEFAULT_DEVHUB_FEATURE_FLAGS`). New
+`packages/engine/src/providers/work-mode.ts` introduces a Work-mode task model
+DISTINCT from Code mode (the existing `NativeTask`/`ProviderAdapter` conversational
+surface) — never named or aliased "Cowork" anywhere (discriminant literal is the
+`"work"` `WORK_MODE_KIND`, checked by `isWorkModeTask`, which returns `false` for
+any bare Code-mode `NativeTaskKey`/`NativeTaskSummary`-shaped value since those
+carry no `kind` field at all). A `WorkModeTask` has: a real provider runtime
+binding (`WorkModeRuntimeBinding` — provider + home + the SAME `NativeTaskKey`
+shape Code mode uses; no mock/simulated variant exists); a folder scope
+(`WorkModeFolderScope.root` + optional `writablePaths`, enforced by
+`assertPathInFolderScope`, which resolves `..`-escapes and unrelated absolute
+paths and throws `WorkModeFolderScopeViolationError`); a permission profile
+(`WorkModePermissionProfile.allowedActions`/`deniedActions`, enforced by
+`assertActionPermitted` — deny always wins over allow, and an action absent from
+both lists is denied by default — distinct from Code mode's own
+`TaskOverrides.permissionMode` provider-native knob) covering the
+`progress:update`/`artifact:record`/`deliverable:add` actions; outcome/progress
+(`WorkModeProgress.status` one of `pending`/`in-progress`/`delivered`/`failed`/
+`cancelled`, advanced via `updateWorkModeProgress`); artifacts
+(`WorkModeArtifact`, recorded via `recordWorkModeArtifact`, which enforces the
+artifact's path resolves inside the folder scope); and deliverables
+(`WorkModeDeliverable`, added via `addWorkModeDeliverable`, which rejects any
+deliverable referencing an artifact path never actually recorded on the task).
+Every entry point (`createWorkModeTask`/`updateWorkModeProgress`/
+`recordWorkModeArtifact`/`addWorkModeDeliverable`) calls the same internal
+`requireFlag` first and throws `WorkModeDisabledError` when `workMode !== true`,
+mirroring the `crossProviderFork` module's gating pattern exactly. Every mutator
+returns a NEW frozen task rather than mutating its input. Exported additively
+from `packages/engine/src/providers/index.ts` (`export * from "./work-mode.js"`).
+New test file `packages/engine/test/providers/work-mode.test.ts` (23 tests, RED
+-first — written and run against the real gating/enforcement logic, not stubs):
+flag-off rejection at all four entry points plus confirms the default flag value
+stays `false`; mode-distinctness (`WORK_MODE_KIND==="work"`, never `"cowork"`,
+and `isWorkModeTask` false for Code-mode-shaped values); folder-scope enforcement
+(accept-inside/reject-`..`-escape/reject-unrelated-absolute-path, both at task
+creation via `writablePaths` and at artifact-record time); permission-profile
+enforcement (allow, default-deny, deny-wins-over-allow, and per-mutator gating);
+and deliverables/artifacts shape (empty-at-creation, deliverable-references-
+recorded-artifact accepted, deliverable-references-unknown-artifact rejected,
+progress advances without mutating the prior task). Full engine suite: 81 files /
+2236 tests green (was 2213, +23); `tsc --noEmit` clean; the provider-index
+public-surface tsc target (`test/provider-index/tsconfig.public-surface.json`)
+clean. No existing test file changed. `git status --short` shows only
+`work-mode.ts`, `work-mode.test.ts`, and the one-line additive `index.ts` export.
+This is engine-foundation only — no server route, no web UI, no wiring into
+`ProviderRegistry.startTask`/any adapter — by design, matching the task's scope
+("engine test file", "provider-index public-surface tsc clean"); a future
+directed task can build the HTTP/UI surface on top the same way M7 Tasks 2-3 did
+for `crossProviderFork`. Landed on `wip/devhub-background-runner` only, per task
+instructions — NOT `origin/main`.
+PRIOR: M7-FORK-WEB-UI (DIRECTED TASK on
 `wip/devhub-background-runner` — M7 Task 3: the cross-provider fork preview UI
 (concept 06) behind the same default-off `crossProviderFork` flag; flag value
 itself UNCHANGED (`false`). New `apps/web/src/components/features/shell/
