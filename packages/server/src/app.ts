@@ -69,6 +69,7 @@ import { registerAutotagRoutes } from "./routes/autotag.js";
 import { registerWebhooksRoutes } from "./routes/webhooks.js";
 import { registerCodexRoutes } from "./routes/codex.js";
 import { registerProviderTaskRoutes } from "./routes/provider-tasks.js";
+import { registerCrossProviderForkRoutes } from "./routes/cross-provider-fork.js";
 import {
   registerProviderIndexRoutes,
   type RegisteredIndexHome,
@@ -440,6 +441,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerProviderTaskRoutes(app, providerRegistry, token, {
     getCoordinator: () => providerTaskIndexCoordinator,
   });
+
+  registerCrossProviderForkRoutes(app, providerRegistry, engine, token);
 
   if (providerIndexStore) {
     registerProviderIndexRoutes(app, {

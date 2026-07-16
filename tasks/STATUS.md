@@ -3,7 +3,52 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M6-NARROW-VIEWPORT (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-FORK-SERVER (DIRECTED TASK on
+`wip/devhub-background-runner` — M7 Task 2: wired the M7 engine fork model
+(`buildCrossProviderHandoffPreview`/`commitCrossProviderHandoff` from
+`cross-provider-fork.ts`) onto the server HTTP boundary, behind the existing
+default-off `crossProviderFork` flag; flag value itself UNCHANGED (`false`). New
+`packages/server/src/routes/cross-provider-fork.ts` registers two POST routes under
+the existing `/api/providers/:provider/tasks/:nativeTaskId` prefix: `fork-preview`
+(reads the source task via `registry.readTask(key, true)`, builds the preview via the
+engine function, and stores it server-side keyed by an opaque `randomUUID()`
+`previewId` — the preview itself, never round-tripped raw text, is what a client could
+tamper with, so it never leaves the server and comes back on commit) and `fork-commit`
+(looks the `previewId` up, single-use — deleted from the in-memory store BEFORE the
+commit call so a retried/duplicated request can never replay it — then calls
+`commitCrossProviderHandoff` with the stored source key/target home/preview and
+returns `{targetTask, link}`). Both routes independently re-check
+`engine.getSettings().devHubFeatures?.crossProviderFork === true` INSIDE the handler
+(never trusting a client-supplied flag) and answer `403 {error:
+"cross_provider_fork_disabled"}` when it is not exactly `true`, matching every other
+DevHub feature-flag route's off-response shape. Both require the exact same Bearer
+mutation-token auth as every other provider-mutating route (`authorizeMutation`,
+mirrored from `provider-tasks.ts`) — a preview reads a task and a commit creates one,
+so neither is a bare read. Wired into `app.ts` right after
+`registerProviderTaskRoutes`, sharing the same `providerRegistry`/`token`. New test
+file `packages/server/test/cross-provider-fork.test.ts` (4 tests): flag-off rejection
+on BOTH routes; an adversarial-source preview proving secrets/hidden-reasoning/
+`system`-role/in-flight-turn content never reaches the response AND no raw provider
+home path appears anywhere in the preview body (`JSON.stringify(...).not.toContain`
+on both `SOURCE_HOME` and `TARGET_HOME`); a source-mutated-between-preview-and-commit
+rejection (`409 SOURCE_TASK_MUTATED`, zero `startTask` calls, and proves the consumed
+preview is single-use — a retry 404s); and a full native-target-creation + bidirectional
+-link success path (`201`, `targetTask.key.provider==="anthropic"`,
+`link.forSource.relation==="handoff-source"`/`link.forTarget.relation===
+"handoff-target"`, the `link` object itself contains no raw home — `targetTask.key.home`
+DOES appear, matching every other provider-task route's existing pattern of echoing
+back a task keyed by the home the caller itself just supplied — and a same-`previewId`
+replay after a successful commit also 404s). Full server suite at this tip: `vitest
+run` 251/251 (was 247, +4 new); `tsc --noEmit` clean. Engine untouched (this task only
+consumes the existing M7 Task 1 engine module, `cross-provider-fork.ts` itself was NOT
+modified) — full engine `tsc --project test/provider-index/tsconfig.public-surface.json`
+re-verified clean. `git status --short` shows only the new route file, its test, and
+the two-line `app.ts` import+registration addition. `crossProviderFork`/`nativeCodex`/
+`persistentClaude`/`unifiedTaskIndex`/every M6 slice flag unchanged. Landed on
+`wip/devhub-background-runner` only, per task instructions — NOT `origin/main`. No
+client/UI wiring in this task (the flag stays unconsumed by any route table entry
+point beyond settings — that's a later M7 task).
+PRIOR: M6-NARROW-VIEWPORT (DIRECTED TASK on
 `wip/devhub-background-runner` — closed the narrow/768+1024 viewport-coverage gap the
 M6-SLICE-EVIDENCE audit flagged for `ThreadWorkspace` (Task 4) and `SettingsRoute` (Task
 8): that audit traced the 768 screenshot overflow to the DEMO FIXTURE's own harness
