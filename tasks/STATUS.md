@@ -3,7 +3,39 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-WORKMODE-CUTOVER (DIRECTED TASK on
+Last updated: 2026-07-16 by M8-DESKTOP-BUILD (DIRECTED TASK on
+`wip/devhub-background-runner` — produces an unsigned Tauri desktop build +
+packaged smoke). Ran the real `tauri build` for `@devhub/desktop`
+(`apps/desktop/src-tauri`): vite build of `@devhub/web` (green), full Rust
+release compile, then bundling to `Claude UI.app` + `Claude UI_0.1.0_x64.dmg`.
+Verified via `codesign -dvvv`/`spctl` that the bundle is ad-hoc/unsigned
+(`Signature=adhoc`, `TeamIdentifier=not set`) — real Apple code-signing +
+notarization is explicitly HELD PENDING Apple credentials (hard gate),
+not attempted. Found and fixed one real bug while proving the build launches:
+`apps/desktop/src-tauri/src/lib.rs`'s default `CLAUDE_UI_SERVER_CMD` was
+still `pnpm --filter @claude-ui/server start`, a stale pre-2026-07-15-rename
+package name — `pnpm --filter` on a non-matching name is a silent no-op
+(exit 0, nothing spawned), so the desktop shell's self-spawned server never
+started and every API call the webview makes would fail. Fixed the default
+(and its doc comment) to `pnpm --filter @devhub/server start`; rebuilt and
+proved the fix live: launched the built unsigned `.app` binary directly, its
+self-spawned real `@devhub/server` came up on `127.0.0.1:8787`
+(`[devhub] server on http://127.0.0.1:8787`), the native window opened
+(confirmed via System Events), and 5 core routes the web bundle depends on
+(`/api/health`, `/api/projects`, `/api/running`, `/api/all-sessions`,
+`/api/health/diagnostics`) all answered 200 with this machine's real indexed
+session data while the window stayed open 27s+ with no crash and a clean
+shutdown on kill. No Rust test harness exists in this crate to pin the
+default string, so the pre-fix/post-fix launch logs are the regression
+evidence (kept in `evidence/m8/desktop/launch.log` vs `launch2.log`). Full
+monorepo build+test gate (engine/server/web via turbo) reconfirmed green
+before this change (engine 81 files/2236 tests, server 16/269, web 40/568,
+`tsc --noEmit` clean) — this task's only code change is the two-line default
+fix in `lib.rs`. Evidence (build log, codesign/spctl checks, launch logs,
+smoke-api log, qa-note) under `evidence/m8/desktop/`. Landed on
+`wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M7-WORKMODE-CUTOVER (DIRECTED TASK on
 `wip/devhub-background-runner` — cuts `workMode` default-on now that
 M7-WORKMODE-PERSIST landed the durable store). `DEFAULT_DEVHUB_FEATURE_FLAGS.workMode`
 flips `false -> true` in `packages/engine/src/providers/feature-flags.ts` (same

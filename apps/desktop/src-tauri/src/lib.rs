@@ -8,7 +8,7 @@
 //!
 //! Everything is configurable via env so power users / CI can override:
 //!   CLAUDE_UI_SERVER_CMD   full shell command to launch the server
-//!                          (default: `pnpm --filter @claude-ui/server start`)
+//!                          (default: `pnpm --filter @devhub/server start`)
 //!   CLAUDE_UI_REPO_DIR     working dir for the command (default: detected repo root)
 //!   CLAUDE_UI_SERVER_HOST  host to probe for readiness    (default: 127.0.0.1)
 //!   CLAUDE_UI_SERVER_PORT  port to probe for readiness    (default: 8787)
@@ -194,7 +194,7 @@ fn ensure_server(host: &str, port: u16) -> Option<Child> {
 
     let cmd = env_or(
         "CLAUDE_UI_SERVER_CMD",
-        "pnpm --filter @claude-ui/server start",
+        "pnpm --filter @devhub/server start",
     );
     let cwd = repo_root();
     log::info!("[claude-ui] starting server: `{cmd}` (cwd: {})", cwd.display());

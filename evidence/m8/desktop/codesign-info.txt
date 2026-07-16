@@ -1,0 +1,16 @@
+Executable=/Users/ronak/.config/superpowers/worktrees/claude-ui/m5-task3-lanes/apps/desktop/src-tauri/target/release/bundle/macos/Claude UI.app/Contents/MacOS/app
+Identifier=app-5aea8e704b3f8cc5
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20400 size=81336 flags=0x20002(adhoc,linker-signed) hashes=2538+0 location=embedded
+Hash type=sha256 size=32
+CandidateCDHash sha256=2d532f5838c297531519753a161e497c91209261
+CandidateCDHashFull sha256=2d532f5838c297531519753a161e497c91209261b89d2a66704862037d2f672c
+Hash choices=sha256
+CMSDigest=2d532f5838c297531519753a161e497c91209261b89d2a66704862037d2f672c
+CMSDigestType=2
+CDHash=2d532f5838c297531519753a161e497c91209261
+Signature=adhoc
+Info.plist=not bound
+TeamIdentifier=not set
+Sealed Resources=none
+Internal requirements=none
