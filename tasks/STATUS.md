@@ -3,10 +3,39 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-TUI-SMOKE (packaged TUI smoke re-run, exit 0,
+Last updated: 2026-07-16 by M8-PWA-BROWSER-SMOKE (browser/PWA packaged smoke
+re-run against the default-on shell — verification task, no source diff).
+Re-verified `DEFAULT_DEVHUB_FEATURE_FLAGS` before starting: all 8 M6 slice flags,
+the umbrella `codexStyleShell`, `unifiedTaskIndex`, and `workMode` were already
+`true` in `packages/engine/src/providers/feature-flags.ts` — nothing flipped by
+this task. Full suite gate at the exact wip tip: engine 2243/2243 (82 files),
+server 270/270 (16 files), web 586/586 (44 files); fresh `vite build` +
+`tsc build` clean. Isolated-scratch click-through (real `buildApp` + real
+`vite build` `dist`, thrown-away static+proxy shim, isolated
+`HOME`/`CLAUDE_CONFIG_DIR`/`DEVHUB_DATA`, one ~460-byte synthetic Claude session
+fixture, zero real-dataset reads) covering Home/task rail, Browse+InspectorDock,
+Chat tab's ThreadWorkspace+Composer, Search dialog (empty + live `PWA` query, `1
+result`), the separate Command palette (`Cmd+Shift+P`), Settings, the three
+secondary-nav destinations (Ops/Inbox/Dashboard), and the 768px narrow Home
+(`scrollWidth <= clientWidth` asserted `true` live) — 0 unexpected console
+errors throughout. Repeated the same real-Codex-on-`PATH` hazard the prior
+M8-PRESERVATION-MATRIX task hit and defused it the same documented way (`PUT
+/api/settings {"nativeCodex":false,...}` before any further navigation; no real
+provider process spawned). Also proved the PWA manifest install contract live:
+`link[rel=manifest]` resolves to `/manifest.webmanifest`, and an in-page `fetch`
+of it returns `name`/`short_name` = `"DevHub"`, `display: "standalone"` — the
+exact file DevHub's `apps/web/public/manifest.webmanifest` ships, matching this
+task's DoD verbatim. 12 new screenshots in `evidence/m8/qa-screenshots/pwa-*.png`
+plus `evidence/m8/fidelity-ledger.md` (6 concrete comparison points against the
+governing M8-PRESERVATION-MATRIX capture, including 2 the prior capture set
+didn't cover: the manifest check and the Command palette). Scratch dir, shim
+script, and both throwaway processes torn down after capture (`lsof -i :8793 -i
+:5194` empty). Full evidence: `evidence/m8/fidelity-ledger.md`.
+
+Previously updated: 2026-07-16 by M8-TUI-SMOKE (packaged TUI smoke re-run, exit 0,
 no breakage — see "M8-TUI-SMOKE" section below).
 
-Previously updated: 2026-07-16 by M8-SIDECAR-HEALTH-DISCOVERY-AUDIT (DIRECTED TASK on
+Previously-previously updated: 2026-07-16 by M8-SIDECAR-HEALTH-DISCOVERY-AUDIT (DIRECTED TASK on
 `wip/devhub-background-runner` — audits + closes M8 checklist item 2:
 "deterministic sidecar/IPC/API base, strict health identity, PATH-independent
 provider discovery" from `.planning/devhub-codex-parity/implementation-plan.md`
