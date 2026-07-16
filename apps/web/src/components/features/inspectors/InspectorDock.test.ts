@@ -128,6 +128,13 @@ describe("InspectorDock — persistent Environment summary (not a sixth tab)", (
     const env = environmentRegion(html);
     expect(env).not.toContain('role="tab"');
     expect(env).toContain('aria-label="Environment"');
+    // M8-PERF-A11Y: axe-core's heading-order rule flagged this as an `<h3>` with
+    // no `<h2>` anywhere earlier in the dock's own subtree (an invalid level-2
+    // jump). It's the ONLY heading the "dock" variant renders, at the same
+    // structural depth as the "disclosure" variant's own top-level `<h2>` — so
+    // `<h2>` is correct here, not `<h3>`.
+    expect(env).toContain(`<h2 class="dh-inspector-env-heading"`);
+    expect(env).not.toContain(`<h3 class="dh-inspector-env-heading"`);
   });
 
   it("owns only backed environment/repository/subagent/source rows", () => {

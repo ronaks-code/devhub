@@ -279,7 +279,7 @@ export function TaskRail({
         {hasTasks ? (
           model.sections.map((section): ReactNode =>
             section.tasks.length === 0 ? null : (
-              <li key={sanitizeRailKey(section.id)} role="presentation" className="dh-tasklist-group">
+              <li key={sanitizeRailKey(section.id)} role="listitem" className="dh-tasklist-group">
                 <div className="dh-tasklist-heading" data-dh-section-heading="">
                   {section.label}
                 </div>

@@ -176,6 +176,7 @@ export function WorkModePanel({ enabled, task, className }: WorkModePanelProps) 
           <div
             className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800"
             role="progressbar"
+            aria-label={`${WORK_MODE_COPY.outcomeHeading}: ${task.outcome.summary}`}
             aria-valuenow={progressPercent}
             aria-valuemin={0}
             aria-valuemax={100}

@@ -54,6 +54,7 @@ export function ProjectsPane({
       </div>
       <div
         {...nav.containerProps}
+        aria-label="Projects"
         className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
       >
         {filtered.map((p, i) => {

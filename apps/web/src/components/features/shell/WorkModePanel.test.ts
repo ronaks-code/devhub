@@ -71,6 +71,14 @@ describe("WorkModePanel", () => {
     expect(screen.getByText("3/5")).toBeInTheDocument();
     const progressbar = screen.getByRole("progressbar");
     expect(progressbar).toHaveAttribute("aria-valuenow", "60");
+    // M8-PERF-A11Y: axe-core's aria-progressbar-name rule flagged this element
+    // with no accessible name — a screen reader announced only "60% progress
+    // bar" with no indication of WHAT is 60% done. Named via the outcome
+    // heading + summary so it reads e.g. "Outcome: Ship a release-ready
+    // package, 60%".
+    expect(progressbar).toHaveAccessibleName(
+      `${WORK_MODE_COPY.outcomeHeading}: ${TASK.outcome.summary}`,
+    );
 
     for (const deliverable of TASK.deliverables) {
       expect(screen.getByText(deliverable.label)).toBeInTheDocument();

@@ -885,6 +885,88 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - HELD (unchanged) — `origin/main` merge and the first-party `com.openai.codex`
   Computer-Use QA remain [RONAK-GATE]/hard-gate, not exercised.
 
+## M8-PERF-A11Y (2026-07-16)
+- PERF MEASUREMENTS — isolated-scratch server (`tsx packages/server/src/index.ts`)
+  + real `vite build` bundle, `HOME`/`CLAUDE_CONFIG_DIR`/`DEVHUB_DATA` all under a
+  `mktemp -d` scratch dir, one synthetic 600-message PROVISIONAL transcript
+  fixture (matches the M3/M4 evidence's own "600-message fixture" precedent).
+  Measured via `playwright-cli eval` + real in-page `performance.now()`/
+  `getEntriesByType`: cold initial load (Home, 3 reps) — TTFB ~72ms,
+  `domContentLoadedEventEnd` ~1.8s, FCP ~4.2-4.3s (real: SPA shell paints late,
+  after the initial data fetch, not a measurement artifact). Warm task-switch
+  (already-loaded page, in-page synthetic clicks): Home→Browse 33ms,
+  Browse→Dashboard 22ms (both near-instant client routing);
+  Dashboard→Settings 1726ms on FIRST visit only (Settings is a lazy-loaded
+  chunk per the existing M4 bundle-split note — expected one-time cost, not a
+  regression). Large-session transcript render (cold nav directly to the
+  600-msg session, 3 reps): ~11.0-11.2s consistently. Full numbers + methodology:
+  `evidence/m8/perf/perf.md`.
+- REAL PERF FINDING, logged as a follow-up (NOT fixed — not a cheap label/role/
+  token change): the default-on M6/M7 `threadWorkspace` shell renders a
+  session's ENTIRE message list with zero virtualization
+  (`ThreadWorkspace.tsx`'s `<ol>` `.map()` over all `items`, confirmed 600/600
+  `data-dh-thread-item` nodes live in the DOM) — replacing the legacy
+  `TranscriptPane`'s `@tanstack/react-virtual` windowing
+  (`data-index` rows, still used only when `threadWorkspace===false`). This is
+  the dominant cost behind the ~11s number above and will scale ~linearly with
+  session size on real long-running sessions. Recommended follow-up:
+  virtualize `ThreadWorkspace`'s message list.
+- A11Y AUDIT — `axe-core@4.10.2` (loaded via CDN `<script>` at audit time; no
+  new devDependency added for a one-off run) run against the REAL rendered DOM
+  of Home/Browse/Dashboard/Settings/Inbox/Ops/Chat on the same isolated-scratch
+  server+bundle. Raw before/after JSON per surface: `evidence/m8/a11y/raw/`.
+- A11Y FIXES (TDD: failing test first, then fixed; all via label/role/contrast-
+  token changes, no behavior change) — 5 new/extended test files, `@devhub/web`
+  579→**586/586**: (1) `TaskRail`'s `.dh-tasklist` `role="presentation"` group
+  `<li>` → `role="listitem"` (was exposing a nested `role="list"` as an invalid
+  `aria-required-children` child on every M6-shell page); (2) `--dh-text-muted`
+  `#969696`→`#b0b0b0` in `index.css` (was 3.5:1 against `--dh-rail-active`,
+  below WCAG AA 4.5:1 — new `contrast-tokens.test.ts` computes the real ratio
+  from the CSS source and pins it ≥4.5:1 against every `dh-*` dark surface);
+  (3) `WorkModePanel`'s outcome progress bar — added
+  `aria-label` (`aria-progressbar-name`, was unnamed); (4) `ProjectsPane`/
+  `SessionsPane`'s shared `useListKeyboardNav` listbox containers — added
+  `aria-label="Projects"`/`"Sessions"` (`aria-input-field-name`, were unnamed);
+  (5) `DashboardSkeleton`/`TranscriptSkeleton`/`ListSkeleton` — added
+  `role="status"` (`aria-prohibited-attr`: `aria-label` on a bare `<div>` with
+  no role is invalid; fixed all 3 loaders consistently even though axe only
+  flagged the dashboard one, since they share the exact same pattern);
+  (6) `InspectorDock`'s Environment region `<h3>`→`<h2>` (`heading-order`: no
+  `<h2>` anywhere earlier in the dock's own subtree). Re-ran the same axe
+  script against the rebuilt bundle: all 6 rules confirmed gone from every
+  affected surface (`evidence/m8/a11y/raw/after-*.log`).
+- A11Y FOLLOW-UPS, logged not silently passed (too large for "cheap"):
+  `nested-interactive` — `SessionsPane`/`ProjectsPane` rows (`role="option"`)
+  nest multiple real buttons (select/pin/rename/delete), a genuine interaction-
+  model tradeoff needing a redesign, not a token fix; a SEPARATE `color-contrast`
+  issue (`--text-dim`/zinc-500-family text on `--panel`, 3.67:1, 19-26 nodes per
+  page on the M6 secondary-nav/tab-strip family — distinct token pair from the
+  one fixed above, needs its own design-system-wide review); and a
+  **light-theme-wide contrast audit** — this headless Chrome's default
+  `prefers-color-scheme` resolved the app's default `theme:"system"` setting to
+  the light palette, which has serious contrast failures of its own (e.g.
+  1.42:1) — `index.css`'s own comment already flags light as "audited
+  separately in M8," so a full light-theme pass (all 7 surfaces, forced
+  `data-theme="light"`) is recommended as its own follow-up rather than folded
+  into this task. Full detail + rule-by-rule table: `evidence/m8/a11y/a11y.md`.
+- GATES GREEN — `turbo run test --filter @devhub/engine --filter @devhub/server
+  --filter @devhub/web --force`: engine 2236/2236 (81 files, unchanged), server
+  269/269 (16 files, unchanged), web **586/586** (44 files, +7 new).
+  `turbo run typecheck --force` PASS on all three. `vite build` PASS.
+  `git diff --check` clean; the four user-owned preservation paths
+  (`.gitignore`, `AGENTS.md`, `ChatPane.tsx`, `SlashPalette.tsx`) untouched.
+- INCIDENT, corrected before any real harm — an early attempt to bind the
+  scratch server to the DEFAULT port `8787` briefly PUT to `/api/settings` on an
+  already-running REAL devhub server owned by a different concurrent agent
+  session (not this task's scratch environment), flipping its `nativeCodex`
+  flag to `false`. Caught immediately (the response's live `webhooks` field
+  revealed it wasn't the scratch server), restored `nativeCodex` back to `true`
+  (its confirmed prior value) in the very next call, then moved this task's own
+  server to an unused port (`8811`) for the rest of the work. No other field on
+  that server was touched. Full note in `evidence/m8/perf/perf.md` §"Harness".
+- HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.

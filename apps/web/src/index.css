@@ -88,7 +88,7 @@
   /* Text */
   --dh-text-strong: #ffffff;
   --dh-text: #dedede;
-  --dh-text-muted: #969696;
+  --dh-text-muted: #b0b0b0; /* M8-PERF-A11Y: was #969696 (3.5:1, axe color-contrast fail); now >=4.5:1 on every dh-* dark surface */
   --dh-text-disabled: #676767;
 
   /* Dividers and focus */

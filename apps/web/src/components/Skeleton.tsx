@@ -25,7 +25,7 @@ export function Skeleton({ className }: { className?: string }) {
  */
 export function TranscriptSkeleton({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="flex flex-col gap-5 px-6 py-6" aria-busy="true" aria-label="Loading transcript">
+    <div role="status" className="flex flex-col gap-5 px-6 py-6" aria-busy="true" aria-label="Loading transcript">
       {Array.from({ length: rows }).map((_, i) => {
         const assistant = i % 2 === 1;
         return (
@@ -61,7 +61,7 @@ export function ListRowSkeleton() {
 /** A column of {@link ListRowSkeleton}s for a loading list pane. */
 export function ListSkeleton({ rows = 6 }: { rows?: number }) {
   return (
-    <div className="px-1.5 py-1" aria-busy="true" aria-label="Loading list">
+    <div role="status" className="px-1.5 py-1" aria-busy="true" aria-label="Loading list">
       {Array.from({ length: rows }).map((_, i) => (
         <ListRowSkeleton key={i} />
       ))}
@@ -96,6 +96,7 @@ export function CardSkeleton({ className }: { className?: string }) {
 export function DashboardSkeleton() {
   return (
     <div
+      role="status"
       className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 py-8"
       aria-busy="true"
       aria-label="Loading dashboard"

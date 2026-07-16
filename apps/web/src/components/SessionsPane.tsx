@@ -338,6 +338,7 @@ export function SessionsPane({
 
       <div
         {...nav.containerProps}
+        aria-label="Sessions"
         onKeyDown={onContainerKeyDown}
         className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
       >

@@ -147,6 +147,25 @@ describe("TaskRail provider identity is quiet text but never absent", () => {
   });
 });
 
+describe("TaskRail ARIA list structure (M8-PERF-A11Y: axe aria-required-children)", () => {
+  it("never marks a section group li role=presentation while it holds a nested role=list", () => {
+    // axe-core's aria-required-children rule flags a `role="list"` whose only
+    // effective children (after presentation roles are collapsed out of the a11y
+    // tree) are themselves a nested `role="list"` — exactly what a
+    // `role="presentation"` group wrapper produces here. `role="listitem"` keeps
+    // the outer list valid while a nested list inside a listitem stays a
+    // standard, allowed ARIA grouping pattern.
+    const html = render({ model: twoTaskModel });
+    expect(html).toContain('data-dh-section-heading=""');
+    expect(html).not.toMatch(/role="presentation"[^>]*class="dh-tasklist-group"/);
+    // The section group li that wraps the nested rows list must itself be a
+    // valid listitem of the outer role="list" ul.
+    const groupStart = html.indexOf('class="dh-tasklist-group"');
+    const groupTag = html.slice(Math.max(0, groupStart - 200), groupStart);
+    expect(groupTag).toContain('role="listitem"');
+  });
+});
+
 describe("TaskRail overflow actions and destinations", () => {
   it("renders overflow actions reachable without hover and independently tabbable", () => {
     const html = render({ model: twoTaskModel });

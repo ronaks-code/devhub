@@ -279,9 +279,9 @@ function EnvironmentRegion({ env }: { env?: EnvironmentSummary }) {
       data-dh-inspector-env=""
       aria-label={INSPECTOR_COPY.environmentHeading}
     >
-      <h3 className="dh-inspector-env-heading" data-dh-inspector-env-heading="">
+      <h2 className="dh-inspector-env-heading" data-dh-inspector-env-heading="">
         {INSPECTOR_COPY.environmentHeading}
-      </h3>
+      </h2>
       {env?.changes ? (
         <p className="dh-inspector-env-row" data-dh-env-row="changes">
           <span className="dh-inspector-env-label">{C.changes}</span>
