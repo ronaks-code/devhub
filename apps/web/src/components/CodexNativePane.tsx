@@ -60,6 +60,7 @@ import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { Markdown } from "./Markdown";
 import { ProviderHomeSetup } from "./ProviderHomeSetup";
 import { EmptyState, IconButton, Spinner } from "./ui";
+import { CrossProviderForkPanel } from "./features/shell/CrossProviderForkPanel.js";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
 type PermissionMode = string;
@@ -1420,8 +1421,12 @@ export function CodexNativeDirectPane({
   preferredTaskId,
   fallback,
   provider = "openai",
+  features,
 }: CodexNativePaneProps) {
   const presentation = nativeProviderPresentation(provider);
+  // M7: cross-provider fork always targets the OTHER shipping native runtime.
+  const otherProvider: ProviderId = provider === "openai" ? "anthropic" : "openai";
+  const crossProviderForkEnabled = features?.crossProviderFork === true;
   const [descriptors, setDescriptors] = useState<readonly ProviderDescriptorCensus[] | null>(null);
   const [home, setHome] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<Readonly<ProviderCapabilities> | null>(null);
@@ -2372,6 +2377,9 @@ export function CodexNativeDirectPane({
   }
 
   const homes = descriptorHomes(descriptors, provider);
+  // M7: the fork target needs a discovered, enabled home for the OTHER provider —
+  // when there is none, the entry point stays hidden (nothing to fork into yet).
+  const crossProviderForkTargetHome = descriptorHomes(descriptors, otherProvider)[0] ?? null;
   if (!home || !capabilities) {
     const unavailable = descriptors.find(
       (candidate) => candidate.provider === provider && candidate.status === "unavailable",
@@ -2688,6 +2696,42 @@ export function CodexNativeDirectPane({
                     <IconButton type="button" aria-label="Fork native task" title="Fork native task" onClick={fork} disabled={Boolean(busy) || mutationsPaused}>
                       <GitFork className="h-3.5 w-3.5" />
                     </IconButton>
+                  ) : null}
+                  {/* M7: cross-provider fork is a SEPARATE entry point from the same-
+                      provider `Fork native task` above — it hands off REVIEWED,
+                      redacted context to a NEW native task on the other provider,
+                      never a same-provider fork. Flag-off (or no discovered home for
+                      the other provider) hides this entirely; there is no other way
+                      to reach it. */}
+                  {selectedCanMutate && crossProviderForkEnabled && crossProviderForkTargetHome ? (
+                    <CrossProviderForkPanel
+                      enabled={crossProviderForkEnabled}
+                      source={{
+                        provider: selectedTask.key.provider,
+                        title: selectedTask.title,
+                        nativeTaskId: selectedTask.key.nativeTaskId,
+                      }}
+                      target={{
+                        provider: otherProvider,
+                        home: crossProviderForkTargetHome,
+                        cwd: selectedTask.cwd ?? crossProviderForkTargetHome,
+                      }}
+                      fetchPreview={() =>
+                        client.forkPreviewCrossProvider(selectedTask.key, {
+                          provider: otherProvider,
+                          home: crossProviderForkTargetHome,
+                          cwd: selectedTask.cwd ?? crossProviderForkTargetHome,
+                        })
+                      }
+                      commitPreview={(previewId) =>
+                        client.forkCommitCrossProvider(
+                          selectedTask.key,
+                          { provider: otherProvider, home: crossProviderForkTargetHome },
+                          previewId,
+                        )
+                      }
+                      className="rounded-md px-2 py-1 text-[11px] text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50 disabled:opacity-40"
+                    />
                   ) : null}
                   {selectedCanMutate && capabilities.archive ? (
                     <IconButton type="button" aria-label="Archive native task" title="Archive native task" onClick={(event) => {

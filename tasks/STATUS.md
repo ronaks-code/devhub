@@ -3,7 +3,70 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-FORK-SERVER (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-FORK-WEB-UI (DIRECTED TASK on
+`wip/devhub-background-runner` — M7 Task 3: the cross-provider fork preview UI
+(concept 06) behind the same default-off `crossProviderFork` flag; flag value
+itself UNCHANGED (`false`). New `apps/web/src/components/features/shell/
+CrossProviderForkPanel.tsx` renders the brief's three stages exactly: an entry-
+point button (`Create cross-provider fork`); a reviewed handoff-preview dialog
+showing `Source task`/`Target provider`/`Requested model` (`Runtime default` when
+null)/`Mode`/`Folder`, the provider-DERIVED permission field (`Permission mode`
+for a Claude target, `Permissions` for Codex — reusing the existing
+`PERMISSION_FIELD_LABEL` map so `Workspace` can never render for a Claude target,
+per the brief's explicit production rejection), the attributed handoff body
+(`Handoff from <provider> task <id>` + the allowlisted transferred messages), a
+LOCKED non-interactive `Excluded automatically` list (plain `<li>` text, never a
+checkbox/select), the two required disclosure lines, and `Cancel`/`Create fork`;
+and a result stage (new target identity, new native id, `Forked from <source>`,
+`Linked by DevHub`). The component owns NO networking itself —
+`fetchPreview`/`commitPreview` are injected callbacks — so it is a pure,
+fully unit-testable UI contract; `enabled={false}` is the ONLY gate and renders
+NOTHING (no button, no reachable dialog). New tests
+`CrossProviderForkPanel.test.ts` (5, real `@testing-library/user-event`): flag-off
+hides the entry point entirely (no button/dialog in the DOM, `fetchPreview` never
+called); opening renders every stage-2 field incl. the Claude `Permission mode`
+row and asserts `Workspace` never appears; confirming `Create fork` calls
+`commitPreview` with the exact `previewId` and renders stage 3; Cancel and Escape
+both close without ever calling `commitPreview`.
+Consumes the M7-FORK-SERVER endpoints via two new `ProviderApiClient` methods in
+`apps/web/src/lib/provider-api.ts`: `forkPreviewCrossProvider`/
+`forkCommitCrossProvider` (POST `fork-preview`/`fork-commit`, same
+`authHeaders`/bearer-token plumbing as every other provider route), with full
+response validators (`parseCrossProviderForkPreviewResult`/
+`parseCrossProviderForkCommitResult`) — including a NEW `parseProviderTaskLocator`
+for the engine's `ProviderTaskLocator` object shape (`{version,provider,
+homeFingerprint,nativeTaskId}`), which travels over this REST boundary as a plain
+JSON object and is NOT the same wire form as the engine's `parseTaskLocator`
+(that parses the unrelated dotted-string cursor form). `forkCommitCrossProvider`
+marks the TARGET home's reconciliation ledger uncertain on any failed/ambiguous
+commit (mirrors `start`'s ledger semantics, since a commit creates a brand-new
+task under the target home); `forkPreviewCrossProvider` carries no ledger side
+effect (the source is only ever read). New `provider-api.test.ts` cases (+2):
+a full preview+commit round trip against the real request/response shapes, and a
+403 `cross_provider_fork_disabled` surfaced as `ProviderHttpError`.
+App composition: wired as an ADDITIVE second entry point inside
+`CodexNativeDirectPane` (`apps/web/src/components/CodexNativePane.tsx`), next to
+the existing SAME-provider `Fork native task` icon button — this is the one place
+in the composed app with a REAL `NativeTaskKey` for a selected task (the legacy
+Chat/Browse `TaskHeader.onFork` call sites in `App.tsx` still have no persistent/
+native task key behind them yet, since `persistentClaude` stays false at this
+milestone, so they were deliberately NOT rewired here rather than fabricated).
+Gated on `selectedCanMutate && crossProviderForkEnabled (features?.
+crossProviderFork===true) && crossProviderForkTargetHome` (a discovered, enabled
+home for the OTHER shipping provider — `descriptorHomes(descriptors,
+otherProvider)[0]`; when the other provider has no home the entry point stays
+hidden rather than fork into nothing). Threaded `features` into
+`CodexNativeDirectPane`'s prop destructure (was already passed by both `App.tsx`
+call sites via `features={settings?.devHubFeatures}`, just previously unused by
+the direct pane) — additive, no existing behavior changed. Full web suite: 36
+files / 550 tests green (was 543, +7: +2 `provider-api.test.ts`, +5
+`CrossProviderForkPanel.test.ts`); `tsc --noEmit` clean; `vite build` clean.
+`git status --short` shows only `provider-api.ts`/`.test.ts`, `CodexNativePane.tsx`,
+and the two new `CrossProviderForkPanel.*` files. `crossProviderFork`/
+`nativeCodex`/`persistentClaude`/`unifiedTaskIndex`/every M6 slice flag unchanged.
+Landed on `wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M7-FORK-SERVER (DIRECTED TASK on
 `wip/devhub-background-runner` — M7 Task 2: wired the M7 engine fork model
 (`buildCrossProviderHandoffPreview`/`commitCrossProviderHandoff` from
 `cross-provider-fork.ts`) onto the server HTTP boundary, behind the existing

@@ -1,4 +1,6 @@
 import type {
+  CrossProviderHandoffLink,
+  CrossProviderHandoffPreview,
   JsonRpcRequestId,
   ListTasksInput,
   NativeRevision,
@@ -17,6 +19,7 @@ import type {
   ProviderRequestIdentity,
   ProviderRequestResponse,
   ProviderResponseDispatchResult,
+  ProviderTaskLocator,
   StartTaskInput,
   TaskOverrides,
   UserInput,
@@ -24,6 +27,8 @@ import type {
 import { getToken, UnauthorizedError } from "./api.js";
 
 export type {
+  CrossProviderHandoffLink,
+  CrossProviderHandoffPreview,
   JsonRpcRequestId,
   ListTasksInput,
   NativeRevision,
@@ -43,6 +48,7 @@ export type {
   ProviderRequestIdentity,
   ProviderRequestResponse,
   ProviderResponseDispatchResult,
+  ProviderTaskLocator,
   StartTaskInput,
   TaskOverrides,
   UserInput,
@@ -137,6 +143,14 @@ const SAFE_PROVIDER_ERROR_CODES = new Set([
   "provider_stream_limit_reached",
   "provider_stream_overloaded",
   "unauthorized",
+  "CROSS_PROVIDER_FORK_DISABLED",
+  "SOURCE_TASK_MUTATED",
+  "HANDOFF_TARGET_NOT_NATIVE",
+  "cross_provider_fork_disabled",
+  "cross_provider_fork_source_mutated",
+  "cross_provider_fork_target_not_native",
+  "cross_provider_fork_preview_not_found",
+  "invalid_cross_provider_fork_request",
 ]);
 
 type PartialCode = "PARTIAL_START" | "PARTIAL_FORK";
@@ -154,7 +168,9 @@ type ProviderEndpointLabel =
   | "provider task archive"
   | "provider task rename"
   | "provider task reconciliation"
-  | "provider event stream";
+  | "provider event stream"
+  | "provider cross-provider fork preview"
+  | "provider cross-provider fork commit";
 
 export type ProviderCreateOutcome =
   | { outcome: "created"; task: NativeTask }
@@ -188,6 +204,27 @@ export type ProviderReconciliationTarget =
   | { scope: "provider-home"; provider: ProviderId; home: string }
   | { scope: "task"; key: NativeTaskKey; fingerprint: string };
 
+/** The target descriptor a caller reviews/submits for a cross-provider fork (M7). */
+export interface CrossProviderForkTargetInput {
+  provider: ProviderId;
+  home: string;
+  cwd: string;
+  model?: string;
+  mode?: string;
+}
+
+/** The server's fork-preview response: an opaque single-use id plus the engine's review preview. */
+export interface CrossProviderForkPreviewResult {
+  previewId: string;
+  preview: CrossProviderHandoffPreview;
+}
+
+/** The server's fork-commit response: the newly created native target task plus the bidirectional link. */
+export interface CrossProviderForkCommitResult {
+  targetTask: NativeTask;
+  link: CrossProviderHandoffLink;
+}
+
 export interface ProviderApiClient {
   providers(): Promise<readonly ProviderDescriptorCensus[]>;
   list(input: ProviderListTasksInput): Promise<Page<NativeTaskSummary>>;
@@ -206,6 +243,25 @@ export interface ProviderApiClient {
   archive(key: NativeTaskKey): Promise<void>;
   rename(key: NativeTaskKey, name: string): Promise<void>;
   acknowledgeReconciliation(target: ProviderReconciliationTarget): Promise<void>;
+  /**
+   * M7: build a review-only cross-provider handoff preview for `key` (never mutates
+   * the source; nothing is created server-side beyond an ephemeral, single-use stored
+   * preview keyed by the returned `previewId`).
+   */
+  forkPreviewCrossProvider(
+    key: NativeTaskKey,
+    target: CrossProviderForkTargetInput,
+  ): Promise<CrossProviderForkPreviewResult>;
+  /**
+   * M7: commit a previously-built preview by its opaque `previewId`, creating the new
+   * native target task and returning the bidirectional handoff link. Single-use: a
+   * repeated call with the same `previewId` 404s.
+   */
+  forkCommitCrossProvider(
+    key: NativeTaskKey,
+    target: Pick<CrossProviderForkTargetInput, "provider" | "home">,
+    previewId: string,
+  ): Promise<CrossProviderForkCommitResult>;
   subscribe(
     key: NativeTaskKey,
     sink: ProviderEventSink,
@@ -700,6 +756,168 @@ function parseTask(
     ids.add(turn.id);
   }
   return { ...summary, turns };
+}
+
+const MAX_TRANSFERRED_CONTEXT_MESSAGES = 10_000;
+const MAX_TRANSFERRED_MESSAGE_CHARS = 256 * 1_024;
+const MAX_CONTENT_HASH_CHARS = 128;
+
+function safeContentHash(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{16,128}$/iu.test(value) &&
+    value.length <= MAX_CONTENT_HASH_CHARS;
+}
+
+function nullableModelOrMode(value: unknown, max: number): value is string | null {
+  return value === null || safeText(value, max);
+}
+
+function safeMessageRole(value: unknown): value is "user" | "assistant" {
+  return value === "user" || value === "assistant";
+}
+
+function safeHandoffRelation(value: unknown): value is "handoff-source" | "handoff-target" {
+  return value === "handoff-source" || value === "handoff-target";
+}
+
+const MAX_HOME_FINGERPRINT_CHARS = 256;
+
+/**
+ * The engine's `ProviderTaskLocator` travels over this REST boundary as the plain
+ * JSON object it already is (`{version, provider, homeFingerprint, nativeTaskId}`)
+ * — never as `serializeTaskLocator`'s opaque dotted string, which is a DIFFERENT
+ * wire form used elsewhere (URL-safe cursors). `parseTaskLocator` from the engine
+ * parses that string form, so it is deliberately not reused here.
+ */
+function parseProviderTaskLocator(value: unknown): ProviderTaskLocator {
+  if (!hasExactKeys(value, ["version", "provider", "homeFingerprint", "nativeTaskId"]) ||
+    value.version !== 1 || !safeProvider(value.provider) ||
+    !safeText(value.homeFingerprint, MAX_HOME_FINGERPRINT_CHARS) ||
+    value.homeFingerprint.length === 0 || !safeId(value.nativeTaskId)) {
+    throw invalidResponse();
+  }
+  return {
+    version: 1,
+    provider: value.provider,
+    homeFingerprint: value.homeFingerprint,
+    nativeTaskId: value.nativeTaskId,
+  };
+}
+
+function parseTransferredContext(value: unknown): CrossProviderHandoffPreview["transferredContext"] {
+  if (!hasExactKeys(value, ["messages"])) throw invalidResponse();
+  if (!Array.isArray(value.messages) || value.messages.length > MAX_TRANSFERRED_CONTEXT_MESSAGES) {
+    throw invalidResponse();
+  }
+  const messages = value.messages.map((message) => {
+    if (!hasExactKeys(message, ["role", "text"]) ||
+      !safeMessageRole(message.role) ||
+      !safeText(message.text, MAX_TRANSFERRED_MESSAGE_CHARS)) {
+      throw invalidResponse();
+    }
+    return { role: message.role, text: message.text };
+  });
+  return { messages };
+}
+
+function parseCrossProviderHandoffPreview(
+  value: unknown,
+  expectedTargetProvider: ProviderId,
+): CrossProviderHandoffPreview {
+  if (!hasExactKeys(value, [
+    "sourceLocator",
+    "sourceContentHash",
+    "targetProvider",
+    "targetModel",
+    "targetMode",
+    "targetCwd",
+    "transferredContext",
+  ])) {
+    throw invalidResponse();
+  }
+  if (!safeContentHash(value.sourceContentHash) ||
+    !safeProvider(value.targetProvider) || value.targetProvider !== expectedTargetProvider ||
+    !nullableModelOrMode(value.targetModel, 256) ||
+    !nullableModelOrMode(value.targetMode, 64) ||
+    !safeHome(value.targetCwd)) {
+    throw invalidResponse();
+  }
+  return {
+    sourceLocator: parseProviderTaskLocator(value.sourceLocator),
+    sourceContentHash: value.sourceContentHash,
+    targetProvider: value.targetProvider,
+    targetModel: value.targetModel,
+    targetMode: value.targetMode,
+    targetCwd: value.targetCwd,
+    transferredContext: parseTransferredContext(value.transferredContext),
+  };
+}
+
+function parseCrossProviderForkPreviewResult(
+  value: unknown,
+  expectedTargetProvider: ProviderId,
+): CrossProviderForkPreviewResult {
+  if (!hasExactKeys(value, ["previewId", "preview"]) ||
+    !safeText(value.previewId, 256) || value.previewId.length === 0) {
+    throw invalidResponse();
+  }
+  return {
+    previewId: value.previewId,
+    preview: parseCrossProviderHandoffPreview(value.preview, expectedTargetProvider),
+  };
+}
+
+function parseHandoffLinkView(
+  value: unknown,
+  expectedRelation: "handoff-source" | "handoff-target",
+): CrossProviderHandoffLink["forSource"] {
+  if (!hasExactKeys(value, ["relation", "self", "counterpart", "sourceContentHash", "createdAt"]) ||
+    !safeHandoffRelation(value.relation) || value.relation !== expectedRelation ||
+    !safeContentHash(value.sourceContentHash) ||
+    !nullableDate(value.createdAt) || value.createdAt === null) {
+    throw invalidResponse();
+  }
+  return {
+    relation: value.relation,
+    self: parseProviderTaskLocator(value.self),
+    counterpart: parseProviderTaskLocator(value.counterpart),
+    sourceContentHash: value.sourceContentHash,
+    createdAt: value.createdAt,
+  };
+}
+
+function parseCrossProviderHandoffLink(value: unknown): CrossProviderHandoffLink {
+  if (!hasExactKeys(value, [
+    "sourceLocator",
+    "targetLocator",
+    "sourceContentHash",
+    "createdAt",
+    "forSource",
+    "forTarget",
+  ]) ||
+    !safeContentHash(value.sourceContentHash) ||
+    !nullableDate(value.createdAt) || value.createdAt === null) {
+    throw invalidResponse();
+  }
+  return {
+    sourceLocator: parseProviderTaskLocator(value.sourceLocator),
+    targetLocator: parseProviderTaskLocator(value.targetLocator),
+    sourceContentHash: value.sourceContentHash,
+    createdAt: value.createdAt,
+    forSource: parseHandoffLinkView(value.forSource, "handoff-source"),
+    forTarget: parseHandoffLinkView(value.forTarget, "handoff-target"),
+  };
+}
+
+function parseCrossProviderForkCommitResult(
+  value: unknown,
+  targetProvider: ProviderId,
+  targetHome: string,
+): CrossProviderForkCommitResult {
+  if (!hasExactKeys(value, ["targetTask", "link"])) throw invalidResponse();
+  return {
+    targetTask: parseTask(value.targetTask, targetProvider, targetHome),
+    link: parseCrossProviderHandoffLink(value.link),
+  };
 }
 
 function parseCapabilities(value: unknown): ProviderCapabilities {
@@ -1659,6 +1877,55 @@ export function createProviderApiClient(): ProviderApiClient {
         }
         return outcome;
       }, { reserveNewTask: true }),
+    ),
+
+    // M7: the source task is ONLY ever read here (never mutated), so a preview
+    // request carries no ledger side effect for the source home/task — a failed
+    // preview leaves nothing uncertain, there is simply no previewId to commit.
+    forkPreviewCrossProvider: async (key, target) => {
+      let response: Response;
+      try {
+        response = await fetch(`${taskPath(key)}/fork-preview`, {
+          method: "POST",
+          headers: authHeaders(JSON_ACCEPT, true),
+          body: JSON.stringify({
+            home: key.home,
+            target: {
+              provider: target.provider,
+              home: target.home,
+              cwd: target.cwd,
+              ...(target.model === undefined ? {} : { model: target.model }),
+              ...(target.mode === undefined ? {} : { mode: target.mode }),
+            },
+          }),
+        });
+      } catch {
+        throw new ProviderHttpError(0, null, "provider cross-provider fork preview");
+      }
+      if (!response.ok) throw await responseError(response, "provider cross-provider fork preview");
+      if (response.status !== 200) throw invalidResponse();
+      return parseCrossProviderForkPreviewResult(
+        await readBoundedJson(response, REST_LIMITS.task),
+        target.provider,
+      );
+    },
+
+    // M7: commit creates a brand-new native task under the TARGET home, so on any
+    // uncertain failure it is the target home's ledger (not the source's) that must
+    // be marked uncertain — exactly the same shape as `start`.
+    forkCommitCrossProvider: (key, target, previewId) => withHomeMutation(
+      target.provider,
+      target.home,
+      () => mutationResponse(
+        `${taskPath(key)}/fork-commit`,
+        "provider cross-provider fork commit",
+        { previewId },
+        201,
+        REST_LIMITS.task,
+        (value) => parseCrossProviderForkCommitResult(value, target.provider, target.home),
+        () => markHome(target.provider, target.home),
+      ),
+      true,
     ),
 
     send: (key, input) => withTaskMutation(key, () => mutationResponse(

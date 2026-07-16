@@ -9,6 +9,8 @@ import {
   createProviderApiClient,
   isProviderReconciliationRequired,
   providerApi,
+  type CrossProviderHandoffLink,
+  type CrossProviderHandoffPreview,
   type NativeTask,
   type NativeTaskKey,
   type ProviderCapabilities,
@@ -328,6 +330,96 @@ describe("providerApi browser HTTP contract", () => {
       home: KEY.home,
       lastTurnId: "turn/1",
     });
+  });
+
+  it("M7: builds a cross-provider fork preview and commits it against the target home", async () => {
+    const preview: CrossProviderHandoffPreview = {
+      sourceLocator: { version: 1, provider: "openai", homeFingerprint: "fp-source", nativeTaskId: KEY.nativeTaskId },
+      sourceContentHash: "a".repeat(64),
+      targetProvider: "anthropic",
+      targetModel: null,
+      targetMode: "code",
+      targetCwd: "/workspace/target",
+      transferredContext: { messages: [{ role: "user", text: "hello" }] },
+    };
+    const targetKey: NativeTaskKey = {
+      provider: "anthropic",
+      home: "/Users/test/.claude home",
+      nativeTaskId: "claude-task-1",
+    };
+    const targetTask: NativeTask = {
+      ...TASK,
+      key: targetKey,
+      title: "Forked task",
+    };
+    const link: CrossProviderHandoffLink = {
+      sourceLocator: preview.sourceLocator,
+      targetLocator: { version: 1, provider: "anthropic", homeFingerprint: "fp-target", nativeTaskId: targetKey.nativeTaskId },
+      sourceContentHash: preview.sourceContentHash,
+      createdAt: "2026-07-16T00:00:00.000Z",
+      forSource: {
+        relation: "handoff-source",
+        self: preview.sourceLocator,
+        counterpart: { version: 1, provider: "anthropic", homeFingerprint: "fp-target", nativeTaskId: targetKey.nativeTaskId },
+        sourceContentHash: preview.sourceContentHash,
+        createdAt: "2026-07-16T00:00:00.000Z",
+      },
+      forTarget: {
+        relation: "handoff-target",
+        self: { version: 1, provider: "anthropic", homeFingerprint: "fp-target", nativeTaskId: targetKey.nativeTaskId },
+        counterpart: preview.sourceLocator,
+        sourceContentHash: preview.sourceContentHash,
+        createdAt: "2026-07-16T00:00:00.000Z",
+      },
+    };
+
+    const client = createProviderApiClient();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ previewId: "preview-1", preview }))
+      .mockResolvedValueOnce(json({ targetTask, link }, 201));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const previewResult = await client.forkPreviewCrossProvider(KEY, {
+      provider: "anthropic",
+      home: targetKey.home,
+      cwd: "/workspace/target",
+      mode: "code",
+    });
+    expect(previewResult).toEqual({ previewId: "preview-1", preview });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/providers/openai/tasks/task%2Fwith%20spaces/fork-preview",
+    );
+    expect(parsedBody(fetchMock.mock.calls[0]!)).toEqual({
+      home: KEY.home,
+      target: { provider: "anthropic", home: targetKey.home, cwd: "/workspace/target", mode: "code" },
+    });
+
+    const commitResult = await client.forkCommitCrossProvider(
+      KEY,
+      { provider: "anthropic", home: targetKey.home },
+      "preview-1",
+    );
+    expect(commitResult).toEqual({ targetTask, link });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/providers/openai/tasks/task%2Fwith%20spaces/fork-commit",
+    );
+    expect(parsedBody(fetchMock.mock.calls[1]!)).toEqual({ previewId: "preview-1" });
+  });
+
+  it("M7: surfaces a disabled cross-provider fork preview as a ProviderHttpError", async () => {
+    const client = createProviderApiClient();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(json({ error: "cross_provider_fork_disabled" }, 403)),
+    );
+    await expect(
+      client.forkPreviewCrossProvider(KEY, {
+        provider: "anthropic",
+        home: "/Users/test/.claude",
+        cwd: "/workspace",
+      }),
+    ).rejects.toMatchObject({ status: 403, code: "cross_provider_fork_disabled" });
   });
 
   it("never lets runtime extra properties override a task's immutable resume ownership", async () => {
