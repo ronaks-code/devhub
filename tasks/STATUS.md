@@ -1187,6 +1187,28 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
   exercised.
 
+## M8-FINAL-GATE (2026-07-16)
+- RAN the plan's exact final gate as one clean pass at tip `cc215f0`:
+  `pnpm install --frozen-lockfile`; `pnpm exec turbo run typecheck test build
+  --force`; `pnpm --filter @devhub/tui smoke`; `pnpm --filter @devhub/desktop
+  build` (unsigned); `git diff --check`; `git status --short`. All six exit
+  `0`. Full per-command transcript + counts: `evidence/m8/final-gate.md`.
+- COUNTS — engine **2230/2230** (80 files), server **270/270** (16 files),
+  web **586/586** (44 files); typecheck clean on all three packages; build
+  clean on engine/server/web plus the desktop Tauri bundle (unsigned
+  `DevHub.app` + `DevHub_0.1.0_x64.dmg`, confirmed on disk); TUI smoke exit
+  0; `git diff --check` and `git status --short` both clean.
+- FLAKE, no code change — the first two attempts at the combined `typecheck
+  test build` command hit a single 5000ms timeout in
+  `packages/server/test/cross-provider-fork.test.ts` under CPU contention
+  from the parallel Rust/Cargo desktop compile; an isolated re-run of that
+  file alone passed in 1321ms and the third full combined attempt passed
+  clean at the same 270/270 count. Diagnosed as resource contention, not a
+  regression — no source changed. Detail in `evidence/m8/final-gate.md`.
+- NOT MERGED — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised. Apple code-signing/notarization remains a hard gate, not
+  attempted; desktop build above is the unsigned artifact only.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
