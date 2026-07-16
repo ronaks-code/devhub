@@ -195,6 +195,18 @@ user-owned `ChatPane.tsx`, off-limits to this slice), mirroring how Tasks 1–2 
 slots/rows as later data-wires. `nativeCodex`/`persistentClaude`/`taskHeaderSetup`
 requested-defaults stay false.
 
+### Task 3 gate-evidence addendum (2026-07-16)
+
+Independent `m6-slice-evidence` review (see `evidence/m6/taskheader/gate-evidence-2026-07-16.md`)
+added the current/min(1024)/narrow(768) screenshot triple (min/narrow were missing from
+the 2026-07-15 entry — only one 1000x780 capture existed) and a grep-verified visible-copy
+diff against the frozen `TASK_HEADER_COPY`/`TASK_SETUP_COPY` dictionaries — both Match. It
+also found a REAL open gap: `TaskHeader.test.ts`/`TaskSetup.test.ts` (351 combined lines)
+contain essentially no live keyboard/focus-order/Escape-restore assertions (one static
+`aria-disabled` string check total), so the plan's Task 3 keyboard/a11y gate item ("popover
+focus to first row... close restores focus to `New task`") is UNVERIFIED, not proven. Do
+not treat Task 3's `S`/`V` gate as fully green until a live-interaction test closes this.
+
 ### Task 4 - ThreadWorkspace + ActivityTimeline (`threadWorkspace`)
 
 Date: 2026-07-15
@@ -248,7 +260,21 @@ data-wire. The flag gate + resolver land here; the App composition mount is stag
 Task 9 `codexStyleShell` cutover integration. `nativeCodex` / `persistentClaude` /
 `threadWorkspace` requested-defaults stay false.
 
-### M6 Task 5 - Composer
+#### Task 4 gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/thread/gate-evidence-2026-07-16.md`) added the
+min(1024)/narrow(768) tier for `fixture-active.html`. Min is clean (no overflow). Narrow
+(768) DOES overflow to 900px — traced live to a fixed-px `.dh-canvas-frame` demo wrapper
+INSIDE THE FIXTURE HARNESS ONLY (absent from `ThreadWorkspace.tsx` itself), and
+`ThreadWorkspace.test.ts` has zero narrow/viewport assertions of any kind. Disposition:
+this is not a proven production regression, but it IS a real, previously-unstated gap —
+`ThreadWorkspace`'s narrow-width behavior is genuinely unverified, not merely "not shown."
+Also reconfirms the cross-slice finding (first logged here, referenced by every later M6
+task's addendum): no M6 3-8 test file uses a live `fireEvent`/`userEvent`/`dispatchEvent`
+DOM interaction; every keyboard/a11y "Match" row above is a static-markup string check or
+a pure-function math check, never a live-interaction proof.
+
+## M6 Task 5 - Composer
 
 Date: 2026-07-15
 
@@ -297,6 +323,17 @@ footer, keyboard/disabled-reason logic, and flag safety only; live mounting into
 canvas is a deferred data-wire (the live host is the user-owned `ChatPane.tsx`), mirroring
 Tasks 3–4 and staged for the Task 9 cutover. `nativeCodex` / `persistentClaude` /
 `composerSurface` requested-defaults stay false.
+
+### Task 5 gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/composer/gate-evidence-2026-07-16.md`) added the
+min(1024)/narrow(768) tier for `fixture-resting.html` — both genuinely clean, no
+harness-artifact overflow (unlike thread/settings-secondary). Copy dictionary
+`COMPOSER_COPY` grep-verified against `surface-inventory.md` `T-composer`/`L-chat` — all
+Match. Keyboard coverage is the second-strongest in M6: `Composer.test.ts` unit-tests the
+actual `decideComposerKey` pure function against synthetic Enter/Shift+Enter/Escape/arrow
+events (21 assertions), stronger than Tasks 3/4's static-only coverage, but still not a
+live DOM `fireEvent` test (0 hits) — recorded as a partial pass, same cross-slice caveat.
 
 ### M6 Task 6 - InspectorDock
 
@@ -361,6 +398,18 @@ dock geometry, runtime-gated destination logic, keyboard/a11y, and flag safety o
 mounting into the shell + wiring real repository/provider events is a deferred data-wire
 staged for the Task 9 `codexStyleShell` cutover. `nativeCodex` / `persistentClaude` /
 `inspectorDock` requested-defaults stay false.
+
+### Task 6 gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/inspector/gate-evidence-2026-07-16.md`) added the
+min(1024)/narrow(768) tier for `fixture-diff.html` — clean, no overflow at either tier
+(the slice already had a dedicated `m6-inspector-disclosure-narrow.png` for its own
+narrow-`Sheet` contract from 2026-07-15; this addendum additionally confirms the `diff`
+destination itself doesn't overflow). `INSPECTOR_COPY` grep-verified against
+`surface-inventory.md` `T-inspectors` — all Match. Keyboard-logic coverage is the deepest
+in M6 (`nextTabIndex` unit-tested against every roving-focus key), but — same cross-slice
+finding — no live `fireEvent` DOM test exists to prove a live `InspectorDock` mount
+actually moves `tabindex="0"`/focus on ArrowRight.
 
 ### M6 Task 7 - Search + Commands
 
@@ -434,6 +483,17 @@ region standing in for `Alert`; a full shadcn migration remains an unstarted, la
 follow-up. `nativeCodex` / `persistentClaude` / `searchCommands` requested-defaults stay
 false.
 
+### Task 7 gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/search-commands/gate-evidence-2026-07-16.md`) added
+the min(1024)/narrow(768) tier for `fixture.html` — clean, no overflow at either tier.
+`SEARCH_COPY`/`COMMAND_COPY` grep-verified as two genuinely separate frozen dictionaries
+(never co-present in the same dialog node) against `surface-inventory.md`
+`T-search`/`T-commands` — all Match. Same cross-slice keyboard/a11y finding: pure-function
+checks (`describeSearchTasksTransition`, `describeEscapeRestore`) and static ARIA-string
+assertions exist; no live `fireEvent` DOM test proves an actual keydown moves the active
+row or restores focus to the DOM node `describeEscapeRestore` names.
+
 ### M6 Task 8 - Settings + secondary utilities
 
 Date: 2026-07-15
@@ -506,6 +566,20 @@ shared token system, reusing the existing `nextTabIndex` roving-focus helper fro
 `nativeCodex` / `persistentClaude` / `searchCommands` / `settingsSecondary`
 requested-defaults stay false.
 
+### Task 8 gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/settings-secondary/gate-evidence-2026-07-16.md`)
+added the min(1024)/narrow(768) tier for `fixture.html`. Min is clean. Narrow (768)
+overflows to 886px — traced live to a fixed-px `.frame{width:820px}` demo card INSIDE THE
+FIXTURE HARNESS ONLY (absent from `SettingsRoute.tsx`). This is a more significant gap than
+Task 4's identical pattern, because Task 8's OWN DoD names "narrow uses slim/sheet
+navigation... no horizontal overflow" as an explicit acceptance line, and none of
+`SettingsRoute.test.ts`/`settings-ui.test.ts`/`SecondaryNav.test.ts` contains any
+narrow/viewport assertion. Disposition: real, open gap against this slice's own stated
+requirement — record it as unmet, not as the `V` Match implied by the original entry's
+narrow-navigation row. `Saved in this browser` / `Not synced` copy grep-verified — Match.
+Same cross-slice keyboard/a11y finding as every other M6 3-8 task (no live `fireEvent` test).
+
 ### M6 Task 9 (compose half, M6-T9-COMPOSE) - App.tsx composition + deferred data-wires
 
 Date: 2026-07-15
@@ -554,3 +628,13 @@ shells — every existing Task 1-8 test still passes unmodified, proving these
 additions are backward-compatible, not breaking changes. `codexStyleShell` stays
 false; `ui.tsx` is not removed; the full cutover drills/reviews are NOT run here —
 those remain the separate cutover task this entry explicitly does not claim.
+
+### Task 9 (compose half) gate-evidence addendum (2026-07-16)
+
+Independent review (see `evidence/m6/task9-compose/gate-evidence-2026-07-16.md`) confirms
+this task's own "zero new screenshots claimed" scope is accurate — no current/min/narrow
+triple is owed here, since no new geometry was introduced. The one new interactive surface,
+`ChatHost.tsx`, is covered by `App.m6-t9.test.ts` (3) and `m6-compose.test.ts` (18), both
+via `renderToStaticMarkup`/pure-function assertions only (0 `fireEvent`/`userEvent`
+hits) — the same cross-slice keyboard/a11y-live-test gap noted in every M6 3-8 addendum
+applies here too, with no additional Task-9-specific finding.
