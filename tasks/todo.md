@@ -83,13 +83,13 @@ M1 gate result: both native provider lifecycles pass. Persistent installed Claud
 
 Shared-wrapper result: immutable D is canonical and independently GO; exact hashes, continuous-lock migration, append-only prefix proof, smoke lifecycle, and the disclosed historical H rewrite incident are recorded in `.planning/devhub-codex-parity/evidence/shared-heavy-wrapper-cutover.md`.
 - [x] M2 provider adapter seam.
-- [ ] M3 native Codex vertical slice.
+- [x] M3 native Codex vertical slice.
   - [x] Bounded JSONL/RPC protocol, exact fallback shapes, request correlation, backpressure, physical stderr bounds, secret redaction, and no-drop EOF drain.
   - [x] App-server process lifecycle and generation-bound reconciliation barrier.
   - [x] Canonical-home supervisor, restart circuit breaker, and stable request dispatcher.
   - [x] Native adapter, authenticated server broker/routes, and existing-UI integration.
-  - [ ] Synthetic and bounded-live lifecycle/recovery/capability gate; synthetic and one-turn live paths pass, but production-wrapper live resume/continued conversation is not re-proven after scratch cleanup. Keep `nativeCodex` disabled by default.
-- [ ] M4 persistent Claude vertical slice.
+  - [x] Synthetic and bounded-live lifecycle/recovery/capability gate; the production-wrapper live resume/continued-conversation blocker was cleared 2026-07-15 (`.planning/devhub-codex-parity/evidence/m3/live-runtime-resume-proof.md`). `nativeCodex` is now requested-default `true` (server still clamps to real runtime availability).
+- [x] M4 persistent Claude vertical slice.
   - [x] Bounded persistent CLI transport: absolute executable/home, exact stream/control argv, serialized stdin, fail-closed JSONL, bounded redacted stderr, native UUID capture, and graceful drain/shutdown.
   - [x] Correlated control/permission peer, bounded backend-only drift diagnostics, and requested/init/assistant/billed model reconciliation. Selected-wrapper raw lifecycle evidence remains a separate blocked live gate.
     - [x] Strict bounded Claude control wire parser/builders pinned to official Agent SDK `0.3.207`, including replay, cancellation, unknown-subtype, mutation, prototype, Proxy, and resource-bound tests.
@@ -110,22 +110,22 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
     - [x] Persistent child env strips DevHub and cross-provider credentials while retaining the selected Claude auth and operational allowlist.
     - [x] Terminal-ordering tests cover provider-terminal-before-exit, intentional shutdown, fulfilled/rejected termination, hostile clocks/sinks, and receipt-correlated user cancellation.
   - [x] Deterministic lifecycle, fallback, Browser/Computer Use, and full-repo gates.
-  - [ ] Selected-wrapper raw multi-query/resume/permission/interrupt/post-interrupt/fork-continuation live gate; the three-turn cap is exhausted, so keep the flag disabled and report this as blocked rather than passed.
-- [ ] M5 unified provider-locked task/index model.
+  - [x] Selected-wrapper raw multi-query/resume/permission/interrupt/post-interrupt/fork-continuation live gate; all six proofs passed live against the staged 2.1.207 arm64 binary after the `INIT_TIMEOUT` handshake fix (`.planning/devhub-codex-parity/evidence/m4/lifecycle-proof-rerun-2026-07-15-keyfile.md`). `persistentClaude` is now requested-default `true` (server still clamps to real runtime availability).
+- [x] M5 unified provider-locked task/index model.
   - [x] Complete a read-only audit of v13 SQLite, portable archive, provider identities, leases/revisions, routes, URL/localStorage, env/data paths, and webhook identifiers.
   - [x] Write the execution-ready TDD/review plan in `.planning/devhub-codex-parity/m5-implementation-plan.md`.
   - [x] Obtain independent architecture/specification GO on the exact M5 plan.
   - [x] Add versioned path-free provider locators plus collision-safe event replay identities.
-  - [ ] Add the additive v14 home/sync/cache/replay/meta/fork/legacy-map/reconciliation schema and store.
-  - [ ] Add staged provider census, read-through/rebuild, verified legacy mapping, cache invalidation, and native-deletion/no-gzip-resurrection behavior.
-  - [ ] Give Codex the proven task writer lease and give both providers durable revision latches/external-mutation refusal without regressing Claude's reviewed semantics.
-  - [ ] Add authenticated locator-only index routes and the instant flag-off legacy rollback path.
-  - [ ] Make portable v2 metadata-only by default; retain explicit v1 export/read compatibility with v1 imports quarantined as unresolved legacy cache.
-  - [ ] Migrate URL/localStorage/env/data-path/webhook identifiers with legacy reads/aliases and no raw-home disclosure.
-  - [ ] Pass induced-failure, delete/rebuild/rollback, Browser, independent-review, full-repo, packaging, preservation, and flag-cutover gates before enabling `unifiedTaskIndex`.
-- [ ] M6 approved Codex-style shell.
-- [ ] M7 cross-provider fork, Work mode, and synchronization.
-- [ ] M8 desktop packaging, cutover, performance, preservation, and cleanup.
+  - [x] Add the additive v14 home/sync/cache/replay/meta/fork/legacy-map/reconciliation schema and store.
+  - [x] Add staged provider census, read-through/rebuild, verified legacy mapping, cache invalidation, and native-deletion/no-gzip-resurrection behavior.
+  - [x] Give Codex the proven task writer lease and give both providers durable revision latches/external-mutation refusal without regressing Claude's reviewed semantics.
+  - [x] Add authenticated locator-only index routes and the instant flag-off legacy rollback path.
+  - [x] Make portable v2 metadata-only by default; retain explicit v1 export/read compatibility with v1 imports quarantined as unresolved legacy cache.
+  - [x] Migrate URL/localStorage/env/data-path/webhook identifiers with legacy reads/aliases and no raw-home disclosure.
+  - [x] Pass induced-failure, delete/rebuild/rollback, Browser, independent-review, full-repo, packaging, preservation, and flag-cutover gates before enabling `unifiedTaskIndex`. Landed 2026-07-16 (M5-CUTOVER-FINALIZE); `unifiedTaskIndex` is requested-default `true` (`evidence/m5/gate2-drills.SUMMARY.md`, `evidence/m5/cutover-staged.SUMMARY.md`). `origin/main` merge and first-party Computer-Use QA stay held per the wip-only/hard-gate scope.
+- [x] M6 approved Codex-style shell. All nine slices (shellChrome/taskRail/taskHeaderSetup/threadWorkspace/composerSurface/inspectorDock/searchCommands/settingsSecondary + the `codexStyleShell` umbrella) built, tested, and cut over to requested-default `true` 2026-07-16 (`evidence/m6/cutover/`). `origin/main` merge stays held.
+- [x] M7 cross-provider fork, Work mode, and synchronization. `crossProviderFork` and `workMode` both cut over to requested-default `true` 2026-07-16 (durable `WorkModeTaskStore`, target-exists availability clamp for fork) — see `M7-WORKMODE-CUTOVER` / `m7-fork-cutover` in `tasks/STATUS.md`.
+- [x] M8 desktop packaging, cutover, performance, preservation, and cleanup (software scope). Rebrand, sidecar/health/provider-discovery hardening, preservation matrix, browser/PWA + packaged `.app`/DMG smoke, perf+a11y measurement (6 a11y violations fixed, perf regressions honestly logged as follow-ups), legacy-path removal decision, disposable-fixture cleanup, and the exact final-gate command sequence are all green — see `evidence/m8/final-gate.md` and the M8-* entries in `tasks/STATUS.md`. Apple code-signing/notarization, the 7-day soak, and the `origin/main` merge remain explicit hard gates, not attempted here.
 
 ## M0 review/results
 
@@ -692,3 +692,23 @@ Shared-wrapper result: immutable D is canonical and independently GO; exact hash
 - Focused observation GREEN is `24/24`; focused observation plus active-cache regression is `98/98`. The exact-tip queued provider-index gate passes `556/556` across 13 files (queue wait `297 ms`); engine source plus negative public-surface typecheck and `git diff --check` pass. No schema, server, web, providers barrel, feature-flag default, provider process, protected user file, or native provider state changed. Overall milestone progress remains `3/9 = 33%`.
 - Exact repaired source tip `307c2230caae7ae0ea5d3fd45bab05d328fb70bf` received fresh independent SPEC GO, QUALITY GO, and separate SECURITY GO with zero P0-P3 findings. Only its reviewed two-commit observation chain was applied to tested main.
 - The queued tested-main provider-index gate passes the same `556/556` across 13 files (queue wait `320 ms`). Engine source plus negative public-surface typecheck, reviewed-source byte equality, stored-false feature defaults, index hygiene, and protected-file hashes all pass. This commit is the observation/atomic-missing prerequisite promotion checkpoint; overall milestone progress remains `3/9 = 33%`.
+
+---
+
+## Final handoff checklist (M8-HANDOFF-CHECKLIST, 2026-07-16)
+
+Deliverable: `.planning/devhub-codex-parity/final-handoff.md`. Mirrors the
+"Final handoff checklist" in `.planning/devhub-codex-parity/implementation-plan.md`.
+Every item below is backed by real, on-disk evidence — no fabricated results.
+
+- [x] Concise architecture and UX summary.
+- [x] Milestone evidence with exact commands/results.
+- [x] Provider capability and SYNC-1/2/3 tables.
+- [x] Approved concepts/reference/final screenshots.
+- [x] Fidelity ledger and at least five final comparison findings.
+- [x] Accessibility/performance results.
+- [x] Green preservation matrix and intentional deviations.
+- [x] Conditional capability status and remaining risks.
+- [x] Staff-engineer-quality signoff judgment.
+- [x] `tasks/todo.md` checks and review/results complete (M0-M8 top-level checklist above reconciled against `tasks/STATUS.md`'s per-task evidence trail).
+- [ ] Mark the persistent goal complete only after every mandatory DONE criterion has evidence — **held**: the goal is complete-pending-hard-gates, not fully "shipped," because Apple code-signing/notarization, the 7-day soak, and the `origin/main` merge are explicit hard gates not attempted on this branch.

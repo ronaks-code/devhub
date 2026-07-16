@@ -3,7 +3,37 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-LEGACY-PATH-DECISION (decided + executed the
+Last updated: 2026-07-16 by M8-HANDOFF-CHECKLIST (docs-only task; assembled
+the Final handoff checklist deliverable at
+`.planning/devhub-codex-parity/final-handoff.md` from evidence already on
+disk — no fabricated results, no new source/test code). Covers: architecture/
+UX summary; per-milestone (M2-M8) evidence table with exact commands/results;
+provider capability + SYNC-1/2/3 tables; approved concepts/reference/final
+screenshot links; a fidelity ledger with 6 concrete final comparison findings
+(>= the required 5, reused from `evidence/m8/fidelity-ledger.md`); a11y (6
+violations fixed via TDD, 3 real follow-ups logged, not silently passed) and
+perf (initial-load FCP gap, and the un-virtualized `ThreadWorkspace` 600-
+message ~11s cold render — both real, both logged as follow-ups, neither
+claimed fixed) results from `evidence/m8/a11y/` and `evidence/m8/perf/`; the
+green preservation matrix plus its intentional deviations (legacy-adapter
+removal, naming scope boundary, sidecar/health hardening); and a conditional-
+capability + remaining-risk section that names the three HELD hard gates
+verbatim (Apple signing/notarization, 7-day soak, `origin/main` merge) so the
+goal is marked complete-pending-hard-gates, not falsely "shipped." Also
+reconciled `tasks/todo.md`'s stale top-level M0-M8 checklist (it still showed
+M3/M5/M6/M7/M8 as open despite their flags being default-`true` and gates
+green per this same STATUS.md's own per-task log) and appended a "Final
+handoff checklist" section mirroring `implementation-plan.md`'s own list.
+Deliberately did NOT rewrite `tasks/STATUS.md`'s own older top-of-file "Core
+tasks" summary table (lines ~834-842) — that table predates most of the
+per-task log below it and is superseded by those entries; this task's scope
+was `tasks/todo.md` only, and the discrepancy is flagged in
+`final-handoff.md` §10 so the next reader isn't misled by it. No flag
+defaults changed, no code touched, no full-suite re-run needed (nothing
+source-affecting changed) — `git diff --check` clean, working tree clean
+after commit.
+
+Previously updated: 2026-07-16 by M8-LEGACY-PATH-DECISION (decided + executed the
 per-path legacy-path retention call: ADR at
 `.planning/devhub-codex-parity/adr-legacy-retention.md`).
 `LegacyClaudeAdapter` (`packages/engine/src/providers/claude/legacy-adapter.ts`)
