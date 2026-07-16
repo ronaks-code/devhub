@@ -336,8 +336,25 @@ export function SessionsPane({
         </div>
       )}
 
+      {/*
+       * `role="grid"`, not `listbox` — deliberate ARIA pattern switch
+       * (DEVHUB-A11Y-NESTED-INTERACTIVE; see evidence/m8/a11y/a11y.md for the
+       * axe `nested-interactive` violation this fixes). Each row's per-item
+       * actions (select checkbox, pin, rename) are real buttons alongside the
+       * "open session" control — a listbox's `option` items must be leaves
+       * (any real focusable descendant is `nested-interactive`; axe also
+       * requires listbox's children be `option`/`group` ONLY, which a "row +
+       * several buttons" shape can't satisfy either — `aria-required-children`
+       * fires the moment any button is even an indirect descendant). A grid's
+       * `row` > `gridcell` structure is built for exactly this: each `gridcell`
+       * legitimately hosts one focusable widget, so nothing here nests two
+       * interactive roles. `useListKeyboardNav`'s j/k/Home/End/Enter model is
+       * unchanged (it never depended on the `listbox`/`option` role names —
+       * only on `focusedIndex` + the container's own onKeyDown).
+       */}
       <div
         {...nav.containerProps}
+        role="grid"
         aria-label="Sessions"
         onKeyDown={onContainerKeyDown}
         className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2 outline-none"
@@ -349,12 +366,17 @@ export function SessionsPane({
           const checked = selected.has(s.sessionId);
           const itemProps = nav.getItemProps(i);
           return (
+            // Row: `role="row"`, a valid direct child of `role="grid"`. Each
+            // action below lives in its own `role="gridcell"` — a gridcell is
+            // explicitly meant to host exactly one focusable widget, so none of
+            // these trigger `nested-interactive` (unlike nesting a `<button>`
+            // inside a `role="option"`/`listbox` leaf).
             <div
               key={s.sessionId}
               ref={(el) => {
                 itemRefs.current[i] = el;
               }}
-              role={itemProps.role}
+              role="row"
               aria-selected={itemProps["aria-selected"]}
               data-focused={itemProps["data-focused"]}
               onMouseEnter={itemProps.onMouseEnter}
@@ -372,61 +394,72 @@ export function SessionsPane({
               <div className="flex items-start gap-1.5">
                 {/* Selection checkbox — always visible once any selection is
                     active, otherwise reveal on hover so it stays unobtrusive. */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleAt(i, e.shiftKey);
-                  }}
-                  className={cn(
-                    "-ml-0.5 mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
-                    checked
-                      ? "border-clay-500 bg-clay-500 text-white"
-                      : "border-zinc-700 text-transparent hover:border-zinc-500",
-                    !checked && selected.size === 0 && "opacity-0 group-hover:opacity-100",
-                  )}
-                  title={checked ? "Deselect (x)" : "Select (x, shift to range)"}
-                  aria-pressed={checked}
-                  aria-label={checked ? "Deselect session" : "Select session"}
-                >
-                  <Check className="h-3 w-3" />
-                </button>
+                <div role="gridcell" className="contents">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleAt(i, e.shiftKey);
+                    }}
+                    className={cn(
+                      "-ml-0.5 mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
+                      checked
+                        ? "border-clay-500 bg-clay-500 text-white"
+                        : "border-zinc-700 text-transparent hover:border-zinc-500",
+                      !checked &&
+                        selected.size === 0 &&
+                        "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                    )}
+                    title={checked ? "Deselect (x)" : "Select (x, shift to range)"}
+                    aria-pressed={checked}
+                    aria-label={checked ? "Deselect session" : "Select session"}
+                  >
+                    <Check className="h-3 w-3" />
+                  </button>
+                </div>
 
-                <IconButton
-                  className={cn(
-                    "mt-0.5 p-1",
-                    s.pinned ? "text-clay-400 hover:text-clay-300" : "opacity-0 group-hover:opacity-100",
-                  )}
-                  title={s.pinned ? "Unpin" : "Pin"}
-                  onClick={() => onTogglePin(s.sessionId, !s.pinned)}
-                >
-                  <Pin className={cn("h-3.5 w-3.5", s.pinned && "fill-current")} />
-                </IconButton>
+                <div role="gridcell" className="contents">
+                  <IconButton
+                    className={cn(
+                      "mt-0.5 p-1",
+                      s.pinned
+                        ? "text-clay-400 hover:text-clay-300"
+                        : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+                    )}
+                    title={s.pinned ? "Unpin" : "Pin"}
+                    onClick={() => onTogglePin(s.sessionId, !s.pinned)}
+                  >
+                    <Pin className={cn("h-3.5 w-3.5", s.pinned && "fill-current")} />
+                  </IconButton>
+                </div>
 
                 {editing ? (
-                  <div className="flex flex-1 items-center gap-1">
-                    <input
-                      autoFocus
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commit(s);
-                        if (e.key === "Escape") setEditingId(null);
-                      }}
-                      className="w-full rounded bg-zinc-800 px-1.5 py-0.5 text-[13px] text-zinc-100 ring-1 ring-clay-500/40 focus:outline-none"
-                    />
-                    <IconButton className="p-1 text-emerald-400" onClick={() => commit(s)} title="Save">
-                      <Check className="h-3.5 w-3.5" />
-                    </IconButton>
-                    <IconButton className="p-1" onClick={() => setEditingId(null)} title="Cancel">
-                      <X className="h-3.5 w-3.5" />
-                    </IconButton>
+                  <div role="gridcell" className="contents">
+                    <div className="flex flex-1 items-center gap-1">
+                      <input
+                        autoFocus
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commit(s);
+                          if (e.key === "Escape") setEditingId(null);
+                        }}
+                        className="w-full rounded bg-zinc-800 px-1.5 py-0.5 text-[13px] text-zinc-100 ring-1 ring-clay-500/40 focus:outline-none"
+                      />
+                      <IconButton className="p-1 text-emerald-400" onClick={() => commit(s)} title="Save">
+                        <Check className="h-3.5 w-3.5" />
+                      </IconButton>
+                      <IconButton className="p-1" onClick={() => setEditingId(null)} title="Cancel">
+                        <X className="h-3.5 w-3.5" />
+                      </IconButton>
+                    </div>
                   </div>
                 ) : (
-                  <button
-                    data-testid="session"
-                    onClick={() => onSelect(s.sessionId)}
-                    className="min-w-0 flex-1 text-left"
-                  >
+                  <div role="gridcell" className="contents min-w-0 flex-1">
+                    <button
+                      data-testid="session"
+                      onClick={() => onSelect(s.sessionId)}
+                      className="min-w-0 flex-1 text-left"
+                    >
                     <div className="flex items-center gap-1.5">
                       <span
                         className={cn(
@@ -484,17 +517,20 @@ export function SessionsPane({
                         ))}
                       </div>
                     )}
-                  </button>
+                    </button>
+                  </div>
                 )}
 
                 {!editing && (
-                  <IconButton
-                    className="p-1 opacity-0 group-hover:opacity-100"
-                    title="Rename"
-                    onClick={() => startEdit(s)}
-                  >
-                    <Pencil className="h-3.5 w-3.5" />
-                  </IconButton>
+                  <div role="gridcell" className="contents">
+                    <IconButton
+                      className="p-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                      title="Rename"
+                      onClick={() => startEdit(s)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
                 )}
               </div>
             </div>

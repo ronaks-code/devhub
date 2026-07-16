@@ -3,7 +3,47 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-HANDOFF-CHECKLIST (docs-only task; assembled
+Last updated: 2026-07-16 by DEVHUB-A11Y-NESTED-INTERACTIVE (closed the
+`nested-interactive` follow-up logged in `evidence/m8/a11y/a11y.md`'s
+M8-PERF-A11Y audit). `SessionsPane` (`apps/web/src/components/SessionsPane.tsx`)
+switched from the `listbox`/`option` ARIA pattern to `grid`/`row`/`gridcell`:
+a `role="option"` leaf can't contain a focusable descendant (that's the
+violation) and — discovered empirically while fixing this — `role="listbox"`
+can't have ANY focusable element as even an indirect descendant unless it's
+wrapped in `option` or `group`, and `group` alone did NOT satisfy axe (a
+`role="group"` wrapper still let the checkbox/pin/rename buttons register as
+illegal flattened children of the listbox, tripping a NEW
+`aria-required-children` violation on the first attempt). `gridcell` is
+explicitly built to host exactly one focusable widget per cell, so wrapping
+each per-row action (select checkbox, pin, the "open session" button, rename)
+in its own `role="gridcell"` inside a `role="row"` inside `role="grid"` fixes
+both rules at once, with zero change to `useListKeyboardNav`'s j/k/Home/End/
+Enter keyboard model (it never read the `listbox`/`option` role names, only
+`focusedIndex` + the container's own `onKeyDown`). `ProjectsPane`
+(`apps/web/src/components/ProjectsPane.tsx`) has no per-row actions today, so
+kept the simpler `listbox`/`option` pattern but made the per-row `role="option"`
+element a non-focusable (`tabIndex={-1}`) `<div>` instead of a native
+`<button>`, closing the same hole preventively. New test file
+`apps/web/src/components/nested-interactive-rows.test.ts` (7 cases, full RTL
+mounts of both panes): asserts zero `role="listbox"`/`role="option"` remain in
+`SessionsPane`, every `gridcell` holds at most one focusable descendant and no
+nested grid/row/gridcell, the checkbox/pin/rename buttons are real reachable
+`<button>`s, clicking the row still opens the session, and `j`/`Enter`
+keyboard nav still works end to end for both panes. Re-ran the same axe
+harness from `evidence/m8/a11y/` (real `vite` dev server + real `tsx` server,
+isolated scratch `HOME`/`CLAUDE_CONFIG_DIR`/`DEVHUB_DATA`, one synthetic
+2-session Claude-format fixture, `nativeCodex` held `false`) against Browse
+with `data-theme` forced `"dark"`: 0 `nested-interactive` violations (raw axe
+JSON in `evidence/m8/a11y/raw/after-browse-nested-interactive-dark.log`); the
+only violation left on that surface is the SEPARATE, already-logged
+`color-contrast` follow-up (`#71717b`/`#18181b`, 3.67:1, M6 secondary-nav),
+untouched by this task. Full gate: `turbo run test --filter=@devhub/web
+--force` 594-595/594-595 (45 files, +1 file/+7 tests); engine 2230/2230 (80
+files), server 270/270 (16 files) unaffected; `tsc --noEmit` clean on
+engine/server/web; `vite build` clean; `oxlint src` 0. Landed on
+`wip/devhub-background-runner` only.
+
+Previously updated: 2026-07-16 by M8-HANDOFF-CHECKLIST (docs-only task; assembled
 the Final handoff checklist deliverable at
 `.planning/devhub-codex-parity/final-handoff.md` from evidence already on
 disk — no fabricated results, no new source/test code). Covers: architecture/

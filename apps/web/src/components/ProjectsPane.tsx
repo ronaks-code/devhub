@@ -25,7 +25,7 @@ export function ProjectsPane({
 
   // j/k + arrow + Enter navigation. Enter selects the highlighted project; the
   // row refs let the hook keep the focused item scrolled into view.
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const nav = useListKeyboardNav({
     count: filtered.length,
     onSelect: (i) => {
@@ -61,16 +61,25 @@ export function ProjectsPane({
           const active = p.id === selectedId;
           const focused = i === nav.focusedIndex;
           return (
-            <button
+            // A non-focusable (`tabIndex=-1`) `role="option"` leaf, not a
+            // `<button>` — keyboard focus/selection flows through the listbox
+            // container's own j/k/Enter handling, not native Tab focus on each
+            // row (matching SessionsPane's roving-focus model; see
+            // DEVHUB-A11Y-NESTED-INTERACTIVE / evidence/m8/a11y/a11y.md). This
+            // row has no per-item action buttons today, but keeping it a plain
+            // leaf (rather than an interactive element) leaves room to add
+            // sibling actions later without reintroducing nested-interactive.
+            <div
               key={p.id}
               ref={(el) => {
                 itemRefs.current[i] = el;
               }}
               data-testid="project"
               {...nav.getItemProps(i)}
+              tabIndex={-1}
               onClick={() => onSelect(p.id)}
               className={cn(
-                "group mb-0.5 flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition",
+                "group mb-0.5 flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition",
                 active
                   ? "bg-clay-500/10 ring-1 ring-clay-500/30"
                   : focused
@@ -110,7 +119,7 @@ export function ProjectsPane({
                   <span>{relativeTime(p.lastActivity)}</span>
                 </div>
               </div>
-            </button>
+            </div>
           );
         })}
         {filtered.length === 0 && (
