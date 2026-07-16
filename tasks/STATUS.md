@@ -3,7 +3,54 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M6-CODEXSTYLESHELL-CUTOVER (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-FORK-FOUNDATION (DIRECTED TASK on
+`wip/devhub-background-runner` — M7 Task 1: RED-first cross-provider fork handoff model
+in the engine, behind the existing default-off `crossProviderFork` flag; flag value
+itself UNCHANGED (`false`), `nativeCodex`/`persistentClaude` also unchanged). New module
+`packages/engine/src/providers/cross-provider-fork.ts` (+export from `providers/index.ts`):
+`buildCrossProviderHandoffPreview`/`buildTransferredContext` build an ALLOWLISTED (not
+blocklisted) transferred-context payload from an already-`registry.readTask`-read source
+task — only `message` events, only `user`/`assistant` roles, only from a REVIEWED
+(completed-status) turn survive, every surviving string re-run through `redactSecrets`,
+and a hidden-reasoning marker regex drops any message that slips one in; everything else
+(approval/permission `request` events carrying approval credentials, diagnostics, usage/
+status/plan/activity chatter, `system`-role messages, in-flight/unreviewed turn output) is
+never allowlisted in, so it never reaches the payload — proved by an adversarial fixture
+task in the new test file that embeds an OpenAI-style key, a `Bearer` token, an
+`auth=`-assignment, a hidden/chain-of-thought-tagged message, an approval-credential
+carrying request event, and an in-flight second turn, then asserts none of that text (or
+the request's identity) survives while the legitimate reviewed message does.
+`sourceTaskContentHash` (sha256 over `canonicalProviderIndexJson` of the full task) is
+captured at preview time and `commitCrossProviderHandoff` RE-READS the source via
+`registry.readTask` and rejects (`SourceTaskMutatedError`) if the hash drifted — the
+source is only ever read in this module, never mutated by any of its own code, so a real
+mutation between preview and commit is the only way the check can fire; the module also
+re-checks the `crossProviderFork` flag at commit time independent of preview time. The
+new native TARGET task is created via the EXISTING `ProviderRegistry.startTask` (not a
+bespoke path), so it goes through the registry's normal ownership/id checks; the commit
+guards that the returned task's provider is the requested target provider (rejects same-
+provider / same-native-id results as `HandoffTargetNotNativeError`). Cross-task references
+use `taskLocator` (provider + home FINGERPRINT + native task id, from the existing
+`provider-index/identity.ts`) everywhere in the preview and the link, never the raw
+provider home path — asserted directly in tests via `JSON.stringify(...).not.toContain(
+rawHomePath)` on both the preview and the link. Linkage is ADDITIVE and bidirectional:
+`commitCrossProviderHandoff` returns a `CrossProviderHandoffLink` with both a `forSource`
+and a `forTarget` view (`relation: "handoff-source" | "handoff-target"`, each carrying the
+other side's locator), neither view mutates either task's own fields. New test file
+`packages/engine/test/providers/cross-provider-fork.test.ts` (7 tests): default-off
+rejection at every entry point, redaction/allowlist adversarial proof, source-immutability
+rejection, native-target creation + bidirectional linkage, cross-provider-only guard (same-
+provider target rejected at preview), flag-flip-between-preview-and-commit rejection, and
+content-hash stability/change-detection. Full engine suite re-run at this tip in the SAME
+commit: `vitest run` 2213/2213 (80/80 files, +1 new file/+7 new tests, no existing test
+changed) + `tsc --noEmit` clean + `tsc --project test/provider-index/tsconfig.public-
+surface.json` clean (untouched — the new module isn't part of that narrow provider-index
+surface list). `git diff --check` clean; `git status --short` shows only the new module,
+its test, and the one-line `providers/index.ts` export addition. Server/web untouched (no
+UI/route wiring — that's a later M7 task); `nativeCodex`/`persistentClaude` flags and every
+M6 slice flag unchanged. Landed on `wip/devhub-background-runner` only, per task
+instructions — NOT `origin/main`.
+PRIOR: M6-CODEXSTYLESHELL-CUTOVER (DIRECTED TASK on
 `wip/devhub-background-runner` — Ronak authorized the umbrella default-on cutover this file's
 prior entries flagged as the only remaining M6 [RONAK-GATE]. Flipped
 `DEFAULT_DEVHUB_FEATURE_FLAGS.codexStyleShell` + all 8 M6 slice flags (`shellChrome`/

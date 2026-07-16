@@ -9,6 +9,7 @@ export * from "./feature-flags.js";
 export * from "./registry.js";
 export * from "./writer-lease.js";
 export * from "./reconciliation-store.js";
+export * from "./cross-provider-fork.js";
 export {
   assertLocatorMatchesKey,
   cachedEventItemId,
