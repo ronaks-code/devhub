@@ -3,7 +3,10 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-SIDECAR-HEALTH-DISCOVERY-AUDIT (DIRECTED TASK on
+Last updated: 2026-07-16 by M8-TUI-SMOKE (packaged TUI smoke re-run, exit 0,
+no breakage — see "M8-TUI-SMOKE" section below).
+
+Previously updated: 2026-07-16 by M8-SIDECAR-HEALTH-DISCOVERY-AUDIT (DIRECTED TASK on
 `wip/devhub-background-runner` — audits + closes M8 checklist item 2:
 "deterministic sidecar/IPC/API base, strict health identity, PATH-independent
 provider discovery" from `.planning/devhub-codex-parity/implementation-plan.md`
@@ -1060,6 +1063,44 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
   (its confirmed prior value) in the very next call, then moved this task's own
   server to an unused port (`8811`) for the rest of the work. No other field on
   that server was touched. Full note in `evidence/m8/perf/perf.md` §"Harness".
+- HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised.
+
+## M8-TUI-SMOKE (2026-07-16)
+- RAN `pnpm --filter @devhub/tui smoke` (`apps/tui/src/smoke.tsx`) at the
+  current wip tip. **No breakage found** — exits `0` on the first try, no
+  renamed-package/endpoint drift. Raw stdout+exit code saved to
+  `evidence/m8/tui/smoke.txt` (repo `.gitignore` excludes `*.log`, so the
+  raw capture uses the same `.txt` convention as the other `evidence/m8/`
+  artifacts).
+- ARCHITECTURE NOTE (why "locally-booted `@devhub/server`" doesn't apply
+  here) — `apps/tui/src/app.tsx`'s own header comment states the design
+  intent directly: the TUI imports `@devhub/engine` **in-process, no HTTP
+  server** ("one brain, many faces" — same engine the web app's server
+  wraps, but the TUI talks to it directly instead of over `/api/...`). The
+  smoke script (`smoke.tsx`) constructs its own `new Engine()`, renders
+  `<App engine={engine} />` with `ink-testing-library`, captures
+  `lastFrame()` after 250ms, then calls `engine.close()` + `unmount()` +
+  `process.exit(0)`. There is no server to boot, no port to isolate, and
+  no "flags" concept in the TUI/engine (no feature-flag surface exists in
+  this face) — confirmed via `grep -rn "flags" packages/engine/src
+  apps/tui/src` returning nothing. So "default flags on" and "isolated
+  scratch port" are inherited from the generic M8 task template written for
+  the web/server pair and don't have a literal analog on this face.
+- CLEAN SHUTDOWN — confirmed via `ps aux` + `lsof -i` immediately after the
+  run: no `smoke.tsx`/`cli.tsx` process left running, no port bound by this
+  run (the one `node`/`:5173` listener seen in `lsof` belongs to an
+  unrelated concurrent agent session's dev server, not this task).
+- DATA NOTE — the smoke's rendered frame lists real local project/session
+  names read from the real local session store (same as any local `tsx
+  src/cli.tsx` run of this TUI) because `Engine`'s constructor has no
+  fixture/scratch-home override param; this is read-only (list projects +
+  render first frame) and matches how this smoke test has always run — no
+  writes, no external/prod resource touched.
+- GATES — `pnpm --filter @devhub/tui smoke` exit `0` (log above) is the
+  full DoD for this task; no source changes were needed so
+  engine/server/web test suites are unaffected (untouched at 2236/2236,
+  269/269, 586/586 respectively per the M8-PERF-A11Y entry above).
 - HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
   exercised.
 

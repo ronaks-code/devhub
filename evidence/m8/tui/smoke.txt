@@ -1,0 +1,30 @@
+
+> @devhub/tui@0.0.1 smoke /Users/ronak/.config/superpowers/worktrees/claude-ui/m5-task3-lanes/apps/tui
+> tsx src/smoke.tsx
+
+(node:74087) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+----- TUI first frame -----
+ ◆ DevHub — terminal face · 43 projects
+
+ Projects
+ › 00-6thsense             39 sessions
+   /                       7 sessions
+   m4-spawn-g8GvTG         1 sessions
+   tmp                     1 sessions
+   capture-companion       3 sessions
+   tunis                   2 sessions
+   bilbao                  1 sessions
+   code                    1 sessions
+   denpasar                2 sessions
+   ronak                   16 sessions
+   sofia                   3 sessions
+   bucharest               1 sessions
+   douala                  3 sessions
+   bangalore               1 sessions
+   tacoma                  1 sessions
+   lyon                    1 sessions
+
+ ↑↓/jk move · ⏎ open · c chat · / search · d dashboard · q quit
+---------------------------
+EXIT:0
