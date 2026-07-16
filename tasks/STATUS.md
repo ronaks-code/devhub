@@ -1160,6 +1160,33 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
   exercised.
 
+## M8-CLEANUP-SWEEP (2026-07-16)
+- SWEPT the tree for disposable artifacts per the M8 checklist final item.
+  Found and removed the only two: `.planning/devhub-codex-parity/qa/
+  m3-fixture-server.ts` and `m5-fixture-server.ts` — hand-rolled Fastify
+  fixture servers used once each for manual browser QA during the M3 and M5
+  milestones (documented, non-reproducibly-needed, in
+  `evidence/m3/browser-qa.md` / `evidence/m5/browser-qa.md`). Confirmed
+  disposable: not imported by any package.json script, not referenced by
+  `turbo.json`, and not consumed by any automated test — `grep -rn
+  "fixture-server"` across `package.json`/`turbo.json`/`apps/*/package.json`/
+  `packages/*/package.json` returned nothing.
+- CHECKED for the rest of the M8 checklist's disposable-artifact categories
+  and found none outstanding: no stray probe scripts beyond the sanctioned
+  `.planning/devhub-codex-parity/probe-evidence/*` (kept — sanctioned
+  evidence), no untracked/stray screenshots or mounted images (the only
+  tracked PNGs outside `evidence/`/`reference-captures/`/`concepts/` are the
+  real desktop app icons under `apps/desktop/src-tauri/icons/`, and the only
+  `.dmg` is a gitignored Tauri build artifact under `target/`), and no temp
+  generated files tracked outside `evidence/` (all `.log`/`.turbo`/`dist`/
+  `node_modules` are gitignored and were untracked, not sweep targets).
+- GATES GREEN post-removal — `turbo run test --filter @devhub/engine
+  --filter @devhub/server --filter @devhub/web --force`: engine 2230/2230
+  (80 files), server 270/270 (16 files), web 586/586 (44 files) — unchanged
+  by the removal. `git diff --check` clean; `git status --short` clean.
+- HELD (unchanged) — `origin/main` merge remains [RONAK-GATE]/hard-gate, not
+  exercised.
+
 ## Recent checkpoints (last 3 tested commits on shared branch)
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
