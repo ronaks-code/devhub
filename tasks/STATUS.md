@@ -3,7 +3,44 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-DESKTOP-BUILD (DIRECTED TASK on
+Last updated: 2026-07-16 by M8-NAMING (DIRECTED TASK on
+`wip/devhub-background-runner` — DevHub in-app branding/naming pass; folder/repo
+rename stays deferred per the settled decision). Made the user-facing product
+name "DevHub" everywhere it renders, without touching the `claude-ui` folder/repo
+name or any route path. Audited every "Claude UI"/"claude-ui" hit in the tree
+first (`grep -rniI`) and separated true user-facing surfaces from internal compat
+identifiers/log prefixes that must NOT change (the `claude-ui:*`/`claude-ui-token`
+localStorage compat keys in `compat-storage.ts`, the `CLAUDE_UI_TOKEN` env-compat
+alias in server tests, and the desktop's internal `[claude-ui]` log-line prefixes
+are load-bearing back-compat/debug surfaces, not rendered UI — left untouched).
+Fixed six real remaining user-facing "Claude UI" strings: `apps/desktop/src-tauri/tauri.conf.json`
+(`productName` + window `title` -> "DevHub" — this is what macOS shows as the
+app name in the Dock/menu bar/Force Quit and in the actual OS window
+titlebar), `apps/web/public/manifest.webmanifest` (`name`/`short_name` -> "DevHub"
+— what a PWA install shows), `apps/desktop/src-tauri/src/notify.rs` (system
+notification `.title(...)` -> "DevHub"), `apps/desktop/src-tauri/src/tray.rs`
+(macOS menu-bar tray tooltip + the "Show/Hide ..." menu item -> "DevHub"),
+`apps/tui/src/app.tsx` (the terminal face's rendered `◆ Claude UI` header ->
+"◆ DevHub"), and `apps/desktop/package.json`'s `description` field for
+consistency. `apps/web/index.html`'s `<title>`/apple-web-app-title and
+`apps/web/src/components/{FirstRun,AuthGate}.tsx`'s rendered copy were already
+"DevHub" from a prior task — confirmed, not re-touched.
+`apps/web/src/components/features/shell/DevHubShell.test.ts` already asserts
+the exact DevHub wordmark and explicitly forbids "Claude UI" in the brand slot
+— confirmed still passing, no test changes needed (no test anywhere else
+asserted the old visible name, so no test updates were needed for this task).
+Not touched (by design, per the task's explicit scope): the `claude-ui`
+worktree/repo folder name itself, the Tauri `identifier`
+(`dev.sixthsense.claude-ui`, a bundle ID not a display name), the `apps/tui`
+package's `bin` name (`claude-ui-tui`, a CLI command users type, not rendered
+UI), and every doc-comment/code-comment mention of "Claude UI" (not rendered
+at runtime). Full monorepo build+test gate: engine 81 files/2236 tests green,
+server 16/269 green, web 41/579 green (all unchanged counts — this task only
+touched non-test config/UI strings), `tsc --noEmit` clean across
+engine/server/web/tui, `vite build` (web) + `tsc` (server/engine) clean. Landed
+on `wip/devhub-background-runner` only, per task instructions — NOT
+`origin/main`.
+PRIOR: M8-DESKTOP-BUILD (DIRECTED TASK on
 `wip/devhub-background-runner` — produces an unsigned Tauri desktop build +
 packaged smoke). Ran the real `tauri build` for `@devhub/desktop`
 (`apps/desktop/src-tauri`): vite build of `@devhub/web` (green), full Rust

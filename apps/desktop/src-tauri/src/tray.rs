@@ -155,7 +155,7 @@ pub fn setup_tray<R: Runtime>(
     port: u16,
 ) -> tauri::Result<()> {
     // Show/Hide toggle (stable id) + a separator + the native Quit item.
-    let toggle = MenuItemBuilder::with_id(TOGGLE_ID, "Show/Hide Claude UI").build(app)?;
+    let toggle = MenuItemBuilder::with_id(TOGGLE_ID, "Show/Hide DevHub").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&toggle)
         .separator()
@@ -164,7 +164,7 @@ pub fn setup_tray<R: Runtime>(
 
     let mut builder = TrayIconBuilder::with_id("claude-ui-tray")
         .menu(&menu)
-        .tooltip("Claude UI")
+        .tooltip("DevHub")
         // Left-click toggles the window; reserve the menu for right-click so the
         // primary click is the common "bring me back" gesture.
         .show_menu_on_left_click(false)

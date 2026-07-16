@@ -161,7 +161,7 @@ fn notify_finished<R: Runtime>(app: &AppHandle<R>, project: &str) {
     match app
         .notification()
         .builder()
-        .title("Claude UI")
+        .title("DevHub")
         .body(&body)
         .show()
     {

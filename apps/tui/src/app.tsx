@@ -164,7 +164,7 @@ export function App({ engine }: { engine: Engine }) {
     <Box flexDirection="column" paddingX={1}>
       <Box marginBottom={1}>
         <Text color="#d97757" bold>
-          ◆ Claude UI
+          ◆ DevHub
         </Text>
         <Text color="gray"> — terminal face · {projects.length} projects</Text>
       </Box>

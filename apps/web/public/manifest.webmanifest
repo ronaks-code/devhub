@@ -1,6 +1,6 @@
 {
-  "name": "Claude UI",
-  "short_name": "Claude UI",
+  "name": "DevHub",
+  "short_name": "DevHub",
   "description": "All-projects control center for Claude Code: browse transcripts, run live sessions, and watch ops.",
   "id": "/",
   "start_url": "/",
