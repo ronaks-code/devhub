@@ -67,12 +67,10 @@ export type {
   VerifiedLegacyMapping,
   VerifiedLegacySessionResolution,
 } from "../provider-index/store-types.js";
-export * from "./claude/legacy-adapter.js";
 export * from "./claude/auth-policy.js";
 export * from "./claude/native-adapter.js";
 export * from "./claude/session-helpers.js";
 export * from "./claude/supervisor.js";
-export * from "./codex/history-fallback-adapter.js";
 export * from "./codex/app-server-process.js";
 export * from "./codex/native-adapter.js";
 export * from "./codex/native-shapes.js";

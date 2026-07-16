@@ -3,7 +3,34 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M8-PWA-BROWSER-SMOKE (browser/PWA packaged smoke
+Last updated: 2026-07-16 by M8-LEGACY-PATH-DECISION (decided + executed the
+per-path legacy-path retention call: ADR at
+`.planning/devhub-codex-parity/adr-legacy-retention.md`).
+`LegacyClaudeAdapter` (`packages/engine/src/providers/claude/legacy-adapter.ts`)
+and `CodexHistoryFallbackAdapter`
+(`packages/engine/src/providers/codex/history-fallback-adapter.ts`) were
+leftover scaffolding from the initial provider-registry design (commit
+`d0d8d08`) with ZERO non-test/non-barrel importers repo-wide — the real
+`persistentClaude:false`/`nativeCodex:false` rollback is already fully
+implemented without them (the SAME `ClaudeNativeAdapter`/`CodexNativeAdapter`
+instance always gets registered and gates its own exposed capabilities via an
+`isEnabled` predicate; the client swaps panes via
+`resolveClaudeShellMode`/`resolveCodexShellMode` in `App.tsx`, reading history
+directly, never through the provider-registry interface). REMOVED both
+classes + their `providers/index.ts` barrel exports + their two test files.
+The `apps/web/src/components/ui.tsx` compatibility facade, by contrast, is
+NOT dead — a live grep found 34 importers across `apps/web/src/components/**`
+(this task's brief's premise of "App.tsx + index.css are the only importers"
+does not match the current tree), matching `design-lock.md`'s explicit "keep
+until no imports remain" instruction — left untouched, KEEP-as-rollback per
+the ADR. Gate after the two deletions: engine 80 files/2230 tests green (-2
+files/-13 tests, exactly the two deleted test files, nothing else moved),
+server 16 files/270 tests unchanged, web 44 files/586 tests unchanged; `tsc
+--noEmit` clean on engine/server/web; `vite build` clean; `pnpm lint` 0/0
+across all four packages; `git diff --check` clean. Landed on
+`wip/devhub-background-runner` only.
+
+Previously updated: 2026-07-16 by M8-PWA-BROWSER-SMOKE (browser/PWA packaged smoke
 re-run against the default-on shell — verification task, no source diff).
 Re-verified `DEFAULT_DEVHUB_FEATURE_FLAGS` before starting: all 8 M6 slice flags,
 the umbrella `codexStyleShell`, `unifiedTaskIndex`, and `workMode` were already
