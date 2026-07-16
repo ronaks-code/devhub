@@ -3,7 +3,74 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-WORKMODE-ENGINE (DIRECTED TASK on
+Last updated: 2026-07-16 by M7-WORKMODE-WIRING (DIRECTED TASK on
+`wip/devhub-background-runner` — wires the M7-WORKMODE-ENGINE model (below) all the
+way through server + web, behind the SAME default-off `workMode` flag (flag value
+itself UNCHANGED, still `false`). New `packages/server/src/routes/work-mode.ts`
+registers `GET /api/work-mode/status` (always answers; the flag probe itself) plus
+a CRUD surface over the real engine model — `POST /api/work-mode/tasks` (create,
+via `createNativeTaskKey`+`createWorkModeTask`), `GET .../tasks/:id`,
+`POST .../tasks/:id/progress|artifacts|deliverables` (via
+`updateWorkModeProgress`/`recordWorkModeArtifact`/`addWorkModeDeliverable`) —
+every one of the five mutating/reading routes RE-CHECKS `workMode` off
+`engine.getSettings()` itself before doing anything (403 `work_mode_disabled`
+otherwise), never trusting a client-supplied flag value in the body (schema
+`additionalProperties:false` plus an exact-shape guard strip/reject any smuggled
+key); storage is an in-memory `Map` scoped to the `registerWorkModeRoutes` closure
+(mirrors the `cross-provider-fork.ts` preview-store pattern — Work mode has no
+persistence layer of its own yet). Registered in `app.ts` next to
+`registerCrossProviderForkRoutes`. New test `packages/server/test/work-mode.test.ts`
+(8 tests): status reflects the real stored flag; every route 403s while off even
+with a fully valid body; a client-smuggled flag value never overrides the server's
+own; full create→read→artifact→deliverable→progress round trip once on, then 403s
+again the instant the flag flips back off; 404 unknown id; 409 duplicate create;
+400 on a deliverable referencing an unrecorded artifact path and on a folder-scope
+escape (`/etc/passwd` outside `/active/claude-ui`). Full server suite: 14 files /
+259 tests green; `tsc --noEmit` clean.
+Web side: new `apps/web/src/lib/work-mode-api.ts` (`createWorkModeApiClient` — thin
+fetch client with `fetchStatus`/`fetchTask`/`createTask`/`getOrCreateTask`, every
+network failure or non-2xx resolving to `null`/`false`, never a fabricated
+placeholder; plus `toWorkModeTaskView` projecting the real DTO into the panel's
+view model, deriving each deliverable's `ready`/`pending` status from whether its
+`satisfiedByArtifactPaths` are actually recorded) — kept separate from the large
+`ProviderApiClient` since Work mode is not a Code-mode provider task. New
+`apps/web/src/components/features/shell/WorkModePanel.tsx`: the pure, prop-driven
+render of concept 07 (`.planning/devhub-codex-parity/concepts/
+07-work-mode-corrected.png` + `07-work-mode-correction-brief.md`) — Work shown
+selected/Code unselected in the compact mode selector (no provider picker, ever);
+fixed `Anthropic · Claude` identity text + `DevHub Work` mode label (never a
+provider picker, never "Cowork" anywhere in the copy); `Work scope` with
+`Folder scope` + `Permission mode`/`Default` (never `Permissions`/`Workspace`);
+`Deliverables` list with per-item `Ready`/`In progress`/`Pending`; `Outcome`
+summary + fraction + progress bar. `enabled={false}` OR `task===null` renders
+NOTHING — no mode selector, no panel, nothing reachable; this is the ONLY gate,
+and it never fabricates placeholder task content when it has no real backing
+task. New `WorkModeSurface.tsx` owns the fetch/create effect (via
+`work-mode-api.ts`) and hands the projection to the pure panel; skips the network
+call entirely when `enabled` is false (belt-and-suspenders — the server
+independently re-checks the same flag on every request regardless). Wired into
+`App.tsx` behind `settings?.devHubFeatures?.workMode === true && project?.cwd` in
+a fixed bottom-right surface, scoped to the active project's real `cwd` as the
+folder scope and a stable per-project task id — no wiring into
+`CodexNativePane`'s task-selection state was needed or attempted this task. New
+tests: `WorkModePanel.test.ts` (7, real `@testing-library/user-event`) — flag-off
+renders nothing (empty DOM, no tablist); no-task renders nothing even with the
+flag on; Work selected/Code unselected with no `combobox` (no provider picker);
+fixed identity/mode-label text present, "cowork" absent (case-insensitive);
+folder scope + `Permission mode`/`Default` present, `Permissions`/`Workspace`
+absent; progress/outcome/every deliverable status renders; a real click on the
+inert Code tab doesn't throw and Work stays selected. `WorkModeSurface.test.ts`
+(3): never calls the client and renders nothing while disabled; fetches/creates
+via the injected client and renders the panel from the real response; renders
+nothing when the server has no task to give back. `work-mode-api.test.ts` (5):
+`fetchStatus` false on non-ok/thrown; reflects a real `true`; `fetchTask` null on
+403/404; `getOrCreateTask` fetches first and only POSTs when the fetch comes back
+empty; `toWorkModeTaskView` projects a real DTO into the exact expected view
+model. Full web suite: 39 files / 565 tests green (was 550, +15); `tsc --noEmit`
+clean; `vite build` clean (dist removed after, not committed). No existing test
+file changed; no other feature flag's default or behavior touched. Landed on
+`wip/devhub-background-runner` only, per task instructions — NOT `origin/main`.
+PRIOR: M7-WORKMODE-ENGINE (DIRECTED TASK on
 `wip/devhub-background-runner` — RED-first Work-mode engine foundation, gated on
 the existing default-off `workMode` feature flag (flag itself UNCHANGED, still
 `false` in `DEFAULT_DEVHUB_FEATURE_FLAGS`). New

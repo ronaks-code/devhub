@@ -70,6 +70,7 @@ import { registerWebhooksRoutes } from "./routes/webhooks.js";
 import { registerCodexRoutes } from "./routes/codex.js";
 import { registerProviderTaskRoutes } from "./routes/provider-tasks.js";
 import { registerCrossProviderForkRoutes } from "./routes/cross-provider-fork.js";
+import { registerWorkModeRoutes } from "./routes/work-mode.js";
 import {
   registerProviderIndexRoutes,
   type RegisteredIndexHome,
@@ -443,6 +444,8 @@ export function buildApp(opts: BuildOptions = {}): {
   });
 
   registerCrossProviderForkRoutes(app, providerRegistry, engine, token);
+
+  registerWorkModeRoutes(app, engine);
 
   if (providerIndexStore) {
     registerProviderIndexRoutes(app, {

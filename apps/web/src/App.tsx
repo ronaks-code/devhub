@@ -80,6 +80,7 @@ import {
 import { CommandDialog, DEFAULT_COMMANDS } from "./components/features/commands/CommandDialog";
 import { resolveSettingsSecondaryMode } from "./components/features/settings/SettingsRoute";
 import { OpsRoute } from "./components/features/ops/OpsRoute";
+import { WorkModeSurface } from "./components/features/shell/WorkModeSurface";
 import { InboxRoute } from "./components/features/inbox/InboxRoute";
 import {
   buildDiffContent,
@@ -2192,6 +2193,26 @@ export default function App() {
           </Suspense>
         ) : devhubClaudePane ?? legacyClaudePane}
       </AppShell>
+
+      {/* M7-WORKMODE-WIRING: Work mode is a DISTINCT DevHub product mode from Code
+          mode, never "Cowork" — see concepts/07-work-mode-corrected.png. Flag-off
+          (default) OR no active project renders nothing; the server independently
+          re-checks `workMode` on every request this surface issues. */}
+      {settings?.devHubFeatures?.workMode === true && project?.cwd ? (
+        <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[420px] max-w-[calc(100vw-2rem)]">
+          <div className="pointer-events-auto">
+            <WorkModeSurface
+              enabled
+              title={project.name}
+              provider="anthropic"
+              home={project.cwd}
+              nativeTaskId={`work-mode-source-${project.id}`}
+              folderRoot={project.cwd}
+              taskId={`work-mode-${project.id}`}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {/* M6 slice 7 (Task 9 data-wire): the devhub `TaskSearchDialog` replaces the
           legacy `SearchPalette` only for `searchCommands===true`; legacy dialog
