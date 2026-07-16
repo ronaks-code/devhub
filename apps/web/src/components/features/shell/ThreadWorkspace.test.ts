@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   RAW_DIAGNOSTIC_MAX,
   THREAD_COPY,
@@ -13,6 +16,7 @@ import {
   sanitizeRequestActions,
 } from "./ThreadWorkspace.js";
 import { SHELL_GEOMETRY } from "./DevHubShell.js";
+import { Composer } from "./Composer.js";
 
 /** Count non-overlapping occurrences of a substring. */
 function count(haystack: string, needle: string): number {
@@ -267,5 +271,68 @@ describe("threadWorkspace slice-flag gate", () => {
     expect(isThreadWorkspaceApplied({ threadWorkspace: false })).toBe(false);
     expect(isThreadWorkspaceApplied({})).toBe(false);
     expect(isThreadWorkspaceApplied(undefined)).toBe(false);
+  });
+});
+
+describe("ThreadWorkspace — live interaction (mounted DOM)", () => {
+  it("typing into the built-in composer slot's textarea updates its value", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(ThreadWorkspace, { items: [] }));
+    const textarea = screen.getByLabelText(THREAD_COPY.composerLabel) as HTMLTextAreaElement;
+    await user.type(textarea, "Ship the release notes");
+    expect(textarea).toHaveValue("Ship the release notes");
+  });
+
+  it("a live composerSlot (the real Composer) sends on Enter and stays in the same stable slot", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    let draft = "";
+    const onDraftChange = vi.fn((v: string) => {
+      draft = v;
+    });
+
+    function Harness() {
+      return createElement(ThreadWorkspace, {
+        items: [],
+        composerSlot: createElement(Composer, {
+          draft,
+          onDraftChange,
+          onSend,
+          onKeyDown: (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              onSend();
+            }
+          },
+        }),
+      });
+    }
+
+    const { rerender } = rtlRender(createElement(Harness));
+    const textarea = screen.getByLabelText("Message") as HTMLTextAreaElement;
+    await user.type(textarea, "Deploy it");
+    expect(onDraftChange).toHaveBeenCalled();
+    // Re-render with the latest draft (as a real controlled host would) before sending.
+    rerender(createElement(Harness));
+    await user.type(textarea, "{Enter}");
+    expect(onSend).toHaveBeenCalledTimes(1);
+    // Geometry is invariant across the composerSlot swap — still the one stable slot.
+    expect(screen.getByLabelText("Message").closest("[data-dh-composer]")).toHaveAttribute(
+      "data-dh-composer-width",
+      String(THREAD_GEOMETRY.composerWidth),
+    );
+  });
+
+  it("clicking Send on the real composer invokes onSend", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    rtlRender(
+      createElement(ThreadWorkspace, {
+        items: [],
+        composerSlot: createElement(Composer, { draft: "Hello", onSend, disabledReason: null }),
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(onSend).toHaveBeenCalledTimes(1);
   });
 });

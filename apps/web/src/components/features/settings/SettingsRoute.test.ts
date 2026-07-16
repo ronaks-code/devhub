@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings } from "../../../lib/api.js";
 import {
   SETTINGS_TABS,
@@ -236,5 +239,100 @@ describe("SettingsRoute — loading and error states", () => {
     expect(html).toContain('role="status"');
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain("Loading settings");
+  });
+});
+
+// --- Live interaction (mounted DOM) --------------------------------------------------
+//
+// Mounting the real tree also mounts the preserved maintenance widgets
+// (RebuildIndex/IntegrityPanel/ArchiveTransfer) and, once a non-preferences tab is
+// selected, the matching preserved editor. Those issue best-effort `fetch`/SSE calls
+// on mount that they already catch internally — real product behavior, not a test
+// concession — so we stub `fetch`/`EventSource` here to keep this a pure DOM test
+// with no real network/SSE connection, exactly like every other vitest run.
+class FakeEventSource {
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  constructor(_url: string) {}
+  close() {}
+}
+
+describe("SettingsRoute — live interaction (mounted DOM)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network disabled in this DOM interaction test")),
+    );
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("clicking the Budget tab selects it and switches the visible tabpanel", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    await user.click(screen.getByRole("tab", { name: "Budget" }));
+    expect(screen.getByRole("tab", { name: "Budget" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Preferences" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("ArrowRight/Home/End rove the settings tablist by keyboard (roving tabindex)", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    const preferencesTab = screen.getByRole("tab", { name: "Preferences" });
+    preferencesTab.focus();
+    expect(preferencesTab).toHaveAttribute("tabindex", "0");
+
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "Budget" })).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "Plugins" })).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: "Preferences" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("toggling a switch calls through to the withNativeCodexPreference state update", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    const toggle = screen.getByRole("switch", { name: "Enable native Codex" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+  });
+
+  it("Clear local connection data opens a confirmation focused on Cancel; Cancel closes it without clearing", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    await user.click(screen.getByRole("button", { name: "Clear local connection data" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    const cancel = screen.getByRole("button", { name: describeClearLocalDataConfirmation().cancelLabel });
+    await waitFor(() => expect(cancel).toHaveFocus());
+
+    await user.click(cancel);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("Clear local connection data — confirming closes the dialog and clears the saved-in-browser state", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    await user.click(screen.getByRole("button", { name: "Clear local connection data" }));
+    await screen.findByRole("dialog");
+
+    const confirmation = describeClearLocalDataConfirmation();
+    await user.click(screen.getByRole("button", { name: confirmation.confirmLabel }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("typing an API host updates the connection field live", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    const hostInput = screen.getByLabelText("API host") as HTMLInputElement;
+    await user.type(hostInput, "https://my-machine:5179");
+    expect(hostInput).toHaveValue("https://my-machine:5179");
   });
 });

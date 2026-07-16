@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   PERMISSION_FIELD_LABEL,
   TASK_SETUP_COPY,
@@ -208,5 +211,74 @@ describe("taskHeaderSetup slice flag gate", () => {
     expect(isTaskHeaderSetupApplied({ taskHeaderSetup: false })).toBe(false);
     expect(isTaskHeaderSetupApplied({})).toBe(false);
     expect(isTaskHeaderSetupApplied(undefined)).toBe(false);
+  });
+});
+
+describe("TaskSetup — live interaction (mounted DOM)", () => {
+  it("selecting a provider in the setup-time picker fires onProviderChange with the new value", async () => {
+    const user = userEvent.setup();
+    const onProviderChange = vi.fn();
+    rtlRender(
+      createElement(TaskSetup, {
+        provider: "openai",
+        inventory: codexInventory,
+        gate: validGate,
+        onProviderChange,
+      }),
+    );
+    const picker = screen.getByRole("combobox", { name: /provider/i });
+    await user.selectOptions(picker, "anthropic");
+    expect(onProviderChange).toHaveBeenCalledWith("anthropic");
+  });
+
+  it("clicking Create task invokes onCreate when every precondition is met", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    rtlRender(
+      createElement(TaskSetup, {
+        provider: "openai",
+        inventory: codexInventory,
+        gate: validGate,
+        onCreate,
+      }),
+    );
+    const button = screen.getByRole("button", { name: TASK_SETUP_COPY.createTask });
+    expect(button).toBeEnabled();
+    await user.click(button);
+    expect(onCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("Create task stays a real disabled control and never invokes onCreate while a precondition is unmet", async () => {
+    const user = userEvent.setup();
+    const onCreate = vi.fn();
+    const gate: CreateTaskGate = { ...validGate, folderSelected: false };
+    rtlRender(
+      createElement(TaskSetup, {
+        provider: "openai",
+        inventory: codexInventory,
+        gate,
+        onCreate,
+      }),
+    );
+    const button = screen.getByRole("button", { name: TASK_SETUP_COPY.createTask });
+    expect(button).toBeDisabled();
+    // A disabled native control never dispatches a click action to onCreate.
+    await user.click(button);
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(screen.getByText(createTaskDisabledReason(gate)!)).toBeInTheDocument();
+    expect(button).toHaveAccessibleDescription(createTaskDisabledReason(gate)!);
+  });
+
+  it("tabbing through the setup reaches the provider picker then Create task in order", async () => {
+    const user = userEvent.setup();
+    rtlRender(
+      createElement(TaskSetup, {
+        provider: "openai",
+        inventory: codexInventory,
+        gate: validGate,
+      }),
+    );
+    await user.tab();
+    expect(screen.getByRole("combobox", { name: /provider/i })).toHaveFocus();
   });
 });

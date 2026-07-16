@@ -1,6 +1,9 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+import { createElement, useEffect, useRef, useState } from "react";
+import { render as rtlRender, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   INSPECTOR_COPY,
   INSPECTOR_DESTINATIONS,
@@ -483,5 +486,86 @@ describe("inspectorDock slice-flag gate", () => {
     expect(isInspectorDockApplied({ inspectorDock: false })).toBe(false);
     expect(isInspectorDockApplied({})).toBe(false);
     expect(isInspectorDockApplied(undefined)).toBe(false);
+  });
+});
+
+/** A stateful host: owns `selected` and moves real DOM focus to the newly-active tab —
+ * the roving-focus behavior a live host layers on top of InspectorDock's pure wiring. */
+function RovingDock({ onSelect }: { onSelect?: (id: string) => void }) {
+  const [selected, setSelected] = useState<InspectorDockProps["selected"]>("diff");
+  const tablistRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const active = tablistRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
+    active?.focus();
+  }, [selected]);
+  return createElement(
+    "div",
+    { ref: tablistRef },
+    createElement(InspectorDock, {
+      selected,
+      onSelectDestination: (id) => {
+        setSelected(id);
+        onSelect?.(id);
+      },
+    }),
+  );
+}
+
+describe("InspectorDock — live interaction (mounted DOM, roving tablist)", () => {
+  it("clicking a tab selects it and switches the visible tabpanel", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(RovingDock));
+    await user.click(screen.getByRole("tab", { name: "Files" }));
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "files");
+  });
+
+  it("ArrowRight/ArrowLeft roves focus and selection across the five destinations, wrapping at the ends", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    rtlRender(createElement(RovingDock, { onSelect }));
+
+    const diffTab = screen.getByRole("tab", { name: "Diff" });
+    diffTab.focus();
+    expect(diffTab).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+    expect(onSelect).toHaveBeenLastCalledWith("files");
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("tabindex", "-1");
+
+    // Left from Files wraps back to Diff... then Left again wraps to the last (Artifacts).
+    await user.keyboard("{ArrowLeft}");
+    expect(onSelect).toHaveBeenLastCalledWith("diff");
+    await user.keyboard("{ArrowLeft}");
+    expect(onSelect).toHaveBeenLastCalledWith("artifacts");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveFocus();
+  });
+
+  it("Home/End jump focus+selection to the first/last destination", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(RovingDock));
+    screen.getByRole("tab", { name: "Files" }).focus();
+
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "artifacts");
+
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("tab", { name: "Diff" })).toHaveFocus();
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "diff");
+  });
+
+  it("only ever exposes exactly one tab (tabIndex 0) in the roving tab order at a time", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(RovingDock));
+    const tablist = screen.getByRole("tablist");
+    await user.click(within(tablist).getByRole("tab", { name: "Terminal" }));
+    const zeroTabIndex = within(tablist)
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("tabindex") === "0");
+    expect(zeroTabIndex).toHaveLength(1);
+    expect(zeroTabIndex[0]).toHaveTextContent("Terminal");
   });
 });

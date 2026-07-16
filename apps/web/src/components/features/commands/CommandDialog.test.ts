@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   COMMAND_COPY,
   CommandDialog,
@@ -191,5 +194,49 @@ describe("searchCommands slice-flag gate (Commands)", () => {
     expect(isSearchCommandsApplied({ searchCommands: true })).toBe(true);
     expect(isSearchCommandsApplied({ searchCommands: false })).toBe(false);
     expect(isSearchCommandsApplied(undefined)).toBe(false);
+  });
+});
+
+describe("CommandDialog — live interaction (mounted DOM)", () => {
+  it("Escape closes the palette", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    rtlRender(createElement(CommandDialog, { onClose }));
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking a regular command runs it via onRun", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    rtlRender(createElement(CommandDialog, { onRun }));
+    await user.click(screen.getByText("New task"));
+    expect(onRun).toHaveBeenCalledWith(DEFAULT_COMMANDS[0]);
+  });
+
+  it("clicking Search tasks transitions to Search instead of running it as a normal command", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    const onSearchTasks = vi.fn();
+    rtlRender(createElement(CommandDialog, { onRun, onSearchTasks }));
+    await user.click(screen.getByText("Search tasks"));
+    expect(onSearchTasks).toHaveBeenCalledTimes(1);
+    expect(onRun).not.toHaveBeenCalled();
+  });
+
+  it("typing filters the visible command rows live", async () => {
+    const { rerender } = rtlRender(createElement(CommandDialog, { onQueryChange: vi.fn() }));
+    // Unfiltered render shows the full approved primary row set.
+    expect(screen.getByText("New task")).toBeInTheDocument();
+    expect(screen.getByText("Go to Ops")).toBeInTheDocument();
+
+    rerender(createElement(CommandDialog, { query: "ops", onQueryChange: vi.fn() }));
+    expect(screen.getByText("Go to Ops")).toBeInTheDocument();
+    expect(screen.queryByText("New task")).not.toBeInTheDocument();
+  });
+
+  it("shows the exact empty-state copy when a query matches nothing", () => {
+    rtlRender(createElement(CommandDialog, { query: "zzzznomatch" }));
+    expect(screen.getByText(COMMAND_COPY.empty)).toBeInTheDocument();
   });
 });

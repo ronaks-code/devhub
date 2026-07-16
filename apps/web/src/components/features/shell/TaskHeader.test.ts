@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TaskHeader } from "./TaskHeader.js";
 import {
   TASK_HEADER_COPY,
@@ -135,5 +138,31 @@ describe("resolveClaudeModelDisclosure — pure divergence logic", () => {
     expect(d.message).toBeNull();
     expect(d.sessionReported).toBeNull();
     expect(d.responseUsed).toBeNull();
+  });
+});
+
+describe("TaskHeader — live interaction (mounted DOM)", () => {
+  it("clicking the fork button invokes onFork exactly once", async () => {
+    const user = userEvent.setup();
+    const onFork = vi.fn();
+    rtlRender(createElement(TaskHeader, { title: "Task", provider: "openai", onFork }));
+    await user.click(screen.getByText(TASK_HEADER_COPY.forkAction));
+    expect(onFork).toHaveBeenCalledTimes(1);
+  });
+
+  it("activating the fork button via the keyboard (Tab + Enter) invokes onFork", async () => {
+    const user = userEvent.setup();
+    const onFork = vi.fn();
+    rtlRender(createElement(TaskHeader, { title: "Task", provider: "anthropic", onFork }));
+    await user.tab();
+    expect(screen.getByText(TASK_HEADER_COPY.forkAction)).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onFork).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw when onFork is omitted (optional handler)", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(TaskHeader, { title: "Task", provider: "openai" }));
+    await user.click(screen.getByText(TASK_HEADER_COPY.forkAction));
   });
 });

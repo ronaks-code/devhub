@@ -3,7 +3,45 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
-Last updated: 2026-07-16 by M7-FORK-FOUNDATION (DIRECTED TASK on
+Last updated: 2026-07-16 by M6-INTERACTION-TESTS (DIRECTED TASK on
+`wip/devhub-background-runner` — closed the M6 live-DOM interaction-test debt for
+slices 3-9: `TaskHeader`/`TaskSetup`/`ThreadWorkspace`/`Composer`/`InspectorDock`/
+`TaskSearchDialog`/`CommandDialog`/`SettingsRoute`/`SecondaryNav` were previously
+asserted ONLY via `renderToStaticMarkup`/pure-function checks — zero real
+`fireEvent`/`userEvent` tests existed anywhere in M6 (confirmed by the prior
+M6-SLICE-EVIDENCE audit). Added `@testing-library/react` + `@testing-library/
+user-event` + `@testing-library/jest-dom` + `jsdom` as web devDependencies; each of
+the 9 test files opts into `// @vitest-environment jsdom` per-file (the shared
+`vitest.config.ts` stays `environment: "node"` by default so `compat-storage.test.ts`'s
+`typeof window === "undefined"` assertion is unaffected), plus a new
+`apps/web/src/test/setup.ts` registered via `setupFiles` that calls
+`@testing-library/react`'s `cleanup()` after each test — guarded so it's a no-op under
+the `node` environment. New real interaction coverage: TaskHeader fork-button
+click+keyboard; TaskSetup provider `<select>` + gated Create-task button
+(enabled/disabled, real `disabled` attr, `aria-describedby` reason); ThreadWorkspace
+textarea typing + a live `Composer` wired as `composerSlot`; Composer's
+`decideComposerKey` wiring end-to-end (Enter sends, Shift+Enter doesn't, Stop always
+actionable, disabled-reason `aria-describedby`); InspectorDock's roving tablist
+(click, ArrowLeft/Right wrap, Home/End, exactly one `tabIndex=0` at a time, real
+focus movement via a stateful host harness); TaskSearchDialog (Escape closes, live
+query typing, result click → `navigationTargetForResult`, scope/date-facet clicks,
+disabled Project-scope-with-no-project); CommandDialog (Escape closes, run vs.
+`Search tasks` transition, live filtering, empty state); SettingsRoute (tab
+click+keyboard roving on the real `Tabs` primitive, a `Switch` toggle, the
+`Clear local connection data` confirm dialog's Cancel/Confirm flow with real
+initial focus, a live text input); SecondaryNav (click + Tab/Enter keyboard
+activation). SettingsRoute's test stubs `global.fetch`/`global.EventSource` (jsdom
+has no native `EventSource`) so the preserved maintenance widgets
+(`RebuildIndex`/`ArchiveTransfer`/`BudgetSettings`) mount without a real network/SSE
+connection — those widgets already catch fetch failures internally in production
+code, this only proves it under a real DOM instead of skipping the mount. Zero
+source/behavior changes: diff is tests-only plus `vitest.config.ts`
+(`setupFiles`), the new `src/test/setup.ts`, and `apps/web/package.json`
+devDependencies/lockfile. `grep -rlE 'fireEvent|userEvent' apps/web/src` now returns
+exactly these 9 files (was zero). Full web suite: 35 files / 535 tests green;
+`tsc --noEmit` clean.
+
+PRIOR: M7-FORK-FOUNDATION (DIRECTED TASK on
 `wip/devhub-background-runner` — M7 Task 1: RED-first cross-provider fork handoff model
 in the engine, behind the existing default-off `crossProviderFork` flag; flag value
 itself UNCHANGED (`false`), `nativeCodex`/`persistentClaude` also unchanged). New module

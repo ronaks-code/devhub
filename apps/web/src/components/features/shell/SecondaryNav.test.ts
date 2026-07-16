@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SECONDARY_DESTINATIONS,
   SecondaryNav,
@@ -62,5 +65,33 @@ describe("SecondaryNav — the shared secondary-navigation landmark", () => {
     );
     expect(html).toContain("board content");
     expect(html.indexOf("</ul>")).toBeLessThan(html.indexOf("board content"));
+  });
+});
+
+describe("SecondaryNav — live interaction (mounted DOM)", () => {
+  it("clicking a non-active destination invokes onNavigate with its id", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    rtlRender(createElement(SecondaryNav, { active: "settings", onNavigate }));
+    await user.click(screen.getByText("Dashboard"));
+    expect(onNavigate).toHaveBeenCalledWith("dashboard");
+  });
+
+  it("Tab reaches each destination link in order and Enter activates the focused one", async () => {
+    const user = userEvent.setup();
+    const onNavigate = vi.fn();
+    rtlRender(createElement(SecondaryNav, { active: "settings", onNavigate }));
+    await user.tab();
+    expect(screen.getByText("Settings")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByText("Live ops")).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onNavigate).toHaveBeenCalledWith("ops");
+  });
+
+  it("does not throw when onNavigate is omitted (optional handler)", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SecondaryNav, { active: "inbox" }));
+    await user.click(screen.getByText("Inbox"));
   });
 });

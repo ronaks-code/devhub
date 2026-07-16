@@ -1,6 +1,9 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+import { createElement, useState } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   COMPOSER_COPY,
   COMPOSER_GEOMETRY,
@@ -284,5 +287,82 @@ describe("composerSurface slice-flag gate", () => {
     expect(isComposerSurfaceApplied({ composerSurface: false })).toBe(false);
     expect(isComposerSurfaceApplied({})).toBe(false);
     expect(isComposerSurfaceApplied(undefined)).toBe(false);
+  });
+});
+
+/** A fully-wired, controlled harness — the shape a real host provides. */
+function ControlledComposer(props: {
+  onSend: () => void;
+  disabledReason?: string | null;
+  sendState?: "send" | "stop";
+}) {
+  const [draft, setDraft] = useState("");
+  return createElement(Composer, {
+    draft,
+    onDraftChange: setDraft,
+    onSend: props.onSend,
+    disabledReason: draft.trim() === "" ? (props.disabledReason ?? COMPOSER_COPY.disabledReason.empty) : null,
+    sendState: props.sendState,
+    onKeyDown: (e) => {
+      const decision = decideComposerKey({
+        key: e.key,
+        shiftKey: e.shiftKey,
+        picker: "none",
+        pickerCount: 0,
+        caretAtStart: false,
+        caretAtEnd: false,
+        turnRunning: false,
+        historyNavigating: false,
+      });
+      if (decision.preventDefault) e.preventDefault();
+      if (decision.action.type === "send") props.onSend();
+    },
+  });
+}
+
+describe("Composer — live interaction (mounted DOM)", () => {
+  it("typing a draft enables Send, and clicking Send invokes onSend", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    rtlRender(createElement(ControlledComposer, { onSend }));
+
+    const textarea = screen.getByLabelText(COMPOSER_COPY.textareaLabel);
+    const send = screen.getByRole("button", { name: COMPOSER_COPY.sendLabel });
+    expect(send).toBeDisabled();
+
+    await user.type(textarea, "Ship it");
+    expect(send).toBeEnabled();
+    await user.click(send);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("Enter (no shift) sends via the wired keyboard decision, Shift+Enter does not", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    rtlRender(createElement(ControlledComposer, { onSend }));
+    const textarea = screen.getByLabelText(COMPOSER_COPY.textareaLabel);
+
+    await user.type(textarea, "Draft one{Shift>}{Enter}{/Shift}");
+    expect(onSend).not.toHaveBeenCalled();
+
+    await user.type(textarea, "{Enter}");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("a real native interrupt (Stop) is always actionable and never carries a disabled reason", async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    rtlRender(createElement(ControlledComposer, { onSend, sendState: "stop" }));
+    const stop = screen.getByRole("button", { name: COMPOSER_COPY.stopLabel });
+    expect(stop).toBeEnabled();
+    await user.click(stop);
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("an empty draft keeps Send disabled with the exact accessible reason wired via aria-describedby", () => {
+    rtlRender(createElement(ControlledComposer, { onSend: vi.fn() }));
+    const send = screen.getByRole("button", { name: COMPOSER_COPY.sendLabel });
+    expect(send).toBeDisabled();
+    expect(send).toHaveAccessibleDescription(COMPOSER_COPY.disabledReason.empty);
   });
 });

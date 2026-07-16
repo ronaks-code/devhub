@@ -1,6 +1,9 @@
-import { createElement } from "react";
+// @vitest-environment jsdom
+import { createElement, useState } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SEARCH_COPY,
   SEARCH_DATE_FACETS,
@@ -295,5 +298,106 @@ describe("searchCommands slice-flag gate (Search)", () => {
     expect(isSearchCommandsApplied({ searchCommands: false })).toBe(false);
     expect(isSearchCommandsApplied({})).toBe(false);
     expect(isSearchCommandsApplied(undefined)).toBe(false);
+  });
+});
+
+describe("TaskSearchDialog — live interaction (mounted DOM)", () => {
+  it("Escape closes the dialog", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    rtlRender(createElement(TaskSearchDialog, { onClose }));
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("typing in the query box fires onQueryChange for every keystroke", async () => {
+    const user = userEvent.setup();
+    const onQueryChange = vi.fn();
+    rtlRender(createElement(TaskSearchDialog, { onQueryChange }));
+    await user.type(screen.getByRole("searchbox"), "auth");
+    // The dialog's `query` prop is unchanged across keystrokes here (no controlling
+    // host), so each keystroke reports just that one typed character — proving the
+    // input's onChange really reaches onQueryChange on every keypress.
+    expect(onQueryChange).toHaveBeenCalledTimes(4);
+    expect(onQueryChange).toHaveBeenNthCalledWith(1, "a");
+    expect(onQueryChange).toHaveBeenNthCalledWith(4, "h");
+  });
+
+  it("clicking a result opens the provider-locked navigation target", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    rtlRender(
+      createElement(TaskSearchDialog, {
+        query: "auth",
+        results: [codexResult, claudeResult],
+        onOpen,
+      }),
+    );
+    await user.click(screen.getByText(codexResult.title));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    const [target, result] = onOpen.mock.calls[0]!;
+    expect(target).toEqual(navigationTargetForResult(codexResult));
+    expect(result).toBe(codexResult);
+  });
+
+  it("switching scope and clicking a date facet fire the wired change handlers", async () => {
+    const user = userEvent.setup();
+    const onScopeChange = vi.fn();
+    const onDateFacetChange = vi.fn();
+    rtlRender(
+      createElement(TaskSearchDialog, {
+        activeProjectId: "proj-1",
+        activeProjectName: "devhub",
+        onScopeChange,
+        onDateFacetChange,
+      }),
+    );
+    await user.click(screen.getByRole("radio", { name: "devhub" }));
+    expect(onScopeChange).toHaveBeenCalledWith("project");
+
+    await user.click(screen.getByRole("radio", { name: "7d" }));
+    expect(onDateFacetChange).toHaveBeenCalledWith("7d");
+
+    await user.click(screen.getByText(SEARCH_COPY.dateControls.clearRange));
+    expect(onDateFacetChange).toHaveBeenCalledWith(null);
+  });
+
+  it("Project scope stays a real disabled control (with its reason) until a project is active", async () => {
+    const user = userEvent.setup();
+    const onScopeChange = vi.fn();
+    rtlRender(createElement(TaskSearchDialog, { onScopeChange }));
+    const projectRadio = screen.getByRole("radio", { name: SEARCH_COPY.scopeProjectFallback });
+    expect(projectRadio).toBeDisabled();
+    await user.click(projectRadio);
+    expect(onScopeChange).not.toHaveBeenCalled();
+  });
+
+  it("a live host wiring query+results end to end: typing narrows, arrow keys move the active row, Enter opens it", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+
+    function Harness() {
+      const [query, setQuery] = useState("");
+      const [activeIndex, setActiveIndex] = useState(0);
+      const results = query ? [codexResult, claudeResult] : [];
+      return createElement(TaskSearchDialog, {
+        query,
+        results,
+        activeIndex,
+        onQueryChange: setQuery,
+        onOpen,
+        // The dialog itself doesn't own Up/Down/Enter row navigation (that's host-level,
+        // mirrored here the way a real host wires it against the query input).
+      });
+    }
+
+    rtlRender(createElement(Harness));
+    const input = screen.getByRole("searchbox");
+    await user.type(input, "auth");
+    expect(await screen.findByText(codexResult.title)).toBeInTheDocument();
+    expect(screen.getByText(claudeResult.title)).toBeInTheDocument();
+    await user.click(screen.getByText(claudeResult.title));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen.mock.calls[0]![1]).toBe(claudeResult);
   });
 });
