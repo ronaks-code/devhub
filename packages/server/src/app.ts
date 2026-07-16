@@ -322,6 +322,20 @@ export function buildApp(opts: BuildOptions = {}): {
       persistentClaude:
         hasMutationToken && nativeClaudeRuntime !== null && nativeClaudeRuntime.canEnable(),
       unifiedTaskIndex: providerIndexStore !== null,
+      // M6 umbrella cutover: every codexStyleShell slice is pure client-side
+      // composition (which React tree App.tsx mounts) with no server runtime
+      // dependency, so each is unconditionally available — the ONLY clamp that can
+      // roll one back is an explicit stored `false` on that flag (handled by the
+      // requested/resolved AND in registerSettingsRoutes), never an availability gap.
+      shellChrome: true,
+      taskRail: true,
+      taskHeaderSetup: true,
+      threadWorkspace: true,
+      composerSurface: true,
+      inspectorDock: true,
+      searchCommands: true,
+      settingsSecondary: true,
+      codexStyleShell: true,
     }),
     appliedDevHubFeatures: () => ({
       persistentClaude: nativeClaudeRuntime?.isAppliedEnabled() ?? false,
@@ -330,6 +344,19 @@ export function buildApp(opts: BuildOptions = {}): {
       // fails open (leaves the coordinator null) if init throws, so a store that exists but
       // could not initialize reports the feature disabled instead of falsely applied.
       unifiedTaskIndex: providerTaskIndexCoordinator !== null,
+      // M6 umbrella cutover: no async activation step exists for these slices (unlike
+      // persistentClaude/unifiedTaskIndex, nothing needs to "come up" server-side), so
+      // applied truth mirrors availability — always true. The rollback path is the
+      // same requested/resolved AND every other DevHub flag uses.
+      shellChrome: true,
+      taskRail: true,
+      taskHeaderSetup: true,
+      threadWorkspace: true,
+      composerSurface: true,
+      inspectorDock: true,
+      searchCommands: true,
+      settingsSecondary: true,
+      codexStyleShell: true,
     }),
     onDevHubFeaturesChanged: (features) => {
       syncProviderTaskIndex(features.unifiedTaskIndex === true);

@@ -1,0 +1,39 @@
+{
+    "theme": "system",
+    "density": "comfortable",
+    "lastProjectId": null,
+    "monthlyBudgetUsd": null,
+    "devHubFeatures": {
+        "nativeCodex": true,
+        "persistentClaude": false,
+        "unifiedTaskIndex": true,
+        "shellChrome": true,
+        "taskRail": true,
+        "taskHeaderSetup": true,
+        "threadWorkspace": true,
+        "composerSurface": true,
+        "inspectorDock": true,
+        "searchCommands": true,
+        "settingsSecondary": true,
+        "codexStyleShell": true,
+        "crossProviderFork": false,
+        "workMode": false
+    },
+    "webhooks": [],
+    "requestedDevHubFeatures": {
+        "nativeCodex": true,
+        "persistentClaude": true,
+        "unifiedTaskIndex": true,
+        "shellChrome": true,
+        "taskRail": true,
+        "taskHeaderSetup": true,
+        "threadWorkspace": true,
+        "composerSurface": true,
+        "inspectorDock": true,
+        "searchCommands": true,
+        "settingsSecondary": true,
+        "codexStyleShell": true,
+        "crossProviderFork": false,
+        "workMode": false
+    }
+}

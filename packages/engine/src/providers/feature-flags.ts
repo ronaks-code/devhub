@@ -102,21 +102,26 @@ export const DEFAULT_DEVHUB_FEATURE_FLAGS: Readonly<DevHubFeatureFlags> = Object
   // initialized; an explicit stored `unifiedTaskIndex: false` is the immediate,
   // non-destructive rollback switch (legacy provider routes stay byte-compatible).
   unifiedTaskIndex: true,
-  // M6 slice flags are additive and default-off; each gates exactly one strangler
-  // slice and rolls back non-destructively. shellChrome gates M6 Task 1;
-  // taskRail gates M6 Task 2; taskHeaderSetup gates M6 Task 3;
-  // threadWorkspace gates M6 Task 4; composerSurface gates M6 Task 5;
-  // inspectorDock gates M6 Task 6; searchCommands gates M6 Task 7; settingsSecondary
-  // gates M6 Task 8.
-  shellChrome: false,
-  taskRail: false,
-  taskHeaderSetup: false,
-  threadWorkspace: false,
-  composerSurface: false,
-  inspectorDock: false,
-  searchCommands: false,
-  settingsSecondary: false,
-  codexStyleShell: false,
+  // M6 umbrella cutover: the codexStyleShell strangler migration (Tasks 1-9) passed
+  // its per-slice SPEC/QUALITY/SECURITY gate review (evidence/m6/<slice>/), so every
+  // M6 slice flag AND the codexStyleShell umbrella are now the requested default —
+  // shellChrome gates Task 1; taskRail gates Task 2; taskHeaderSetup gates Task 3;
+  // threadWorkspace gates Task 4; composerSurface gates Task 5; inspectorDock gates
+  // Task 6; searchCommands gates Task 7; settingsSecondary gates Task 8. Each slice
+  // is still additive and independently rolls back non-destructively to its exact
+  // legacy surface: the server availability clamp ANDs every resolved value against
+  // real applied truth, and an explicit stored `false` on ANY ONE flag is the
+  // immediate, byte-compatible rollback to the legacy App.tsx chrome for that slice
+  // ONLY — the other slices (and the umbrella) are unaffected (evidence/m6/cutover/).
+  shellChrome: true,
+  taskRail: true,
+  taskHeaderSetup: true,
+  threadWorkspace: true,
+  composerSurface: true,
+  inspectorDock: true,
+  searchCommands: true,
+  settingsSecondary: true,
+  codexStyleShell: true,
   crossProviderFork: false,
   workMode: false,
 });
