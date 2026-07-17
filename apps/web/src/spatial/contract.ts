@@ -21,7 +21,7 @@ export type AgentStatus =
   | "idle" // spawned, no active assignment — standing at their desk
   | "working" // heads-down on an assignment
   | "talking" // currently on an active edge (see WorldState.edges)
-  | "moving" // a leader in transit between rooms
+  | "moving" // in transit between rooms (dept home ⇄ project room, or a leader visiting)
   | "blocked" // waiting on a gate/human/dependency
   | "done"; // finished; will despawn shortly
 
@@ -30,26 +30,33 @@ export type AgentRole =
   | "leader" // VP/principal — MOVES between rooms (lateral + vertical)
   | "engineer" // heads-down IC, stays at a desk
   | "pm" // coordinates; occasional movement
-  | "specialist"; // design/marketing/QA/etc — desk-bound like an engineer
+  | "specialist"; // research/marketing/ops/QA/etc — desk-bound like an engineer
 
 /**
  * A single live agent instance. `id` is stable for the instance's lifetime
- * (e.g. `vulcan-devhub-3`). `dept` maps to a room's department; `assignment` is
- * the human-readable task shown on the desk label. `reports_to` builds the
- * vertical hierarchy (leader → reports); null for top-level leaders.
+ * (e.g. `vulcan-3`).
+ *
+ * Home vs. current location: `dept` is the agent's PERMANENT home department —
+ * it never changes, and its home is that department's room. `project` is what
+ * it's CURRENTLY pulled onto: "" means it's home in its department room; a
+ * non-empty project name means it has moved into that project's team room. The
+ * renderer figures out which room to draw an agent in from room membership (the
+ * room whose `members[]` contains this id), so an agent moving dept→project is
+ * just a membership change + a `project` flip, and the scene walks it over.
  */
 export interface Agent {
   id: string;
-  /** Display name — usually `<dept>-<project>` or the codename. */
+  /** Display name — the codename, e.g. `vulcan-3` or `athena-lead`. */
   name: string;
+  /** PERMANENT home department (one of DEPARTMENTS). Never changes. */
   dept: string;
   role: AgentRole;
   status: AgentStatus;
-  /** Human-readable current task; shown as the desk label. Empty when idle. */
+  /** Human-readable current task; shown on the floating nameplate. Empty when idle. */
   assignment: string;
   /** Agent id of this agent's leader, or null for a top-level leader. */
   reports_to: string | null;
-  /** Project this instance is working under; ties it to a room. */
+  /** Current project name, or "" when the agent is home in its department room. */
   project: string;
 }
 
@@ -60,9 +67,9 @@ export type EdgeKind =
 
 /**
  * A message/report relationship between two agents. `active` marks an edge that
- * is *currently* carrying traffic — the renderer animates a leader moving along
- * active edges and draws a live line. Inactive edges are the standing org graph
- * (drawn faint or not at all).
+ * is *currently* carrying traffic — the renderer draws a live line and rides a
+ * pulse along it. Inactive edges are the standing org graph (drawn faint or not
+ * at all).
  */
 export interface Edge {
   id: string;
@@ -75,18 +82,35 @@ export interface Edge {
 }
 
 /**
- * A room = a department working on a project. Rooms spawn when a project starts
- * and extend/shrink as members join/leave. `members` are agent ids currently
- * assigned here (their "home" room). Leaders may visit other rooms but their
- * home membership stays here.
+ * The two ROOM TYPES, color/style-coded distinctly in the renderer:
+ *  - "department": a persistent home base for one department (always present).
+ *  - "project":    an ephemeral team room spawned per active project. It pulls a
+ *                  CROSS-department mix of agents, grows/shrinks as the project
+ *                  needs, and despawns when the project finishes.
+ */
+export type RoomKind = "department" | "project";
+
+/**
+ * A room. `kind` decides how it's drawn and what it means:
+ *  - department room: `dept` set, `project` empty. `members` are that dept's
+ *    agents currently at home (i.e. not pulled onto a project).
+ *  - project room: `project` set, `dept` empty (it's cross-department).
+ *    `members` are the agents currently pulled onto the project; `status` is a
+ *    short "what's being worked on" line shown on the room nameplate.
+ * `members` always reflects who is PHYSICALLY in the room right now.
  */
 export interface Room {
   id: string;
-  project: string;
+  kind: RoomKind;
+  /** Department codename for a department room; "" for a project room. */
   dept: string;
-  /** Display title, e.g. "Vulcan · devhub". */
+  /** Project name for a project room; "" for a department room. */
+  project: string;
+  /** Display title (e.g. "Vulcan · Engineering" or "Q3 GTM push"). */
   label: string;
-  members: string[]; // agent ids
+  members: string[]; // agent ids currently in this room
+  /** Project rooms only: a short current-focus line for the room nameplate. */
+  status?: string;
 }
 
 /**
@@ -145,16 +169,40 @@ export function applyDelta(world: WorldState, delta: DeltaMessage): WorldState {
   };
 }
 
-/** The known company departments (codenames) → a stable display accent index. */
+/**
+ * The real OpenClaw departments — the agent TEAMS in the company (grounded in
+ * company-platform's `company_workforce`). Deliberately NOT the fleet code repos:
+ * capture / nerve / devhub / company / sensorium / atlas are repositories, not
+ * teams, and must never appear as a department or a room here.
+ */
 export const DEPARTMENTS = [
+  "athena", // company desk — orchestration / PM / strategy / arbitration
   "vulcan", // engineering
-  "apollo", // product/PM
-  "thoth", // research/knowledge
-  "talos", // infra/ops
-  "vesta", // design
-  "argus", // QA/security
+  "apollo", // marketing
+  "thoth", // research / product intelligence
+  "talos", // lab operations — hardware
+  "vesta", // company operations — ops / finance
+  "argus", // fleet reliability — health / security
+  "hermes", // outbound — comms & reply handling
 ] as const;
 export type Department = (typeof DEPARTMENTS)[number];
+
+/** Human-readable department names for room banners + the legend. */
+export const DEPARTMENT_LABELS: Record<string, string> = {
+  athena: "Athena · Company Desk",
+  vulcan: "Vulcan · Engineering",
+  apollo: "Apollo · Marketing",
+  thoth: "Thoth · Research",
+  talos: "Talos · Lab Ops",
+  vesta: "Vesta · Ops & Finance",
+  argus: "Argus · Fleet Health",
+  hermes: "Hermes · Outbound",
+};
+
+/** Label for a department (falls back to a capitalized codename). */
+export function departmentLabel(dept: string): string {
+  return DEPARTMENT_LABELS[dept] ?? dept.charAt(0).toUpperCase() + dept.slice(1);
+}
 
 /**
  * Validate an untrusted parsed JSON value as a WorldState. Tolerant by intent:
@@ -208,8 +256,9 @@ function isRoom(x: unknown): x is Room {
   const r = x as Record<string, unknown>;
   return (
     typeof r.id === "string" &&
-    typeof r.project === "string" &&
+    (r.kind === "department" || r.kind === "project") &&
     typeof r.dept === "string" &&
+    typeof r.project === "string" &&
     typeof r.label === "string" &&
     Array.isArray(r.members) &&
     r.members.every((m) => typeof m === "string")

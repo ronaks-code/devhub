@@ -33,12 +33,16 @@ export interface Edge {
   topic?: string;
 }
 
+export type RoomKind = "department" | "project";
+
 export interface Room {
   id: string;
-  project: string;
+  kind: RoomKind;
   dept: string;
+  project: string;
   label: string;
   members: string[];
+  status?: string;
 }
 
 export interface WorldState {

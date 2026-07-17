@@ -26,7 +26,7 @@ const base: WorldState = {
   ts: 100,
   agents: [agent("a"), agent("b")],
   edges: [{ id: "e1", from: "a", to: "b", kind: "vertical", active: false }],
-  rooms: [{ id: "r1", project: "devhub", dept: "vulcan", label: "R1", members: ["a", "b"] }],
+  rooms: [{ id: "r1", kind: "department", project: "", dept: "vulcan", label: "R1", members: ["a", "b"] }],
 };
 
 describe("applyDelta", () => {
@@ -74,7 +74,7 @@ describe("parseWorldState", () => {
         { id: "ok", from: "a", to: "a", kind: "lateral", active: true },
         { id: "ghost", from: "a", to: "zzz", kind: "vertical", active: true },
       ],
-      rooms: [{ id: "r1", project: "p", dept: "vulcan", label: "R", members: ["a", "zzz"] }],
+      rooms: [{ id: "r1", kind: "project", project: "p", dept: "", label: "R", members: ["a", "zzz"] }],
     };
     const parsed = parseWorldState(dirty)!;
     expect(parsed.edges.map((e) => e.id)).toEqual(["ok"]);
