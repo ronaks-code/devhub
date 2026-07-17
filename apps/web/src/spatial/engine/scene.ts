@@ -138,8 +138,12 @@ export class SpatialScene {
   // Hub-only actors.
   private hubLayer = new Container();
   private building!: Container;
+  private buildingGlow!: Graphics;
   private avatar!: Container;
-  private avatarPos = { x: 0, y: -220 };
+  private avatarPos = { x: 0, y: 260 };
+  private avatarVel = { x: 0, y: 0 };
+  private avatarHeading = -Math.PI / 2; // facing "up" (toward HQ) at start
+  private camFollow = { x: 0, y: 0 }; // smoothed camera focus point in world space
   private keys = new Set<string>();
   private enterHint!: Text;
 
@@ -233,13 +237,30 @@ export class SpatialScene {
   private buildHub(): void {
     // Ground: a large muted grid to give the sense of a place.
     const ground = new Graphics();
-    ground.rect(-900, -700, 1800, 1400).fill(0x111114);
-    for (let gx = -900; gx <= 900; gx += 90) ground.moveTo(gx, -700).lineTo(gx, 700);
-    for (let gy = -700; gy <= 700; gy += 90) ground.moveTo(-900, gy).lineTo(900, gy);
-    ground.stroke({ width: 1, color: 0x1c1c22 });
+    ground.rect(-1400, -1100, 2800, 2200).fill(0x0e0e12);
+    for (let gx = -1400; gx <= 1400; gx += 90) ground.moveTo(gx, -1100).lineTo(gx, 1100);
+    for (let gy = -1100; gy <= 1100; gy += 90) ground.moveTo(-1400, gy).lineTo(1400, gy);
+    ground.stroke({ width: 1, color: 0x191920 });
     this.hubLayer.addChild(ground);
 
-    // The OpenClaw HQ building — a labeled iso block you walk to and enter.
+    // A road/plaza leading from the spawn point up to OpenClaw HQ, so the map
+    // reads as a place you travel through rather than empty space.
+    const road = new Graphics();
+    road.roundRect(-46, -40, 92, 360, 20).fill(0x15151b); // vertical avenue
+    road.roundRect(-46, -40, 92, 360, 20).stroke({ width: 2, color: 0x24242e });
+    // dashed centre line
+    for (let y = 300; y > -20; y -= 46) road.roundRect(-3, y, 6, 24, 3).fill(0x33333f);
+    // plaza ring around HQ
+    road.circle(0, 0, 170).stroke({ width: 2, color: 0x24242e });
+    this.hubLayer.addChild(road);
+
+    // Soft glow under the HQ so it reads as the obvious destination (pulsed).
+    this.buildingGlow = new Graphics();
+    this.buildingGlow.circle(0, 40, 150).fill({ color: 0x3b82f6, alpha: 0.12 });
+    this.buildingGlow.circle(0, 40, 95).fill({ color: 0x3b82f6, alpha: 0.1 });
+    this.hubLayer.addChild(this.buildingGlow);
+
+    // The OpenClaw HQ building — a labeled iso block you drive to and enter.
     this.building = new Container();
     const b = new Graphics();
     // iso top
@@ -248,6 +269,10 @@ export class SpatialScene {
     b.poly([-130, 5, 0, 80, 0, 150, -130, 75]).fill(0x111827);
     // right face
     b.poly([130, 5, 0, 80, 0, 150, 130, 75]).fill(0x0b1220);
+    // a few lit "windows" so it feels occupied
+    for (const [wx, wy] of [[-70, 40], [-40, 55], [70, 40], [40, 55]] as const) {
+      b.rect(wx - 6, wy - 8, 12, 14).fill({ color: 0x60a5fa, alpha: 0.5 });
+    }
     this.building.addChild(b);
     const bl = new Text({ text: "OpenClaw HQ", style: nameStyle(16, 0x93c5fd) });
     bl.anchor.set(0.5);
@@ -256,36 +281,81 @@ export class SpatialScene {
     this.building.position.set(0, 0);
     this.hubLayer.addChild(this.building);
 
-    // Player avatar — a little "car"/token you drive with WASD/arrows or click.
+    // Player avatar — a little CAR you drive with WASD/arrows. Rotates to face
+    // its heading; a `chassis` child is spun while the label stays upright.
     this.avatar = new Container();
-    const a = new Graphics();
-    a.circle(0, 0, 12).fill(0xff6b3d).stroke({ width: 2, color: 0xffffff });
-    a.rect(-4, -20, 8, 8).fill(0xffffff); // a nub so orientation reads
-    this.avatar.addChild(a);
+    const chassis = new Graphics();
+    chassis.roundRect(-16, -10, 32, 20, 5).fill(0xff6b3d).stroke({ width: 2, color: 0xffffff });
+    chassis.roundRect(2, -7, 9, 14, 3).fill(0xffe4d6); // windshield toward +x (heading)
+    chassis.circle(15, 0, 3).fill(0xffffff); // headlight nub
+    chassis.label = "chassis";
+    this.avatar.addChild(chassis);
     const you = new Text({ text: "you", style: subStyle(11, 0xfca5a5) });
     you.anchor.set(0.5);
-    you.position.set(0, 20);
+    you.position.set(0, 22);
     this.avatar.addChild(you);
     this.avatar.position.set(this.avatarPos.x, this.avatarPos.y);
     this.hubLayer.addChild(this.avatar);
 
-    this.enterHint = new Text({ text: "▲ walk to OpenClaw HQ and press E to enter", style: subStyle(13, 0x9ca3af) });
+    this.enterHint = new Text({ text: "▲ drive to OpenClaw HQ (WASD) and press E to enter", style: subStyle(13, 0x9ca3af) });
     this.enterHint.anchor.set(0.5);
-    this.enterHint.position.set(0, 240);
+    this.enterHint.position.set(0, 320);
     this.hubLayer.addChild(this.enterHint);
+
+    this.camFollow = { x: this.avatarPos.x, y: this.avatarPos.y };
   }
 
   private updateHub(dt: number): void {
-    const speed = 3.2 * dt;
-    if (this.keys.has("w") || this.keys.has("arrowup")) this.avatarPos.y -= speed;
-    if (this.keys.has("s") || this.keys.has("arrowdown")) this.avatarPos.y += speed;
-    if (this.keys.has("a") || this.keys.has("arrowleft")) this.avatarPos.x -= speed;
-    if (this.keys.has("d") || this.keys.has("arrowright")) this.avatarPos.x += speed;
+    // Momentum-based "driving": accelerate toward the input direction, apply
+    // friction, cap speed — so movement feels like a vehicle, not a cursor.
+    let ax = 0;
+    let ay = 0;
+    if (this.keys.has("w") || this.keys.has("arrowup")) ay -= 1;
+    if (this.keys.has("s") || this.keys.has("arrowdown")) ay += 1;
+    if (this.keys.has("a") || this.keys.has("arrowleft")) ax -= 1;
+    if (this.keys.has("d") || this.keys.has("arrowright")) ax += 1;
+    const mag = Math.hypot(ax, ay);
+    const ACCEL = 0.5;
+    const FRICTION = 0.86;
+    const MAX = 6.5;
+    if (mag > 0) {
+      this.avatarVel.x += (ax / mag) * ACCEL * dt;
+      this.avatarVel.y += (ay / mag) * ACCEL * dt;
+    }
+    this.avatarVel.x *= FRICTION;
+    this.avatarVel.y *= FRICTION;
+    const sp = Math.hypot(this.avatarVel.x, this.avatarVel.y);
+    if (sp > MAX) {
+      this.avatarVel.x = (this.avatarVel.x / sp) * MAX;
+      this.avatarVel.y = (this.avatarVel.y / sp) * MAX;
+    }
+    this.avatarPos.x += this.avatarVel.x * dt;
+    this.avatarPos.y += this.avatarVel.y * dt;
     this.avatar.position.set(this.avatarPos.x, this.avatarPos.y);
+    // Face heading only while actually moving; rotate the chassis, keep label up.
+    if (sp > 0.3) this.avatarHeading = Math.atan2(this.avatarVel.y, this.avatarVel.x);
+    const chassis = this.avatar.getChildByLabel?.("chassis");
+    if (chassis) chassis.rotation = this.avatarHeading;
 
-    const near = Math.hypot(this.avatarPos.x - this.building.x, this.avatarPos.y - this.building.y) < 130;
+    // Camera smoothly follows the car so you can roam a big map.
+    const k = Math.min(1, 0.08 * dt);
+    this.camFollow.x += (this.avatarPos.x - this.camFollow.x) * k;
+    this.camFollow.y += (this.avatarPos.y - this.camFollow.y) * k;
+    this.camera.position.set(
+      this.app.renderer.width / 2 - this.camFollow.x,
+      this.app.renderer.height / 2 - this.camFollow.y,
+    );
+
+    // Pulse the HQ glow.
+    const pulse = 0.5 + 0.5 * Math.sin(this.app.ticker.lastTime / 600);
+    this.buildingGlow.alpha = 0.7 + 0.3 * pulse;
+    this.buildingGlow.scale.set(1 + 0.04 * pulse);
+
+    const near = Math.hypot(this.avatarPos.x - this.building.x, this.avatarPos.y - this.building.y) < 150;
     this.enterHint.visible = near;
     this.enterHint.text = near ? "press E to enter OpenClaw HQ" : "▲ drive to OpenClaw HQ (WASD)";
+    // Keep the hint pinned near the car so it's always readable as you roam.
+    this.enterHint.position.set(this.avatarPos.x, this.avatarPos.y + 44);
     if (near && this.keys.has("e")) {
       this.keys.delete("e");
       this.enterOffice();
