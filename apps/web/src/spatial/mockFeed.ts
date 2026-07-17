@@ -23,7 +23,7 @@
  */
 
 import type { Agent, AgentRole, Edge, Room, ServerMessage, WorldState } from "./contract";
-import { DEPARTMENTS, DEPARTMENT_LABELS } from "./contract";
+import { DEPARTMENT_LABELS } from "./contract";
 
 /** Tiny seeded RNG (mulberry32) — deterministic, dependency-free. */
 function rng(seed: number): () => number {
