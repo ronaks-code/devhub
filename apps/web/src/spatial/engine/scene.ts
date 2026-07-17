@@ -49,6 +49,8 @@ interface AgentView {
   cur: { x: number; y: number };
   placed: boolean;
   lastPlate: string;
+  /** Stable phase offset so characters don't all bob in lockstep. */
+  bobPhase: number;
 }
 
 interface RoomView {
@@ -91,6 +93,26 @@ function agentWorkLine(agent: Agent): string {
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+/** One color per status — shared by the body status dot and the nameplate. */
+const STATUS_COLOR: Record<string, number> = {
+  idle: 0x6b7280,
+  working: 0x34d399,
+  talking: 0x60a5fa,
+  moving: 0xfbbf24,
+  blocked: 0xf87171,
+  done: 0x4b5563,
+};
+function statusColor(status: string): number {
+  return STATUS_COLOR[status] ?? 0x6b7280;
+}
+
+/** Stable 0..2π phase from an id so characters bob out of sync with each other. */
+function hashPhase(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return ((h >>> 0) % 1000) / 1000 * Math.PI * 2;
 }
 
 export interface SceneCallbacks {
@@ -418,6 +440,7 @@ export class SpatialScene {
           cur: { x: 0, y: 0 },
           placed: false,
           lastPlate: "",
+          bobPhase: hashPhase(id),
         };
         this.agentViews.set(id, view);
       }
@@ -443,38 +466,70 @@ export class SpatialScene {
     g.circle(0, -h - 6, 6).fill(0xf5f5f4); // head
     if (isLeader) g.circle(0, -h - 6, 9).stroke({ width: 2, color: 0xfacc15 }); // leader halo
 
-    const dotColors: Record<string, number> = {
-      idle: 0x6b7280,
-      working: 0x34d399,
-      talking: 0x60a5fa,
-      moving: 0xfbbf24,
-      blocked: 0xf87171,
-      done: 0x4b5563,
-    };
     view.statusDot.clear();
-    view.statusDot.circle(0, 0, 4).fill(dotColors[agent.status] ?? 0x6b7280);
+    const sc = statusColor(agent.status);
+    // A soft ring + core so the status pip reads as a small "beacon".
+    view.statusDot.circle(0, 0, 6).fill({ color: sc, alpha: 0.22 });
+    view.statusDot.circle(0, 0, 3.5).fill(sc);
     view.statusDot.position.set(0, -h - 16);
   }
 
-  /** Build the floating name/work plate above a character (Warzone style). */
+  /**
+   * Build the floating name/work plate above a character (Warzone style): a
+   * pinned pill with a left status pip, dept-colored name, a muted work line, a
+   * status-tinted border, and a little downward tail pointing at the character.
+   * Leaders get a slightly stronger frame so they stand out at a glance.
+   */
   private drawAgentPlate(view: AgentView, agent: Agent): void {
     const name = agentDisplayName(agent);
     const work = agentWorkLine(agent);
-    const key = `${name}|${work}|${agent.dept}`;
+    const key = `${name}|${work}|${agent.dept}|${agent.status}|${agent.role}`;
     if (key === view.lastPlate) return;
+
+    const dept = deptColor(agent.dept);
+    const sc = statusColor(agent.status);
+    const isLeader = agent.role === "leader";
+
+    view.plateName.anchor.set(0, 0);
+    view.plateTask.anchor.set(0, 0);
     view.plateName.text = name;
-    view.plateName.style = nameStyle(10, deptColor(agent.dept));
+    view.plateName.style = nameStyle(10, dept);
     view.plateTask.text = work;
-    const w = Math.max(view.plateName.width, view.plateTask.width) + 12;
-    const h = view.plateName.height + view.plateTask.height + 8;
-    // Anchor plate above the character's head.
-    const top = agent.role === "leader" ? -58 : -52;
-    view.plateName.position.set(0, top + 4);
-    view.plateTask.position.set(0, top + 4 + view.plateName.height);
+    view.plateTask.style = subStyle(9, 0xcbd5e1);
+
+    const padX = 8;
+    const padY = 5;
+    const dot = 6; // status pip diameter
+    const gap = 6;
+    const textW = Math.max(view.plateName.width, view.plateTask.width);
+    const w = padX + dot + gap + textW + padX;
+    const h = view.plateName.height + view.plateTask.height + padY * 2;
+    // Sit the pill above the head; leaders a touch higher (taller body).
+    const top = isLeader ? -62 : -54;
+    const left = -w / 2;
+
+    // Left-aligned text, offset past the status pip.
+    const textX = left + padX + dot + gap;
+    view.plateName.position.set(textX, top + padY);
+    view.plateTask.position.set(textX, top + padY + view.plateName.height);
+
     const bg = view.plateBg;
     bg.clear();
-    bg.roundRect(-w / 2, top, w, h, 6).fill({ color: 0x0b0b0d, alpha: 0.8 });
-    bg.roundRect(-w / 2, top, w, h, 6).stroke({ width: 1, color: deptColor(agent.dept), alpha: 0.55 });
+    // Pill body.
+    bg.roundRect(left, top, w, h, 7).fill({ color: 0x0b0b0d, alpha: 0.86 });
+    // Status pip, vertically centered on the name row.
+    const pipY = top + padY + view.plateName.height / 2;
+    bg.circle(left + padX + dot / 2, pipY, dot / 2 + 1).fill({ color: sc, alpha: 0.28 });
+    bg.circle(left + padX + dot / 2, pipY, dot / 2).fill(sc);
+    // Downward tail (map-pin) pointing at the character.
+    const tailY = top + h;
+    bg.poly([-4, tailY, 4, tailY, 0, tailY + 6]).fill({ color: 0x0b0b0d, alpha: 0.86 });
+    // Border: dept color, brighter/thicker for leaders.
+    bg.roundRect(left, top, w, h, 7).stroke({
+      width: isLeader ? 1.5 : 1,
+      color: dept,
+      alpha: isLeader ? 0.85 : 0.5,
+    });
     view.lastPlate = key;
   }
 
@@ -504,7 +559,16 @@ export class SpatialScene {
         view.cur.x += (target.x - view.cur.x) * k;
         view.cur.y += (target.y - view.cur.y) * k;
       }
-      view.container.position.set(view.cur.x, view.cur.y);
+      // Gentle life: a small vertical bob so characters don't look frozen.
+      // Working agents bob a touch more (heads-down); moving agents don't bob
+      // (they're already walking). Phase-offset per agent so it's not a wave.
+      const amp = a.status === "working" ? 1.6 : a.status === "idle" ? 1.0 : a.status === "moving" ? 0 : 0.7;
+      const bob = amp === 0 ? 0 : Math.sin(this.app.ticker.lastTime / 360 + view.bobPhase) * amp;
+      view.container.position.set(view.cur.x, view.cur.y + bob);
+      // Stagger the middle desk column's nameplate down a touch so horizontally
+      // adjacent plates don't overlap (desks are ~96px apart, plates are wider).
+      const dc = this.layout.deskCol.get(a.id) ?? 0;
+      view.plate.position.y = (dc % 2) * 18;
       // Z-order by screen-y so nearer characters draw on top.
       view.container.zIndex = view.cur.y;
     }

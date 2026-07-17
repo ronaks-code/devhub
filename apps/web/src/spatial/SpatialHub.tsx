@@ -155,6 +155,17 @@ export function SpatialHub(): React.JSX.Element {
               </div>
             ))}
           </div>
+          <div className="mt-2 mb-1 border-t border-zinc-800 pt-1.5 font-semibold text-zinc-300">Connections</div>
+          <div className="grid gap-1">
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span className="inline-block h-0.5 w-4 rounded-full" style={{ background: "#fcd34d", boxShadow: "0 0 4px #fcd34d" }} />
+              <span>Leader → report (vertical)</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span className="inline-block h-0.5 w-4 rounded-full" style={{ background: "#38bdf8", boxShadow: "0 0 4px #38bdf8" }} />
+              <span>Peer ↔ peer (lateral)</span>
+            </div>
+          </div>
           <div className="mt-2 border-t border-zinc-800 pt-1.5 text-[10px] text-zinc-500">
             drag to pan · scroll to zoom · hover a character for detail
           </div>

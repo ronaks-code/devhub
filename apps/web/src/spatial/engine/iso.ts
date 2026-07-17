@@ -54,6 +54,8 @@ export interface WorldLayout {
   rooms: Map<string, RoomLayout>;
   /** Agent id → its CURRENT desk grid point (from whichever room it's in now). */
   deskOf: Map<string, GridPoint>;
+  /** Agent id → its desk column within its room (for staggering nameplates). */
+  deskCol: Map<string, number>;
   /** Overall grid bounds, for initial camera fit. */
   bounds: { minCol: number; maxCol: number; minRow: number; maxRow: number };
 }
@@ -109,8 +111,9 @@ const BAND_GAP_ROWS = 1; // blank screen-rows between the dept band and project 
 const DESK_COLS = 3; // desks per row inside a room
 // Desks sit every DESK_STRIDE tiles so characters (and their nameplates) don't
 // pile onto each other in iso space — adjacent tiles are only TILE_W/2 apart,
-// far narrower than a nameplate. A stride of 2 gives ~64px of breathing room.
-const DESK_STRIDE = 2;
+// far narrower than a nameplate. Stride 3 gives ~96px of horizontal breathing
+// room; the renderer additionally staggers adjacent plates vertically.
+const DESK_STRIDE = 3;
 
 const ROOMS_PER_SCREEN_ROW = 4; // rooms per band-row before wrapping
 
@@ -147,6 +150,7 @@ export function computeLayout(world: WorldState): WorldLayout {
 
   const roomLayouts = new Map<string, RoomLayout>();
   const deskOf = new Map<string, GridPoint>();
+  const deskCol = new Map<string, number>();
 
   // Largest room's footprint drives a uniform, overlap-proof cell size.
   let maxCols = 1;
@@ -190,6 +194,7 @@ export function computeLayout(world: WorldState): WorldLayout {
       };
       desks.set(memberId, p);
       deskOf.set(memberId, p);
+      deskCol.set(memberId, dc);
     });
 
     roomLayouts.set(room.id, { room, origin, cols, rows: rowsSize, center, desks });
@@ -207,7 +212,7 @@ export function computeLayout(world: WorldState): WorldLayout {
     place(room, i % ROOMS_PER_SCREEN_ROW, projBandStart + Math.floor(i / ROOMS_PER_SCREEN_ROW));
   });
 
-  return { rooms: roomLayouts, deskOf, bounds: { minCol, maxCol, minRow, maxRow } };
+  return { rooms: roomLayouts, deskOf, deskCol, bounds: { minCol, maxCol, minRow, maxRow } };
 }
 
 /**
