@@ -4,11 +4,16 @@
  *
  * Mental model: we work in a flat "grid" space (col, row) like a chessboard,
  * then PROJECT it to screen with the classic 2:1 isometric transform so it looks
- * like a 3/4 view office. Everything spatial (rooms, desks, moving leaders) is
+ * like a 3/4 view office. Everything spatial (rooms, desks, moving agents) is
  * placed in grid space; `toScreen` is the only thing that knows about the tilt.
+ *
+ * Two room TYPES are laid out in separate horizontal BANDS so the type reads at
+ * a glance even before you notice the color/style: department rooms (persistent
+ * home bases) sit in the top band, project rooms (ephemeral cross-dept teams) in
+ * a band below, with a clear gap between them.
  */
 
-import type { Agent, Room, WorldState } from "../contract";
+import { DEPARTMENTS, type Agent, type Room, type WorldState } from "../contract";
 
 /** Half-width / half-height of one iso tile in screen px (2:1 diamond). */
 export const TILE_W = 64;
@@ -47,21 +52,24 @@ export interface RoomLayout {
 
 export interface WorldLayout {
   rooms: Map<string, RoomLayout>;
-  /** Agent id → its home desk grid point (from its room). */
+  /** Agent id → its CURRENT desk grid point (from whichever room it's in now). */
   deskOf: Map<string, GridPoint>;
   /** Overall grid bounds, for initial camera fit. */
   bounds: { minCol: number; maxCol: number; minRow: number; maxRow: number };
 }
 
-const ROOM_GAP = 2; // empty tiles between rooms
+const ROOM_GAP = 2; // empty tiles between rooms within a band
+const BAND_GAP_ROWS = 1; // blank screen-rows between the dept band and project band
 const DESK_COLS = 3; // desks per row inside a room
-// Desks sit every DESK_STRIDE tiles so characters (and their name labels) don't
+// Desks sit every DESK_STRIDE tiles so characters (and their nameplates) don't
 // pile onto each other in iso space — adjacent tiles are only TILE_W/2 apart,
-// which is far narrower than a name label. A stride of 2 gives ~64px of breathing
-// room between neighbors.
+// far narrower than a nameplate. A stride of 2 gives ~64px of breathing room.
 const DESK_STRIDE = 2;
 
-const ROOMS_PER_SCREEN_ROW = 3; // rooms per row before wrapping to a new screen row
+const ROOMS_PER_SCREEN_ROW = 4; // rooms per band-row before wrapping
+
+/** Stable department ordering (matches DEPARTMENTS) so home rooms never shuffle. */
+const DEPT_ORDER = new Map<string, number>(DEPARTMENTS.map((d, i) => [d, i]));
 
 /** Size a room's floor from its member count (bigger crew ⇒ bigger room). */
 function roomSize(memberCount: number): { cols: number; rows: number } {
@@ -75,21 +83,29 @@ function roomSize(memberCount: number): { cols: number; rows: number } {
  * grid banding overlaps under the iso projection because +col and +row both push
  * down-and-sideways; instead we pin each room's top vertex to a screen cell whose
  * spacing exceeds the largest room's diamond footprint, so rooms can never
- * overlap no matter how many spawn. Origins are then back-projected from those
- * screen points via the inverse iso transform.
+ * overlap no matter how many spawn. Origins are back-projected from those screen
+ * points via the inverse iso transform.
  *
- * Stable ordering by room id keeps a room in the same spot across ticks, so
- * agents don't teleport when unrelated rooms spawn/despawn.
+ * Rooms are split into two BANDS: department rooms first (ordered by DEPARTMENTS,
+ * then id), then project rooms (by id) on fresh screen-rows below a gap. Stable
+ * ordering keeps a room in the same spot across ticks, so agents don't teleport
+ * when unrelated rooms spawn/despawn.
  */
 export function computeLayout(world: WorldState): WorldLayout {
-  const rooms = [...world.rooms].sort((a, b) => a.id.localeCompare(b.id));
+  const deptRooms = world.rooms
+    .filter((r) => r.kind === "department")
+    .sort((a, b) => (DEPT_ORDER.get(a.dept) ?? 99) - (DEPT_ORDER.get(b.dept) ?? 99) || a.id.localeCompare(b.id));
+  const projRooms = world.rooms
+    .filter((r) => r.kind !== "department")
+    .sort((a, b) => a.id.localeCompare(b.id));
+
   const roomLayouts = new Map<string, RoomLayout>();
   const deskOf = new Map<string, GridPoint>();
 
   // Largest room's footprint drives a uniform, overlap-proof cell size.
   let maxCols = 1;
   let maxRows = 1;
-  for (const room of rooms) {
+  for (const room of world.rooms) {
     const { cols, rows } = roomSize(room.members.length);
     maxCols = Math.max(maxCols, cols);
     maxRows = Math.max(maxRows, rows);
@@ -100,28 +116,23 @@ export function computeLayout(world: WorldState): WorldLayout {
   const cellW = span * (TILE_W / 2);
   const cellH = span * (TILE_H / 2);
 
+  const deptBandRows = Math.max(1, Math.ceil(deptRooms.length / ROOMS_PER_SCREEN_ROW));
+  const projBandStart = deptRooms.length ? deptBandRows + BAND_GAP_ROWS : 0;
+
   let minCol = 0;
   let maxCol = 0;
   let minRow = 0;
   let maxRow = 0;
 
-  rooms.forEach((room, i) => {
+  const place = (room: Room, gx: number, gy: number): void => {
     const { cols, rows: rowsSize } = roomSize(room.members.length);
-
-    // Screen cell for this room; back-project its top vertex to a grid origin.
-    const gx = i % ROOMS_PER_SCREEN_ROW;
-    const gy = Math.floor(i / ROOMS_PER_SCREEN_ROW);
     const sx = gx * cellW;
     const sy = gy * cellH;
     // Inverse of toScreen: col-row = x/(TILE_W/2), col+row = y/(TILE_H/2).
     const a = sx / (TILE_W / 2);
     const b = sy / (TILE_H / 2);
     const origin: GridPoint = { col: (a + b) / 2, row: (b - a) / 2 };
-
-    const center: GridPoint = {
-      col: origin.col + cols / 2,
-      row: origin.row + rowsSize / 2,
-    };
+    const center: GridPoint = { col: origin.col + cols / 2, row: origin.row + rowsSize / 2 };
 
     const desks = new Map<string, GridPoint>();
     room.members.forEach((memberId, idx) => {
@@ -141,6 +152,13 @@ export function computeLayout(world: WorldState): WorldLayout {
     minRow = Math.min(minRow, origin.row);
     maxCol = Math.max(maxCol, origin.col + cols);
     maxRow = Math.max(maxRow, origin.row + rowsSize);
+  };
+
+  deptRooms.forEach((room, i) => {
+    place(room, i % ROOMS_PER_SCREEN_ROW, Math.floor(i / ROOMS_PER_SCREEN_ROW));
+  });
+  projRooms.forEach((room, i) => {
+    place(room, i % ROOMS_PER_SCREEN_ROW, projBandStart + Math.floor(i / ROOMS_PER_SCREEN_ROW));
   });
 
   return { rooms: roomLayouts, deskOf, bounds: { minCol, maxCol, minRow, maxRow } };
@@ -148,8 +166,10 @@ export function computeLayout(world: WorldState): WorldLayout {
 
 /**
  * Where an agent should be drawn RIGHT NOW in grid space. A desk-bound agent is
- * at its desk. A "moving" leader is interpolated along its active edge toward the
- * target's desk/room by `phase` (0..1), so it visibly walks room→room.
+ * at its current desk. A "moving" leader is interpolated along its active edge
+ * toward the target's desk by `phase` (0..1), so it visibly walks toward whoever
+ * it's talking to. (Bigger dept→project moves are handled by the scene lerping
+ * toward the new desk when room membership changes.)
  */
 export function agentGridPosition(
   agent: Agent,
@@ -178,15 +198,27 @@ function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
 }
 
-/** A stable accent color per department, for rooms/characters. */
+/** A stable accent color per department, for home rooms/characters. */
 export function deptColor(dept: string): number {
   const palette: Record<string, number> = {
+    athena: 0xfcd34d, // gold — company desk / orchestrator
     vulcan: 0xff6b3d, // clay/orange — engineering
-    apollo: 0x4d9bff, // blue — product
+    apollo: 0xf472b6, // pink — marketing
     thoth: 0xa78bfa, // violet — research
-    talos: 0x34d399, // green — infra
-    vesta: 0xf472b6, // pink — design
-    argus: 0xfbbf24, // amber — QA/security
+    talos: 0x34d399, // green — lab ops
+    vesta: 0x38bdf8, // sky — ops & finance
+    argus: 0xf87171, // red — fleet health
+    hermes: 0x818cf8, // indigo — outbound
   };
   return palette[dept] ?? 0x9ca3af;
+}
+
+/**
+ * The single accent for ALL project rooms — deliberately one shared, non-dept
+ * hue (bright amber) so the room TYPE reads instantly regardless of which depts
+ * are inside. The scene pairs this with a dashed border + a "PROJECT" tag, vs a
+ * dept room's solid dept-colored border, so the two types can't be confused.
+ */
+export function projectAccent(): number {
+  return 0xf59e0b;
 }

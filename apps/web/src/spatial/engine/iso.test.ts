@@ -24,13 +24,13 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     status: "idle",
     assignment: "",
     reports_to: null,
-    project: "devhub",
+    project: "",
     ...over,
   };
 }
 
 function room(id: string, members: string[], over: Partial<Room> = {}): Room {
-  return { id, project: "devhub", dept: "vulcan", label: id, members, ...over };
+  return { id, kind: "department", project: "", dept: "vulcan", label: id, members, ...over };
 }
 
 /** Screen-space axis-aligned bounding box of a room's iso footprint. */
