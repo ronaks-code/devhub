@@ -9,10 +9,10 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Agent } from "./contract";
+import { departmentLabel, type Agent } from "./contract";
 import { SpatialScene, type SceneMode } from "./engine/scene";
 import { useWorldState, type FeedSource } from "./stateClient";
-import { deptColor } from "./engine/iso";
+import { deptColor, projectAccent } from "./engine/iso";
 
 /** Default live-feed URL (the M1 adapter). Only used when mode=live. */
 const LIVE_URL =
@@ -58,8 +58,10 @@ export function SpatialHub(): React.JSX.Element {
     sceneRef.current?.update(world);
   }, [world]);
 
-  const roomCount = world.rooms.length;
+  const deptRoomCount = world.rooms.filter((r) => r.kind === "department").length;
+  const projRoomCount = world.rooms.filter((r) => r.kind === "project").length;
   const agentCount = world.agents.length;
+  const onProject = world.agents.filter((a) => a.project).length;
   const talking = world.edges.filter((e) => e.active).length;
 
   const depts = useMemo(() => {
@@ -93,7 +95,7 @@ export function SpatialHub(): React.JSX.Element {
             {source === "live" ? "LIVE · M1" : "MOCK DATA"}
           </span>
           <span className="rounded-md bg-zinc-900/80 px-2 py-1 text-[11px] text-zinc-400 ring-1 ring-zinc-800">
-            {roomCount} rooms · {agentCount} agents · {talking} talking
+            {deptRoomCount} depts · {projRoomCount} projects · {agentCount} agents ({onProject} on projects) · {talking} talking
           </span>
         </div>
         <div className="pointer-events-auto flex items-center gap-1 rounded-md bg-zinc-900/80 p-1 ring-1 ring-zinc-800">
@@ -125,14 +127,25 @@ export function SpatialHub(): React.JSX.Element {
             {hovered.assignment ? hovered.assignment : "idle at desk"}
           </div>
           <div className="mt-1 text-[11px] text-zinc-500">
-            {hovered.dept} · {hovered.project} · {hovered.status}
+            {departmentLabel(hovered.dept)} · {hovered.project ? `on ${hovered.project}` : "home"} · {hovered.status}
           </div>
         </div>
       ) : null}
 
-      {/* ── Department legend (office only) ── */}
+      {/* ── Legend: room types + departments (office only) ── */}
       {mode === "office" && depts.length > 0 ? (
         <div className="pointer-events-none absolute bottom-3 right-3 rounded-lg bg-zinc-900/80 p-2.5 text-[11px] ring-1 ring-zinc-800">
+          <div className="mb-1 font-semibold text-zinc-300">Room types</div>
+          <div className="mb-2 grid gap-1">
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span className="inline-block h-2.5 w-3.5 rounded-sm border-2 border-solid" style={{ borderColor: hex(deptColor("vulcan")) }} />
+              <span>Department (home base)</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-zinc-400">
+              <span className="inline-block h-2.5 w-3.5 rounded-sm border-2 border-dashed" style={{ borderColor: hex(projectAccent()) }} />
+              <span>Project (cross-dept team)</span>
+            </div>
+          </div>
           <div className="mb-1 font-semibold text-zinc-300">Departments</div>
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
             {depts.map(([dept, color]) => (
@@ -143,7 +156,7 @@ export function SpatialHub(): React.JSX.Element {
             ))}
           </div>
           <div className="mt-2 border-t border-zinc-800 pt-1.5 text-[10px] text-zinc-500">
-            drag to pan · scroll to zoom
+            drag to pan · scroll to zoom · hover a character for detail
           </div>
         </div>
       ) : null}
