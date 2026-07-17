@@ -58,6 +58,52 @@ export interface WorldLayout {
   bounds: { minCol: number; maxCol: number; minRow: number; maxRow: number };
 }
 
+export interface ScreenBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+/**
+ * TRUE screen-space axis-aligned bounding box of everything drawn in the office.
+ *
+ * Why this exists (camera-fit bug): grid `bounds` are min/max col+row taken
+ * INDEPENDENTLY, so `toScreen(minCol, minRow)` invents a corner no room actually
+ * occupies — a phantom point above the real content. Fitting to it left dead
+ * space at the top. Instead we project the four real corners of every room and
+ * take the actual min/max of x and y. `headroom` reserves screen px above the
+ * topmost room for its floating banner (which sits ~2 grid-rows up); `pad` is a
+ * uniform breathing margin.
+ */
+export function screenBounds(
+  layout: WorldLayout,
+  opts: { headroom?: number; pad?: number } = {},
+): ScreenBounds {
+  const headroom = opts.headroom ?? 0;
+  const pad = opts.pad ?? 0;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const rl of layout.rooms.values()) {
+    const corners = [
+      toScreen(rl.origin.col, rl.origin.row),
+      toScreen(rl.origin.col + rl.cols, rl.origin.row),
+      toScreen(rl.origin.col, rl.origin.row + rl.rows),
+      toScreen(rl.origin.col + rl.cols, rl.origin.row + rl.rows),
+    ];
+    for (const c of corners) {
+      minX = Math.min(minX, c.x);
+      maxX = Math.max(maxX, c.x);
+      minY = Math.min(minY, c.y);
+      maxY = Math.max(maxY, c.y);
+    }
+  }
+  if (!Number.isFinite(minX)) return { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  return { minX: minX - pad, maxX: maxX + pad, minY: minY - headroom - pad, maxY: maxY + pad };
+}
+
 const ROOM_GAP = 2; // empty tiles between rooms within a band
 const BAND_GAP_ROWS = 1; // blank screen-rows between the dept band and project band
 const DESK_COLS = 3; // desks per row inside a room

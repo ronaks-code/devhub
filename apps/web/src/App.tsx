@@ -1970,7 +1970,7 @@ export default function App() {
           mode, never "Cowork" — see concepts/07-work-mode-corrected.png. Flag-off
           (default) OR no active project renders nothing; the server independently
           re-checks `workMode` on every request this surface issues. */}
-      {shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
+      {tab !== "spatial" && shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
         <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[420px] max-w-[calc(100vw-2rem)]">
           <div className="pointer-events-auto">
             <WorkModeSurface

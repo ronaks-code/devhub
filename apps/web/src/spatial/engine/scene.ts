@@ -28,6 +28,7 @@ import {
   computeLayout,
   deptColor,
   projectAccent,
+  screenBounds,
   toScreen,
   type RoomLayout,
   type WorldLayout,
@@ -128,6 +129,13 @@ export class SpatialScene {
   private destroyed = false;
   private dragging = false;
   private lastPointer = { x: 0, y: 0 };
+  /**
+   * Whether the user has taken manual camera control (panned/zoomed). Until they
+   * do, the office view AUTO-FITS to content on every layout change — so as the
+   * mock feed spawns project rooms the camera keeps them framed instead of
+   * leaving the dead space the one-shot fit produced. Reset on entering office.
+   */
+  private userAdjusted = false;
 
   constructor(cb: SceneCallbacks = {}) {
     this.app = new Application();
@@ -175,6 +183,8 @@ export class SpatialScene {
     this.layout = computeLayout(world);
     this.reconcileRooms();
     this.reconcileAgents();
+    // Keep the office framed as rooms spawn/despawn — until the user takes over.
+    if (this.mode === "office" && !this.userAdjusted) this.fitOfficeToView();
   }
 
   setMode(mode: SceneMode): void {
@@ -184,8 +194,13 @@ export class SpatialScene {
     this.roomLayer.visible = mode === "office";
     this.edgeLayer.visible = mode === "office";
     this.agentLayer.visible = mode === "office";
-    if (mode === "office") this.fitOfficeToView();
-    else this.centerCameraOnScreen();
+    if (mode === "office") {
+      // Re-hand camera control to auto-fit each time we (re)enter the office.
+      this.userAdjusted = false;
+      this.fitOfficeToView();
+    } else {
+      this.centerCameraOnScreen();
+    }
   }
 
   getMode(): SceneMode {
@@ -499,9 +514,14 @@ export class SpatialScene {
     // CURRENT desks — this is how "who's talking to whom" reads, including
     // cross-room / cross-department lines. Vertical (leader→report) is amber;
     // lateral (peer↔peer) is blue. A pulse rides from → to.
+    //
+    // Visibility: these must read at the fit/default zoom (scale can be <1), so
+    // we paint THREE layers — a wide soft halo, a mid glow, and a bright core —
+    // and gently pulse the core alpha so the line looks alive rather than static.
     this.edgeGfx.clear();
     const HEAD = 34; // px above the character's feet anchor
     const t = (this.app.ticker.lastTime / 700) % 1;
+    const breathe = 0.82 + 0.18 * Math.sin(this.app.ticker.lastTime / 320); // 0.64..1.0
     for (const e of this.world.edges) {
       if (!e.active) continue;
       const fromDesk = this.layout.deskOf.get(e.from);
@@ -509,18 +529,28 @@ export class SpatialScene {
       if (!fromDesk || !toDesk) continue;
       const from = toScreen(fromDesk.col, fromDesk.row);
       const to = toScreen(toDesk.col, toDesk.row);
-      const col = e.kind === "vertical" ? 0xfbbf24 : 0x60a5fa;
+      // Vertical (leader→report) amber; lateral (peer↔peer) cyan — both punchy.
+      const col = e.kind === "vertical" ? 0xfcd34d : 0x38bdf8;
       const fx = from.x;
       const fy = from.y - HEAD;
       const tx = to.x;
       const ty = to.y - HEAD;
-      // Soft glow underlay + crisp core line.
-      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 6, color: col, alpha: 0.18 });
-      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 2, color: col, alpha: 0.9 });
-      // A traveling pulse dot showing message flow direction (from → to).
+      // Layer 1: wide soft halo (reads even when zoomed out).
+      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 12, color: col, alpha: 0.12 });
+      // Layer 2: mid glow.
+      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 6, color: col, alpha: 0.32 });
+      // Layer 3: bright crisp core, gently breathing.
+      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 2.5, color: col, alpha: breathe });
+      // Small anchor pips at both ends so the connection's endpoints are obvious.
+      this.edgeGfx.circle(fx, fy, 3).fill({ color: col, alpha: 0.9 });
+      this.edgeGfx.circle(tx, ty, 3).fill({ color: col, alpha: 0.9 });
+      // A traveling pulse dot showing message flow direction (from → to), with a
+      // faint halo so it stays legible against busy floors.
       const px = fx + (tx - fx) * t;
       const py = fy + (ty - fy) * t;
-      this.edgeGfx.circle(px, py, 4).fill({ color: col, alpha: 1 });
+      this.edgeGfx.circle(px, py, 9).fill({ color: col, alpha: 0.2 });
+      this.edgeGfx.circle(px, py, 5).fill({ color: 0xffffff, alpha: 0.95 });
+      this.edgeGfx.circle(px, py, 3).fill({ color: col, alpha: 1 });
     }
   }
 
@@ -531,24 +561,32 @@ export class SpatialScene {
   }
 
   private fitOfficeToView(): void {
-    if (!this.layout) {
+    if (!this.layout || this.layout.rooms.size === 0) {
       this.centerCameraOnScreen();
       return;
     }
-    const b = this.layout.bounds;
-    const tl = toScreen(b.minCol, b.maxRow); // leftmost x
-    const tr = toScreen(b.maxCol, b.minRow); // rightmost x
-    const top = toScreen(b.minCol, b.minRow);
-    const bot = toScreen(b.maxCol, b.maxRow);
-    const w = Math.max(tr.x - tl.x, 1);
-    const h = Math.max(bot.y - top.y, 1);
+    // TRUE screen AABB of the drawn content (see iso.screenBounds). `headroom`
+    // reserves room for the floating room banner (~2.2 grid-rows up ≈ 70px on
+    // screen) so it isn't clipped at the top; `pad` is a uniform margin. Fitting
+    // to this exact box removes the dead space the old phantom-corner fit left.
+    const b = screenBounds(this.layout, { headroom: 72, pad: 48 });
+    const w = Math.max(b.maxX - b.minX, 1);
+    const h = Math.max(b.maxY - b.minY, 1);
     const vw = this.app.renderer.width;
     const vh = this.app.renderer.height;
-    const scale = Math.min(vw / (w + 200), vh / (h + 200), 1.4);
+    const scale = Math.min(vw / w, vh / h, 1.4);
     this.camera.scale.set(scale);
-    const cx = (tl.x + tr.x) / 2;
-    const cy = (top.y + bot.y) / 2;
-    this.camera.position.set(vw / 2 - cx * scale, vh / 2 - cy * scale);
+    // Center horizontally, but TOP-ANCHOR vertically: the office is wide-and-short,
+    // so fitting to width leaves vertical slack — we push that slack to the BOTTOM
+    // (content starts just under the top HUD) rather than centering it, which is
+    // what left the big empty band up top. TOP_MARGIN clears the top badge/toggle.
+    const TOP_MARGIN = 96;
+    const cx = (b.minX + b.maxX) / 2;
+    const scaledH = h * scale;
+    // If content is shorter than the viewport, sit it just below the HUD; if it's
+    // taller, still fit (top at margin, bottom may extend — but scale prevents that).
+    const y = scaledH < vh - TOP_MARGIN ? TOP_MARGIN - b.minY * scale : (vh - scaledH) / 2 - b.minY * scale;
+    this.camera.position.set(vw / 2 - cx * scale, y);
   }
 
   private onKeyDown = (e: KeyboardEvent) => this.keys.add(e.key.toLowerCase());
@@ -569,6 +607,7 @@ export class SpatialScene {
       const dx = e.clientX - this.lastPointer.x;
       const dy = e.clientY - this.lastPointer.y;
       this.lastPointer = { x: e.clientX, y: e.clientY };
+      if (dx !== 0 || dy !== 0) this.userAdjusted = true; // stop auto-fitting
       this.camera.position.x += dx;
       this.camera.position.y += dy;
     });
@@ -576,6 +615,7 @@ export class SpatialScene {
       "wheel",
       (e) => {
         e.preventDefault();
+        this.userAdjusted = true; // manual zoom => stop auto-fitting
         const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
         const rect = canvas.getBoundingClientRect();
         const px = e.clientX - rect.left;

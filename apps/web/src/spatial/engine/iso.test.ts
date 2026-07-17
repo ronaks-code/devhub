@@ -6,6 +6,7 @@ import {
   agentGridPosition,
   computeLayout,
   deptColor,
+  screenBounds,
   toScreen,
 } from "./iso";
 
@@ -143,6 +144,62 @@ describe("agentGridPosition", () => {
     // Midway it is strictly between the two.
     const mid = agentGridPosition(lead, layout, world, 0.5);
     expect(mid.col).not.toBe(home.col);
+  });
+});
+
+describe("screenBounds", () => {
+  // Two dept rooms placed on different screen cells: minCol comes from one room,
+  // minRow from another. The OLD camera fit combined them via
+  // toScreen(minCol, minRow), inventing a top corner ABOVE all real content.
+  // screenBounds must instead return the true union of the rooms' projected
+  // corners — so its top (minY) equals the highest actual room corner, no higher.
+  const world: WorldState = {
+    rev: 1,
+    ts: 0,
+    agents: [agent("a"), agent("b"), agent("c")],
+    edges: [],
+    rooms: [
+      room("r1", ["a"]),
+      room("r2", ["b"]),
+      room("r3", ["c"]),
+    ],
+  };
+  const layout = computeLayout(world);
+
+  it("returns the true AABB — top matches the highest real room corner, no phantom space", () => {
+    const b = screenBounds(layout);
+    // Highest (smallest y) corner across all rooms.
+    let realTop = Infinity;
+    for (const rl of layout.rooms.values()) {
+      for (const c of [
+        toScreen(rl.origin.col, rl.origin.row),
+        toScreen(rl.origin.col + rl.cols, rl.origin.row),
+        toScreen(rl.origin.col, rl.origin.row + rl.rows),
+        toScreen(rl.origin.col + rl.cols, rl.origin.row + rl.rows),
+      ]) {
+        realTop = Math.min(realTop, c.y);
+      }
+    }
+    expect(b.minY).toBeCloseTo(realTop, 5);
+
+    // A phantom corner from independent minima would sit strictly above realTop.
+    const gb = layout.bounds;
+    const phantom = toScreen(gb.minCol, gb.minRow).y;
+    expect(phantom).toBeLessThan(realTop); // the bug we avoid
+  });
+
+  it("applies headroom + pad symmetrically except extra room above for the banner", () => {
+    const base = screenBounds(layout);
+    const padded = screenBounds(layout, { headroom: 72, pad: 48 });
+    expect(padded.minX).toBeCloseTo(base.minX - 48, 5);
+    expect(padded.maxX).toBeCloseTo(base.maxX + 48, 5);
+    expect(padded.maxY).toBeCloseTo(base.maxY + 48, 5);
+    expect(padded.minY).toBeCloseTo(base.minY - 72 - 48, 5);
+  });
+
+  it("is safe on an empty layout", () => {
+    const empty = computeLayout({ rev: 1, ts: 0, agents: [], edges: [], rooms: [] });
+    expect(screenBounds(empty)).toEqual({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
   });
 });
 
