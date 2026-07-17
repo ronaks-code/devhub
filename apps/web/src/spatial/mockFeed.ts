@@ -223,6 +223,7 @@ export class MockFeed {
     const changedRooms = new Map<string, Room>();
     const removedAgents: string[] = [];
     const removedRooms: string[] = [];
+    const removedEdges: string[] = [];
 
     // 1) ICs cycle work state.
     for (const a of this.world.agents) {
@@ -299,7 +300,15 @@ export class MockFeed {
       const memberIds = new Set(room.members);
       this.world.agents = this.world.agents.filter((a) => !memberIds.has(a.id));
       this.world.rooms = this.world.rooms.filter((r) => r.id !== room.id);
-      this.world.edges = this.world.edges.filter((e) => !memberIds.has(e.from) && !memberIds.has(e.to));
+      // Drop every edge touching a drained member — and REPORT those ids, so a
+      // client applying this delta doesn't retain edges pointing at agents that no
+      // longer exist (which would leave ghost lines in the graph).
+      const keptEdges: Edge[] = [];
+      for (const e of this.world.edges) {
+        if (memberIds.has(e.from) || memberIds.has(e.to)) removedEdges.push(e.id);
+        else keptEdges.push(e);
+      }
+      this.world.edges = keptEdges;
       removedAgents.push(...room.members);
       removedRooms.push(room.id);
     }
@@ -316,6 +325,7 @@ export class MockFeed {
       rooms: [...changedRooms.values()],
       removedAgents,
       removedRooms,
+      removedEdges,
     });
   }
 }

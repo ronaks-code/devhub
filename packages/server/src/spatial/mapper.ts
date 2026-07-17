@@ -20,8 +20,10 @@ const STATUSES: AgentStatus[] = ["idle", "working", "talking", "moving", "blocke
 function normRole(raw?: string): AgentRole {
   const r = (raw ?? "").toLowerCase();
   if (ROLES.includes(r as AgentRole)) return r as AgentRole;
-  if (/lead|vp|principal|manager|director|chief/.test(r)) return "leader";
+  // Check product/PM BEFORE the leader pattern: "product manager" contains
+  // "manager" but is a PM, not a VP-level leader.
   if (/pm|product/.test(r)) return "pm";
+  if (/lead|vp|principal|manager|director|chief/.test(r)) return "leader";
   if (/eng|dev|coder|swe/.test(r)) return "engineer";
   return "specialist";
 }
