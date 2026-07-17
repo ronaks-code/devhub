@@ -25,6 +25,7 @@
     "highlight.js": "^11.10.0",
     "katex": "^0.16.11",
     "lucide-react": "^0.469.0",
+    "pixi.js": "^8.19.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
