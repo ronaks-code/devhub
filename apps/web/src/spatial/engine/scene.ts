@@ -5,23 +5,31 @@
  *
  * Design choices that keep it light on the M5:
  * - One WebGL context, containers reused across ticks (reconcile, don't rebuild).
- * - Positions derived every frame from the layout + per-agent motion phase, so
- *   there's no physics engine — just cheap lerps.
+ * - Positions are SMOOTHED every frame toward each agent's current desk, so when
+ *   an agent is pulled from its department room into a project room (a membership
+ *   change), the character visibly WALKS there — no physics engine, just a lerp.
  * - Two "modes" share one camera: `hub` (aerial, you drive an avatar to the
  *   building) and `office` (the iso room scene). Entering zooms between them.
+ *
+ * Two ROOM TYPES are drawn distinctly: department rooms get a solid, dept-colored
+ * border + cool floor; project rooms get a dashed amber border + warm floor + a
+ * "PROJECT" tag. Every character and every room wears a floating, Warzone-style
+ * NAMEPLATE showing who/what it is and its current work.
  *
  * This file is the only place that touches Pixi; math lives in `iso.ts`.
  */
 
 import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
-import type { Agent, WorldState } from "../contract";
+import { departmentLabel, type Agent, type Room, type WorldState } from "../contract";
 import {
   TILE_W,
   TILE_H,
   agentGridPosition,
   computeLayout,
   deptColor,
+  projectAccent,
   toScreen,
+  type RoomLayout,
   type WorldLayout,
 } from "./iso";
 
@@ -30,32 +38,58 @@ export type SceneMode = "hub" | "office";
 interface AgentView {
   container: Container;
   body: Graphics;
-  label: Text;
+  /** Warzone-style floating nameplate: a pill bg + name/work text above the head. */
+  plate: Container;
+  plateBg: Graphics;
+  plateName: Text;
+  plateTask: Text;
   statusDot: Graphics;
-  /** 0..1 motion phase for a moving leader. */
-  phase: number;
+  /** Smoothed screen position (so a re-homed agent walks rather than teleports). */
+  cur: { x: number; y: number };
+  placed: boolean;
+  lastPlate: string;
 }
 
 interface RoomView {
   container: Container;
   floor: Graphics;
-  label: Text;
+  /** Floating banner above the room (dept label, or project name + status). */
+  banner: Container;
+  bannerBg: Graphics;
+  bannerText: Text;
+  lastBanner: string;
 }
 
-const labelStyle = (size: number, color = 0xe5e7eb) =>
-  new TextStyle({ fontFamily: "ui-sans-serif, system-ui, sans-serif", fontSize: size, fill: color, fontWeight: "600" });
+const nameStyle = (size: number, color = 0xf1f5f9) =>
+  new TextStyle({ fontFamily: "ui-sans-serif, system-ui, sans-serif", fontSize: size, fill: color, fontWeight: "700" });
+const subStyle = (size: number, color = 0x9ca3af) =>
+  new TextStyle({ fontFamily: "ui-sans-serif, system-ui, sans-serif", fontSize: size, fill: color, fontWeight: "500" });
 
-/**
- * Compact per-character label. The room title already carries the dept·project,
- * so under each character we only need the differentiator: "lead" for a leader,
- * otherwise the trailing token of its name (e.g. `apollo-capture-2` → "2"). Full
- * name + assignment live on the hover card, so this stays legible when a room is
- * crowded. Falls back to the full name if there's nothing shorter.
- */
-function shortAgentLabel(agent: Agent): string {
-  if (agent.role === "leader") return "lead";
-  const tail = agent.name.split("-").pop();
-  return tail && tail !== agent.name ? tail : agent.name;
+/** Trailing token of a codename, e.g. `vulcan-3` → "vulcan-3" stays; used raw. */
+function agentDisplayName(agent: Agent): string {
+  return agent.name;
+}
+
+/** One short line of "current work" for the floating nameplate. */
+function agentWorkLine(agent: Agent): string {
+  switch (agent.status) {
+    case "working":
+      return agent.assignment ? truncate(agent.assignment, 26) : "working";
+    case "talking":
+      return "talking";
+    case "moving":
+      return "on the move";
+    case "blocked":
+      return "blocked";
+    case "done":
+      return "wrapping up";
+    default:
+      return agent.project ? "on " + truncate(agent.project, 20) : "idle at desk";
+  }
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
 export interface SceneCallbacks {
@@ -178,7 +212,7 @@ export class SpatialScene {
     // right face
     b.poly([130, 5, 0, 80, 0, 150, 130, 75]).fill(0x0b1220);
     this.building.addChild(b);
-    const bl = new Text({ text: "OpenClaw HQ", style: labelStyle(16, 0x93c5fd) });
+    const bl = new Text({ text: "OpenClaw HQ", style: nameStyle(16, 0x93c5fd) });
     bl.anchor.set(0.5);
     bl.position.set(0, -95);
     this.building.addChild(bl);
@@ -191,14 +225,14 @@ export class SpatialScene {
     a.circle(0, 0, 12).fill(0xff6b3d).stroke({ width: 2, color: 0xffffff });
     a.rect(-4, -20, 8, 8).fill(0xffffff); // a nub so orientation reads
     this.avatar.addChild(a);
-    const you = new Text({ text: "you", style: labelStyle(11, 0xfca5a5) });
+    const you = new Text({ text: "you", style: subStyle(11, 0xfca5a5) });
     you.anchor.set(0.5);
     you.position.set(0, 20);
     this.avatar.addChild(you);
     this.avatar.position.set(this.avatarPos.x, this.avatarPos.y);
     this.hubLayer.addChild(this.avatar);
 
-    this.enterHint = new Text({ text: "▲ walk to OpenClaw HQ and press E to enter", style: labelStyle(13, 0x9ca3af) });
+    this.enterHint = new Text({ text: "▲ walk to OpenClaw HQ and press E to enter", style: subStyle(13, 0x9ca3af) });
     this.enterHint.anchor.set(0.5);
     this.enterHint.position.set(0, 240);
     this.hubLayer.addChild(this.enterHint);
@@ -236,35 +270,18 @@ export class SpatialScene {
       if (!view) {
         const c = new Container();
         const floor = new Graphics();
-        const label = new Text({ text: rl.room.label, style: labelStyle(13) });
-        label.anchor.set(0.5, 1);
-        c.addChild(floor, label);
+        const banner = new Container();
+        const bannerBg = new Graphics();
+        const bannerText = new Text({ text: "", style: nameStyle(13) });
+        bannerText.anchor.set(0.5, 0.5);
+        banner.addChild(bannerBg, bannerText);
+        c.addChild(floor, banner);
         this.roomLayer.addChild(c);
-        view = { container: c, floor, label };
+        view = { container: c, floor, banner, bannerBg, bannerText, lastBanner: "" };
         this.roomViews.set(id, view);
       }
-      // (Re)draw the iso floor tiles for the room's footprint.
-      const g = view.floor;
-      g.clear();
-      const color = deptColor(rl.room.dept);
-      for (let dc = 0; dc < rl.cols; dc++) {
-        for (let dr = 0; dr < rl.rows; dr++) {
-          const p = toScreen(rl.origin.col + dc, rl.origin.row + dr);
-          const shade = (dc + dr) % 2 === 0 ? 0x17171c : 0x131317;
-          g.poly([p.x, p.y, p.x + TILE_W / 2, p.y + TILE_H / 2, p.x, p.y + TILE_H, p.x - TILE_W / 2, p.y + TILE_H / 2]).fill(shade);
-        }
-      }
-      // Room accent border around the footprint.
-      const o = toScreen(rl.origin.col, rl.origin.row);
-      const tr = toScreen(rl.origin.col + rl.cols, rl.origin.row);
-      const bl2 = toScreen(rl.origin.col, rl.origin.row + rl.rows);
-      const br = toScreen(rl.origin.col + rl.cols, rl.origin.row + rl.rows);
-      g.poly([o.x, o.y, tr.x, tr.y, br.x, br.y, bl2.x, bl2.y]).stroke({ width: 2, color, alpha: 0.7 });
-      // Sit the room title above the room's top corner so it never collides with
-      // the first row of characters.
-      const c0 = toScreen(rl.center.col, rl.origin.row - 1.1);
-      view.label.position.set(c0.x, c0.y);
-      view.label.text = rl.room.label;
+      this.drawRoomFloor(view, rl.room, rl);
+      this.drawRoomBanner(view, rl.room, rl);
     }
     for (const [id, view] of this.roomViews) {
       if (!seen.has(id)) {
@@ -274,6 +291,85 @@ export class SpatialScene {
     }
   }
 
+  /** Paint a room's iso floor + border, styled by room TYPE. */
+  private drawRoomFloor(view: RoomView, room: Room, rl: RoomLayout): void {
+    const g = view.floor;
+    g.clear();
+    const isProject = room.kind === "project";
+    const accent = isProject ? projectAccent() : deptColor(room.dept);
+    // Floor tint: cool slate for departments, warm sepia for projects.
+    const shadeA = isProject ? 0x201a12 : 0x17171c;
+    const shadeB = isProject ? 0x1a150f : 0x131317;
+    for (let dc = 0; dc < rl.cols; dc++) {
+      for (let dr = 0; dr < rl.rows; dr++) {
+        const p = toScreen(rl.origin.col + dc, rl.origin.row + dr);
+        const shade = (dc + dr) % 2 === 0 ? shadeA : shadeB;
+        g.poly([p.x, p.y, p.x + TILE_W / 2, p.y + TILE_H / 2, p.x, p.y + TILE_H, p.x - TILE_W / 2, p.y + TILE_H / 2]).fill(shade);
+      }
+    }
+    // Border around the footprint. Department = solid; project = dashed amber.
+    const o = toScreen(rl.origin.col, rl.origin.row);
+    const tr = toScreen(rl.origin.col + rl.cols, rl.origin.row);
+    const bl = toScreen(rl.origin.col, rl.origin.row + rl.rows);
+    const br = toScreen(rl.origin.col + rl.cols, rl.origin.row + rl.rows);
+    const ring = [o, tr, br, bl];
+    if (isProject) {
+      this.strokeDashed(g, ring, accent);
+    } else {
+      g.poly([o.x, o.y, tr.x, tr.y, br.x, br.y, bl.x, bl.y]).stroke({ width: 2, color: accent, alpha: 0.75 });
+    }
+  }
+
+  /** Draw a dashed polygon outline (for project-room borders). */
+  private strokeDashed(g: Graphics, pts: { x: number; y: number }[], color: number): void {
+    const dash = 10;
+    const gap = 7;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i]!;
+      const b = pts[(i + 1) % pts.length]!;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      const ux = (b.x - a.x) / len;
+      const uy = (b.y - a.y) / len;
+      let d = 0;
+      while (d < len) {
+        const s = d;
+        const e = Math.min(d + dash, len);
+        g.moveTo(a.x + ux * s, a.y + uy * s).lineTo(a.x + ux * e, a.y + uy * e);
+        d += dash + gap;
+      }
+    }
+    g.stroke({ width: 2.5, color, alpha: 0.95 });
+  }
+
+  /** Floating room nameplate: dept label, or project name + status + headcount. */
+  private drawRoomBanner(view: RoomView, room: Room, rl: RoomLayout): void {
+    const count = room.members.length;
+    const isProject = room.kind === "project";
+    let text: string;
+    if (isProject) {
+      const status = room.status ? ` — ${room.status}` : "";
+      text = `▸ PROJECT · ${room.project}\n${count} on it${status}`;
+    } else {
+      text = `${departmentLabel(room.dept)}\n${count} home`;
+    }
+    if (text !== view.lastBanner) {
+      view.bannerText.text = text;
+      view.bannerText.style = isProject ? nameStyle(13, 0xfde68a) : nameStyle(13, 0xe5e7eb);
+      view.bannerText.style.align = "center";
+      const w = view.bannerText.width + 20;
+      const h = view.bannerText.height + 12;
+      const bg = view.bannerBg;
+      bg.clear();
+      bg.roundRect(-w / 2, -h / 2, w, h, 7).fill({ color: 0x0b0b0d, alpha: 0.82 });
+      bg.roundRect(-w / 2, -h / 2, w, h, 7).stroke({ width: 1.5, color: isProject ? projectAccent() : deptColor(room.dept), alpha: 0.9 });
+      view.lastBanner = text;
+    }
+    // Sit the banner above the room's top corner so it never collides with the
+    // first row of characters.
+    const c0 = toScreen(rl.center.col, rl.origin.row - 1.2);
+    view.banner.position.set(c0.x, c0.y);
+  }
+
   private reconcileAgents(): void {
     const present = new Map(this.world.agents.map((a) => [a.id, a]));
     for (const [id, agent] of present) {
@@ -281,21 +377,37 @@ export class SpatialScene {
       if (!view) {
         const c = new Container();
         const body = new Graphics();
-        const label = new Text({ text: shortAgentLabel(agent), style: labelStyle(10, 0xcbd5e1) });
-        label.anchor.set(0.5, 0);
-        label.position.set(0, 6);
         const statusDot = new Graphics();
         statusDot.position.set(0, -30);
-        c.addChild(body, statusDot, label);
+        // Floating nameplate.
+        const plate = new Container();
+        const plateBg = new Graphics();
+        const plateName = new Text({ text: "", style: nameStyle(10) });
+        plateName.anchor.set(0.5, 0);
+        const plateTask = new Text({ text: "", style: subStyle(9) });
+        plateTask.anchor.set(0.5, 0);
+        plate.addChild(plateBg, plateName, plateTask);
+        c.addChild(body, statusDot, plate);
         c.eventMode = "static";
         c.cursor = "pointer";
         c.on("pointerover", () => this.cb.onSelectAgent?.(present.get(id) ?? null));
         this.agentLayer.addChild(c);
-        view = { container: c, body, label, statusDot, phase: 0 };
+        view = {
+          container: c,
+          body,
+          plate,
+          plateBg,
+          plateName,
+          plateTask,
+          statusDot,
+          cur: { x: 0, y: 0 },
+          placed: false,
+          lastPlate: "",
+        };
         this.agentViews.set(id, view);
       }
       this.drawAgentBody(view, agent);
-      view.label.text = shortAgentLabel(agent);
+      this.drawAgentPlate(view, agent);
     }
     for (const [id, view] of this.agentViews) {
       if (!present.has(id)) {
@@ -329,6 +441,28 @@ export class SpatialScene {
     view.statusDot.position.set(0, -h - 16);
   }
 
+  /** Build the floating name/work plate above a character (Warzone style). */
+  private drawAgentPlate(view: AgentView, agent: Agent): void {
+    const name = agentDisplayName(agent);
+    const work = agentWorkLine(agent);
+    const key = `${name}|${work}|${agent.dept}`;
+    if (key === view.lastPlate) return;
+    view.plateName.text = name;
+    view.plateName.style = nameStyle(10, deptColor(agent.dept));
+    view.plateTask.text = work;
+    const w = Math.max(view.plateName.width, view.plateTask.width) + 12;
+    const h = view.plateName.height + view.plateTask.height + 8;
+    // Anchor plate above the character's head.
+    const top = agent.role === "leader" ? -58 : -52;
+    view.plateName.position.set(0, top + 4);
+    view.plateTask.position.set(0, top + 4 + view.plateName.height);
+    const bg = view.plateBg;
+    bg.clear();
+    bg.roundRect(-w / 2, top, w, h, 6).fill({ color: 0x0b0b0d, alpha: 0.8 });
+    bg.roundRect(-w / 2, top, w, h, 6).stroke({ width: 1, color: deptColor(agent.dept), alpha: 0.55 });
+    view.lastPlate = key;
+  }
+
   // ── Per-frame ──────────────────────────────────────────────────────────
   private frame(): void {
     const dt = this.app.ticker.deltaTime;
@@ -338,30 +472,34 @@ export class SpatialScene {
     }
     if (!this.layout) return;
 
-    // Animate active edges + move leaders along them.
-    this.edgeGfx.clear();
+    // Smooth each agent toward its current desk. When an agent is re-homed into a
+    // different room (membership change), its target desk jumps and the character
+    // walks there over a few frames — that's the dept→project movement.
     for (const a of this.world.agents) {
       const view = this.agentViews.get(a.id);
       if (!view) continue;
-      // A moving leader glides toward the target but STOPS just short (0.82) so it
-      // stands beside the person it's talking to rather than fully overlapping them
-      // — which also keeps the relationship line (drawn below) visibly non-zero.
-      if (a.status === "moving") view.phase = Math.min(0.82, view.phase + 0.012 * dt);
-      else view.phase = 0;
-      const gp = agentGridPosition(a, this.layout, this.world, view.phase);
-      const sp = toScreen(gp.col, gp.row);
-      view.container.position.set(sp.x, sp.y);
+      const gp = agentGridPosition(a, this.layout, this.world, a.status === "moving" ? 0.6 : 0);
+      const target = toScreen(gp.col, gp.row);
+      if (!view.placed) {
+        view.cur.x = target.x;
+        view.cur.y = target.y;
+        view.placed = true;
+      } else {
+        const k = Math.min(1, 0.16 * dt);
+        view.cur.x += (target.x - view.cur.x) * k;
+        view.cur.y += (target.y - view.cur.y) * k;
+      }
+      view.container.position.set(view.cur.x, view.cur.y);
       // Z-order by screen-y so nearer characters draw on top.
-      view.container.zIndex = sp.y;
+      view.container.zIndex = view.cur.y;
     }
     this.agentLayer.sortableChildren = true;
 
-    // Draw active edges as glowing relationship lines. Endpoints are the two
-    // agents' HOME desks (not the live, animating positions) so the line is always
-    // full-length and stable while the edge is active — the moving leader token
-    // rides along it. Lines are lifted to head height and drawn thick + bright so
-    // "who's talking to whom" reads at a glance, even for short intra-room edges.
-    // Vertical (leader→report) is amber; lateral (peer↔peer) is blue.
+    // Draw active edges as glowing relationship lines between the two agents'
+    // CURRENT desks — this is how "who's talking to whom" reads, including
+    // cross-room / cross-department lines. Vertical (leader→report) is amber;
+    // lateral (peer↔peer) is blue. A pulse rides from → to.
+    this.edgeGfx.clear();
     const HEAD = 34; // px above the character's feet anchor
     const t = (this.app.ticker.lastTime / 700) % 1;
     for (const e of this.world.edges) {
