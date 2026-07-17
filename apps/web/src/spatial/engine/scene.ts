@@ -471,10 +471,13 @@ export class SpatialScene {
       bg.roundRect(-w / 2, -h / 2, w, h, 7).stroke({ width: 1.5, color: isProject ? projectAccent() : deptColor(room.dept), alpha: 0.9 });
       view.lastBanner = text;
     }
-    // Sit the banner well above the room's top corner so it clears the floating
-    // nameplates of the first row of characters.
-    const c0 = toScreen(rl.center.col, rl.origin.row - 2.2);
-    view.banner.position.set(c0.x, c0.y);
+    // Center the banner horizontally over the room and lift it clearly above the
+    // room's TOP VERTEX (the highest screen point) so it clears the floating
+    // nameplates of the first-row characters instead of colliding with the
+    // top-right desk (which the old center-col placement did).
+    const centerX = toScreen(rl.center.col, rl.center.row).x;
+    const topVertex = toScreen(rl.origin.col, rl.origin.row);
+    view.banner.position.set(centerX, topVertex.y - 46);
   }
 
   private reconcileAgents(): void {
