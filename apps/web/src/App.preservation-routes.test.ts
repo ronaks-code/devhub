@@ -26,8 +26,11 @@ const appSource = readFileSync(APP_TSX_PATH, "utf8");
 // reachable without a redundant literal comparison.
 const IMPLICIT_ELSE_TABS = new Set(["chat"]);
 
-describe("M8 preservation matrix — every advertised route still mounts (RT-01..RT-09)", () => {
-  it("ROUTE_TABS (the URL contract) has exactly the 9 surface-inventory route values", () => {
+describe("M8 preservation matrix — every advertised route still mounts (RT-01..RT-09 + spatial)", () => {
+  it("ROUTE_TABS (the URL contract) has exactly the 9 surface-inventory routes plus `spatial`", () => {
+    // `spatial` is the post-M8 addition (the "office game" visualizer). The other
+    // nine are the frozen M0 surface-inventory routes (RT-01..RT-09); keep this set
+    // exact so dropping/renaming any of them still fails loudly.
     expect(new Set(ROUTE_TABS)).toEqual(
       new Set([
         "home",
@@ -36,6 +39,7 @@ describe("M8 preservation matrix — every advertised route still mounts (RT-01.
         "ops",
         "inbox",
         "dashboard",
+        "spatial",
         "settings",
         "openai-chat",
         "codex-history",
