@@ -45,6 +45,19 @@ interface RoomView {
 const labelStyle = (size: number, color = 0xe5e7eb) =>
   new TextStyle({ fontFamily: "ui-sans-serif, system-ui, sans-serif", fontSize: size, fill: color, fontWeight: "600" });
 
+/**
+ * Compact per-character label. The room title already carries the dept·project,
+ * so under each character we only need the differentiator: "lead" for a leader,
+ * otherwise the trailing token of its name (e.g. `apollo-capture-2` → "2"). Full
+ * name + assignment live on the hover card, so this stays legible when a room is
+ * crowded. Falls back to the full name if there's nothing shorter.
+ */
+function shortAgentLabel(agent: Agent): string {
+  if (agent.role === "leader") return "lead";
+  const tail = agent.name.split("-").pop();
+  return tail && tail !== agent.name ? tail : agent.name;
+}
+
 export interface SceneCallbacks {
   /** Fired when the player enters the building from the hub. */
   onEnter?: () => void;
@@ -101,7 +114,10 @@ export class SpatialScene {
     }
     container.appendChild(this.app.canvas);
 
-    this.camera.addChild(this.floorLayer, this.edgeLayer, this.roomLayer, this.agentLayer, this.hubLayer);
+    // Layer order matters: room floors first, then edge lines ON TOP of the
+    // floors (otherwise the floors paint over the "talking" lines), then agents
+    // on top of everything so characters are never occluded.
+    this.camera.addChild(this.floorLayer, this.roomLayer, this.edgeLayer, this.agentLayer, this.hubLayer);
     this.edgeLayer.addChild(this.edgeGfx);
     this.app.stage.addChild(this.camera);
 
@@ -244,7 +260,9 @@ export class SpatialScene {
       const bl2 = toScreen(rl.origin.col, rl.origin.row + rl.rows);
       const br = toScreen(rl.origin.col + rl.cols, rl.origin.row + rl.rows);
       g.poly([o.x, o.y, tr.x, tr.y, br.x, br.y, bl2.x, bl2.y]).stroke({ width: 2, color, alpha: 0.7 });
-      const c0 = toScreen(rl.center.col, rl.origin.row - 0.3);
+      // Sit the room title above the room's top corner so it never collides with
+      // the first row of characters.
+      const c0 = toScreen(rl.center.col, rl.origin.row - 1.1);
       view.label.position.set(c0.x, c0.y);
       view.label.text = rl.room.label;
     }
@@ -263,7 +281,7 @@ export class SpatialScene {
       if (!view) {
         const c = new Container();
         const body = new Graphics();
-        const label = new Text({ text: agent.name, style: labelStyle(10, 0xcbd5e1) });
+        const label = new Text({ text: shortAgentLabel(agent), style: labelStyle(10, 0xcbd5e1) });
         label.anchor.set(0.5, 0);
         label.position.set(0, 6);
         const statusDot = new Graphics();
@@ -277,7 +295,7 @@ export class SpatialScene {
         this.agentViews.set(id, view);
       }
       this.drawAgentBody(view, agent);
-      view.label.text = agent.name;
+      view.label.text = shortAgentLabel(agent);
     }
     for (const [id, view] of this.agentViews) {
       if (!present.has(id)) {
@@ -325,7 +343,10 @@ export class SpatialScene {
     for (const a of this.world.agents) {
       const view = this.agentViews.get(a.id);
       if (!view) continue;
-      if (a.status === "moving") view.phase = Math.min(1, view.phase + 0.012 * dt);
+      // A moving leader glides toward the target but STOPS just short (0.82) so it
+      // stands beside the person it's talking to rather than fully overlapping them
+      // — which also keeps the relationship line (drawn below) visibly non-zero.
+      if (a.status === "moving") view.phase = Math.min(0.82, view.phase + 0.012 * dt);
       else view.phase = 0;
       const gp = agentGridPosition(a, this.layout, this.world, view.phase);
       const sp = toScreen(gp.col, gp.row);
@@ -335,19 +356,33 @@ export class SpatialScene {
     }
     this.agentLayer.sortableChildren = true;
 
-    // Draw active edges as glowing lines between the two agents' current spots.
+    // Draw active edges as glowing relationship lines. Endpoints are the two
+    // agents' HOME desks (not the live, animating positions) so the line is always
+    // full-length and stable while the edge is active — the moving leader token
+    // rides along it. Lines are lifted to head height and drawn thick + bright so
+    // "who's talking to whom" reads at a glance, even for short intra-room edges.
+    // Vertical (leader→report) is amber; lateral (peer↔peer) is blue.
+    const HEAD = 34; // px above the character's feet anchor
+    const t = (this.app.ticker.lastTime / 700) % 1;
     for (const e of this.world.edges) {
       if (!e.active) continue;
-      const from = this.agentViews.get(e.from)?.container.position;
-      const to = this.agentViews.get(e.to)?.container.position;
-      if (!from || !to) continue;
+      const fromDesk = this.layout.deskOf.get(e.from);
+      const toDesk = this.layout.deskOf.get(e.to);
+      if (!fromDesk || !toDesk) continue;
+      const from = toScreen(fromDesk.col, fromDesk.row);
+      const to = toScreen(toDesk.col, toDesk.row);
       const col = e.kind === "vertical" ? 0xfbbf24 : 0x60a5fa;
-      this.edgeGfx.moveTo(from.x, from.y - 20).lineTo(to.x, to.y - 20).stroke({ width: 2, color: col, alpha: 0.5 });
-      // A traveling pulse dot along the edge.
-      const t = (this.app.ticker.lastTime / 700) % 1;
-      const px = from.x + (to.x - from.x) * t;
-      const py = from.y - 20 + (to.y - from.y) * t;
-      this.edgeGfx.circle(px, py, 3).fill(col);
+      const fx = from.x;
+      const fy = from.y - HEAD;
+      const tx = to.x;
+      const ty = to.y - HEAD;
+      // Soft glow underlay + crisp core line.
+      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 6, color: col, alpha: 0.18 });
+      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 2, color: col, alpha: 0.9 });
+      // A traveling pulse dot showing message flow direction (from → to).
+      const px = fx + (tx - fx) * t;
+      const py = fy + (ty - fy) * t;
+      this.edgeGfx.circle(px, py, 4).fill({ color: col, alpha: 1 });
     }
   }
 

@@ -55,11 +55,28 @@ export interface WorldLayout {
 
 const ROOM_GAP = 2; // empty tiles between rooms
 const DESK_COLS = 3; // desks per row inside a room
+// Desks sit every DESK_STRIDE tiles so characters (and their name labels) don't
+// pile onto each other in iso space — adjacent tiles are only TILE_W/2 apart,
+// which is far narrower than a name label. A stride of 2 gives ~64px of breathing
+// room between neighbors.
+const DESK_STRIDE = 2;
+
+const ROOMS_PER_SCREEN_ROW = 3; // rooms per row before wrapping to a new screen row
+
+/** Size a room's floor from its member count (bigger crew ⇒ bigger room). */
+function roomSize(memberCount: number): { cols: number; rows: number } {
+  const deskRows = Math.ceil(Math.max(memberCount, 1) / DESK_COLS);
+  // Footprint spans the strided desk grid plus a 1-tile wall/walkway border.
+  return { cols: DESK_COLS * DESK_STRIDE + 1, rows: deskRows * DESK_STRIDE + 1 };
+}
 
 /**
- * Deterministically place rooms on a coarse grid (wrapping every ROOMS_PER_BAND)
- * and lay desks inside each. Room size grows with member count so a busy project
- * literally takes up more floor — the "rooms extend as projects grow" behavior.
+ * Place rooms on a regular SCREEN-space grid (not a raw grid-space band). Raw
+ * grid banding overlaps under the iso projection because +col and +row both push
+ * down-and-sideways; instead we pin each room's top vertex to a screen cell whose
+ * spacing exceeds the largest room's diamond footprint, so rooms can never
+ * overlap no matter how many spawn. Origins are then back-projected from those
+ * screen points via the inverse iso transform.
  *
  * Stable ordering by room id keeps a room in the same spot across ticks, so
  * agents don't teleport when unrelated rooms spawn/despawn.
@@ -69,10 +86,19 @@ export function computeLayout(world: WorldState): WorldLayout {
   const roomLayouts = new Map<string, RoomLayout>();
   const deskOf = new Map<string, GridPoint>();
 
-  const ROOMS_PER_BAND = 3;
-  let bandCol = 0;
-  let bandRow = 0;
-  let tallestInBand = 0;
+  // Largest room's footprint drives a uniform, overlap-proof cell size.
+  let maxCols = 1;
+  let maxRows = 1;
+  for (const room of rooms) {
+    const { cols, rows } = roomSize(room.members.length);
+    maxCols = Math.max(maxCols, cols);
+    maxRows = Math.max(maxRows, rows);
+  }
+  // A diamond of size (cols+rows) is (cols+rows)*TILE_W/2 wide and *TILE_H/2 tall
+  // in screen px; add ROOM_GAP tiles of walkway so neighbors clearly separate.
+  const span = maxCols + maxRows + ROOM_GAP;
+  const cellW = span * (TILE_W / 2);
+  const cellH = span * (TILE_H / 2);
 
   let minCol = 0;
   let maxCol = 0;
@@ -80,19 +106,18 @@ export function computeLayout(world: WorldState): WorldLayout {
   let maxRow = 0;
 
   rooms.forEach((room, i) => {
-    const memberCount = Math.max(room.members.length, 1);
-    const deskRows = Math.ceil(memberCount / DESK_COLS);
-    // +2 tiles of padding all around for walls/walkway.
-    const cols = DESK_COLS + 2;
-    const rowsSize = deskRows + 2;
+    const { cols, rows: rowsSize } = roomSize(room.members.length);
 
-    if (i > 0 && i % ROOMS_PER_BAND === 0) {
-      bandCol = 0;
-      bandRow += tallestInBand + ROOM_GAP;
-      tallestInBand = 0;
-    }
+    // Screen cell for this room; back-project its top vertex to a grid origin.
+    const gx = i % ROOMS_PER_SCREEN_ROW;
+    const gy = Math.floor(i / ROOMS_PER_SCREEN_ROW);
+    const sx = gx * cellW;
+    const sy = gy * cellH;
+    // Inverse of toScreen: col-row = x/(TILE_W/2), col+row = y/(TILE_H/2).
+    const a = sx / (TILE_W / 2);
+    const b = sy / (TILE_H / 2);
+    const origin: GridPoint = { col: (a + b) / 2, row: (b - a) / 2 };
 
-    const origin: GridPoint = { col: bandCol, row: bandRow };
     const center: GridPoint = {
       col: origin.col + cols / 2,
       row: origin.row + rowsSize / 2,
@@ -102,7 +127,10 @@ export function computeLayout(world: WorldState): WorldLayout {
     room.members.forEach((memberId, idx) => {
       const dc = idx % DESK_COLS;
       const dr = Math.floor(idx / DESK_COLS);
-      const p: GridPoint = { col: origin.col + 1 + dc, row: origin.row + 1 + dr };
+      const p: GridPoint = {
+        col: origin.col + 1 + dc * DESK_STRIDE,
+        row: origin.row + 1 + dr * DESK_STRIDE,
+      };
       desks.set(memberId, p);
       deskOf.set(memberId, p);
     });
@@ -113,9 +141,6 @@ export function computeLayout(world: WorldState): WorldLayout {
     minRow = Math.min(minRow, origin.row);
     maxCol = Math.max(maxCol, origin.col + cols);
     maxRow = Math.max(maxRow, origin.row + rowsSize);
-
-    bandCol += cols + ROOM_GAP;
-    tallestInBand = Math.max(tallestInBand, rowsSize);
   });
 
   return { rooms: roomLayouts, deskOf, bounds: { minCol, maxCol, minRow, maxRow } };
