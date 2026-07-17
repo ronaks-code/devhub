@@ -6,7 +6,10 @@
  *
  * Guarantees it enforces (so the renderer never has to defend itself):
  *  - Every agent has a valid role/status (defaulted if the raw value is junk).
- *  - Rooms are DERIVED (dept × project); membership follows each agent.
+ *  - Rooms are DERIVED into two types: a DEPARTMENT room per dept (holding the
+ *    agents currently home, i.e. not on a project) and a PROJECT room per active
+ *    project (holding the cross-dept agents pulled onto it). Membership follows
+ *    each agent's `project`.
  *  - Edges reference only agents that exist; direction/kind is inferred from the
  *    reporting hierarchy when the raw message doesn't say.
  */
@@ -41,10 +44,12 @@ function normStatus(raw?: string): AgentStatus {
 
 function mapAgent(raw: RawOpenClawAgent): Agent {
   const dept = (raw.dept ?? raw.department ?? "unknown").toLowerCase();
-  const project = raw.project ?? "general";
+  // Empty project = the agent is home in its department room. A non-empty
+  // project pulls it into that project's (cross-department) team room.
+  const project = raw.project ?? "";
   return {
     id: raw.id,
-    name: raw.name ?? `${dept}-${project}`,
+    name: raw.name ?? raw.id,
     dept,
     role: normRole(raw.role ?? raw.kind),
     status: normStatus(raw.status ?? raw.state),
@@ -58,25 +63,36 @@ function cap(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Derive rooms from agents: one room per (dept, project) actually in use. */
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+/**
+ * Derive the two room types from agents:
+ *  - one DEPARTMENT room per dept, holding agents currently home (project === "");
+ *  - one PROJECT room per active project, holding the agents pulled onto it.
+ */
 function deriveRooms(agents: Agent[]): Room[] {
-  const byKey = new Map<string, Room>();
+  const deptRooms = new Map<string, Room>();
+  const projRooms = new Map<string, Room>();
   for (const a of agents) {
-    const key = `${a.dept}::${a.project}`;
-    let room = byKey.get(key);
-    if (!room) {
-      room = {
-        id: `room-${key}`,
-        dept: a.dept,
-        project: a.project,
-        label: `${cap(a.dept)} · ${a.project}`,
-        members: [],
-      };
-      byKey.set(key, room);
+    if (a.project) {
+      let room = projRooms.get(a.project);
+      if (!room) {
+        room = { id: `proj-${slug(a.project)}`, kind: "project", dept: "", project: a.project, label: a.project, members: [] };
+        projRooms.set(a.project, room);
+      }
+      room.members.push(a.id);
+    } else {
+      let room = deptRooms.get(a.dept);
+      if (!room) {
+        room = { id: `dept-${a.dept}`, kind: "department", dept: a.dept, project: "", label: cap(a.dept), members: [] };
+        deptRooms.set(a.dept, room);
+      }
+      room.members.push(a.id);
     }
-    room.members.push(a.id);
   }
-  return [...byKey.values()].sort((x, y) => x.id.localeCompare(y.id));
+  return [...deptRooms.values(), ...projRooms.values()].sort((x, y) => x.id.localeCompare(y.id));
 }
 
 function mapEdge(raw: RawOpenClawMessage, i: number, byId: Map<string, Agent>): Edge | null {

@@ -26,7 +26,7 @@ describe("diffWorld", () => {
         { id: "b", name: "b", dept: "vulcan", role: "engineer", status: "idle", assignment: "", reports_to: null, project: "p" },
       ],
       edges: [{ id: "e", from: "a", to: "b", kind: "lateral", active: false }],
-      rooms: [{ id: "r", project: "p", dept: "vulcan", label: "R", members: ["a", "b"] }],
+      rooms: [{ id: "r", kind: "project", project: "p", dept: "", label: "R", members: ["a", "b"] }],
     };
     const next: WorldState = {
       rev: 2,
@@ -37,7 +37,7 @@ describe("diffWorld", () => {
         { id: "c", name: "c", dept: "vulcan", role: "engineer", status: "idle", assignment: "", reports_to: null, project: "p" },
       ],
       edges: [],
-      rooms: [{ id: "r", project: "p", dept: "vulcan", label: "R", members: ["a", "c"] }],
+      rooms: [{ id: "r", kind: "project", project: "p", dept: "", label: "R", members: ["a", "c"] }],
     };
     const delta = diffWorld(prev, next, 2);
     expect(delta.removedAgents).toEqual(["b"]);

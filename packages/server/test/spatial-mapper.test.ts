@@ -49,18 +49,27 @@ describe("mapOpenClawToWorld", () => {
     expect(a.reports_to).toBe("boss");
   });
 
-  it("derives one room per (dept, project) with correct membership", () => {
+  it("derives department rooms for home agents and cross-dept project rooms for tasked ones", () => {
     const raw: RawOpenClawState = {
       agents: [
-        { id: "a", dept: "vulcan", project: "devhub" },
-        { id: "b", dept: "vulcan", project: "devhub" },
-        { id: "c", dept: "vulcan", project: "capture" },
+        { id: "a", dept: "vulcan" }, // home
+        { id: "b", dept: "vulcan", project: "Q3 GTM push" }, // pulled onto a project
+        { id: "c", dept: "apollo", project: "Q3 GTM push" }, // cross-dept teammate
+        { id: "d", dept: "apollo" }, // home
       ],
     };
     const rooms = mapOpenClawToWorld(raw).rooms;
-    expect(rooms).toHaveLength(2);
-    const devhub = rooms.find((r) => r.project === "devhub")!;
-    expect(devhub.members.sort()).toEqual(["a", "b"]);
+    const dept = rooms.filter((r) => r.kind === "department");
+    const proj = rooms.filter((r) => r.kind === "project");
+    expect(dept.map((r) => r.dept).sort()).toEqual(["apollo", "vulcan"]);
+    // A department room only holds its HOME agents.
+    expect(rooms.find((r) => r.kind === "department" && r.dept === "vulcan")!.members).toEqual(["a"]);
+    // One project room, cross-department (dept === ""), with both tasked agents.
+    expect(proj).toHaveLength(1);
+    const gtm = proj[0]!;
+    expect(gtm.project).toBe("Q3 GTM push");
+    expect(gtm.dept).toBe("");
+    expect(gtm.members.sort()).toEqual(["b", "c"]);
   });
 
   it("drops edges pointing at non-existent agents and dedupes by id", () => {
