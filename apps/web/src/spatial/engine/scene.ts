@@ -364,9 +364,9 @@ export class SpatialScene {
       bg.roundRect(-w / 2, -h / 2, w, h, 7).stroke({ width: 1.5, color: isProject ? projectAccent() : deptColor(room.dept), alpha: 0.9 });
       view.lastBanner = text;
     }
-    // Sit the banner above the room's top corner so it never collides with the
-    // first row of characters.
-    const c0 = toScreen(rl.center.col, rl.origin.row - 1.2);
+    // Sit the banner well above the room's top corner so it clears the floating
+    // nameplates of the first row of characters.
+    const c0 = toScreen(rl.center.col, rl.origin.row - 2.2);
     view.banner.position.set(c0.x, c0.y);
   }
 
