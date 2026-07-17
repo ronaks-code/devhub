@@ -57,9 +57,46 @@ describe("MockFeed", () => {
       }
       assertConsistent(world);
     }
-    // Rooms stay within the simulation's bounds.
-    expect(world.rooms.length).toBeGreaterThanOrEqual(2);
-    expect(world.rooms.length).toBeLessThanOrEqual(6);
+    // The 8 department rooms are persistent; projects add 0..4 more.
+    const deptRooms = world.rooms.filter((r) => r.kind === "department");
+    expect(deptRooms).toHaveLength(8);
+    expect(world.rooms.length).toBeGreaterThanOrEqual(8);
+    expect(world.rooms.length).toBeLessThanOrEqual(12);
+  });
+
+  it("seeds the 8 real OpenClaw departments and never the code repos", () => {
+    const world = new MockFeed({ seed: 5 }).getWorld();
+    const depts = new Set(world.rooms.filter((r) => r.kind === "department").map((r) => r.dept));
+    expect([...depts].sort()).toEqual(
+      ["apollo", "argus", "athena", "hermes", "talos", "thoth", "vesta", "vulcan"],
+    );
+    // Code repos must never appear as a dept or a project.
+    const repos = ["devhub", "capture", "nerve", "company", "sensorium", "atlas"];
+    for (const r of world.rooms) {
+      expect(repos).not.toContain(r.dept);
+      expect(repos).not.toContain(r.project);
+    }
+    for (const a of world.agents) expect(repos).not.toContain(a.dept);
+  });
+
+  it("moves an agent out of its home room and into a project room when pulled", () => {
+    const feed = new MockFeed({ seed: 11 });
+    // Run until at least one project room exists.
+    let world = feed.getWorld();
+    for (let i = 0; i < 400 && !world.rooms.some((r) => r.kind === "project"); i++) {
+      feed.tick();
+      world = feed.getWorld();
+    }
+    const proj = world.rooms.find((r) => r.kind === "project");
+    expect(proj).toBeTruthy();
+    expect(proj!.members.length).toBeGreaterThan(0);
+    // Every project member has project set and is NOT listed in any dept room.
+    for (const id of proj!.members) {
+      const agent = world.agents.find((a) => a.id === id)!;
+      expect(agent.project).toBe(proj!.project);
+      const inHome = world.rooms.some((r) => r.kind === "department" && r.members.includes(id));
+      expect(inHome).toBe(false);
+    }
   });
 
   it("emits frames that survive the wire parser", () => {
