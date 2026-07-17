@@ -100,6 +100,11 @@ import { cn } from "./lib/utils";
 const DashboardPane = lazy(() =>
   import("./components/DashboardPane").then((m) => ({ default: m.DashboardPane })),
 );
+// Spatial "office game" view — the PixiJS/WebGL swarm visualizer. Heavy (Pixi +
+// canvas), so it's code-split and only pulls its chunk when the tab is opened.
+const SpatialHub = lazy(() =>
+  import("./spatial/SpatialHub").then((m) => ({ default: m.SpatialHub })),
+);
 const SettingsPane = lazy(() =>
   import("./components/SettingsPane").then((m) => ({ default: m.SettingsPane })),
 );
@@ -164,7 +169,7 @@ export function PaneFallback() {
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings" | "openai-chat" | "codex-history";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -1352,6 +1357,7 @@ export default function App() {
         { id: "chat", label: "Chat", current: tab === "chat" },
         { id: "dashboard", label: "Dashboard", current: tab === "dashboard" },
         { id: "ops", label: "Live Ops", current: tab === "ops" },
+        { id: "spatial", label: "Spatial", current: tab === "spatial" },
         { id: "inbox", label: "Inbox", current: tab === "inbox" },
         { id: "settings", label: "Settings", current: tab === "settings" },
       ],
@@ -1673,6 +1679,7 @@ export default function App() {
           {(
             [
               { id: "ops" as Tab, icon: <Radio className="h-3.5 w-3.5" />, label: "Live Ops" },
+              { id: "spatial" as Tab, icon: <Hexagon className="h-3.5 w-3.5" />, label: "Spatial" },
               { id: "inbox" as Tab, icon: <Inbox className="h-3.5 w-3.5" />, label: "Inbox" },
               { id: "settings" as Tab, icon: <Settings className="h-3.5 w-3.5" />, label: "Settings" },
             ] as const
@@ -1926,6 +1933,10 @@ export default function App() {
               )
             }
           />
+        ) : tab === "spatial" ? (
+          <Suspense fallback={<PaneFallback />}>
+            <SpatialHub />
+          </Suspense>
         ) : tab === "openai-chat" ? (
           <Suspense fallback={<PaneFallback />}>
             <OpenAIPane />

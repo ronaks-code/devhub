@@ -34,6 +34,7 @@ export const ROUTE_TABS = [
   "ops",
   "inbox",
   "dashboard",
+  "spatial",
   "settings",
   "openai-chat",
   "codex-history",
