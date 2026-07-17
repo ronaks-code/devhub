@@ -13,7 +13,7 @@
  * a band below, with a clear gap between them.
  */
 
-import { DEPARTMENTS, type Agent, type Room, type WorldState } from "../contract";
+import { DEPARTMENTS, type Agent, type Edge, type Room, type WorldState } from "../contract";
 
 /** Half-width / half-height of one iso tile in screen px (2:1 diamond). */
 export const TILE_W = 64;
@@ -247,6 +247,26 @@ export function agentGridPosition(
 
 function easeInOut(t: number): number {
   return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+}
+
+/**
+ * The relationship lines to draw for a focused agent: ALL edges touching `id`
+ * (in either direction) whose both endpoints have a known desk — standing
+ * structure (who reports to whom / peers) AND currently-active talk. The renderer
+ * styles active edges bright+pulsing and inactive ones dim+static, so hovering
+ * any agent reveals its place in the org even when it isn't talking right now.
+ * Returning only the focused agent's edges (vs the whole graph) keeps the default
+ * scene clean and the per-hover draw cheap. `id === null` ⇒ none (clean scene).
+ */
+export function edgesForAgent(
+  edges: Edge[],
+  id: string | null,
+  deskOf: Map<string, GridPoint>,
+): Edge[] {
+  if (!id) return [];
+  return edges.filter(
+    (e) => (e.from === id || e.to === id) && deskOf.has(e.from) && deskOf.has(e.to),
+  );
 }
 
 /** A stable accent color per department, for home rooms/characters. */

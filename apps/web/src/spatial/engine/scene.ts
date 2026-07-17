@@ -20,13 +20,14 @@
  */
 
 import { Application, Container, Graphics, Text, TextStyle } from "pixi.js";
-import { departmentLabel, type Agent, type Room, type WorldState } from "../contract";
+import { departmentLabel, type Agent, type Edge, type Room, type WorldState } from "../contract";
 import {
   TILE_W,
   TILE_H,
   agentGridPosition,
   computeLayout,
   deptColor,
+  edgesForAgent,
   projectAccent,
   screenBounds,
   toScreen,
@@ -149,7 +150,14 @@ export class SpatialScene {
 
   private roomViews = new Map<string, RoomView>();
   private agentViews = new Map<string, AgentView>();
+  /** Static relationship-line geometry — rebuilt only when hover/layout changes. */
   private edgeGfx = new Graphics();
+  /** The traveling message pulse — the ONLY edge geometry redrawn per frame (tiny). */
+  private pulseGfx = new Graphics();
+  /** Id of the agent whose connections are currently shown (hover/select). */
+  private hoveredId: string | null = null;
+  /** Set when the visible-edge set may have changed, so `frame` rebuilds once. */
+  private edgesDirty = true;
 
   private cb: SceneCallbacks;
   private destroyed = false;
@@ -186,7 +194,7 @@ export class SpatialScene {
     // floors (otherwise the floors paint over the "talking" lines), then agents
     // on top of everything so characters are never occluded.
     this.camera.addChild(this.floorLayer, this.roomLayer, this.edgeLayer, this.agentLayer, this.hubLayer);
-    this.edgeLayer.addChild(this.edgeGfx);
+    this.edgeLayer.addChild(this.edgeGfx, this.pulseGfx);
     this.app.stage.addChild(this.camera);
 
     this.buildHub();
@@ -209,6 +217,7 @@ export class SpatialScene {
     this.layout = computeLayout(world);
     this.reconcileRooms();
     this.reconcileAgents();
+    this.edgesDirty = true; // desks/edges may have shifted; rebuild lines once
     // Keep the office framed as rooms spawn/despawn — until the user takes over.
     if (this.mode === "office" && !this.userAdjusted) this.fitOfficeToView();
   }
@@ -223,6 +232,8 @@ export class SpatialScene {
     if (mode === "office") {
       // Re-hand camera control to auto-fit each time we (re)enter the office.
       this.userAdjusted = false;
+      this.hoveredId = null;
+      this.edgesDirty = true;
       this.fitOfficeToView();
     } else {
       this.centerCameraOnScreen();
@@ -500,7 +511,20 @@ export class SpatialScene {
         c.addChild(body, statusDot, plate);
         c.eventMode = "static";
         c.cursor = "pointer";
-        c.on("pointerover", () => this.cb.onSelectAgent?.(present.get(id) ?? null));
+        // Hovering an agent reveals ONLY its relationship lines (clean by default,
+        // and cheap — a handful of lines instead of the whole graph).
+        c.on("pointerover", () => {
+          this.hoveredId = id;
+          this.edgesDirty = true;
+          this.cb.onSelectAgent?.(this.world.agents.find((a) => a.id === id) ?? null);
+        });
+        c.on("pointerout", () => {
+          if (this.hoveredId === id) {
+            this.hoveredId = null;
+            this.edgesDirty = true;
+            this.cb.onSelectAgent?.(null);
+          }
+        });
         this.agentLayer.addChild(c);
         view = {
           container: c,
@@ -647,47 +671,91 @@ export class SpatialScene {
     }
     this.agentLayer.sortableChildren = true;
 
-    // Draw active edges as glowing relationship lines between the two agents'
-    // CURRENT desks — this is how "who's talking to whom" reads, including
-    // cross-room / cross-department lines. Vertical (leader→report) is amber;
-    // lateral (peer↔peer) is blue. A pulse rides from → to.
-    //
-    // Visibility: these must read at the fit/default zoom (scale can be <1), so
-    // we paint THREE layers — a wide soft halo, a mid glow, and a bright core —
-    // and gently pulse the core alpha so the line looks alive rather than static.
-    this.edgeGfx.clear();
-    const HEAD = 34; // px above the character's feet anchor
-    const t = (this.app.ticker.lastTime / 700) % 1;
-    const breathe = 0.82 + 0.18 * Math.sin(this.app.ticker.lastTime / 320); // 0.64..1.0
-    for (const e of this.world.edges) {
-      if (!e.active) continue;
-      const fromDesk = this.layout.deskOf.get(e.from);
-      const toDesk = this.layout.deskOf.get(e.to);
-      if (!fromDesk || !toDesk) continue;
+    // Relationship lines — ONLY for the hovered/selected agent, so the default
+    // scene is clean (no web of lines) and cheap. The static line geometry is
+    // rebuilt only when the hover or layout changes (`edgesDirty`), NOT every
+    // frame — rebuilding long multi-layer strokes per frame was the lag source.
+    // The single per-frame draw is the tiny traveling pulse.
+    const edges = this.visibleEdges();
+    if (this.edgesDirty) {
+      this.rebuildEdgeLines(edges);
+      this.edgesDirty = false;
+    }
+    this.drawPulses(edges);
+  }
+
+  /** Active edges connected to the hovered agent (both directions), desks known. */
+  private visibleEdges(): Edge[] {
+    if (!this.layout) return [];
+    return edgesForAgent(this.world.edges, this.hoveredId, this.layout.deskOf);
+  }
+
+  private static EDGE_HEAD = 34; // px above a character's feet anchor
+  private edgeColor(kind: Edge["kind"]): number {
+    return kind === "vertical" ? 0xfcd34d : 0x38bdf8; // amber leader→report / cyan peer↔peer
+  }
+
+  /** Rebuild the STATIC relationship-line geometry (called only when dirty).
+   *  Active edges (talking now) are bright + glowing; standing structural edges
+   *  are dim + thin so they read as "latent relationship, not active traffic". */
+  private rebuildEdgeLines(edges: Edge[]): void {
+    const g = this.edgeGfx;
+    g.clear();
+    if (!this.layout || edges.length === 0) return;
+    const HEAD = SpatialScene.EDGE_HEAD;
+    // Draw standing edges first so active ones sit visually on top.
+    for (const e of [...edges].sort((a, b) => Number(a.active) - Number(b.active))) {
+      const fromDesk = this.layout.deskOf.get(e.from)!;
+      const toDesk = this.layout.deskOf.get(e.to)!;
       const from = toScreen(fromDesk.col, fromDesk.row);
       const to = toScreen(toDesk.col, toDesk.row);
-      // Vertical (leader→report) amber; lateral (peer↔peer) cyan — both punchy.
-      const col = e.kind === "vertical" ? 0xfcd34d : 0x38bdf8;
+      const col = this.edgeColor(e.kind);
       const fx = from.x;
       const fy = from.y - HEAD;
       const tx = to.x;
       const ty = to.y - HEAD;
-      // Layer 1: wide soft halo (reads even when zoomed out).
-      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 12, color: col, alpha: 0.12 });
-      // Layer 2: mid glow.
-      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 6, color: col, alpha: 0.32 });
-      // Layer 3: bright crisp core, gently breathing.
-      this.edgeGfx.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 2.5, color: col, alpha: breathe });
-      // Small anchor pips at both ends so the connection's endpoints are obvious.
-      this.edgeGfx.circle(fx, fy, 3).fill({ color: col, alpha: 0.9 });
-      this.edgeGfx.circle(tx, ty, 3).fill({ color: col, alpha: 0.9 });
-      // A traveling pulse dot showing message flow direction (from → to), with a
-      // faint halo so it stays legible against busy floors.
-      const px = fx + (tx - fx) * t;
-      const py = fy + (ty - fy) * t;
-      this.edgeGfx.circle(px, py, 9).fill({ color: col, alpha: 0.2 });
-      this.edgeGfx.circle(px, py, 5).fill({ color: 0xffffff, alpha: 0.95 });
-      this.edgeGfx.circle(px, py, 3).fill({ color: col, alpha: 1 });
+      if (e.active) {
+        g.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 10, color: col, alpha: 0.14 }); // halo
+        g.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 5, color: col, alpha: 0.34 }); // glow
+        g.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 2.5, color: col, alpha: 0.95 }); // core
+        g.circle(fx, fy, 3.5).fill({ color: col, alpha: 0.95 });
+        g.circle(tx, ty, 3.5).fill({ color: col, alpha: 0.95 });
+      } else {
+        // Standing relationship: faint, thin, no glow — org structure at a glance.
+        g.moveTo(fx, fy).lineTo(tx, ty).stroke({ width: 1.5, color: col, alpha: 0.32 });
+        g.circle(fx, fy, 2.5).fill({ color: col, alpha: 0.5 });
+        g.circle(tx, ty, 2.5).fill({ color: col, alpha: 0.5 });
+      }
+    }
+  }
+
+  /** Per-frame: a small traveling pulse per visible edge + a ring on the hovered
+   *  agent. Only a few tiny circles — no long-line re-tessellation, so it's cheap. */
+  private drawPulses(edges: Edge[]): void {
+    const g = this.pulseGfx;
+    g.clear();
+    // Highlight ring so it's obvious whose connections are shown.
+    if (this.hoveredId) {
+      const hv = this.agentViews.get(this.hoveredId);
+      if (hv) g.circle(hv.cur.x, hv.cur.y - 14, 22).stroke({ width: 2, color: 0xffffff, alpha: 0.45 });
+    }
+    if (!this.layout || edges.length === 0) return;
+    const HEAD = SpatialScene.EDGE_HEAD;
+    const t = (this.app.ticker.lastTime / 900) % 1; // slow, non-distracting drift
+    for (const e of edges) {
+      if (!e.active) continue; // only live traffic gets a traveling pulse
+      const fromDesk = this.layout.deskOf.get(e.from)!;
+      const toDesk = this.layout.deskOf.get(e.to)!;
+      const from = toScreen(fromDesk.col, fromDesk.row);
+      const to = toScreen(toDesk.col, toDesk.row);
+      const col = this.edgeColor(e.kind);
+      const fx = from.x;
+      const fy = from.y - HEAD;
+      const px = fx + (to.x - fx) * t;
+      const py = fy + (to.y - HEAD - fy) * t;
+      g.circle(px, py, 7).fill({ color: col, alpha: 0.25 });
+      g.circle(px, py, 4).fill({ color: 0xffffff, alpha: 0.95 });
+      g.circle(px, py, 2.5).fill({ color: col, alpha: 1 });
     }
   }
 

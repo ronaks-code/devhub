@@ -155,7 +155,9 @@ export function SpatialHub(): React.JSX.Element {
               </div>
             ))}
           </div>
-          <div className="mt-2 mb-1 border-t border-zinc-800 pt-1.5 font-semibold text-zinc-300">Connections</div>
+          <div className="mt-2 mb-1 border-t border-zinc-800 pt-1.5 font-semibold text-zinc-300">
+            Connections <span className="font-normal text-zinc-500">(hover an agent)</span>
+          </div>
           <div className="grid gap-1">
             <div className="flex items-center gap-1.5 text-zinc-400">
               <span className="inline-block h-0.5 w-4 rounded-full" style={{ background: "#fcd34d", boxShadow: "0 0 4px #fcd34d" }} />

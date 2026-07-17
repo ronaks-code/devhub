@@ -6,9 +6,12 @@ import {
   agentGridPosition,
   computeLayout,
   deptColor,
+  edgesForAgent,
   screenBounds,
   toScreen,
 } from "./iso";
+import type { GridPoint } from "./iso";
+import type { Edge } from "../contract";
 
 /**
  * iso layout tests. The load-bearing guarantee here is that rooms NEVER overlap
@@ -200,6 +203,42 @@ describe("screenBounds", () => {
   it("is safe on an empty layout", () => {
     const empty = computeLayout({ rev: 1, ts: 0, agents: [], edges: [], rooms: [] });
     expect(screenBounds(empty)).toEqual({ minX: 0, maxX: 0, minY: 0, maxY: 0 });
+  });
+});
+
+describe("edgesForAgent (hover-only relationship lines)", () => {
+  const desks = new Map<string, GridPoint>([
+    ["lead", { col: 0, row: 0 }],
+    ["rep", { col: 2, row: 0 }],
+    ["peer", { col: 4, row: 0 }],
+    // "ghost" has no desk on purpose
+  ]);
+  const edges: Edge[] = [
+    { id: "e1", from: "lead", to: "rep", kind: "vertical", active: true },
+    { id: "e2", from: "lead", to: "peer", kind: "lateral", active: false }, // inactive
+    { id: "e3", from: "peer", to: "rep", kind: "lateral", active: true }, // doesn't touch lead
+    { id: "e4", from: "lead", to: "ghost", kind: "vertical", active: true }, // ghost has no desk
+  ];
+
+  it("returns nothing when no agent is focused (clean default scene)", () => {
+    expect(edgesForAgent(edges, null, desks)).toEqual([]);
+  });
+
+  it("returns the focused agent's edges — active AND standing — when both desks are known", () => {
+    const got = edgesForAgent(edges, "lead", desks);
+    // e1 (active) + e2 (standing/inactive) both count; e3 isn't lead's; e4 is deskless.
+    expect(new Set(got.map((e) => e.id))).toEqual(new Set(["e1", "e2"]));
+  });
+
+  it("excludes edges whose other endpoint has no desk", () => {
+    const got = edgesForAgent(edges, "lead", desks);
+    expect(got.map((e) => e.id)).not.toContain("e4"); // ghost has no desk
+  });
+
+  it("matches edges in either direction (from OR to the focused agent)", () => {
+    const got = edgesForAgent(edges, "rep", desks);
+    // e1 (lead->rep) and e3 (peer->rep) both touch rep with known desks
+    expect(new Set(got.map((e) => e.id))).toEqual(new Set(["e1", "e3"]));
   });
 });
 
