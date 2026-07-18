@@ -477,6 +477,52 @@ describe("ClaudeEventNormalizer", () => {
     }
   });
 
+  it("projects Task subagents from launch through correlated completion", () => {
+    const normalize = normalizer();
+    const started = normalize.normalize({
+      type: "assistant",
+      uuid: UUIDS[0],
+      session_id: SESSION,
+      message: {
+        id: "message-agent",
+        model: SONNET,
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [{
+          type: "tool_use",
+          id: "task-1",
+          name: "Task",
+          input: { description: "Inspect stream", subagent_type: "Explore", prompt: "Find the live path" },
+        }],
+      },
+    }, ctx);
+    const completed = normalize.normalize({
+      type: "user",
+      uuid: UUIDS[1],
+      session_id: SESSION,
+      message: {
+        id: "message-result",
+        content: [{ type: "tool_result", tool_use_id: "task-1", content: "Found the live SSE path" }],
+      },
+    }, ctx);
+
+    expect(started.events[0]?.event).toMatchObject({
+      type: "activity",
+      itemId: "task-1",
+      activity: "subagent",
+      status: "running",
+    });
+    expect(started.events[0]?.event.type === "activity" ? started.events[0].event.message : null)
+      .toContain("Inspect stream");
+    expect(completed.events[0]?.event).toMatchObject({
+      type: "activity",
+      itemId: "task-1",
+      activity: "subagent",
+      status: "completed",
+    });
+    expect(completed.events[0]?.event.type === "activity" ? completed.events[0].event.message : null)
+      .toContain("Found the live SSE path");
+  });
+
   it("suppresses thinking, signatures, tool input, tool results, and credential text", () => {
     const normalize = normalizer();
     normalize.normalize({

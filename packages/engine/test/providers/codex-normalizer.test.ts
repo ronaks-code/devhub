@@ -142,6 +142,39 @@ describe("Codex native notification normalization", () => {
     expect(JSON.stringify(activity)).not.toContain("/secret/cwd");
   });
 
+  it("preserves bounded subagent labels and output metadata in activity events", () => {
+    const events = normalizeCodexNotification(notification("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      completedAtMs: 2,
+      item: {
+        id: "agent-call-1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        prompt: "Inspect event flow",
+        senderThreadId: "thread-1",
+        receiverThreadIds: ["agent-thread-1"],
+        agentsStates: {
+          "agent-thread-1": { status: "completed", message: "Found the SSE path" },
+        },
+        status: "completed",
+      },
+    }), context);
+
+    expect(events).toMatchObject([
+      { type: "status", scope: "item", status: "completed", nativeId: "agent-call-1" },
+      {
+        type: "activity",
+        activity: "collabAgentToolCall",
+        status: "completed",
+        itemId: "agent-call-1",
+      },
+    ]);
+    const activity = events.find((event) => event.type === "activity");
+    expect(activity?.type === "activity" ? activity.message : null).toContain("Inspect event flow");
+    expect(activity?.type === "activity" ? activity.message : null).toContain("Found the SSE path");
+  });
+
   it("redacts a credential before truncating a bounded activity body", () => {
     const prefix = "x".repeat(CODEX_MAX_ACTIVITY_BODY_JSON_BYTES - 10);
     const events = normalizeCodexNotification(notification("item/completed", {
