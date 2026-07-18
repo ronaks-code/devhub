@@ -1036,6 +1036,8 @@ export { testMcpServer } from "./config/mcp-test.js";
 export type { McpTestResult } from "./config/mcp-test.js";
 export { setMcpEnabled, listMcpToggles } from "./config/mcp-toggle.js";
 export type { McpToggle } from "./config/mcp-toggle.js";
+export { createCodexMcpManager } from "./config/codex-mcp.js";
+export type { CodexMcpManager, CodexMcpServerDef, CodexMcpRunner } from "./config/codex-mcp.js";
 export {
   projectRollups,
   costByProject,

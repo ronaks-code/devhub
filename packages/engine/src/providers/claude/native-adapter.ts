@@ -1229,6 +1229,19 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     return this.refreshChain;
   }
 
+  /** Recycle idle CLI generations so the next turn in each session reads current MCP config. */
+  async reloadMcpConfig(): Promise<boolean> {
+    if (this.disposed) throw adapterError("DISPOSED", "Claude native adapter is disposed");
+    let recycled = false;
+    await Promise.all([...this.states.values()].map(async (state) => {
+      const hadRuntime = state.runtime !== null;
+      state.idleReleaseRequested = true;
+      await this.releaseIfIdle(state);
+      if (hadRuntime && state.runtime === null) recycled = true;
+    }));
+    return recycled;
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise !== null) return this.disposePromise;
     this.disposed = true;
@@ -2451,7 +2464,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     if (state.releasePromise !== null) return state.releasePromise;
     const subscription = this.subscriptions.get(state.key.nativeTaskId);
     if (
-      subscription?.sinks.size || state.activeTurnId !== null ||
+      (subscription?.sinks.size && !state.idleReleaseRequested) || state.activeTurnId !== null ||
       state.activeActivities.size > 0 || state.pendingMutations > 0 ||
       state.runtimePromise !== null || state.replayEvents.length > 0 || state.replayOverflow
     ) return;

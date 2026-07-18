@@ -217,9 +217,12 @@ export interface GitDiff {
 
 /** Where a config entry was found. */
 export type ConfigScope = "global" | "project";
+export type McpProvider = "anthropic" | "openai";
 
 /** One configured MCP server, as returned by GET /api/config/mcp. */
 export interface McpServerDef {
+  provider: McpProvider;
+  enabled: boolean;
   name: string;
   /** "stdio" | "sse" | "http" | … as written in config; null when unspecified. */
   type: string | null;

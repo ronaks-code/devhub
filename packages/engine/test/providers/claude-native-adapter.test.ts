@@ -336,6 +336,15 @@ const startWithPlan = (
 ) => h.adapter.startTask({ permissionMode: "plan", ...input });
 
 describe("ClaudeNativeAdapter", () => {
+  it("recycles an idle persistent runtime for MCP config while keeping subscriptions", async () => {
+    const h = harness();
+    const unsubscribe = await h.adapter.subscribe(key(), () => undefined);
+    await resumeWithPlan(h);
+    await expect(h.adapter.reloadMcpConfig()).resolves.toBe(true);
+    expect(h.runtimeLeases[0]?.releaseCalls).toBe(1);
+    await unsubscribe();
+  });
+
   it("advertises only implemented persistent-native operations and closes all gates when disabled", async () => {
     const off = harness(false);
     await expect(off.adapter.capabilities()).resolves.toEqual(defineProviderCapabilities());

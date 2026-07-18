@@ -21,6 +21,7 @@ import type {
   GitDiff,
   GitBranch,
   ConfigScope,
+  McpProvider,
   McpServerDef,
   McpServerInput,
   HooksConfig,
@@ -292,7 +293,10 @@ export interface GitRemoteResult {
 export interface McpWriteResult {
   ok: boolean;
   name: string;
-  scope: ConfigScope;
+  scope?: ConfigScope;
+  provider?: McpProvider;
+  enabled?: boolean;
+  applied?: "live" | "next-turn";
   /** Present on PUT (the persisted server entry); absent on DELETE. */
   server?: Record<string, unknown>;
 }
@@ -319,16 +323,19 @@ export interface HooksWriteResult {
  */
 const config = {
   /** All configured MCP servers: global + (when `cwd` given) that project's. */
-  mcpList: (cwd?: string) =>
+  mcpList: (provider: McpProvider = "anthropic", cwd?: string) =>
     get<McpServerDef[]>(
-      "/api/config/mcp" + (cwd ? `?cwd=${encodeURIComponent(cwd)}` : ""),
+      `/api/config/mcp?provider=${provider}` + (cwd ? `&cwd=${encodeURIComponent(cwd)}` : ""),
     ),
   /** Upsert one MCP server. A known project `cwd` writes project scope; else global. */
-  mcpSet: (name: string, server: McpServerInput, cwd?: string) =>
-    send<McpWriteResult>("/api/config/mcp", "PUT", { name, server, cwd }),
+  mcpSet: (provider: McpProvider, name: string, server: McpServerInput, cwd?: string) =>
+    send<McpWriteResult>("/api/config/mcp", "PUT", { provider, name, server, cwd }),
   /** Remove a named MCP server. Scope follows `cwd` (project) or none (global). */
-  mcpDelete: (name: string, cwd?: string) =>
-    send<McpWriteResult>("/api/config/mcp", "DELETE", { name, cwd }),
+  mcpDelete: (provider: McpProvider, name: string, cwd?: string) =>
+    send<McpWriteResult>("/api/config/mcp", "DELETE", { provider, name, cwd }),
+  /** Reversibly enable/disable a configured server. */
+  mcpToggle: (provider: McpProvider, name: string, enabled: boolean, cwd?: string) =>
+    send<McpWriteResult>("/api/config/mcp", "PATCH", { provider, name, enabled, cwd }),
 
   /**
    * The merged hooks map + contributing settings.json paths. With a (known)

@@ -10,7 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../../lib/api";
-import type { ConfigScope, McpServerDef, McpServerInput } from "../../lib/types";
+import type { ConfigScope, McpProvider, McpServerDef, McpServerInput } from "../../lib/types";
 import { cn } from "../../lib/utils";
 import { Spinner } from "../ui";
 
@@ -42,6 +42,7 @@ function McpEditor({
   initialName,
   initialJson,
   initialScope,
+  provider,
   scopeLocked,
   projectCwd,
   busy,
@@ -51,6 +52,7 @@ function McpEditor({
   initialName: string;
   initialJson: string;
   initialScope: ConfigScope;
+  provider: McpProvider;
   /** When editing an existing server, the scope can't change (name+scope is the key). */
   scopeLocked: boolean;
   /** Whether a project cwd is available (enables the "project" scope option). */
@@ -122,8 +124,8 @@ function McpEditor({
             onChange={(e) => setScope(e.target.value as ConfigScope)}
             disabled={scopeLocked}
           >
-            <option value="global">global (~/.claude.json)</option>
-            <option value="project" disabled={!projectCwd}>
+            <option value="global">{provider === "openai" ? "user (~/.codex/config.toml)" : "user (~/.claude.json)"}</option>
+            <option value="project" disabled={!projectCwd || provider === "openai"}>
               project{projectCwd ? "" : " (open a project first)"}
             </option>
           </select>
@@ -194,31 +196,34 @@ type EditTarget = { mode: "new" } | { mode: "edit"; def: McpServerDef } | null;
 /**
  * Manage MCP servers across scopes. Lists every configured server (global +
  * project when a cwd is given), and supports add / edit / remove through a
- * JSON-validated form. All writes go through the engine config module via the
- * server, which validates + backs up ~/.claude.json before writing.
+ * JSON-validated form. Writes use the provider-native config store and are safely
+ * backed up before mutation.
  */
 export function McpManager({ projectCwd }: { projectCwd?: string }) {
+  const [provider, setProvider] = useState<McpProvider>("anthropic");
   const [servers, setServers] = useState<McpServerDef[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditTarget>(null);
   const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [applyNotice, setApplyNotice] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
-      const list = await api.config.mcpList(projectCwd);
+      const list = await api.config.mcpList(provider, provider === "anthropic" ? projectCwd : undefined);
       setServers(list);
       setLoadError(null);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : String(e));
     }
-  }, [projectCwd]);
+  }, [projectCwd, provider]);
 
   useEffect(() => {
     let cancelled = false;
     setServers(null);
+    setApplyNotice(null);
     api.config
-      .mcpList(projectCwd)
+      .mcpList(provider, provider === "anthropic" ? projectCwd : undefined)
       .then((list) => {
         if (!cancelled) setServers(list);
       })
@@ -228,7 +233,7 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [projectCwd]);
+  }, [projectCwd, provider]);
 
   const handleSubmit = useCallback(
     async (name: string, entry: McpServerInput, scope: ConfigScope) => {
@@ -237,7 +242,8 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
       try {
         // Scope is implied by cwd: project scope passes the project cwd; global
         // passes none. The write echoes the target (not the list), so re-fetch.
-        await api.config.mcpSet(name, entry, scope === "project" ? projectCwd : undefined);
+        const result = await api.config.mcpSet(provider, name, entry, scope === "project" ? projectCwd : undefined);
+        setApplyNotice(result.applied === "live" ? "Applied to this Codex session." : "Applies on the next turn.");
         await reload();
         setEditing(null);
       } catch (e) {
@@ -246,7 +252,7 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
         setBusy(false);
       }
     },
-    [projectCwd, reload],
+    [projectCwd, provider, reload],
   );
 
   const handleDelete = useCallback(
@@ -255,7 +261,8 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
       setLoadError(null);
       try {
         // Match the server's existing scope: project servers need the cwd.
-        await api.config.mcpDelete(def.name, def.scope === "project" ? projectCwd : undefined);
+        const result = await api.config.mcpDelete(provider, def.name, def.scope === "project" ? projectCwd : undefined);
+        setApplyNotice(result.applied === "live" ? "Applied to this Codex session." : "Applies on the next turn.");
         await reload();
         setPendingDelete(null);
       } catch (e) {
@@ -266,8 +273,27 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
         setBusy(false);
       }
     },
-    [projectCwd, reload],
+    [projectCwd, provider, reload],
   );
+
+  const handleToggle = useCallback(async (def: McpServerDef) => {
+    setBusy(true);
+    setLoadError(null);
+    try {
+      const result = await api.config.mcpToggle(
+        provider,
+        def.name,
+        !def.enabled,
+        provider === "anthropic" && def.scope === "project" ? projectCwd : undefined,
+      );
+      setApplyNotice(result.applied === "live" ? "Applied to this Codex session." : "Applies on the next turn.");
+      await reload();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [projectCwd, provider, reload]);
 
   // A stable key per server (name is unique within a scope).
   const keyed = useMemo(
@@ -277,12 +303,24 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
 
   return (
     <section className="space-y-4 rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-5">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Server className="h-4 w-4 text-zinc-500" />
         <h2 className="text-[13px] font-semibold text-zinc-200">MCP servers</h2>
         <span className="rounded-md bg-zinc-800/70 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
           {servers ? servers.length : "…"}
         </span>
+        <label className="ml-2 flex items-center gap-2 text-[11px] text-zinc-500">
+          <span>Provider</span>
+          <select
+            aria-label="MCP provider"
+            className={cn(inputCls, "py-1")}
+            value={provider}
+            onChange={(event) => { setProvider(event.target.value as McpProvider); setEditing(null); }}
+          >
+            <option value="anthropic">Claude</option>
+            <option value="openai">Codex</option>
+          </select>
+        </label>
         {!editing ? (
           <button
             onClick={() => setEditing({ mode: "new" })}
@@ -294,9 +332,13 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
         ) : null}
       </div>
       <p className="-mt-2 text-[11.5px] text-zinc-600">
-        Model Context Protocol servers Claude Code can connect to. Writes back up{" "}
-        <code className="rounded bg-zinc-800/70 px-1 text-[11px]">~/.claude.json</code> before saving.
+        Model Context Protocol servers {provider === "openai" ? "Codex" : "Claude Code"} can connect to. Writes back up{" "}
+        <code className="rounded bg-zinc-800/70 px-1 text-[11px]">
+          {provider === "openai" ? "~/.codex/config.toml" : "~/.claude.json"}
+        </code> before saving.
       </p>
+
+      {applyNotice ? <p role="status" className="text-[11.5px] text-emerald-400">{applyNotice}</p> : null}
 
       {loadError ? (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-[12px] text-red-300">
@@ -310,6 +352,7 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
           initialName=""
           initialJson={NEW_TEMPLATE}
           initialScope="global"
+          provider={provider}
           scopeLocked={false}
           projectCwd={projectCwd}
           busy={busy}
@@ -339,6 +382,7 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
                 initialName={s.name}
                 initialJson={rawToJson(s)}
                 initialScope={s.scope}
+                provider={provider}
                 scopeLocked
                 projectCwd={projectCwd}
                 busy={busy}
@@ -389,6 +433,22 @@ export function McpManager({ projectCwd }: { projectCwd?: string }) {
                 </div>
               ) : (
                 <div className="flex shrink-0 items-center gap-1">
+                  {(provider === "openai" || s.scope === "project") ? (
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={s.enabled}
+                      aria-label={`${s.enabled ? "Disable" : "Enable"} ${s.name}`}
+                      disabled={busy}
+                      onClick={() => void handleToggle(s)}
+                      className={cn(
+                        "mr-1 rounded-full px-2 py-1 text-[10px] font-medium ring-1 transition disabled:opacity-50",
+                        s.enabled ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30" : "bg-zinc-800 text-zinc-500 ring-zinc-700",
+                      )}
+                    >
+                      {s.enabled ? "On" : "Off"}
+                    </button>
+                  ) : null}
                   <button
                     onClick={() => {
                       setPendingDelete(null);

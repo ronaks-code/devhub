@@ -152,6 +152,16 @@ const missingRemoteError = (
 });
 
 describe("CodexNativeAdapter native task projection", () => {
+  it("hot-reloads MCP config through the retained app-server lease", async () => {
+    const h = adapter();
+    expect(await h.native.reloadMcpConfig()).toBe(false);
+    h.supervisor.lease.enqueue("thread/read", { thread: nativeThread("thread-1") });
+    await h.native.readTask(nativeKey(), false);
+    h.supervisor.lease.enqueue("config/mcpServer/reload", {});
+    await expect(h.native.reloadMcpConfig()).resolves.toBe(true);
+    expect(h.supervisor.lease.calls.at(-1)).toEqual({ method: "config/mcpServer/reload", params: undefined });
+  });
+
   it.each([
     ["read", (h: ReturnType<typeof adapter>) => h.native.readTask(nativeKey(), false)],
     ["resume pre-read", (h: ReturnType<typeof adapter>) =>
