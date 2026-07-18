@@ -297,6 +297,21 @@ const activityMessage = (
     return optionalText(item.aggregatedOutput, "item.aggregatedOutput");
   }
   if (itemType === "fileChange") return fileChangeBody(item.changes, "item.changes");
+  if (itemType === "collabAgentToolCall") {
+    return boundedActivityBody(JSON.stringify({
+      tool: item.tool,
+      prompt: item.prompt ?? null,
+      receiverThreadIds: item.receiverThreadIds,
+      agentsStates: item.agentsStates,
+    }));
+  }
+  if (itemType === "subAgentActivity") {
+    return boundedActivityBody(JSON.stringify({
+      kind: item.kind,
+      agentThreadId: item.agentThreadId,
+      agentPath: item.agentPath,
+    }));
+  }
   return null;
 };
 

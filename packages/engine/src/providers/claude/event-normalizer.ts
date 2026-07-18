@@ -28,6 +28,7 @@ export const CLAUDE_EVENT_MAX_MESSAGE_STARTS = 4_096;
 export const CLAUDE_EVENT_MAX_TEXT_DELTAS = 100_000;
 export const CLAUDE_EVENT_MAX_TEXT_CHARS = 65_536;
 export const CLAUDE_EVENT_MAX_RUNTIME_CAPABILITIES = 256;
+export const CLAUDE_EVENT_MAX_TRACKED_TOOL_ACTIVITIES = 4_096;
 
 const NATIVE_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -106,6 +107,14 @@ const safeText = (value: unknown): string => {
   if (typeof value !== "string" || value.length > CLAUDE_EVENT_MAX_TEXT_CHARS ||
     value.includes("\u0000")) return projectionFail();
   return redactSecrets(value);
+};
+
+const boundedActivityMessage = (value: unknown): string => {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof serialized !== "string") return "";
+  return redactSecrets(serialized)
+    .replaceAll("\u0000", "")
+    .slice(0, CLAUDE_EVENT_MAX_TEXT_CHARS);
 };
 
 const safeRuntimeCapabilities = (value: unknown): readonly string[] => {
@@ -255,6 +264,7 @@ export class ClaudeEventNormalizer {
     string,
     { readonly fingerprint: string; readonly messageId: string | null; readonly streamKey: string }
   >();
+  private readonly trackedToolActivities = new Map<string, "subagent" | "background-task">();
 
   constructor(options: ClaudeEventNormalizerOptions) {
     const supplied = boundaryRecord(
@@ -536,14 +546,56 @@ export class ClaudeEventNormalizer {
             itemId,
           });
         } else if (raw.type === "assistant" && block.type === "tool_use") {
-          addEvent({
-            type: "activity",
-            turnId,
-            itemId: safeId(block.id),
-            activity: "tool-use",
-            status: "requested",
-            message: safeId(block.name),
-          });
+          const toolUseId = safeId(block.id);
+          const toolName = safeId(block.name);
+          const input = optionalRecord(block.input);
+          const activity = toolName === "Task" || toolName === "Agent"
+            ? "subagent" as const
+            : input?.run_in_background === true
+              ? "background-task" as const
+              : null;
+          if (activity) {
+            if (
+              !this.trackedToolActivities.has(toolUseId) &&
+              this.trackedToolActivities.size >= CLAUDE_EVENT_MAX_TRACKED_TOOL_ACTIVITIES
+            ) return projectionFail();
+            this.trackedToolActivities.set(toolUseId, activity);
+            addEvent({
+              type: "activity",
+              turnId,
+              itemId: toolUseId,
+              activity,
+              status: "running",
+              message: boundedActivityMessage({
+                label: input?.description ?? input?.prompt ?? toolName,
+                description: input?.description ?? null,
+                agentType: input?.subagent_type ?? null,
+                prompt: input?.prompt ?? null,
+              }),
+            });
+          } else {
+            addEvent({
+              type: "activity",
+              turnId,
+              itemId: toolUseId,
+              activity: "tool-use",
+              status: "requested",
+              message: toolName,
+            });
+          }
+        } else if (raw.type === "user" && block.type === "tool_result") {
+          const toolUseId = safeId(block.tool_use_id);
+          const activity = this.trackedToolActivities.get(toolUseId);
+          if (activity) {
+            addEvent({
+              type: "activity",
+              turnId,
+              itemId: toolUseId,
+              activity,
+              status: block.is_error === true ? "failed" : "completed",
+              message: boundedActivityMessage(block.content),
+            });
+          }
         }
       }
       if (raw.type === "assistant") {

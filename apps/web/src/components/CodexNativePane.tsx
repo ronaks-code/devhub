@@ -61,6 +61,7 @@ import { Markdown } from "./Markdown";
 import { ProviderHomeSetup } from "./ProviderHomeSetup";
 import { EmptyState, IconButton, Spinner } from "./ui";
 import { CrossProviderForkPanel } from "./features/shell/CrossProviderForkPanel.js";
+import { AgentTasksPanel, projectAgentTasks } from "./AgentTasksPanel.js";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting" | "disconnected";
 type PermissionMode = string;
@@ -1450,6 +1451,12 @@ export function CodexNativeDirectPane({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedTask, setSelectedTask] = useState<NativeTask | null>(null);
   const [timeline, setTimeline] = useState<CodexTimelineState>(EMPTY_TIMELINE);
+  const agentTasks = useMemo(() => projectAgentTasks(
+    timeline.order.flatMap((key) => {
+      const entry = timeline.entries[key];
+      return entry?.kind === "activity" ? [entry] : [];
+    }),
+  ), [timeline]);
   const [listLoading, setListLoading] = useState(true);
   const [taskLoading, setTaskLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2875,6 +2882,8 @@ export function CodexNativeDirectPane({
             </div>
           </div>
         ), document.body) : null}
+
+        {selectedTask ? <AgentTasksPanel tasks={agentTasks} /> : null}
 
         <div className="relative min-h-0 flex-1">
           <div
