@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_MAX_ACTIVITY_BODY_JSON_BYTES,
   CodexNormalizationError,
   normalizeCodexNotification,
   normalizeCodexServerRequest,
@@ -94,7 +95,7 @@ describe("Codex native notification normalization", () => {
     expect(JSON.stringify(events)).not.toContain("citation-secret");
   });
 
-  it("suppresses reasoning content and maps tool-like items to metadata-only activity", () => {
+  it("suppresses reasoning content and maps tool output to redacted activity bodies", () => {
     const reasoning = normalizeCodexNotification(notification("item/completed", {
       threadId: "thread-1",
       turnId: "turn-1",
@@ -122,7 +123,7 @@ describe("Codex native notification normalization", () => {
         command: "echo command-secret",
         cwd: "/secret/cwd",
         commandActions: [],
-        aggregatedOutput: "output-secret",
+        aggregatedOutput: "tests passed\nsk-proj-0123456789abcdefghijklmnop",
       },
     }), context);
     expect(activity).toMatchObject([
@@ -133,12 +134,31 @@ describe("Codex native notification normalization", () => {
         itemId: "command-1",
         activity: "commandExecution",
         status: "failed",
-        message: null,
+        message: "tests passed\n[REDACTED]",
       },
     ]);
     expect(JSON.stringify(activity)).not.toContain("command-secret");
-    expect(JSON.stringify(activity)).not.toContain("output-secret");
+    expect(JSON.stringify(activity)).not.toContain("sk-proj-");
     expect(JSON.stringify(activity)).not.toContain("/secret/cwd");
+  });
+
+  it("redacts a credential before truncating a bounded activity body", () => {
+    const prefix = "x".repeat(CODEX_MAX_ACTIVITY_BODY_JSON_BYTES - 10);
+    const events = normalizeCodexNotification(notification("item/completed", {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      completedAtMs: 2,
+      item: {
+        id: "command-1",
+        type: "commandExecution",
+        status: "completed",
+        command: "run",
+        cwd: "/tmp/work",
+        commandActions: [],
+        aggregatedOutput: `${prefix} sk-proj-0123456789abcdefghijklmnop trailing`,
+      },
+    }), context);
+    expect(JSON.stringify(events)).not.toContain("sk-proj-");
   });
 
   it("maps assistant and plan deltas without losing item identity", () => {
@@ -213,7 +233,7 @@ describe("Codex native notification normalization", () => {
     }]);
   });
 
-  it("summarizes unified diffs and patch updates without exposing bodies or paths", () => {
+  it("summarizes unified diffs and preserves their bodies", () => {
     const diff = [
       "diff --git a/a.txt b/a.txt",
       "--- a/a.txt",
@@ -232,13 +252,20 @@ describe("Codex native notification normalization", () => {
       turnId: "turn-1",
       diff,
     }), context);
-    expect(turnEvents).toMatchObject([{
-      type: "diff-summary",
-      changedFiles: 2,
-      additions: 3,
-      deletions: 1,
-    }]);
-    expect(JSON.stringify(turnEvents)).not.toContain("secret");
+    expect(turnEvents).toMatchObject([
+      {
+        type: "diff-summary",
+        changedFiles: 2,
+        additions: 3,
+        deletions: 1,
+      },
+      {
+        type: "activity",
+        activity: "fileChange",
+        status: "updated",
+        message: diff,
+      },
+    ]);
 
     const patchEvents = normalizeCodexNotification(notification("item/fileChange/patchUpdated", {
       threadId: "thread-1",
@@ -249,17 +276,24 @@ describe("Codex native notification normalization", () => {
         { path: "/secret/b.txt", kind: { type: "delete" }, diff: "-gone-secret" },
       ],
     }), context);
-    expect(patchEvents).toMatchObject([{
-      type: "diff-summary",
-      changedFiles: 2,
-      additions: 3,
-      deletions: 2,
-    }]);
-    expect(JSON.stringify(patchEvents)).not.toContain("/secret");
-    expect(JSON.stringify(patchEvents)).not.toContain("gone-secret");
+    expect(patchEvents).toMatchObject([
+      {
+        type: "diff-summary",
+        changedFiles: 2,
+        additions: 3,
+        deletions: 2,
+      },
+      {
+        type: "activity",
+        itemId: "patch-1",
+        activity: "fileChange",
+        status: "updated",
+        message: `${diff}\n-gone-secret`,
+      },
+    ]);
   });
 
-  it("drops raw command and file output deltas entirely", () => {
+  it("withholds raw output deltas until the authoritative completed item", () => {
     for (const method of [
       "item/commandExecution/outputDelta",
       "item/fileChange/outputDelta",
@@ -384,6 +418,31 @@ describe("Codex native server-request normalization", () => {
     expect(normalized.request).toEqual(normalized.event.type === "request"
       ? normalized.event.request
       : undefined);
+  });
+
+  it("projects a redacted command beside its exact approval request", () => {
+    const normalized = normalizeCodexServerRequest({
+      id: 9,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "item-1",
+        approvalId: null,
+        startedAtMs: 1,
+        command: "echo sk-proj-0123456789abcdefghijklmnop",
+        cwd: "/tmp/work",
+      },
+    }, context);
+
+    expect(normalized.detailEvents).toMatchObject([{
+      type: "activity",
+      turnId: "turn-1",
+      itemId: "item-1",
+      activity: "commandApproval",
+      status: "waitingOnApproval",
+      message: "echo [REDACTED]",
+    }]);
   });
 
   it("preserves numeric and string RPC ids as distinct identities", () => {

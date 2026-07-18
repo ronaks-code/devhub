@@ -11,9 +11,9 @@ import type {
   DevHubFeatureFlags,
   IndexedProviderTask,
   IndexedProviderTaskSummary,
+  IndexedProviderEvent,
   JsonRpcRequestId,
   ProviderCapabilities,
-  ProviderEvent,
   ProviderId,
   ProviderReconciliationState,
   ProviderTaskLocator,
@@ -162,7 +162,7 @@ export interface IndexEventSubscription {
 
 export type IndexStreamFrame =
   | { readonly type: "snapshot"; readonly streamEpoch: string }
-  | { readonly type: "event"; readonly event: ProviderEvent }
+  | { readonly type: "event"; readonly event: IndexedProviderEvent }
   | { readonly type: "live" }
   | { readonly type: "resync-required" };
 

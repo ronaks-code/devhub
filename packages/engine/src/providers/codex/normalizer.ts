@@ -22,6 +22,8 @@ export const CODEX_DIAGNOSTIC_MAX_SHAPE_KEYS = 32;
 export const CODEX_DIAGNOSTIC_MAX_METHOD_LENGTH = 256;
 export const CODEX_DIAGNOSTIC_MAX_KEY_LENGTH = 64;
 export const CODEX_MAX_USER_INPUT_QUESTIONS = 64;
+/** Leaves 32 KiB of headroom inside the direct provider stream's 256 KiB frame cap. */
+export const CODEX_MAX_ACTIVITY_BODY_JSON_BYTES = 224 * 1_024;
 
 export interface CodexNormalizationContext {
   readonly home: string;
@@ -47,6 +49,8 @@ export class CodexNormalizationError extends Error {
 export interface NormalizedCodexServerRequest {
   readonly request: ProviderRequest;
   readonly event: ProviderEvent;
+  /** Safe provider-neutral context rendered beside the exact approval card. */
+  readonly detailEvents: readonly ProviderEvent[];
   /** Stable question ids retained backend-only for exact answer validation. */
   readonly questionIds: readonly string[];
 }
@@ -242,6 +246,60 @@ const extractUserText = (item: Record<string, unknown>): string | null => {
   return chunks.length > 0 ? chunks.join("\n") : null;
 };
 
+const boundedActivityBody = (value: string): string => {
+  // Redact the complete provider value first. Truncating first could expose a
+  // credential prefix whose suffix fell just beyond the display boundary.
+  const redacted = redactSecrets(value);
+  if (Buffer.byteLength(JSON.stringify(redacted), "utf8") <= CODEX_MAX_ACTIVITY_BODY_JSON_BYTES) {
+    return redacted;
+  }
+  const suffix = "\n… [output truncated at safe UI boundary]";
+  let lower = 0;
+  let upper = redacted.length;
+  while (lower < upper) {
+    const midpoint = Math.ceil((lower + upper) / 2);
+    const candidate = `${redacted.slice(0, midpoint)}${suffix}`;
+    if (Buffer.byteLength(JSON.stringify(candidate), "utf8") <= CODEX_MAX_ACTIVITY_BODY_JSON_BYTES) {
+      lower = midpoint;
+    } else {
+      upper = midpoint - 1;
+    }
+  }
+  // Avoid ending the visible prefix with one half of a UTF-16 surrogate pair.
+  const end = lower > 0 && /[\uD800-\uDBFF]/u.test(redacted[lower - 1]!) ? lower - 1 : lower;
+  return `${redacted.slice(0, end)}${suffix}`;
+};
+
+const optionalText = (
+  value: unknown,
+  field: string,
+): string | null => value === null || value === undefined
+  ? null
+  : boundedActivityBody(text(value, field));
+
+const fileChangeBody = (
+  changesValue: unknown,
+  field: string,
+): string | null => {
+  const changes = array(changesValue, field);
+  if (changes.length === 0) return null;
+  return boundedActivityBody(changes.map((entry, index) => {
+    const change = record(entry, `${field}[${index}]`);
+    return text(change.diff, `${field}[${index}].diff`);
+  }).join("\n"));
+};
+
+const activityMessage = (
+  item: Record<string, unknown>,
+  itemType: string,
+): string | null => {
+  if (itemType === "commandExecution") {
+    return optionalText(item.aggregatedOutput, "item.aggregatedOutput");
+  }
+  if (itemType === "fileChange") return fileChangeBody(item.changes, "item.changes");
+  return null;
+};
+
 const normalizeItemNotification = (
   params: Record<string, unknown>,
   context: CodexNormalizationContext,
@@ -289,7 +347,7 @@ const normalizeItemNotification = (
       itemId,
       activity: itemType,
       status: status(item.status, phase),
-      message: null,
+      message: activityMessage(item, itemType),
     }, threadId, context));
   }
   return frozenEvents(events);
@@ -366,14 +424,25 @@ const normalizeKnownNotification = (
     case "turn/diff/updated": {
       const threadId = nativeId(params.threadId, "threadId");
       const turnId = nativeId(params.turnId, "turnId");
-      const counts = diffCounts(text(params.diff, "diff"));
-      return frozenEvents([normalizedEvent({
-        type: "diff-summary",
-        turnId,
-        changedFiles: counts.files,
-        additions: counts.additions,
-        deletions: counts.deletions,
-      }, threadId, context)]);
+      const diff = text(params.diff, "diff");
+      const counts = diffCounts(diff);
+      return frozenEvents([
+        normalizedEvent({
+          type: "diff-summary",
+          turnId,
+          changedFiles: counts.files,
+          additions: counts.additions,
+          deletions: counts.deletions,
+        }, threadId, context),
+        normalizedEvent({
+          type: "activity",
+          turnId,
+          itemId: null,
+          activity: "fileChange",
+          status: "updated",
+          message: boundedActivityBody(diff),
+        }, threadId, context),
+      ]);
     }
     case "turn/plan/updated": {
       const threadId = nativeId(params.threadId, "threadId");
@@ -419,12 +488,15 @@ const normalizeKnownNotification = (
     }
     case "item/commandExecution/outputDelta":
     case "item/fileChange/outputDelta":
-      // Raw stdout/stderr and file-operation output are backend diagnostics only.
+      // Per-fragment redaction can leak credentials split across chunks. The
+      // canonical completed item below is redacted as a whole and authoritative.
       return frozenEvents([]);
     case "item/fileChange/patchUpdated": {
       const threadId = nativeId(params.threadId, "threadId");
       const turnId = nativeId(params.turnId, "turnId");
+      const itemId = nativeId(params.itemId, "itemId");
       const changes = array(params.changes, "changes");
+      const body = fileChangeBody(changes, "changes");
       let additions = 0;
       let deletions = 0;
       changes.forEach((entry, index) => {
@@ -433,13 +505,23 @@ const normalizeKnownNotification = (
         additions += counts.additions;
         deletions += counts.deletions;
       });
-      return frozenEvents([normalizedEvent({
-        type: "diff-summary",
-        turnId,
-        changedFiles: changes.length,
-        additions,
-        deletions,
-      }, threadId, context)]);
+      return frozenEvents([
+        normalizedEvent({
+          type: "diff-summary",
+          turnId,
+          changedFiles: changes.length,
+          additions,
+          deletions,
+        }, threadId, context),
+        normalizedEvent({
+          type: "activity",
+          turnId,
+          itemId,
+          activity: "fileChange",
+          status: "updated",
+          message: body,
+        }, threadId, context),
+      ]);
     }
     case "error": {
       const threadId = nativeId(params.threadId, "threadId");
@@ -522,6 +604,25 @@ const requestEvent = (
   ...(context.occurredAt === undefined ? {} : { occurredAt: context.occurredAt }),
 });
 
+const requestDetailEvents = (
+  request: ProviderRequest,
+  params: Record<string, unknown>,
+  context: CodexNormalizationContext,
+): readonly ProviderEvent[] => {
+  if (request.kind !== "command-approval" || params.command === null || params.command === undefined) {
+    return Object.freeze([]);
+  }
+  const command = boundedActivityBody(text(params.command, "command"));
+  return frozenEvents([normalizedEvent({
+    type: "activity",
+    turnId: request.identity.turnId,
+    itemId: request.identity.itemId,
+    activity: "commandApproval",
+    status: "waitingOnApproval",
+    message: command,
+  }, request.identity.key.nativeTaskId, context)]);
+};
+
 const inputQuestionIds = (params: Record<string, unknown>): readonly string[] => {
   const questions = array(params.questions, "questions");
   if (questions.length > CODEX_MAX_USER_INPUT_QUESTIONS) {
@@ -557,7 +658,7 @@ const mcpApprovalId = (params: Record<string, unknown>): string | null => {
   throw new TypeError("invalid MCP elicitation mode");
 };
 
-/** Strictly normalize one supported app-server request without copying prompt/tool payloads. */
+/** Strictly normalize one supported request plus bounded, redacted approval display context. */
 export function normalizeCodexServerRequest(
   request: CodexRpcRequest,
   context: CodexNormalizationContext,
@@ -646,7 +747,12 @@ export function normalizeCodexServerRequest(
     }
     const event = requestEvent(providerRequest, context);
     if (event.type !== "request") throw new TypeError("request normalization failed");
-    return Object.freeze({ request: event.request, event, questionIds });
+    return Object.freeze({
+      request: event.request,
+      event,
+      detailEvents: requestDetailEvents(event.request, params, context),
+      questionIds,
+    });
   } catch (error) {
     if (error instanceof CodexNormalizationError) throw error;
     throw new CodexNormalizationError(

@@ -397,6 +397,7 @@ export class CodexRequestBroker {
     }
 
     try {
+      for (const detailEvent of normalized.detailEvents) this.emit(detailEvent);
       // Mark delivery before invoking user code so a synchronous abort can publish
       // the matching resolution event and never strand a visible request.
       pending.requestEmitted = true;

@@ -132,7 +132,6 @@ const adapter = (supervisor = new FakeSupervisor(), enabled = true) => ({
     supervisor,
     cursorSecret: SECRET,
     isEnabled: () => enabled,
-    requestMode: "manual",
   }),
   supervisor,
 });
@@ -243,6 +242,7 @@ describe("CodexNativeAdapter native task projection", () => {
     ]);
 
     const secret = "sk-proj-0123456789abcdefghijklmnop";
+    const commandOutput = `tests passed\n${secret}`;
     const items = [
       {
         type: "userMessage",
@@ -262,7 +262,7 @@ describe("CodexNativeAdapter native task projection", () => {
         source: "agent",
         status: "completed",
         commandActions: [],
-        aggregatedOutput: secret,
+        aggregatedOutput: commandOutput,
         exitCode: 0,
         durationMs: 1,
       },
@@ -281,7 +281,11 @@ describe("CodexNativeAdapter native task projection", () => {
       expect.objectContaining({ type: "message", role: "user", text: "hello", itemId: "user-1" }),
       expect.objectContaining({ type: "message", role: "assistant", text: "world", itemId: "agent-1" }),
       expect.objectContaining({ type: "plan", text: "ship it", itemId: "plan-1" }),
-      expect.objectContaining({ type: "activity", activity: "commandExecution", message: null }),
+      expect.objectContaining({
+        type: "activity",
+        activity: "commandExecution",
+        message: "tests passed\n[REDACTED]",
+      }),
     ]));
     expect(JSON.stringify(task)).not.toContain(secret);
     expect(JSON.stringify(task)).not.toContain("hidden");
@@ -431,6 +435,8 @@ describe("CodexNativeAdapter live dispatch", () => {
         itemId: "item-1",
         approvalId: null,
         startedAtMs: 1,
+        command: "pnpm test",
+        cwd: "/tmp/project",
       },
     }, { home: HOME, generation: 1, signal });
     await vi.waitFor(() => expect(received).toContainEqual(expect.objectContaining({ type: "request" })));
@@ -451,7 +457,7 @@ describe("CodexNativeAdapter live dispatch", () => {
       .toHaveLength(1);
   });
 
-  it("implements direct controls but advertises unproven interaction capabilities as false", async () => {
+  it("implements direct controls and advertises the proven approval interactions", async () => {
     const h = adapter();
     const key = { provider: "openai" as const, home: HOME, nativeTaskId: "thread-1" };
     const capabilities = await h.native.capabilities();
@@ -465,8 +471,8 @@ describe("CodexNativeAdapter live dispatch", () => {
       steer: false,
       interrupt: true,
       subscribe: true,
-      approveCommand: false,
-      approveFileChange: false,
+      approveCommand: true,
+      approveFileChange: true,
       approvePermissions: false,
       requestUserInput: false,
       mcpElicitation: false,
@@ -759,7 +765,7 @@ describe("CodexNativeAdapter hardening boundaries", () => {
       .toHaveLength(1);
   });
 
-  it("fails unsupported requests closed by default without publishing an unusable prompt", async () => {
+  it("holds command approvals for an exact response by default", async () => {
     const supervisor = new FakeSupervisor();
     const native = new CodexNativeAdapter({
       home: HOME,
@@ -773,7 +779,7 @@ describe("CodexNativeAdapter hardening boundaries", () => {
     const unsubscribe = await native.subscribe(key, sink);
     const handlers = supervisor.acquires[0]!.handlers;
 
-    expect(await handlers.onServerRequest({
+    const handling = handlers.onServerRequest({
       id: 7,
       method: "item/commandExecution/requestApproval",
       params: {
@@ -782,13 +788,32 @@ describe("CodexNativeAdapter hardening boundaries", () => {
         itemId: "item-1",
         approvalId: null,
         startedAtMs: 1,
+        command: "pnpm test",
+        cwd: "/tmp/project",
       },
     }, {
       home: HOME,
       generation: 1,
       signal: new AbortController().signal,
-    })).toEqual({ decision: "cancel" });
-    expect(sink).not.toHaveBeenCalledWith(expect.objectContaining({ type: "request" }));
+    });
+    await vi.waitFor(() => expect(sink).toHaveBeenCalledWith(expect.objectContaining({
+      type: "request",
+      request: expect.objectContaining({ kind: "command-approval" }),
+    })));
+    expect(sink).toHaveBeenCalledWith(expect.objectContaining({
+      type: "activity",
+      activity: "commandApproval",
+      message: "pnpm test",
+    }));
+    const requestEvent = sink.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.type === "request");
+    await expect(native.respond({
+      kind: "command-approval",
+      identity: requestEvent.request.identity,
+      decision: "allow",
+    })).resolves.toBeUndefined();
+    await expect(handling).resolves.toEqual({ decision: "accept" });
     await unsubscribe();
   });
 
@@ -909,7 +934,6 @@ describe("CodexNativeAdapter hardening boundaries", () => {
       supervisor,
       cursorSecret: SECRET,
       isEnabled: () => enabled,
-      requestMode: "manual",
     });
     let resolveRead!: (value: unknown) => void;
     supervisor.lease.enqueue("thread/read", () => new Promise((resolve) => {
@@ -1268,7 +1292,6 @@ const fencedAdapter = (
     supervisor,
     cursorSecret: SECRET,
     isEnabled: () => enabled,
-    requestMode: "manual",
     writerLeases,
     reconciliationStore,
     ...extra,
@@ -1451,7 +1474,6 @@ describe("CodexNativeAdapter adversarial writer-lease + reconciliation parity", 
         supervisor,
         cursorSecret: SECRET,
         isEnabled: () => true,
-        requestMode: "manual",
         writerLeases,
         reconciliationStore,
       });
@@ -1554,7 +1576,6 @@ describe("CodexNativeAdapter adversarial writer-lease + reconciliation parity", 
       supervisor,
       cursorSecret: SECRET,
       isEnabled: () => true,
-      requestMode: "manual",
       writerLeases: { acquire: () => tampering },
       reconciliationStore,
     });
@@ -1718,7 +1739,6 @@ describe("CodexNativeAdapter adversarial writer-lease + reconciliation parity", 
       supervisor,
       cursorSecret: SECRET,
       isEnabled: () => true,
-      requestMode: "manual",
       writerLeases,
       reconciliationStore: store,
     });
