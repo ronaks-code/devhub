@@ -37,6 +37,7 @@ export const ROUTE_TABS = [
   "settings",
   "openai-chat",
   "codex-history",
+  "automations",
 ] as const;
 
 export type RouteTab = (typeof ROUTE_TABS)[number];

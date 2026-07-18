@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Sparkles,
   Sun,
+  Timer,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -47,6 +48,7 @@ import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { LiveOpsBoard } from "./components/LiveOpsBoard";
+import { AutomationsBoard } from "./components/AutomationsBoard";
 import { InboxPane } from "./components/InboxPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { CommandPalette, type Command } from "./components/CommandPalette";
@@ -136,7 +138,7 @@ const CHAT_MODELS = [
   "claude-fable-5",
 ] as const;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings" | "openai-chat" | "codex-history";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "settings" | "openai-chat" | "codex-history" | "automations";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -165,7 +167,7 @@ function writeUiState(state: PersistedUiState): void {
   writeCompat(UI_STATE_KEY, JSON.stringify(state));
 }
 
-const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history"];
+const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history", "automations"];
 
 export type CodexShellMode = "native" | "history";
 export type ClaudeShellMode = "native" | "legacy";
@@ -1320,6 +1322,14 @@ export default function App() {
         run: () => setTab("inbox"),
       },
       {
+        id: "tab-automations",
+        title: "Go to Scheduled Jobs",
+        group: "Navigate",
+        keywords: "automations launchd cron jobs schedule",
+        icon: <Timer className="h-3.5 w-3.5" />,
+        run: () => setTab("automations"),
+      },
+      {
         id: "tab-dashboard",
         title: "Go to Dashboard",
         group: "Navigate",
@@ -1625,6 +1635,7 @@ export default function App() {
           {(
             [
               { id: "ops" as Tab, icon: <Radio className="h-3.5 w-3.5" />, label: "Live Ops" },
+              { id: "automations" as Tab, icon: <Timer className="h-3.5 w-3.5" />, label: "Scheduled Jobs" },
               { id: "inbox" as Tab, icon: <Inbox className="h-3.5 w-3.5" />, label: "Inbox" },
               { id: "settings" as Tab, icon: <Settings className="h-3.5 w-3.5" />, label: "Settings" },
             ] as const
@@ -1710,6 +1721,8 @@ export default function App() {
               <LiveOpsBoard onOpenSession={openSessionByCwd} />
             )}
           </div>
+        ) : tab === "automations" ? (
+          <AutomationsBoard />
         ) : tab === "inbox" ? (
           <InboxPane onOpenSession={openSession} />
         ) : tab === "browse" ? (
