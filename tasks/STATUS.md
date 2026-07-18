@@ -3,6 +3,23 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
+Last updated: 2026-07-18 by PROGRESS-UI (ADDED AFTER FREEZE — not part of the
+frozen 9-milestone denominator). Completed the "Progress / Shipped Work" board UI
+on `feat/progress-dashboard` by adding the one missing task requirement:
+interactive status filters. `apps/web/src/components/ProgressBoard.tsx` now
+renders a data-driven status-chip row (shipped/verified/staged/wip/blocked,
+ordered canonically, each with its corpus count) that toggles a client-side
+filter over the already-fetched snapshot — `filterProjects()` narrows each
+project's features/items to the active statuses and RECOMPUTES
+itemCount/statusCounts/typeCounts so displayed rollups stay honest; empty results
+show a scoped EmptyState, a Clear button resets, and sections auto-expand while a
+filter is active. Stale filter values are pruned when the period/refresh changes
+the dataset. No new deps, no server change, no touch to DashboardPane. Gates
+GREEN: web `tsc --noEmit` clean, `oxlint src/` 0, `vite build` clean
+(ProgressBoard code-split, own 12.8 KB chunk), web tests 633/633. Filter verified
+against a freshly-mined snapshot (11 projects / 1650 items / statuses
+shipped 757, verified 563, staged 159, blocked 96, wip 75). NOT pushed to `main`.
+
 Last updated: 2026-07-18 by PROGRESS-DATA-ENGINE (ADDED AFTER FREEZE — not part
 of the frozen 9-milestone denominator). Shipped the additive "Progress / Shipped
 Work" board on `feat/progress-dashboard` (worktree registered below). NEW:

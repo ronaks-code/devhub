@@ -57,6 +57,57 @@ function statusStyle(status: string): { dot: string; text: string; pill: string 
   }
 }
 
+/** Canonical order for status filter chips (unknown statuses tack on after). */
+const STATUS_ORDER = [
+  "shipped",
+  "verified",
+  "staged",
+  "in-progress",
+  "wip",
+  "blocked",
+  "proposed",
+];
+
+/** Order a status→count map by STATUS_ORDER, unknowns last (by count desc). */
+function orderedStatuses(counts: Record<string, number>): string[] {
+  const known = STATUS_ORDER.filter((s) => (counts[s] ?? 0) > 0);
+  const extra = Object.keys(counts)
+    .filter((s) => (counts[s] ?? 0) > 0 && !STATUS_ORDER.includes(s))
+    .sort((a, b) => (counts[b] ?? 0) - (counts[a] ?? 0));
+  return [...known, ...extra];
+}
+
+/**
+ * Filter every project's features/items to the active status set, recomputing
+ * itemCount/statusCounts/typeCounts so the displayed rollups stay honest.
+ * Empty set = no filter (return input unchanged). Projects/features with no
+ * matching items are dropped.
+ */
+function filterProjects(projects: ProgressProject[], active: Set<string>): ProgressProject[] {
+  if (active.size === 0) return projects;
+  const out: ProgressProject[] = [];
+  for (const p of projects) {
+    const features: ProgressFeature[] = [];
+    for (const f of p.features) {
+      const items = f.items.filter((it) => active.has(it.status));
+      if (items.length === 0) continue;
+      const statusCounts: Record<string, number> = {};
+      for (const it of items) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1;
+      features.push({ ...f, items, itemCount: items.length, statusCounts });
+    }
+    if (features.length === 0) continue;
+    const allItems = features.flatMap((f) => f.items);
+    const statusCounts: Record<string, number> = {};
+    const typeCounts: Record<string, number> = {};
+    for (const it of allItems) {
+      statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1;
+      typeCounts[it.type] = (typeCounts[it.type] ?? 0) + 1;
+    }
+    out.push({ ...p, features, itemCount: allItems.length, statusCounts, typeCounts });
+  }
+  return out;
+}
+
 /** Local StatCard (matches DashboardPane's card style; that one isn't exported). */
 function StatCard({
   icon,
@@ -167,8 +218,8 @@ function ItemRow({ item }: { item: ProgressItem }) {
 }
 
 /** A collapsible feature/epic bucket inside a project. */
-function FeatureRow({ feature }: { feature: ProgressFeature }) {
-  const [open, setOpen] = useState(false);
+function FeatureRow({ feature, defaultOpen = false }: { feature: ProgressFeature; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/20">
       <button
@@ -199,8 +250,14 @@ function FeatureRow({ feature }: { feature: ProgressFeature }) {
 }
 
 /** A collapsible per-project section: header stats + expandable feature list. */
-function ProjectSection({ project }: { project: ProgressProject }) {
-  const [open, setOpen] = useState(false);
+function ProjectSection({
+  project,
+  defaultOpen = false,
+}: {
+  project: ProgressProject;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   const shipped =
     (project.statusCounts.shipped || 0) + (project.statusCounts.verified || 0);
   return (
@@ -242,7 +299,7 @@ function ProjectSection({ project }: { project: ProgressProject }) {
         <div className="flex flex-col gap-2 border-t border-zinc-800/60 px-4 py-3">
           <StatusPills counts={project.statusCounts} />
           {project.features.map((f) => (
-            <FeatureRow key={f.key} feature={f} />
+            <FeatureRow key={f.key} feature={f} defaultOpen={defaultOpen} />
           ))}
         </div>
       ) : null}
@@ -265,6 +322,9 @@ export function ProgressBoard(_props?: {
   const [data, setData] = useState<ProgressResponse | null>(null);
   const [period, setPeriod] = useState<PeriodRange>({ id: "all" });
   const [refreshing, setRefreshing] = useState(false);
+  // Active status filter (empty = show all). Toggling a chip narrows the board
+  // to items with that status, recomputing counts client-side.
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const aliveRef = useRef(true);
   const periodRef = useRef(period);
   periodRef.current = period;
@@ -342,6 +402,53 @@ export function ProgressBoard(_props?: {
   const totals = data?.totals;
   const blocked = totals?.statusCounts.blocked ?? 0;
   const effort = data?.effort;
+
+  // Status chips are data-driven from the corpus-wide status counts, ordered
+  // canonically (shipped/staged/blocked first). This adapts if the miner emits
+  // new statuses without a code change.
+  const statusChips = useMemo(
+    () => orderedStatuses(totals?.statusCounts ?? {}),
+    [totals],
+  );
+
+  const filterActive = statusFilter.size > 0;
+  const visibleProjects = useMemo(
+    () => filterProjects(data?.projects ?? [], statusFilter),
+    [data, statusFilter],
+  );
+  const visibleItemCount = useMemo(
+    () => visibleProjects.reduce((sum, p) => sum + p.itemCount, 0),
+    [visibleProjects],
+  );
+
+  const toggleStatus = useCallback((status: string) => {
+    setStatusFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }, []);
+
+  // Drop any active filter values that no longer exist in the current dataset
+  // (e.g. after a period change or refresh), so stale chips don't hide everything.
+  useEffect(() => {
+    if (statusFilter.size === 0) return;
+    const present = new Set(statusChips);
+    let changed = false;
+    for (const s of statusFilter) {
+      if (!present.has(s)) {
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      setStatusFilter((prev) => {
+        const next = new Set([...prev].filter((s) => present.has(s)));
+        return next.size === prev.size ? prev : next;
+      });
+    }
+  }, [statusChips, statusFilter]);
 
   const harnessLine = useMemo(() => {
     if (!effort) return null;
@@ -434,12 +541,74 @@ export function ProgressBoard(_props?: {
               </div>
             ) : null}
 
-            {/* Per-project sections */}
-            <div className="flex flex-col gap-2.5">
-              {data.projects.map((p) => (
-                <ProjectSection key={p.slug} project={p} />
-              ))}
-            </div>
+            {/* Status filters (shipped/staged/blocked/…) — client-side, over the
+                already-fetched snapshot. */}
+            {statusChips.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="mr-1 text-[10.5px] font-medium uppercase tracking-wide text-zinc-600">
+                  Status
+                </span>
+                {statusChips.map((status) => {
+                  const active = statusFilter.has(status);
+                  const s = statusStyle(status);
+                  const n = totals?.statusCounts[status] ?? 0;
+                  return (
+                    <button
+                      key={status}
+                      onClick={() => toggleStatus(status)}
+                      aria-pressed={active}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition",
+                        active
+                          ? cn("border-transparent", s.pill)
+                          : "border-zinc-800 bg-zinc-900/40 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200",
+                      )}
+                      title={`${active ? "Hide" : "Show only"} ${status} items`}
+                    >
+                      <span className={cn("h-1.5 w-1.5 rounded-full", s.dot)} />
+                      {status}
+                      <span className="tabular-nums text-zinc-500">{n}</span>
+                    </button>
+                  );
+                })}
+                {filterActive ? (
+                  <button
+                    onClick={() => setStatusFilter(new Set())}
+                    className="ml-1 rounded-full px-2 py-1 text-[11px] text-zinc-500 transition hover:text-zinc-200"
+                    title="Clear status filter"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/* Per-project sections (filtered) */}
+            {visibleProjects.length === 0 ? (
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 py-10">
+                <EmptyState
+                  icon={<Rocket className="h-8 w-8" />}
+                  title="No items match this filter"
+                  hint="No work items match the selected status in this timeframe. Clear the filter or widen the period."
+                />
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2.5">
+                {filterActive ? (
+                  <div className="text-[11px] text-zinc-500">
+                    {compactNumber(visibleItemCount)} item{visibleItemCount === 1 ? "" : "s"} across{" "}
+                    {visibleProjects.length} project{visibleProjects.length === 1 ? "" : "s"}
+                  </div>
+                ) : null}
+                {visibleProjects.map((p) => (
+                  <ProjectSection
+                    key={filterActive ? `${p.slug}-filtered` : p.slug}
+                    project={p}
+                    defaultOpen={filterActive}
+                  />
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
