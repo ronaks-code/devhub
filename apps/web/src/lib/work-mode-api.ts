@@ -8,6 +8,25 @@
  * "no task" (the panel's `enabled`/`task` gate, not a synthetic placeholder).
  */
 
+import { getToken } from "./api";
+
+/**
+ * Global `fetch` with the stored bearer token attached (when one is configured),
+ * mirroring the auth seam every other API client uses via `withAuth` in `api.ts`.
+ * On the local no-token default this is a pass-through no-op; in the packaged
+ * DevHub desktop app — which always seeds a per-launch `DEVHUB_DESKTOP_TOKEN` —
+ * it's what keeps the flag-gated `/api/work-mode/*` routes from answering 401.
+ * Without it, `fetchStatus` reads 401 as `{ enabled: false }` and the whole Work
+ * mode surface silently disables itself even though the server flag is on.
+ */
+const authedFetch: typeof fetch = (input, init) => {
+  const token = getToken();
+  if (!token) return fetch(input, init);
+  const headers = new Headers(init?.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+};
+
 export type WorkModeOutcomeStatus = "pending" | "in-progress" | "delivered" | "failed" | "cancelled";
 
 export interface WorkModeTaskDto {
@@ -49,7 +68,7 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-export function createWorkModeApiClient(fetchImpl: typeof fetch = fetch): WorkModeApiClient {
+export function createWorkModeApiClient(fetchImpl: typeof fetch = authedFetch): WorkModeApiClient {
   const fetchStatus = async (): Promise<{ enabled: boolean }> => {
     try {
       const response = await fetchImpl("/api/work-mode/status");
