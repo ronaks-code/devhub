@@ -210,6 +210,7 @@ interface RuntimeState {
   refreshPromise: Promise<void> | null;
   refreshDirty: boolean;
   idleReleaseRequested: boolean;
+  mcpReloadRequested: boolean;
   modelDivergenceGeneration: number | null;
   terminalFinalizerDirty: boolean;
   terminalFinalizerKey: string | null;
@@ -1235,6 +1236,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     let recycled = false;
     await Promise.all([...this.states.values()].map(async (state) => {
       const hadRuntime = state.runtime !== null;
+      state.mcpReloadRequested = state.runtime !== null || state.runtimePromise !== null;
       state.idleReleaseRequested = true;
       await this.releaseIfIdle(state);
       if (hadRuntime && state.runtime === null) recycled = true;
@@ -1695,6 +1697,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       refreshPromise: null,
       refreshDirty: false,
       idleReleaseRequested: false,
+      mcpReloadRequested: false,
       modelDivergenceGeneration: null,
       terminalFinalizerDirty: false,
       terminalFinalizerKey: null,
@@ -1869,6 +1872,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     state.runtime = null;
     state.writer = null;
     state.idleReleaseRequested = false;
+    state.mcpReloadRequested = false;
     state.pendingEvents.length = 0;
     state.modelDivergenceGeneration = null;
     state.terminalFinalizerDirty = false;
@@ -2224,6 +2228,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     state.runtime = null;
     state.writer = null;
     state.idleReleaseRequested = false;
+    state.mcpReloadRequested = false;
     if (state.nativeInitialized) state.initialLaunch = "resume";
     try { await runtime.release(); } catch { /* The reconciliation latch remains authoritative. */ }
     if (writer !== null) {
@@ -2464,12 +2469,14 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
     if (state.releasePromise !== null) return state.releasePromise;
     const subscription = this.subscriptions.get(state.key.nativeTaskId);
     if (
-      (subscription?.sinks.size && !state.idleReleaseRequested) || state.activeTurnId !== null ||
+      (subscription?.sinks.size && !state.mcpReloadRequested) || state.activeTurnId !== null ||
       state.activeActivities.size > 0 || state.pendingMutations > 0 ||
       state.runtimePromise !== null || state.replayEvents.length > 0 || state.replayOverflow
     ) return;
     if (state.runtime !== null && !state.idleReleaseRequested) return;
     if (state.runtime === null && state.writer === null) {
+      state.idleReleaseRequested = false;
+      state.mcpReloadRequested = false;
       this.evictStateIfResourceFree(state);
       return;
     }
@@ -2480,6 +2487,7 @@ export class ClaudeNativeAdapter implements ProviderAdapter {
       state.runtime = null;
       state.writer = null;
       state.idleReleaseRequested = false;
+      state.mcpReloadRequested = false;
       if (state.nativeInitialized) state.initialLaunch = "resume";
       if (runtime !== null) {
         try { await runtime.release(); } catch { /* Best-effort idle release. */ }
