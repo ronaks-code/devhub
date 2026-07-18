@@ -22,6 +22,7 @@
  */
 import { Worker, isMainThread, parentPort } from "node:worker_threads";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { scanSession } from "./parse-session.js";
 import type { ScanSeed, ScanResult } from "./parse-session.js";
 
@@ -60,11 +61,15 @@ class ScanWorkerPool {
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
     // Point the Worker at THIS module's URL; the `parentPort` branch below is its entry.
-    // Inherit the parent's execArgv so a TS-aware loader (e.g. tsx's `--import`) carries
-    // into the worker — that lets a `.ts` entry run in dev. In a compiled build the entry
-    // is plain `.js` and needs no loader. If the worker can't load (no loader, missing
-    // file), it errors and the caller falls back to the synchronous scan.
-    const w = new Worker(fileURLToPath(import.meta.url), { execArgv: process.execArgv });
+    // A tsx CLI process registers its loader in-process, so it is not necessarily present
+    // in process.execArgv for a child worker. Register tsx explicitly for the source entry.
+    // Do not copy eval/input-type flags from a source launcher: those are invalid when a
+    // Worker receives a file entry. Compiled `.js` keeps the parent's normal execArgv.
+    const sourceEntry = fileURLToPath(import.meta.url).endsWith(".ts");
+    const execArgv = sourceEntry
+      ? ["--import", createRequire(import.meta.url).resolve("tsx")]
+      : process.execArgv;
+    const w = new Worker(fileURLToPath(import.meta.url), { execArgv });
     w.on("message", (reply: ScanReply) => {
       const resolve = this.pending;
       this.pending = null;

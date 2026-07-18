@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Bot, Cpu, MessageSquarePlus } from "lucide-react";
-import { api, codexApi } from "../lib/api";
 import type { SessionSummary } from "../lib/types";
 import type { CodexSession, CodexStats } from "../lib/types";
 import { Spinner } from "./ui";
+import { loadHomeData } from "../lib/home-data";
 
 /** Last path segment of a working directory path. */
 function lastSegment(cwd: string | null | undefined): string {
@@ -24,15 +24,6 @@ function relTime(iso: string | null | undefined): string {
   if (h < 24) return `${h}h ago`;
   const d = Math.floor(h / 24);
   return `${d}d ago`;
-}
-
-/** Count sessions whose last activity falls in the last N days. */
-function countRecent(sessions: SessionSummary[], days: number): number {
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return sessions.filter((s) => {
-    const t = s.lastTimestamp ? new Date(s.lastTimestamp).getTime() : 0;
-    return t >= cutoff;
-  }).length;
 }
 
 interface UnifiedItem {
@@ -61,6 +52,8 @@ function StatCard({ label, value, sub }: StatCardProps) {
 
 export function HomePane({ onNewChat }: { onNewChat: () => void }) {
   const [claudeSessions, setClaudeSessions] = useState<SessionSummary[]>([]);
+  const [claudeTotal, setClaudeTotal] = useState(0);
+  const [claudeThisMonth, setClaudeThisMonth] = useState(0);
   const [codexSessions, setCodexSessions] = useState<CodexSession[]>([]);
   const [codexStats, setCodexStats] = useState<CodexStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,30 +62,13 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
     let cancelled = false;
     setLoading(true);
 
-    Promise.allSettled([
-      // Fetch all sessions across projects for Claude stats
-      api.projects().then(async (projects) => {
-        const all: SessionSummary[] = [];
-        await Promise.allSettled(
-          projects.map((p) =>
-            api.sessions(p.id).then((ss) => {
-              all.push(...ss);
-            }),
-          ),
-        );
-        return all;
-      }),
-      codexApi.sessions(),
-      codexApi.stats(),
-    ]).then(([claudeResult, codexResult, statsResult]) => {
+    loadHomeData().then((data) => {
       if (cancelled) return;
-      if (claudeResult.status === "fulfilled") setClaudeSessions(claudeResult.value);
-      if (codexResult.status === "fulfilled" && !(codexResult.value instanceof Error)) {
-        setCodexSessions(codexResult.value as CodexSession[]);
-      }
-      if (statsResult.status === "fulfilled" && !(statsResult.value instanceof Error)) {
-        setCodexStats(statsResult.value as CodexStats);
-      }
+      setClaudeSessions(data.claudeSessions);
+      setClaudeTotal(data.claudeTotal);
+      setClaudeThisMonth(data.claudeLast30Days);
+      setCodexSessions(data.codexSessions);
+      setCodexStats(data.codexStats);
       setLoading(false);
     });
 
@@ -125,7 +101,6 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
     })
     .slice(0, 20);
 
-  const claudeThisMonth = countRecent(claudeSessions, 30);
   const codexThisMonth = codexStats?.last30Days ?? 0;
 
   return (
@@ -160,7 +135,7 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
               />
               <StatCard
                 label="Total Claude"
-                value={claudeSessions.length}
+                value={claudeTotal}
                 sub="all time"
               />
               <StatCard
