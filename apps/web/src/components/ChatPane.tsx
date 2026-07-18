@@ -22,6 +22,7 @@ import { SnippetLibrary } from "./SnippetLibrary";
 import { TokenMeter } from "./TokenMeter";
 import { TurnFooter } from "./TurnFooter";
 import { BranchSwitcher } from "./BranchSwitcher";
+import { ChatWorktreePanel } from "./ChatWorktreePanel";
 import { TurnError } from "./TurnError";
 import { usePromptHistory } from "../hooks/usePromptHistory";
 import { useImageAttach } from "../hooks/useImageAttach";
@@ -1038,6 +1039,8 @@ export function ChatPane({
           New chat
         </button>
       </div>
+
+      <ChatWorktreePanel cwd={cwd} />
 
       {/* Message stream */}
       <div className="relative min-h-0 flex-1">

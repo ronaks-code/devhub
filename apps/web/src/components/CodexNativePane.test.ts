@@ -558,12 +558,12 @@ describe("CodexNativePane keyboard and lifecycle ordering", () => {
     expect(token).not.toContain("/");
   });
 
-  it("drops hidden cross-provider model and permission state at serialization", () => {
+  it("serializes provider-native model and permission state", () => {
     expect(providerCreateOverrides(
       "anthropic",
-      "gpt-5.4",
+      "claude-opus-4-1",
       "workspace-write",
-    )).toEqual({ permissionMode: "plan" });
+    )).toEqual({ model: "claude-opus-4-1", permissionMode: "plan" });
     expect(providerCreateOverrides("anthropic", "", "plan"))
       .toEqual({ permissionMode: "plan" });
     expect(providerCreateOverrides("openai", "gpt-5.4", "manual"))

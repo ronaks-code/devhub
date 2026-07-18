@@ -21,6 +21,7 @@ import {
   type ComposerConnection,
 } from "./Composer.js";
 import { InspectorDock } from "../inspectors/InspectorDock.js";
+import { ChatWorktreePanel } from "../../ChatWorktreePanel.js";
 
 /**
  * ChatHost — the live Chat-tab composition of `TaskHeader` + `ThreadWorkspace` +
@@ -54,7 +55,7 @@ export interface ChatHostProps {
   /** Task title shown in `TaskHeader`. */
   title: string;
   /** Route a provider-change request to the (still-M7) fork flow. */
-  onFork?: () => void;
+  onFork?: (sessionId: string | null) => void;
   /** Mount `InspectorDock` alongside the transcript (`inspectorDock` flag). */
   showInspector?: boolean;
 }
@@ -152,7 +153,12 @@ export function ChatHost({
   return (
     <div className="flex min-h-0 flex-1 gap-0" data-dh-chat-host="">
       <div className="flex min-h-0 flex-1 flex-col">
-        <TaskHeader title={title} provider="anthropic" onFork={onFork} />
+        <TaskHeader
+          title={title}
+          provider="anthropic"
+          onFork={() => onFork?.(sessionId)}
+        />
+        <ChatWorktreePanel cwd={cwd} />
         <ThreadWorkspace
           items={items}
           provider="anthropic"

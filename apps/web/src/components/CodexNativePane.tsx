@@ -186,8 +186,6 @@ const EMPTY_TIMELINE: CodexTimelineState = Object.freeze({
   entries: Object.freeze({}),
 });
 
-export const CLAUDE_MODEL_DISCLOSURE =
-  "Claude model selection unavailable until runtime support is verified.";
 export const PROVIDER_LOCK_DISCLOSURE =
   "Provider is fixed after creation. Fork to another provider to continue there.";
 
@@ -254,7 +252,7 @@ export function providerCreateOverrides(
   )
     ? permissionMode
     : providerDefaultPermission(provider);
-  const visibleModel = provider === "openai" ? model.trim() : "";
+  const visibleModel = model.trim();
   return Object.freeze({
     ...(visibleModel ? { model: visibleModel } : {}),
     permissionMode: safePermission,
@@ -1381,6 +1379,12 @@ export interface CodexNativePaneProps {
   client?: ProviderApiClient;
   preferredHome?: string;
   preferredTaskId?: string;
+  /** A legacy shell routed an explicit fork intent for `preferredTaskId`. */
+  autoOpenCrossProviderFork?: boolean;
+  /** Clears the routed intent once the real native fork panel consumes it. */
+  onCrossProviderForkAutoOpen?: () => void;
+  /** Restores the caller's normal shell route after the fork flow closes. */
+  onCrossProviderForkClosed?: () => void;
   fallback?: ReactNode;
   provider?: ProviderId;
   /** Resolved DevHub feature flags. When `unifiedTaskIndex` is applied true the setup
@@ -1399,6 +1403,13 @@ export interface CodexNativePaneProps {
  * hooks and neither leaks state across a flag flip.
  */
 export function CodexNativePane(props: CodexNativePaneProps) {
+  const routedForkRef = useRef(props.autoOpenCrossProviderFork === true);
+  // The indexed home picker does not own task mutations. A routed fork intent
+  // must enter the direct native task surface, which discovers the provider home
+  // and constructs the exact NativeTaskKey before calling the fork routes.
+  if (routedForkRef.current) {
+    return <CodexNativeDirectPane {...props} />;
+  }
   if (isUnifiedTaskIndexApplied(props.features)) {
     return (
       <ProviderHomeSetup
@@ -1419,6 +1430,9 @@ export function CodexNativeDirectPane({
   client = providerApi,
   preferredHome,
   preferredTaskId,
+  autoOpenCrossProviderFork = false,
+  onCrossProviderForkAutoOpen,
+  onCrossProviderForkClosed,
   fallback,
   provider = "openai",
   features,
@@ -2486,22 +2500,16 @@ export function CodexNativeDirectPane({
                 className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
               />
             </label>
-            {provider === "openai" ? (
-              <label className="block text-[10.5px] text-zinc-500">
-                Model (optional)
-                <input
-                  disabled={busy === "create"}
-                  value={createModel}
-                  onChange={(event) => setCreateModel(event.target.value)}
-                  placeholder="Provider default"
-                  className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-                />
-              </label>
-            ) : (
-              <p className="text-[10.5px] leading-relaxed text-zinc-600">
-                {CLAUDE_MODEL_DISCLOSURE}
-              </p>
-            )}
+            <label className="block text-[10.5px] text-zinc-500">
+              Model (optional)
+              <input
+                disabled={busy === "create"}
+                value={createModel}
+                onChange={(event) => setCreateModel(event.target.value)}
+                placeholder="Provider default"
+                className="mt-1 w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              />
+            </label>
             <label className="block text-[10.5px] text-zinc-500">
               Permission mode
               <select
@@ -2704,6 +2712,9 @@ export function CodexNativeDirectPane({
                   {selectedCanMutate && crossProviderForkEnabled && crossProviderForkTargetHome ? (
                     <CrossProviderForkPanel
                       enabled={crossProviderForkEnabled}
+                      autoOpen={autoOpenCrossProviderFork}
+                      onAutoOpenConsumed={onCrossProviderForkAutoOpen}
+                      onClosed={onCrossProviderForkClosed}
                       source={{
                         provider: selectedTask.key.provider,
                         title: selectedTask.title,

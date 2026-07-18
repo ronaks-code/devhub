@@ -309,6 +309,13 @@ export function nativeClaudePreferredTaskId(
   return seed?.sessionId;
 }
 
+/** Recover the provider home from Claude's canonical `<home>/projects/...` transcript path. */
+export function nativeClaudeHomeFromSessionFile(filePath: string | undefined): string | undefined {
+  if (!filePath) return undefined;
+  const match = /[\\/]projects[\\/]/.exec(filePath);
+  return match && match.index > 0 ? filePath.slice(0, match.index) : undefined;
+}
+
 /** Navigation destinations use page semantics, not an incomplete tabs pattern. */
 export function navigationAriaCurrent(active: boolean): "page" | undefined {
   return active ? "page" : undefined;
@@ -820,6 +827,12 @@ export default function App() {
   // Seeds ChatPane to resume an existing session (--resume) after a handoff
   // from the Browse transcript. Cleared once consumed.
   const [chatSeed, setChatSeed] = useState<{ sessionId: string; projectId: string } | null>(null);
+  // Legacy Browse/Chat headers know the native Claude session id but not its
+  // provider home. Route the intent into CodexNativePane, whose existing
+  // discovery path resolves the real NativeTaskKey before opening the fork UI.
+  const [crossProviderForkTaskId, setCrossProviderForkTaskId] = useState<string | null>(null);
+  const [crossProviderForkHome, setCrossProviderForkHome] = useState<string | undefined>(undefined);
+  const [crossProviderForkNativeRoute, setCrossProviderForkNativeRoute] = useState(false);
   // Bumping this remounts ChatPane to start a fresh conversation (command palette
   // "New chat" / programmatic reset), since ChatPane keys off it.
   const [chatNonce, setChatNonce] = useState(0);
@@ -1352,6 +1365,31 @@ export default function App() {
   const project = projects.find((p) => p.id === projectId) ?? null;
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
+  const openCrossProviderFork = useCallback((nativeTaskId: string | null) => {
+    if (settings?.devHubFeatures?.crossProviderFork !== true) {
+      pushToast({
+        title: "Cross-provider fork unavailable",
+        body: "A native target provider is not available for this task.",
+        level: "info",
+      });
+      return;
+    }
+    if (!nativeTaskId || !projectId) {
+      pushToast({
+        title: "Start the Claude task first",
+        body: "Send a message before creating a cross-provider fork.",
+        level: "info",
+      });
+      return;
+    }
+    setChatSeed({ sessionId: nativeTaskId, projectId });
+    setCrossProviderForkTaskId(nativeTaskId);
+    setCrossProviderForkHome(nativeClaudeHomeFromSessionFile(
+      sessions.find((session) => session.sessionId === nativeTaskId)?.filePath,
+    ));
+    setCrossProviderForkNativeRoute(true);
+    setTab("chat");
+  }, [projectId, pushToast, sessions, settings?.devHubFeatures?.crossProviderFork]);
 
   // Responsive Browse layout: 3 panes on wide screens, a single active pane with
   // a breadcrumb on narrow ones. The stage auto-advances as the user drills in.
@@ -1570,13 +1608,7 @@ export default function App() {
                 : "New task"
             }
             showInspector={inspectorDockMode === "devhub" && inspectorVisible}
-            onFork={() =>
-              pushToast({
-                title: "Cross-provider fork not available yet",
-                body: "Fork support ships in a later milestone (M7).",
-                level: "info",
-              })
-            }
+            onFork={openCrossProviderFork}
           />
         ) : (
           <div className="flex-1 bg-zinc-950">
@@ -1901,13 +1933,7 @@ export default function App() {
                       <TaskHeader
                         title={sessionTitle ?? project.name}
                         provider="anthropic"
-                        onFork={() =>
-                          pushToast({
-                            title: "Cross-provider fork not available yet",
-                            body: "Fork support ships in a later milestone (M7).",
-                            level: "info",
-                          })
-                        }
+                        onFork={() => openCrossProviderFork(sessionId)}
                       />
                     ) : project ? (
                       <ProjectDetailHeader
@@ -1982,13 +2008,20 @@ export default function App() {
           ) : (
             <CodexHistoryPane />
           )
-        ) : claudeShellMode === "native" ? (
+        ) : claudeShellMode === "native" || crossProviderForkNativeRoute ? (
           <Suspense fallback={<PaneFallback />}>
             <CodexNativePane
-              key={nativePaneRouteKey("anthropic")}
+              key={`${nativePaneRouteKey("anthropic")}:${crossProviderForkNativeRoute ? "fork" : "normal"}`}
               provider="anthropic"
               features={settings?.devHubFeatures}
-              preferredTaskId={nativeClaudePreferredTaskId(activeSeed)}
+              preferredHome={crossProviderForkHome}
+              preferredTaskId={crossProviderForkTaskId ?? nativeClaudePreferredTaskId(activeSeed)}
+              autoOpenCrossProviderFork={crossProviderForkTaskId !== null}
+              onCrossProviderForkAutoOpen={() => setCrossProviderForkTaskId(null)}
+              onCrossProviderForkClosed={() => {
+                setCrossProviderForkNativeRoute(false);
+                setCrossProviderForkHome(undefined);
+              }}
               fallback={legacyClaudePane}
             />
           </Suspense>
