@@ -16,7 +16,7 @@ import { CostForecast } from "./dashboard/CostForecast";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { DirtyRepos } from "./dashboard/DirtyRepos";
 import { ToolAnalytics } from "./dashboard/ToolAnalytics";
-import { Badge, EmptyState, Spinner } from "./ui";
+import { Badge, EmptyState, LoadErrorState, Spinner } from "./ui";
 import { DashboardSkeleton } from "./Skeleton";
 
 /** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
@@ -142,7 +142,7 @@ export function DashboardPane({
   // Auto-refreshing stats / running / period-rollups. The hook polls on an
   // interval, pauses while the tab is hidden, and refreshes on return — so
   // "running now" and the totals stay fresh without a manual reload.
-  const { stats, running, rollups, rollupsError } = useStatsPolling({
+  const { stats, statsError, running, rollups, rollupsError, refresh } = useStatsPolling({
     intervalMs: DASH_POLL_MS,
     since: period.since,
     until: period.until,
@@ -183,7 +183,13 @@ export function DashboardPane({
   if (!stats) {
     return (
       <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
-        <DashboardSkeleton />
+        {statsError ? (
+          <div className="mx-auto max-w-3xl px-6 py-6">
+            <LoadErrorState message="Couldn't load dashboard." onRetry={refresh} />
+          </div>
+        ) : (
+          <DashboardSkeleton />
+        )}
       </div>
     );
   }

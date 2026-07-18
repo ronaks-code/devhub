@@ -68,8 +68,8 @@ export interface ReducedMotion {
   /** Set the preference explicitly (persisted). */
   setPreference: (pref: PerfPreference) => void;
   /**
-   * Cycle the preference auto → on → off → auto. Handy for a single header
-   * button that walks the three states on click.
+   * Toggle the effective state. The first click always changes what the user
+   * sees, even when the initial "auto" state already follows a reduced-motion OS.
    */
   cyclePreference: () => void;
 }
@@ -121,11 +121,11 @@ export function useReducedMotion(): ReducedMotion {
 
   const cyclePreference = useCallback(() => {
     setPreferenceState((prev) => {
-      const next = PREFS[(PREFS.indexOf(prev) + 1) % PREFS.length]!;
+      const next: PerfPreference = resolveReduced(prev, osReduced) ? "off" : "on";
       writePreference(next);
       return next;
     });
-  }, []);
+  }, [osReduced]);
 
   return useMemo(
     () => ({ reduced, preference, setPreference, cyclePreference }),

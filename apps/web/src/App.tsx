@@ -57,7 +57,7 @@ import { AutomationsBoard } from "./components/AutomationsBoard";
 import { InboxPane } from "./components/InboxPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
-import { ToastStack, type ToastItem } from "./components/Toast";
+import { mergeToast, ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
 import { SessionCostBadge } from "./components/SessionCostBadge";
 import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
@@ -108,7 +108,7 @@ import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
 import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
 import { useTheme, type ThemePreference } from "./hooks/useTheme";
-import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
+import { parseRoute, useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { readCompat, writeCompat } from "./lib/compat-storage";
 import { displayCodexSessionTitle, displaySessionTitle } from "./lib/session-title";
 import { cn } from "./lib/utils";
@@ -225,6 +225,18 @@ function writeUiState(state: PersistedUiState): void {
 }
 
 const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "spatial", "settings", "openai-chat", "codex-history", "automations", "progress"];
+
+export function resolveInitialUiState(
+  persisted: PersistedUiState,
+  route: RouteState,
+): { tab: Tab; projectId: string | null; sessionId: string | null } {
+  const persistedTab = persisted.tab && VALID_TABS.includes(persisted.tab) ? persisted.tab : null;
+  return {
+    tab: route.tab ?? persistedTab ?? "home",
+    projectId: route.project ?? persisted.projectId ?? null,
+    sessionId: route.session ?? null,
+  };
+}
 
 /** App-specific destinations extend the approved command set without reviving the retired palette. */
 const APP_COMMANDS: readonly CommandAction[] = Object.freeze([
@@ -578,9 +590,9 @@ function CodexNativeLoadFailure({
 
 /** Icon + label for each perf-mode preference, for the header toggle. */
 const PERF_META: Record<PerfPreference, { label: string; title: string }> = {
-  auto: { label: "Motion: auto", title: "Reduced motion follows your OS setting — click to force it on" },
+  auto: { label: "Motion: auto", title: "Reduced motion follows your OS setting — click to toggle it" },
   on: { label: "Motion: off", title: "Reduced motion forced ON — click to force it off" },
-  off: { label: "Motion: on", title: "Full motion forced ON — click to follow your OS setting" },
+  off: { label: "Motion: on", title: "Full motion forced ON — click to force reduced motion on" },
 };
 
 export function TopBar({
@@ -681,7 +693,8 @@ export function TopBar({
       ) : null}
 
       <div className={TOP_BAR_SECONDARY_CLASS}>
-        {/* Perf / reduced-motion toggle. Cycles auto → on → off; tinted clay
+        {/* Perf / reduced-motion toggle. Auto follows the OS until the first
+            click, then each click flips the effective state; tinted clay
             while motion is being suppressed so the active state reads at a glance. */}
         <button
           onClick={onCyclePerf}
@@ -772,6 +785,14 @@ export function openHeaderOverlay(
   openOverlay();
 }
 
+/** Keyboard-layout tolerant detection for the unmodified "?" shortcut. */
+export function isShortcutHelpKey(
+  event: Pick<KeyboardEvent, "key" | "code" | "shiftKey" | "metaKey" | "ctrlKey" | "altKey">,
+): boolean {
+  const questionMark = event.key === "?" || (event.code === "Slash" && event.shiftKey);
+  return questionMark && !event.metaKey && !event.ctrlKey && !event.altKey;
+}
+
 /** Open Work exclusively, or close it normally when its focused trigger toggles it. */
 export function toggleWorkModeOverlay(
   open: boolean,
@@ -799,23 +820,21 @@ export function useWorkModeEscapeDismiss(open: boolean, onDismiss: () => void): 
 }
 
 export default function App() {
+  const [initialUiState] = useState(() => resolveInitialUiState(readUiState(), parseRoute()));
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(() => readUiState().projectId ?? null);
+  const [projectId, setProjectId] = useState<string | null>(initialUiState.projectId);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   // True while the selected project's session list is being (re)fetched, so the
   // SessionsPane can show a content-shaped skeleton instead of a bare "No
   // sessions" flash before the data lands.
   const [loadingSessions, setLoadingSessions] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(initialUiState.sessionId);
   const [tailBytes, setTailBytes] = useState<number | undefined>(undefined);
   const [page, setPage] = useState<SessionMessagesPage | null>(null);
   const [loadingPage, setLoadingPage] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [sessionCount, setSessionCount] = useState(0);
-  const [tab, setTab] = useState<Tab>(() => {
-    const t = readUiState().tab;
-    return t && VALID_TABS.includes(t) ? t : "home";
-  });
+  const [tab, setTab] = useState<Tab>(initialUiState.tab);
   const [searchOpen, setSearchOpen] = useState(false);
   const [workModeOpen, setWorkModeOpen] = useState(false);
   const workModeTriggerRef = useRef<HTMLButtonElement>(null);
@@ -929,7 +948,7 @@ export default function App() {
   // still owns permission mode locally. Falls back to settings then a default.
   const [chatModel, setChatModel] = useState<string | null>(null);
   // Carries a session to auto-select after a search-driven project switch.
-  const pendingSessionRef = useRef<string | null>(null);
+  const pendingSessionRef = useRef<string | null>(initialUiState.sessionId);
   // The message seq a search pick wants the transcript to jump to + highlight,
   // once it loads. Bumped each pick (via a nonce) so re-picking the SAME hit
   // re-triggers the jump even when seq is unchanged. Null = no pending jump.
@@ -945,7 +964,7 @@ export default function App() {
   // fetch-error Retry that succeeds). Capped at 4 visible, like the notify path.
   const pushToast = useCallback((toast: Omit<ToastItem, "id">) => {
     const id = ++toastSeq.current;
-    setToasts((prev) => [...prev.slice(-3), { ...toast, id }]);
+    setToasts((prev) => mergeToast(prev, toast, id));
     return id;
   }, []);
 
@@ -1164,7 +1183,7 @@ export default function App() {
   // modifier required; Shift is fine since "?" itself is Shift+/.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "?" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (!isShortcutHelpKey(e)) return;
       const t = e.target as HTMLElement | null;
       const tag = t?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) {
@@ -1400,8 +1419,8 @@ export default function App() {
     restoredRouteRef.current = true;
     if (initialRoute.project && projects.some((p) => p.id === initialRoute.project)) {
       applyRoute(initialRoute);
-    } else if (initialRoute.tab) {
-      setTab(initialRoute.tab);
+    } else if (!initialRoute.project) {
+      applyRoute(initialRoute);
     }
   }, [projects, initialRoute, applyRoute]);
 
@@ -1805,6 +1824,7 @@ export default function App() {
             <TaskRail
               model={taskRailModel}
               onNewTask={startNewChat}
+              onSelectTask={(id) => { if (projectId) openSession(projectId, id); }}
               onSelectDestination={(id) => { setChatSeed(null); setTab(id as Tab); }}
             />
           ) : (
@@ -1817,7 +1837,7 @@ export default function App() {
             [
               { id: "home" as Tab, icon: <Home className="h-3.5 w-3.5" />, label: "Home" },
               { id: "browse" as Tab, icon: <Folder className="h-3.5 w-3.5" />, label: "Browse" },
-              { id: "chat" as Tab, icon: <Sparkles className="h-3.5 w-3.5" />, label: claudeShellMode === "native" ? "Claude" : "New Chat" },
+              { id: "chat" as Tab, icon: <Sparkles className="h-3.5 w-3.5" />, label: claudeShellMode === "native" ? "Claude" : "New Claude Chat" },
               { id: "dashboard" as Tab, icon: <LayoutDashboard className="h-3.5 w-3.5" />, label: "Dashboard" },
             ] as const
           ).map(({ id, icon, label }) => (
@@ -1844,7 +1864,7 @@ export default function App() {
           </div>
           {(
             [
-              { id: "openai-chat" as Tab, icon: <Bot className="h-3.5 w-3.5" />, label: "New Chat" },
+              { id: "openai-chat" as Tab, icon: <Bot className="h-3.5 w-3.5" />, label: "New OpenAI Chat" },
               {
                 id: "codex-history" as Tab,
                 icon: codexNav.icon === "bot"
@@ -2229,10 +2249,9 @@ export default function App() {
         />
       )}
 
-      {/* M6 slice 7 (Task 9 data-wire): the SEPARATE `CommandDialog` — the legacy
-          `CommandPalette` stays unmounted exactly as today (it always was, even
-          before M6). Only mounted while open AND `searchCommands===true`. */}
-      {searchCommandsMode === "devhub" && commandOpen ? (
+      {/* Commands are a global app utility. The searchCommands flag chooses the
+          Search implementation, but must never turn the command palette into a no-op. */}
+      {commandOpen ? (
         <CommandDialog
           query={dhCommandQuery}
           commands={APP_COMMANDS}

@@ -4,6 +4,7 @@ import type { DailyUsage, RunningSession, Stats } from "../lib/types";
 
 export interface StatsPollingData {
   stats: Stats | null;
+  statsError: boolean;
   running: RunningSession[] | null;
   rollups: DailyUsage[] | null;
   /** True when the rollups endpoint isn't available on this server (404/501). */
@@ -46,6 +47,7 @@ export function useStatsPolling(options: UseStatsPollingOptions = {}): UseStatsP
 
   const [data, setData] = useState<StatsPollingData>({
     stats: null,
+    statsError: false,
     running: null,
     rollups: null,
     rollupsError: false,
@@ -66,9 +68,11 @@ export function useStatsPolling(options: UseStatsPollingOptions = {}): UseStatsP
     api
       .stats()
       .then((s) => {
-        if (aliveRef.current) setData((d) => ({ ...d, stats: s }));
+        if (aliveRef.current) setData((d) => ({ ...d, stats: s, statsError: false }));
       })
-      .catch(() => {})
+      .catch(() => {
+        if (aliveRef.current) setData((d) => ({ ...d, statsError: true }));
+      })
       .finally(() => {
         if (aliveRef.current) setLoading(false);
       });

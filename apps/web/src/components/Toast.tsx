@@ -26,6 +26,32 @@ export interface ToastItem {
   actionLabel?: string;
   /** Auto-dismiss after this many ms (default {@link DEFAULT_DURATION}); 0 = never. */
   duration?: number;
+  /** Visible-stack identity used to coalesce repeated instances of one failure. */
+  dedupeKey?: string;
+  /** Number of occurrences represented by this card. Hidden when absent/one. */
+  repeatCount?: number;
+}
+
+/** Add a toast, or replace the visible card with the same key and increment it. */
+export function mergeToast(
+  current: readonly ToastItem[],
+  toast: Omit<ToastItem, "id">,
+  id: number,
+): ToastItem[] {
+  if (toast.dedupeKey) {
+    const existingIndex = current.findIndex((item) => item.dedupeKey === toast.dedupeKey);
+    if (existingIndex >= 0) {
+      const next = [...current];
+      const existing = current[existingIndex]!;
+      next[existingIndex] = {
+        ...toast,
+        id,
+        repeatCount: (existing.repeatCount ?? 1) + 1,
+      };
+      return next;
+    }
+  }
+  return [...current.slice(-3), { ...toast, id }];
 }
 
 /** Default auto-dismiss timeout. Matches the prior hard-coded 6s. */
@@ -110,7 +136,14 @@ function Toast({ item, onDismiss }: { item: ToastItem; onDismiss: (id: number) =
           clickable ? "cursor-pointer" : "cursor-default",
         )}
       >
-        <div className="truncate text-[13px] font-medium text-zinc-100">{item.title}</div>
+        <div className="flex items-center gap-1.5 text-[13px] font-medium text-zinc-100">
+          <span className="truncate">{item.title}</span>
+          {(item.repeatCount ?? 1) > 1 ? (
+            <span className="shrink-0 rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] text-red-200">
+              ×{item.repeatCount}
+            </span>
+          ) : null}
+        </div>
         {item.body ? (
           <div className="mt-0.5 line-clamp-2 text-[12px] text-zinc-400">{item.body}</div>
         ) : null}

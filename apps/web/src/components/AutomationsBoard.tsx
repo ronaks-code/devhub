@@ -4,7 +4,7 @@ import type { AutomationJob, AutomationsGroup, AutomationsResponse } from "../li
 import { api } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { cn } from "../lib/utils";
-import { EmptyState, Spinner } from "./ui";
+import { EmptyState, LoadErrorState, Spinner } from "./ui";
 
 /** How often to re-poll /api/automations (paused while the tab is hidden).
  * The server caches for 45s server-side, so polling faster than that just
@@ -143,18 +143,23 @@ function HostSection({ group, nowMs }: { group: AutomationsGroup; nowMs: number 
 export function AutomationsBoard() {
   const [data, setData] = useState<AutomationsResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const aliveRef = useRef(true);
 
   const load = useCallback(() => {
     setRefreshing(true);
+    setLoadError(false);
     api
       .automations()
       .then((r) => {
-        if (aliveRef.current) setData(r);
+        if (aliveRef.current) {
+          setData(r);
+          setLoadError(false);
+        }
       })
       .catch(() => {
-        if (aliveRef.current) setData((prev) => prev ?? { ok: true, groups: [], generatedAt: new Date().toISOString() });
+        if (aliveRef.current) setLoadError(true);
       })
       .finally(() => {
         if (aliveRef.current) setRefreshing(false);
@@ -240,7 +245,13 @@ export function AutomationsBoard() {
           </button>
         </div>
 
-        {data == null ? (
+        {loadError ? (
+          <LoadErrorState
+            message="Couldn't load scheduled jobs."
+            onRetry={load}
+            retrying={refreshing}
+          />
+        ) : data == null ? (
           <div className="flex h-40 items-center justify-center">
             <Spinner className="h-6 w-6" />
           </div>

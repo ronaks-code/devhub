@@ -89,3 +89,31 @@ export function EmptyState({ icon, title, hint }: { icon: ReactNode; title: stri
     </div>
   );
 }
+
+/** Explicit retryable load failure; never doubles as a benign empty state. */
+export function LoadErrorState({
+  message,
+  onRetry,
+  retrying = false,
+}: {
+  message: string;
+  onRetry: () => void;
+  retrying?: boolean;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/[0.06] px-4 py-3 text-[12px] text-red-200"
+    >
+      <span>{message}</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        disabled={retrying}
+        className="shrink-0 rounded-md bg-red-500/10 px-2.5 py-1 font-medium text-red-200 ring-1 ring-red-500/30 transition hover:bg-red-500/20 disabled:opacity-50"
+      >
+        {retrying ? "Retrying…" : "Retry"}
+      </button>
+    </div>
+  );
+}

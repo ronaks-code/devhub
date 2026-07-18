@@ -8,6 +8,11 @@ function shortPath(url: string): string {
   return noQuery || url;
 }
 
+/** Collapse query variants while keeping methods and endpoint paths distinct. */
+export function fetchErrorDedupeKey(method: string, url: string): string {
+  return `${method.toUpperCase()} ${shortPath(url)}`;
+}
+
 /**
  * Bridge non-401 API fetch failures (from {@link onFetchError}) to the app's Toast
  * system, giving each one a Retry affordance. When a request fails for a reason
@@ -44,6 +49,7 @@ export function useFetchErrorToasts(
       title: `Couldn't load ${label}`,
       body: "The request failed.",
       level: "error",
+      dedupeKey: fetchErrorDedupeKey(e.method, e.url),
       onClick,
       actionLabel: "Retry →",
       // Sticky-ish: give the user time to notice + act on a load failure.

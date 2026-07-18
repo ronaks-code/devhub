@@ -13,7 +13,7 @@ import { displaySessionTitle } from "../lib/session-title";
 import { api } from "../lib/api";
 import { compactNumber, relativeTime, totalTokens } from "../lib/format";
 import { cn } from "../lib/utils";
-import { EmptyState, Spinner } from "./ui";
+import { EmptyState, LoadErrorState, Spinner } from "./ui";
 
 /** How many recent sessions to pull for triage (server-sorted by recent). */
 const INBOX_LIMIT = 60;
@@ -179,6 +179,7 @@ export function InboxPane({
 }) {
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   // sessionIds with an action in flight (disables the row briefly).
   const [busyIds, setBusyIds] = useState<ReadonlySet<string>>(() => new Set());
   // sessionIds the user just cleared (tagged/archived) — hidden immediately for a
@@ -188,22 +189,24 @@ export function InboxPane({
 
   const load = useCallback(() => {
     setRefreshing(true);
+    setLoadError(false);
     api
       .allSessions({ sort: "recent", limit: INBOX_LIMIT })
       .then((rows) => {
         if (!aliveRef.current) return;
         setSessions(rows);
+        setLoadError(false);
         // A real refresh re-derives the inbox from server truth, so drop the
         // optimistic "cleared" set.
         setClearedIds(new Set());
       })
       .catch(() => {
-        if (aliveRef.current && sessions == null) setSessions([]);
+        if (aliveRef.current) setLoadError(true);
       })
       .finally(() => {
         if (aliveRef.current) setRefreshing(false);
       });
-  }, [sessions]);
+  }, []);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -311,7 +314,13 @@ export function InboxPane({
           archived. Tag, pin, or archive them to clear the queue.
         </p>
 
-        {sessions == null ? (
+        {loadError ? (
+          <LoadErrorState
+            message="Couldn't load inbox."
+            onRetry={load}
+            retrying={refreshing}
+          />
+        ) : sessions == null ? (
           <div className="flex h-40 items-center justify-center">
             <Spinner className="h-6 w-6" />
           </div>
