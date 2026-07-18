@@ -83,6 +83,7 @@ import {
   registerOpenAIRoutes,
   type OpenAISessionFactory,
 } from "./routes/openai.js";
+import { registerDesktopWebRoutes } from "./routes/desktop-web.js";
 import { registerOpenAIWs } from "./openai-ws.js";
 import { fireWebhooks } from "./webhook-fire.js";
 import {
@@ -143,6 +144,12 @@ export interface BuildOptions {
    * native runtime. Raw homes never leave the server; only their fingerprints cross the boundary.
    */
   providerHomes?: readonly ConfiguredProviderHome[];
+  /** Built Vite directory to serve for the packaged desktop WebView. */
+  webDist?: string;
+  /** Per-launch desktop bearer token seeded into the packaged UI. */
+  desktopToken?: string;
+  /** Exact loopback Host header accepted by the packaged desktop server. */
+  desktopHost?: string;
 }
 
 async function settleProviderRuntimeOperations(
@@ -163,6 +170,9 @@ export function buildApp(opts: BuildOptions = {}): {
   // Prefer DEVHUB_TOKEN; accept the exact CLAUDE_UI_TOKEN alias only when it's absent.
   // On a conflict the DevHub value wins with a value-free diagnostic (no token in logs).
   const token = (opts.token ?? resolveCompatEnv("DEVHUB_TOKEN", "CLAUDE_UI_TOKEN").value)?.trim();
+  if (opts.webDist && (!opts.desktopToken || !token || token !== opts.desktopToken)) {
+    throw new Error("Packaged desktop mode requires one matching UI and server token");
+  }
   const openAIChatEnabled =
     opts.openAIChatEnabled ?? process.env.DEVHUB_ENABLE_OPENAI_CHAT === "1";
   const openAIOptions = {
@@ -273,6 +283,25 @@ export function buildApp(opts: BuildOptions = {}): {
 
   const app = Fastify({ logger: false });
 
+  if (opts.webDist && !opts.desktopHost) {
+    throw new Error("Packaged desktop mode requires an exact loopback Host");
+  }
+
+  // CORS does not stop DNS rebinding: a hostile hostname can resolve to
+  // 127.0.0.1 and remain same-origin from the browser's perspective. Pin both
+  // Host and Origin before serving the token-bearing index or any API route.
+  app.addHook("onRequest", async (req, reply) => {
+    if (!opts.desktopHost) return;
+    const expectedHost = opts.desktopHost.toLowerCase();
+    if (req.headers.host?.toLowerCase() !== expectedHost) {
+      return reply.code(421).send({ error: "desktop_host_mismatch" });
+    }
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${expectedHost}`) {
+      return reply.code(403).send({ error: "desktop_origin_mismatch" });
+    }
+  });
+
   app.addHook("onClose", async () => {
     await settleProviderRuntimeOperations([
       ...(nativeCodexRuntime === null ? [] : [() => nativeCodexRuntime.close()]),
@@ -289,13 +318,18 @@ export function buildApp(opts: BuildOptions = {}): {
     ) await nativeClaudeRuntime.refreshEnabled();
   });
 
-  app.register(cors, { origin: true, credentials: true });
+  // A packaged FDA-capable desktop server is same-origin only. Browser/remote
+  // mode keeps the existing reflected-CORS behavior for its explicit token gate.
+  app.register(cors, opts.webDist ? { origin: false } : { origin: true, credentials: true });
   // WebSocket support must be registered before any ws routes are defined.
   app.register(websocket);
 
   // Auth seam: enforced only when a token is configured (local-only by default).
   app.addHook("onRequest", async (req, reply) => {
     if (!token) return;
+    // The packaged UI must load once before it can seed its per-launch token.
+    // Only non-API bundle files are exempt; every privileged route remains gated.
+    if (opts.webDist && !req.url.startsWith("/api")) return;
     // WebSocket upgrades can't carry an Authorization header reliably; the ws
     // route guards itself, so skip the token check for the upgrade handshake.
     if (req.url.startsWith("/api/ws")) return;
@@ -682,6 +716,14 @@ export function buildApp(opts: BuildOptions = {}): {
       unsubNotify?.();
     });
   });
+
+  // Register the packaged SPA last. Static API routes always win over its
+  // catch-all, and unknown /api paths remain JSON 404s instead of index.html.
+  if (opts.webDist) {
+    const webDist = opts.webDist;
+    app.register(async (instance) =>
+      registerDesktopWebRoutes(instance, webDist, opts.desktopToken));
+  }
 
   return { app, engine };
 }

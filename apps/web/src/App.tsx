@@ -1511,14 +1511,7 @@ export default function App() {
     setDhSearchError(false);
     let cancelled = false;
     const t = setTimeout(() => {
-      const url =
-        `/api/search?q=${encodeURIComponent(term)}&limit=30` +
-        (effectiveProject ? `&projectId=${encodeURIComponent(effectiveProject)}` : "");
-      fetch(url, { headers: { accept: "application/json" } })
-        .then((r) => {
-          if (!r.ok) throw new Error(`search failed: ${r.status}`);
-          return r.json() as Promise<SearchHitWithSeq[]>;
-        })
+      api.search(term, 30, effectiveProject)
         .then((res) => {
           if (cancelled) return;
           const scoped = effectiveProject ? res.filter((h) => h.projectId === effectiveProject) : res;
