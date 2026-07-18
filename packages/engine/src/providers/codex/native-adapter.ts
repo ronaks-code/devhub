@@ -128,11 +128,6 @@ export interface CodexNativeAdapterOptions {
   readonly cursorSecret: string | Uint8Array;
   readonly isEnabled?: () => boolean;
   /**
-   * Manual is an internal integration seam only. Public interaction capability
-   * flags remain false until request details have a safe provider-neutral shape.
-   */
-  readonly requestMode?: "fail-closed" | "manual";
-  /**
    * DevHub writer-lease fence over existing-task mutations. Optional so hermetic
    * projection tests can exercise the read/list surface without a lease store;
    * the server runtime always injects the shared store, so every production
@@ -480,12 +475,13 @@ function enabledCapabilities(): Readonly<ProviderCapabilities> {
     resume: true,
     fork: true,
     send: true,
-    // Schema presence alone is not enough to advertise a user-facing capability.
+    // These two interactions have an exact broker identity, authenticated response
+    // route, and fail-closed timeout. Other request kinds remain capability-gated.
     steer: false,
     interrupt: true,
     subscribe: true,
-    approveCommand: false,
-    approveFileChange: false,
+    approveCommand: true,
+    approveFileChange: true,
     approvePermissions: false,
     requestUserInput: false,
     mcpElicitation: false,
@@ -500,7 +496,6 @@ export class CodexNativeAdapter implements ProviderAdapter {
   private readonly supervisor: CodexNativeAdapterSupervisor;
   private readonly cursorCodec: CodexListCursorCodec;
   private readonly isEnabledFn: () => boolean;
-  private readonly requestMode: "fail-closed" | "manual";
   private readonly writerLeases: CodexNativeAdapterWriterLeases | null;
   private readonly reconciliationStore: AdapterReconciliationStore | null;
   private readonly maxTrackedRevisions: number;
@@ -552,12 +547,13 @@ export class CodexNativeAdapter implements ProviderAdapter {
     if (!this.adoptGeneration(context.generation)) {
       throw adapterError("DISABLED", "Stale Codex generation was rejected");
     }
-    if (this.requestMode === "manual") return this.broker.handle(request, context);
     const normalized = normalizeCodexServerRequest(request, context).request;
     switch (normalized.kind) {
       case "command-approval":
       case "file-change-approval":
-        return Object.freeze({ decision: "cancel" });
+        // The broker fails closed on timeout, abort, generation, turn, or task
+        // cancellation and accepts only the exact pending request identity.
+        return this.broker.handle(request, context);
       case "permission":
         return Object.freeze({ permissions: Object.freeze({}) });
       case "mcp-elicitation":
@@ -588,11 +584,6 @@ export class CodexNativeAdapter implements ProviderAdapter {
     this.supervisor = options.supervisor;
     this.cursorCodec = new CodexListCursorCodec(options.cursorSecret);
     this.isEnabledFn = options.isEnabled ?? (() => true);
-    if (options.requestMode !== undefined && options.requestMode !== "fail-closed" &&
-      options.requestMode !== "manual") {
-      throw new TypeError("requestMode must be fail-closed or manual");
-    }
-    this.requestMode = options.requestMode ?? "fail-closed";
     if (options.writerLeases !== undefined &&
       (typeof options.writerLeases !== "object" || options.writerLeases === null ||
         typeof options.writerLeases.acquire !== "function")) {

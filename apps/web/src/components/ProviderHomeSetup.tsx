@@ -20,6 +20,7 @@ import {
   type PublicProviderHome,
 } from "../lib/provider-index-api.js";
 import { EmptyState, Spinner } from "./ui";
+import { IndexedApprovalInbox } from "./CodexApprovalCard.js";
 
 const PROVIDER_LABEL: Readonly<Record<ProviderId, string>> = Object.freeze({
   openai: "OpenAI · Codex",
@@ -276,12 +277,15 @@ export function ProviderHomeSetup({
   }
 
   return (
-    <ProviderHomePicker
-      homes={homes}
-      selectedFingerprint={selectedFingerprint}
-      onSelect={setSelectedFingerprint}
-      label={label}
-      product={product}
-    />
+    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
+      <ProviderHomePicker
+        homes={homes}
+        selectedFingerprint={selectedFingerprint}
+        onSelect={setSelectedFingerprint}
+        label={label}
+        product={product}
+      />
+      {selectedHome ? <IndexedApprovalInbox home={selectedHome} client={transport.client} /> : null}
+    </div>
   );
 }
