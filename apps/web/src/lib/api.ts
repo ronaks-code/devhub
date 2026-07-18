@@ -15,6 +15,7 @@ import type { AppSettings } from "@devhub/engine/types";
 // pulls in Node-only code) so the web bundle stays free of server deps. Kept in
 // lockstep with packages/engine/src/git.ts.
 import type {
+  AutomationsResponse,
   GitStatus,
   GitLogEntry,
   GitDiff,
@@ -677,6 +678,10 @@ export const api = {
   maintenanceRepair: () =>
     sendMaybe<unknown>("/api/maintenance/repair", "POST").then(normalizeIntegrityReport),
   running: () => get<RunningSession[]>("/api/running"),
+  // Scheduled Jobs / Automations dashboard: launchd jobs across M5 + M1,
+  // grouped by host. M1 degrades to `reachable: false` rather than failing
+  // the whole request when it's unreachable (see routes/automations.ts).
+  automations: () => get<AutomationsResponse>("/api/automations"),
   // Read-only git status for a project cwd. The server returns null when the
   // directory is not a git repo (or git is unavailable); rejects unknown cwds.
   gitStatus: (cwd: string) =>

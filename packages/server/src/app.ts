@@ -61,6 +61,7 @@ import { registerFileChangesRoutes } from "./routes/file-changes.js";
 import { registerOpenExternalRoutes } from "./routes/open-external.js";
 import { registerTailRoutes } from "./routes/tail.js";
 import { registerHealthRoutes, DEVHUB_SERVER_SERVICE_ID, serverVersion } from "./routes/health.js";
+import { registerAutomationsRoutes } from "./routes/automations.js";
 import { registerReindexRoutes } from "./routes/reindex.js";
 import { registerBudgetRoutes } from "./routes/budget.js";
 import { registerMaintenanceRoutes } from "./routes/maintenance.js";
@@ -467,6 +468,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerTailRoutes(app, engine);
 
   registerHealthRoutes(app, engine);
+
+  registerAutomationsRoutes(app, engine);
 
   registerReindexRoutes(app, engine);
 

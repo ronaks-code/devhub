@@ -15,6 +15,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Timer,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -39,6 +40,7 @@ import { ProjectDetailHeader } from "./components/ProjectDetailHeader";
 import { TranscriptPane } from "./components/TranscriptPane";
 import { ChatPane } from "./components/ChatPane";
 import { LiveOpsBoard } from "./components/LiveOpsBoard";
+import { AutomationsBoard } from "./components/AutomationsBoard";
 import { InboxPane } from "./components/InboxPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
@@ -66,7 +68,11 @@ import {
   type SearchResult,
   type SearchScope,
 } from "./components/features/search/TaskSearchDialog";
-import { CommandDialog, DEFAULT_COMMANDS } from "./components/features/commands/CommandDialog";
+import {
+  CommandDialog,
+  DEFAULT_COMMANDS,
+  type CommandAction,
+} from "./components/features/commands/CommandDialog";
 import { resolveSettingsSecondaryMode } from "./components/features/settings/SettingsRoute";
 import { OpsRoute } from "./components/features/ops/OpsRoute";
 import { WorkModeSurface } from "./components/features/shell/WorkModeSurface";
@@ -169,7 +175,7 @@ export function PaneFallback() {
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -198,7 +204,26 @@ function writeUiState(state: PersistedUiState): void {
   writeCompat(UI_STATE_KEY, JSON.stringify(state));
 }
 
-const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "settings", "openai-chat", "codex-history"];
+const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "spatial", "settings", "openai-chat", "codex-history", "automations"];
+
+/** App-specific destinations extend the approved command set without reviving the retired palette. */
+const APP_COMMANDS: readonly CommandAction[] = Object.freeze([
+  ...DEFAULT_COMMANDS,
+  {
+    id: "go-to-spatial",
+    title: "Go to Spatial",
+    kind: "navigate",
+    group: "Navigate",
+    keywords: "spatial office city visualizer agents",
+  },
+  {
+    id: "go-to-automations",
+    title: "Go to Scheduled Jobs",
+    kind: "navigate",
+    group: "Navigate",
+    keywords: "automations launchd cron jobs schedule",
+  },
+]);
 
 export type CodexShellMode = "native" | "history";
 export type ClaudeShellMode = "native" | "legacy";
@@ -1358,6 +1383,7 @@ export default function App() {
         { id: "dashboard", label: "Dashboard", current: tab === "dashboard" },
         { id: "ops", label: "Live Ops", current: tab === "ops" },
         { id: "spatial", label: "Spatial", current: tab === "spatial" },
+        { id: "automations", label: "Scheduled Jobs", current: tab === "automations" },
         { id: "inbox", label: "Inbox", current: tab === "inbox" },
         { id: "settings", label: "Settings", current: tab === "settings" },
       ],
@@ -1680,6 +1706,7 @@ export default function App() {
             [
               { id: "ops" as Tab, icon: <Radio className="h-3.5 w-3.5" />, label: "Live Ops" },
               { id: "spatial" as Tab, icon: <Hexagon className="h-3.5 w-3.5" />, label: "Spatial" },
+              { id: "automations" as Tab, icon: <Timer className="h-3.5 w-3.5" />, label: "Scheduled Jobs" },
               { id: "inbox" as Tab, icon: <Inbox className="h-3.5 w-3.5" />, label: "Inbox" },
               { id: "settings" as Tab, icon: <Settings className="h-3.5 w-3.5" />, label: "Settings" },
             ] as const
@@ -1790,6 +1817,8 @@ export default function App() {
               <LiveOpsBoard onOpenSession={openSessionByCwd} />
             )}
           </div>
+        ) : tab === "automations" ? (
+          <AutomationsBoard />
         ) : tab === "inbox" ? (
           // M6 slice 8 (Task 9 data-wire): `InboxRoute` routes the SAME `InboxPane`
           // under `SecondaryNav` only for `settingsSecondary===true`.
@@ -2026,7 +2055,7 @@ export default function App() {
       {searchCommandsMode === "devhub" && commandOpen ? (
         <CommandDialog
           query={dhCommandQuery}
-          commands={DEFAULT_COMMANDS}
+          commands={APP_COMMANDS}
           onQueryChange={setDhCommandQuery}
           onClose={() => setCommandOpen(false)}
           onRun={(action) => {
@@ -2040,6 +2069,12 @@ export default function App() {
             } else if (action.id === "go-to-ops") {
               setChatSeed(null);
               setTab("ops");
+            } else if (action.id === "go-to-spatial") {
+              setChatSeed(null);
+              setTab("spatial");
+            } else if (action.id === "go-to-automations") {
+              setChatSeed(null);
+              setTab("automations");
             }
           }}
           onSearchTasks={() => {

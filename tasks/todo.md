@@ -712,3 +712,20 @@ Every item below is backed by real, on-disk evidence — no fabricated results.
 - [x] Staff-engineer-quality signoff judgment.
 - [x] `tasks/todo.md` checks and review/results complete (M0-M8 top-level checklist above reconciled against `tasks/STATUS.md`'s per-task evidence trail).
 - [ ] Mark the persistent goal complete only after every mandatory DONE criterion has evidence — **held**: the goal is complete-pending-hard-gates, not fully "shipped," because Apple code-signing/notarization, the 7-day soak, and the `origin/main` merge are explicit hard gates not attempted on this branch.
+
+---
+
+## Reconcile main spatial visualizer with jobs dashboard/provider index (2026-07-17)
+
+- [x] Resolve all ten merge conflicts as a strict feature union, preserving main's spatial visualizer and the feature branch's automations dashboard/provider-index subsystem.
+- [ ] Verify no conflict markers or unmerged index entries remain and review the complete staged merge diff. (Markers are clean; index writes are sandbox-blocked.)
+- [ ] Run dependency, typecheck, build, server/web test, provider-index focused, and bundle-wiring gates through the shared heavy-job queue where required.
+- [ ] Fix only merge-integration regressions; do not weaken tests, alter history, touch `main`, or push.
+- [ ] Stage the complete resolved merge and create exactly one local reconciliation merge commit on `merge/consolidate-main-jobs`.
+
+### Review / results
+
+- Resolved the live conflict contents from current stage 2 plus the feature-only automations graft. The prompt's ADD/ADD premise was stale: stage 2 already held newer hardened provider-index files, while stage 3 would have regressed the browser bundle and default-on/rollback coverage.
+- Fresh typecheck: engine PASS, server PASS, web PASS after restoring the lockfile-matched dependency tree from the exact spatial-tip sibling worktree (npm DNS is blocked in this sandbox).
+- Fresh lint: engine/server/web PASS. Focused gates: engine provider-index 639/639; web provider-index/router/route-preservation 39/39; web spatial 25/25; server spatial 12/12. Server provider-index is 28/29 with the sole SSE case blocked before assertions by sandbox `listen EPERM`; an independent minimal Node listener reproduces the same restriction.
+- Full suites/builds remain unrun because the mandatory shared heavy queue cannot identify its process (`ps` is sandbox-denied), so bypassing it is prohibited. `git add`, fetch, and the final commit are also blocked because `.git` is read-only (`index.lock`/`FETCH_HEAD` permission denied).

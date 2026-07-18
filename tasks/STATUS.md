@@ -3,6 +3,27 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
+Last updated: 2026-07-17 by MERGE-CONSOLIDATE-MAIN-JOBS (conflict contents
+resolved in the existing `merge/consolidate-main-jobs` merge, but NOT committed:
+the managed sandbox makes `.git` read-only). Preserved the current main spatial
+visualizer and hardened/default-on provider-index implementation, then grafted
+the feature-only Scheduled Jobs dashboard through App routing, both navigation
+rails, the current CommandDialog, the server route table, API client, and DTOs.
+The prompt's ADD/ADD premise was stale in the live index: stage 2 already held
+newer provider-index code and tests; taking stage 3 wholesale would have restored
+a Node-only web import and pre-cutover expectations. No conflict markers remain;
+engine/server/web typecheck and lint pass. Focused gates: engine provider-index
+639/639, web provider-index/router/route preservation 39/39, web spatial 25/25,
+server spatial 12/12. Server provider-index is 28/29 because this sandbox rejects
+all localhost listeners (`listen EPERM`) before the SSE assertion; the other 28
+pass. Full suites/builds remain unrun because the mandatory heavy-queue wrapper
+cannot identify its process while sandbox policy denies `ps`; do not bypass it.
+`git add`/commit and `git fetch` are likewise blocked by the read-only `.git`
+mount (`index.lock`/`FETCH_HEAD` permission denied). Resume in a checkout with
+writable `.git`, process introspection, localhost listen, and queue access; stage
+the resolved files, run the queued full gates/build and bundle greps, then create
+the single local merge commit. Do not push.
+
 Last updated: 2026-07-16 by DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV (closed
 the `--text-dim`/`--text-muted` zinc-500 color-contrast follow-up logged in
 `evidence/m8/a11y/a11y.md`'s "found and NOT fixed" table). See that section

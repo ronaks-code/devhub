@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { serializeTaskLocator } from "@devhub/engine/providers";
-import { parseRoute, buildRouteSearch } from "./router";
+import { parseRoute, buildRouteSearch, ROUTE_TABS } from "./router";
 
 /** A valid, canonical serialized provider-task locator for the URL tests. */
 const LOCATOR = serializeTaskLocator({
@@ -41,7 +41,7 @@ describe("parseRoute", () => {
   });
 
   it("accepts each valid tab", () => {
-    for (const tab of ["browse", "chat", "ops", "inbox", "dashboard", "settings"] as const) {
+    for (const tab of ROUTE_TABS) {
       expect(parseRoute(`?tab=${tab}`).tab).toBe(tab);
     }
   });

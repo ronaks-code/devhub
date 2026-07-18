@@ -155,6 +155,36 @@ export interface GitStatus {
   untracked: string[];
 }
 
+// Scheduled-jobs dashboard shapes for GET /api/automations. Mirrored locally
+// (not imported from the server) so the web bundle stays free of Node-only
+// code. Kept in lockstep with packages/server/src/routes/automations.ts.
+export interface AutomationJob {
+  id: string;
+  host: string;
+  schedule_human: string | null;
+  next_run: string | null;
+  last_run: string | null;
+  last_exit_status: number | null;
+  status: "active" | "enabled" | "staged" | "failed" | string;
+  purpose: string;
+  owner: string | null;
+  log_path: string | null;
+  program: string | null;
+}
+
+export interface AutomationsGroup {
+  host: "M5" | "M1";
+  reachable: boolean;
+  jobs: AutomationJob[];
+  error?: string;
+}
+
+export interface AutomationsResponse {
+  ok: true;
+  groups: AutomationsGroup[];
+  generatedAt: string;
+}
+
 export interface GitLogEntry {
   hash: string;
   shortHash: string;
