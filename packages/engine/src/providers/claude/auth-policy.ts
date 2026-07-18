@@ -133,3 +133,30 @@ export function requireClaudeProgrammaticAuth(
   }
   return result;
 }
+
+export type ClaudeAuthMethod = ClaudeProgrammaticAuthMethod | "subscription";
+
+export interface ClaudeAuthDecision {
+  readonly authorized: true;
+  readonly method: ClaudeAuthMethod;
+}
+
+/**
+ * Resolves how the native `claude` CLI should authenticate, without ever
+ * throwing for the "no programmatic credential present" case. A stored
+ * Claude-app/Pro/Max OAuth login (the CLI's own ~/.claude session) is a
+ * legitimate, first-class auth path here — it is only excluded from
+ * {@link evaluateClaudeProgrammaticAuth}, which classifies programmatic
+ * product credentials specifically. The AMBIGUOUS_AUTH guard (more than one
+ * programmatic method configured at once) still propagates: that ambiguity
+ * is a real misconfiguration regardless of subscription support.
+ */
+export function resolveClaudeAuth(
+  environment: Readonly<NodeJS.ProcessEnv> | Readonly<Record<string, string>>,
+): Readonly<ClaudeAuthDecision> {
+  const programmatic = evaluateClaudeProgrammaticAuth(environment);
+  if (programmatic.authorized && programmatic.method !== null) {
+    return Object.freeze({ authorized: true, method: programmatic.method });
+  }
+  return Object.freeze({ authorized: true, method: "subscription" });
+}

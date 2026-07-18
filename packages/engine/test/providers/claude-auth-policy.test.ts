@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateClaudeProgrammaticAuth,
   requireClaudeProgrammaticAuth,
+  resolveClaudeAuth,
 } from "../../src/providers/claude/auth-policy.js";
 
 describe("Claude programmatic auth policy", () => {
@@ -27,6 +28,8 @@ describe("Claude programmatic auth policy", () => {
       }
     }
     expect(Object.isFrozen(result)).toBe(true);
+    // resolveClaudeAuth agrees with the programmatic classification whenever one applies.
+    expect(resolveClaudeAuth(env)).toEqual({ authorized: true, method });
   });
 
   it("rejects subscription OAuth and incomplete cloud flags without reflecting values", () => {
@@ -76,7 +79,11 @@ describe("Claude programmatic auth policy", () => {
       AWS_REGION: "us-east-1",
     },
   ])("rejects simultaneous complete billing paths without reflecting credentials", (env) => {
-    for (const classify of [evaluateClaudeProgrammaticAuth, requireClaudeProgrammaticAuth]) {
+    for (const classify of [
+      evaluateClaudeProgrammaticAuth,
+      requireClaudeProgrammaticAuth,
+      resolveClaudeAuth,
+    ]) {
       expect(() => classify(env)).toThrowError(expect.objectContaining({
         code: "AMBIGUOUS_AUTH",
       }));
@@ -87,5 +94,32 @@ describe("Claude programmatic auth policy", () => {
         expect(String(error)).not.toContain("workload-secret");
       }
     }
+  });
+});
+
+describe("resolveClaudeAuth (non-throwing subscription-aware resolver)", () => {
+  it("accepts a subscription (Pro/Max OAuth) login as a first-class, non-throwing auth path", () => {
+    const secret = "oauth-secret";
+    const result = resolveClaudeAuth({ CLAUDE_CODE_OAUTH_TOKEN: secret });
+    expect(result).toEqual({ authorized: true, method: "subscription" });
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("resolves to subscription for a bare environment with no auth signal at all", () => {
+    expect(resolveClaudeAuth({})).toEqual({ authorized: true, method: "subscription" });
+  });
+
+  it("still throws AMBIGUOUS_AUTH for two simultaneous programmatic methods, subscription token or not", () => {
+    expect(() => resolveClaudeAuth({
+      ANTHROPIC_API_KEY: "api-secret",
+      ANTHROPIC_AUTH_TOKEN: "workload-secret",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-secret",
+    })).toThrowError(expect.objectContaining({ code: "AMBIGUOUS_AUTH" }));
+  });
+
+  it("still throws INVALID_ENVIRONMENT for a hostile environment shape", () => {
+    expect(() => resolveClaudeAuth(Object.create({ ANTHROPIC_API_KEY: "inherited" })))
+      .toThrowError(expect.objectContaining({ code: "INVALID_ENVIRONMENT" }));
   });
 });

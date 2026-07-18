@@ -192,20 +192,20 @@ describe("native Claude runtime composition", () => {
     expect(isNativeClaudeLifecycleEvidence({ ...complete, extra: true })).toBe(false);
   });
 
-  it("refuses subscription OAuth and registers a dormant adapter only with programmatic auth", async () => {
+  it("refuses ambiguous programmatic auth but registers a dormant adapter with programmatic or subscription auth", async () => {
     const root = temporaryRoot();
     const found = installation(root);
-    const unauthenticatedRegistry = new ProviderRegistry();
+    const ambiguousRegistry = new ProviderRegistry();
     expect(createNativeClaudeRuntime({
-      registry: unauthenticatedRegistry,
+      registry: ambiguousRegistry,
       isEnabled: () => true,
       installation: found,
-      baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "subscription-only" },
+      baseEnv: { ANTHROPIC_API_KEY: "api-secret", ANTHROPIC_AUTH_TOKEN: "workload-secret" },
       writerLeaseDbPath: path.join(root, "unauthorized-leases.sqlite"),
       helpers: helpers(),
       lifecycleEvidence: lifecycleEvidence(),
     })).toBeNull();
-    expect(await unauthenticatedRegistry.descriptorCensus()).toEqual([]);
+    expect(await ambiguousRegistry.descriptorCensus()).toEqual([]);
 
     const registry = new ProviderRegistry();
     let enabled = false;
@@ -242,6 +242,46 @@ describe("native Claude runtime composition", () => {
     await expect(registry.listTasks("anthropic", { home: realpathSync(found.home) }))
       .rejects.toMatchObject({ code: "PROVIDER_CAPABILITY_UNAVAILABLE" });
     await runtime!.close();
+    await runtime!.close();
+  });
+
+  it("constructs under a subscription-only login and hands the CLI its own OAuth token", async () => {
+    const root = temporaryRoot();
+    const found = installation(root);
+    const registry = new ProviderRegistry();
+    const sessionHelpers = helpers();
+    const runtimeFactory = vi.fn((options: {
+      configHome: string;
+      sessionId: string;
+      baseEnv: Readonly<NodeJS.ProcessEnv>;
+    }) => fakeRuntime(options));
+    const runtime = createNativeClaudeRuntime({
+      registry,
+      isEnabled: () => true,
+      installation: found,
+      baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "subscription-token" },
+      writerLeaseDbPath: path.join(root, "subscription-leases.sqlite"),
+      helpers: sessionHelpers,
+      runtimeFactory,
+      lifecycleEvidence: lifecycleEvidence(),
+      idFactory: () => SESSION,
+    });
+    expect(runtime).not.toBeNull();
+    expect(runtime!.auth).toEqual({ authorized: true, method: "subscription" });
+
+    await runtime!.refreshEnabled();
+    await expect(registry.listTasks("anthropic", { home: realpathSync(found.home) }))
+      .resolves.toEqual({ items: [], nextCursor: null });
+    expect(sessionHelpers.listSessions).toHaveBeenCalledTimes(1);
+
+    await expect(runtime!.adapter.startTask({
+      home: realpathSync(found.home),
+      cwd: realpathSync(found.home),
+      permissionMode: "plan",
+      input: { text: "verify subscription auth reaches the child env" },
+    })).rejects.toMatchObject({ code: "PARTIAL_START" });
+    const childEnv = runtimeFactory.mock.calls[0]![0].baseEnv;
+    expect(childEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe("subscription-token");
     await runtime!.close();
   });
 
@@ -595,7 +635,7 @@ describe("buildApp native Claude wiring", () => {
     await app.close();
   });
 
-  it("keeps a saved request clamped off when auth/runtime discovery is unavailable", async () => {
+  it("applies a saved request under a subscription-only login with a valid mutation token", async () => {
     const root = temporaryRoot();
     const found = installation(root);
     const { app } = buildApp({
@@ -606,6 +646,32 @@ describe("buildApp native Claude wiring", () => {
         installation: found,
         baseEnv: { CLAUDE_CODE_OAUTH_TOKEN: "subscription-only" },
         writerLeaseDbPath: path.join(root, "leases.sqlite"),
+        helpers: helpers(),
+        lifecycleEvidence: lifecycleEvidence(),
+      },
+    });
+    await app.ready();
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/settings",
+      headers: { authorization: `Bearer ${ACCESS_TOKEN}` },
+    });
+    expect(response.json().devHubFeatures.persistentClaude).toBe(true);
+    expect(response.json().requestedDevHubFeatures.persistentClaude).toBe(true);
+    await app.close();
+  });
+
+  it("keeps a saved request clamped off when auth is ambiguous", async () => {
+    const root = temporaryRoot();
+    const found = installation(root);
+    const { app } = buildApp({
+      engine: settingsEngine(true),
+      token: ACCESS_TOKEN,
+      nativeCodex: false,
+      nativeClaude: {
+        installation: found,
+        baseEnv: { ANTHROPIC_API_KEY: "api-secret", ANTHROPIC_AUTH_TOKEN: "workload-secret" },
+        writerLeaseDbPath: path.join(root, "ambiguous-leases.sqlite"),
         helpers: helpers(),
         lifecycleEvidence: lifecycleEvidence(),
       },

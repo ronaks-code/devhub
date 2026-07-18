@@ -15,10 +15,11 @@ import {
   ClaudeSessionHelpers,
   createAdapterReconciliationStore,
   NativeTaskWriterLeaseStore,
-  requireClaudeProgrammaticAuth,
+  resolveClaudeAuth,
+  type ClaudeAuthDecision,
   type ClaudeNativeAdapterHelpers,
   type ClaudeNativeAdapterWriterLeases,
-  type ClaudeProgrammaticAuthDecision,
+  type ClaudeProgrammaticAuthMethod,
   type ClaudeSupervisorRuntimeFactory,
   type ProviderReconciliationStore,
   type ProviderRegistry,
@@ -100,7 +101,7 @@ export interface CreateNativeClaudeRuntimeOptions {
 export interface NativeClaudeRuntime {
   readonly available: true;
   readonly installation: Readonly<NativeClaudeInstallation>;
-  readonly auth: Readonly<ClaudeProgrammaticAuthDecision>;
+  readonly auth: Readonly<ClaudeAuthDecision>;
   readonly compatibility: Readonly<NativeClaudeCompatibility>;
   readonly helpers: ClaudeNativeAdapterHelpers;
   readonly writerLeases: NativeClaudeWriterLeases;
@@ -348,7 +349,7 @@ function isDevHubOwnedOrCrossProviderSecret(key: string): boolean {
 }
 
 function selectedAuthKeys(
-  method: NonNullable<ClaudeProgrammaticAuthDecision["method"]>,
+  method: ClaudeProgrammaticAuthMethod,
 ): ReadonlySet<string> {
   switch (method) {
     case "api-key":
@@ -387,7 +388,7 @@ function selectedAuthKeys(
 function authorizedEnvironment(
   source: Readonly<NodeJS.ProcessEnv>,
 ): {
-  readonly auth: Readonly<ClaudeProgrammaticAuthDecision>;
+  readonly auth: Readonly<ClaudeAuthDecision>;
   readonly env: Readonly<NodeJS.ProcessEnv>;
 } | null {
   try {
@@ -402,8 +403,14 @@ function authorizedEnvironment(
         env[key] = descriptor.value;
       }
     }
-    const auth = requireClaudeProgrammaticAuth(env);
-    const allowed = selectedAuthKeys(auth.method!);
+    const auth = resolveClaudeAuth(env);
+    // Subscription (Pro/Max OAuth) auth relies on the CLI resolving its own login from
+    // CLAUDE_CONFIG_DIR, so CLAUDE_CODE_OAUTH_TOKEN must survive here. Every other
+    // AUTH_PATH_KEYS entry is still stripped — a subscription login carries no
+    // programmatic credential to select, so nothing else in that list is relevant.
+    const allowed = auth.method === "subscription"
+      ? new Set(["CLAUDE_CODE_OAUTH_TOKEN"])
+      : selectedAuthKeys(auth.method);
     for (const key of AUTH_PATH_KEYS) {
       if (!allowed.has(key)) delete env[key];
     }

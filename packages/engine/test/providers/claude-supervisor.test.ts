@@ -217,18 +217,29 @@ const acquire = (
 });
 
 describe("ClaudePersistentSupervisor", () => {
-  it("fails before runtime creation when disabled or only subscription OAuth is available", async () => {
+  it("fails before runtime creation when disabled", async () => {
     const disabled = harness({ enabled: () => false });
     await expect(acquire(disabled.supervisor)).rejects.toMatchObject({ code: "DISABLED" });
     expect(disabled.runtimeFactory).not.toHaveBeenCalled();
+  });
 
+  it("accepts a subscription-only login (no programmatic credential) and keeps the OAuth token", async () => {
     const secret = "oauth-secret";
-    const unauthorized = harness({ env: { CLAUDE_CODE_OAUTH_TOKEN: secret } });
-    await expect(acquire(unauthorized.supervisor)).rejects.toMatchObject({
-      code: "UNAUTHORIZED_AUTH",
-      message: expect.not.stringContaining(secret),
+    const subscriptionOnly = harness({ env: { CLAUDE_CODE_OAUTH_TOKEN: secret } });
+    await acquire(subscriptionOnly.supervisor);
+    expect(subscriptionOnly.runtimeFactory).toHaveBeenCalledTimes(1);
+    expect(subscriptionOnly.runtimes[0]?.options.baseEnv.CLAUDE_CODE_OAUTH_TOKEN).toBe(secret);
+  });
+
+  it("still fails closed before runtime creation on ambiguous programmatic auth", async () => {
+    const ambiguous = harness({
+      env: { ANTHROPIC_API_KEY: "api-secret", ANTHROPIC_AUTH_TOKEN: "workload-secret" },
     });
-    expect(unauthorized.runtimeFactory).not.toHaveBeenCalled();
+    await expect(acquire(ambiguous.supervisor)).rejects.toMatchObject({
+      code: "UNAUTHORIZED_AUTH",
+      message: expect.not.stringContaining("api-secret"),
+    });
+    expect(ambiguous.runtimeFactory).not.toHaveBeenCalled();
   });
 
   it("coalesces concurrent ownership into one generation and shuts down on last release", async () => {

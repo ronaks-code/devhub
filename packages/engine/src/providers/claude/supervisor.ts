@@ -21,8 +21,8 @@ import {
   type ClaudeBackendDiagnosticSnapshot,
 } from "./backend-diagnostic-store.js";
 import {
-  requireClaudeProgrammaticAuth,
-  type ClaudeProgrammaticAuthDecision,
+  resolveClaudeAuth,
+  type ClaudeAuthDecision,
 } from "./auth-policy.js";
 import type { ClaudeModelEvidenceSnapshot } from "./model-evidence.js";
 import {
@@ -374,7 +374,13 @@ export class ClaudePersistentSupervisor {
     this.isEnabled = options.isEnabled;
     this.reconcile = options.reconcile;
     const baseEnv = { ...(options.baseEnv ?? process.env) };
-    delete baseEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    // Only strip the subscription token when it isn't the env's sole auth path — a
+    // programmatic method (API key, workload identity, or a cloud credential) makes it
+    // dead cruft best scrubbed defensively. Under a subscription-only login, this is the
+    // one credential the CLI actually needs, so it must survive to reach the child process.
+    let subscriptionOnly = false;
+    try { subscriptionOnly = resolveClaudeAuth(baseEnv).method === "subscription"; } catch { /* leave stripped below */ }
+    if (!subscriptionOnly) delete baseEnv.CLAUDE_CODE_OAUTH_TOKEN;
     this.baseEnv = Object.freeze(baseEnv);
     this.runtimeFactory = options.runtimeFactory ?? defaultRuntimeFactory;
     this.canonicalizeHome = options.canonicalizeHome ?? canonicalizeProviderHome;
@@ -1009,8 +1015,8 @@ export class ClaudePersistentSupervisor {
     try { return this.isEnabled() === true; } catch { return false; }
   }
 
-  private authorized(): Readonly<ClaudeProgrammaticAuthDecision> {
-    try { return requireClaudeProgrammaticAuth(this.baseEnv); } catch {
+  private authorized(): Readonly<ClaudeAuthDecision> {
+    try { return resolveClaudeAuth(this.baseEnv); } catch {
       throw supervisorError(
         "UNAUTHORIZED_AUTH",
         "Claude persistent runtime requires programmatic authentication",
