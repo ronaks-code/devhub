@@ -3,6 +3,35 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
+Last updated: 2026-07-18 by PROGRESS-DATA-ENGINE (ADDED AFTER FREEZE — not part
+of the frozen 9-milestone denominator). Shipped the additive "Progress / Shipped
+Work" board on `feat/progress-dashboard` (worktree registered below). NEW:
+`packages/server/scripts/gen-progress.mjs` (dependency-free miner: globs every
+`wf_*` workflow journal under the 00-6thsense Claude project, dedupes ~1650 work
+items on hash(project|date|title), groups project→feature→item, AND computes a
+cheap no-LLM token/session effort tally straight from Claude
+`~/.claude/projects/**` + Codex `~/.codex/archived_sessions/**` transcripts,
+bucketed by project/date/harness; writes `${DEVHUB_DATA}/progress-snapshot.json`);
+`packages/server/src/routes/progress.ts` (`GET /api/progress?since=&until=`
+cached+degrade-graceful with recomputed windowed aggregates, `POST
+/api/progress/refresh` fire-and-forget miner spawn with in-flight guard, cloned
+from automations.ts/reindex.ts); `apps/web/src/components/ProgressBoard.tsx`
+(self-loading `max-w-5xl` board reusing `PeriodSelector` + poll/visibility-pause,
+project→feature accordions, status pills, shipped bars, corpus-wide approx-token
+effort banner); `ai.6thsense.devhub.progress-mine.plist` (nightly cadence,
+surfaces on the Scheduled Jobs board). EDITS: `App.tsx` (Tab union, VALID_TABS,
+lazy import, BOTH nav rails, content branch, one APP_COMMANDS entry + handler),
+`lib/api.ts` (`progress`/`refreshProgress`), `lib/types.ts` (mirrored `Progress*`
+types), `server/src/app.ts` (import+register). Does NOT touch `DashboardPane` or
+any existing chart. Gates GREEN: engine build clean; server + web `tsc --noEmit`
+clean; `oxlint` 0 on both; `vite build` clean (ProgressBoard code-split into its
+own 10 KB chunk); server tests 287/287; web tests 633/633. Route + miner
+runtime-verified via Fastify inject: full GET, windowed GET (all items in-range),
+malformed `since`→400, missing-snapshot→empty-valid 200 (never 500), refresh
+202 + rapid-second `alreadyRunning`. Honesty note held: per-logical-project
+tokens are best-effort cwd→slug attribution (`approx:true`); `itemCount` is the
+trustworthy per-project effort signal. NOT pushed to `main`.
+
 Last updated: 2026-07-17 by MERGE-CONSOLIDATE-MAIN-JOBS (conflict contents
 resolved in the existing `merge/consolidate-main-jobs` merge, but NOT committed:
 the managed sandbox makes `.git` read-only). Preserved the current main spatial
@@ -971,6 +1000,7 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
+- `feat/progress-dashboard` at `/Users/ronak/Documents/01-code/active/claude-ui-progress-wt` — ACTIVE (PROGRESS-DATA-ENGINE, 2026-07-18). Additive-only "Progress / Shipped Work" tab: new `apps/web/src/components/ProgressBoard.tsx`, `packages/server/src/routes/progress.ts`, `packages/server/scripts/gen-progress.mjs`, launchd plist; edits to `App.tsx` (tab/nav/command), `lib/api.ts`, `lib/types.ts`, `server/src/app.ts`. Mines the two workflow journals (glob picks up new `wf_*` runs) into a per-project→feature progress snapshot + a cheap transcript-derived token/session effort tally (Claude `~/.claude/projects/**` + Codex `~/.codex/archived_sessions/**`), served at `GET /api/progress` (cached, degrade-graceful, since/until window) with `POST /api/progress/refresh`. Does NOT touch `DashboardPane` or any existing chart. Not pushed to `main`.
 - `wip/devhub-background-runner` at `this commit` — PAUSED handoff branch (sole resume target unless Ronak names another checkout). Carries additive, un-promoted WIP built in the background runner: Task 3 M5 coordinator observation lanes (`observeListPage`/`observeTask`, bounded per-locator FIFO lanes, `maxObservationOperations` reservations, per-locator observation epochs). 589/589 provider-index tests, full engine 2083/2083, typecheck + public-surface + `git diff --check` clean. NOT promoted to `campaign/auto-improve`; no independent SPEC/QUALITY/SECURITY GO yet; `nativeCodex`/`persistentClaude`/`unifiedTaskIndex` remain false; no rebuild/read-through/server/flag work. The goal-level pause still stands.
 - `campaign/auto-improve` — tested shared branch; M5 E/F plus the FULL Task 3 (native-missing, verified-legacy mapping, opaque observation, atomic-missing, coordinator foundation, observation lanes, T3B readThrough/projector, T3C rebuild, and T3D server-composition wiring) are integrated after exact mainline gates and independent SPEC/QUALITY/SECURITY GO. `nativeCodex`/`persistentClaude`/`unifiedTaskIndex` remain false.
 - detached `m5` at `3808d21` — exact reviewed M5 E source retained read-only after promotion; current goal coordinator.
@@ -1386,6 +1416,7 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
   exercised.
 
 ## Recent checkpoints (last 3 tested commits on shared branch)
+- `feat/progress-dashboard`  PROGRESS-DATA-ENGINE (added after freeze): additive Progress board + data engine (miner, `/api/progress` [+refresh], ProgressBoard tab). Gates green — server 287/287, web 633/633, both typecheck+oxlint clean, `vite build` clean; route+miner runtime-verified via inject. Not on `main`.
 - `campaign/auto-improve tip`  Task 3 completion (T3B readThrough/projector + T3C rebuild + T3D server-composition wiring) promotion; engine provider-index 629/629, server 207/207, web provider-api 52/52, plus exact-tip SPEC/QUALITY/SECURITY GO. `unifiedTaskIndex` stays false.
 - `c9a376b`  M5 coordinator observation-lanes promotion; 589/589 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.
 - `cdbff7d`  Task 3 coordinator foundation/initialization promotion; 577/577 provider-index tests plus exact-tip SPEC/QUALITY/SECURITY GO.

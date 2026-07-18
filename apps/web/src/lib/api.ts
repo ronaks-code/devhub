@@ -16,6 +16,7 @@ import type { AppSettings } from "@devhub/engine/types";
 // lockstep with packages/engine/src/git.ts.
 import type {
   AutomationsResponse,
+  ProgressResponse,
   GitStatus,
   GitLogEntry,
   GitDiff,
@@ -689,6 +690,24 @@ export const api = {
   // grouped by host. M1 degrades to `reachable: false` rather than failing
   // the whole request when it's unreachable (see routes/automations.ts).
   automations: () => get<AutomationsResponse>("/api/automations"),
+  // Progress / Shipped Work board: a pre-mined per-project -> feature -> item
+  // snapshot plus a transcript-derived token/effort tally, served from
+  // progress-snapshot.json. `get` (not getMaybe) so the board renders its OWN
+  // degraded state; the server already returns an empty-but-valid payload when
+  // the snapshot is missing/malformed (see routes/progress.ts).
+  progress: (since?: string, until?: string) => {
+    const qs = new URLSearchParams();
+    if (since) qs.set("since", since);
+    if (until) qs.set("until", until);
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return get<ProgressResponse>(`/api/progress${suffix}`);
+  },
+  // Re-mine the progress snapshot in the background (POST). Fire-and-forget on
+  // the server (202); the next progress() picks up the fresh file. *Maybe so an
+  // older server without the route degrades to a hidden/disabled refresh control
+  // instead of erroring — matching how reindex is wired.
+  refreshProgress: () =>
+    sendMaybe<{ started: boolean; alreadyRunning?: boolean }>("/api/progress/refresh", "POST"),
   // Read-only git status for a project cwd. The server returns null when the
   // directory is not a git repo (or git is unavailable); rejects unknown cwds.
   gitStatus: (cwd: string) =>

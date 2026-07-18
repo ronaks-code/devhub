@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ai.6thsense.devhub.progress-mine — nightly re-mine of the DevHub Progress
+  snapshot (packages/server/scripts/gen-progress.mjs). Writes
+  ${DEVHUB_DATA:-~/.claude-ui}/progress-snapshot.json, which GET /api/progress
+  serves. Because this label matches the ai.6thsense.* prefix, it ALSO shows up
+  on the DevHub "Scheduled Jobs" board automatically (no extra monitoring).
+
+  INSTALL (run once, from a login shell so mise-managed `node` is on PATH):
+    cp packages/server/scripts/ai.6thsense.devhub.progress-mine.plist \
+       ~/Library/LaunchAgents/
+    # edit the WorkingDirectory / script path below to your real checkout if it
+    # differs from the default main worktree path, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.6thsense.devhub.progress-mine.plist
+    launchctl enable  gui/$(id -u)/ai.6thsense.devhub.progress-mine
+    launchctl kickstart -k gui/$(id -u)/ai.6thsense.devhub.progress-mine   # run once now
+
+  UNINSTALL:
+    launchctl bootout gui/$(id -u)/ai.6thsense.devhub.progress-mine
+
+  A manual, on-demand refresh is also available from the Progress board's
+  Refresh button (POST /api/progress/refresh), which spawns the same miner.
+
+  NOTE: uses a login zsh so mise/asdf-managed `node` resolves the same way it
+  does interactively; replace with an absolute node path if you prefer.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.6thsense.devhub.progress-mine</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>node /Users/ronak/Documents/01-code/active/claude-ui/packages/server/scripts/gen-progress.mjs</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/ronak/Documents/01-code/active/claude-ui</string>
+
+  <!-- Nightly at 03:09 (favoring 9). -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>9</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/ronak/Library/Logs/6thsense/devhub-progress-mine.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ronak/Library/Logs/6thsense/devhub-progress-mine.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

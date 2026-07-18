@@ -12,6 +12,7 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Radio,
+  Rocket,
   Search,
   Settings,
   Sparkles,
@@ -106,6 +107,12 @@ import { cn } from "./lib/utils";
 const DashboardPane = lazy(() =>
   import("./components/DashboardPane").then((m) => ({ default: m.DashboardPane })),
 );
+// Progress / Shipped Work board — heavy (big mined snapshot + accordions), so
+// it's code-split exactly like DashboardPane and only pulls its chunk when the
+// tab is opened.
+const ProgressBoard = lazy(() =>
+  import("./components/ProgressBoard").then((m) => ({ default: m.ProgressBoard })),
+);
 // Spatial "office game" view — the PixiJS/WebGL swarm visualizer. Heavy (Pixi +
 // canvas), so it's code-split and only pulls its chunk when the tab is opened.
 const SpatialHub = lazy(() =>
@@ -175,7 +182,7 @@ export function PaneFallback() {
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations";
+type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations" | "progress";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -204,7 +211,7 @@ function writeUiState(state: PersistedUiState): void {
   writeCompat(UI_STATE_KEY, JSON.stringify(state));
 }
 
-const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "spatial", "settings", "openai-chat", "codex-history", "automations"];
+const VALID_TABS: readonly Tab[] = ["home", "browse", "chat", "ops", "inbox", "dashboard", "spatial", "settings", "openai-chat", "codex-history", "automations", "progress"];
 
 /** App-specific destinations extend the approved command set without reviving the retired palette. */
 const APP_COMMANDS: readonly CommandAction[] = Object.freeze([
@@ -222,6 +229,13 @@ const APP_COMMANDS: readonly CommandAction[] = Object.freeze([
     kind: "navigate",
     group: "Navigate",
     keywords: "automations launchd cron jobs schedule",
+  },
+  {
+    id: "go-to-progress",
+    title: "Go to Progress",
+    kind: "navigate",
+    group: "Navigate",
+    keywords: "progress shipped work features milestones changelog",
   },
 ]);
 
@@ -1421,6 +1435,7 @@ export default function App() {
         { id: "dashboard", label: "Dashboard", current: tab === "dashboard" },
         { id: "ops", label: "Live Ops", current: tab === "ops" },
         { id: "spatial", label: "Spatial", current: tab === "spatial" },
+        { id: "progress", label: "Progress", current: tab === "progress" },
         { id: "automations", label: "Scheduled Jobs", current: tab === "automations" },
         { id: "inbox", label: "Inbox", current: tab === "inbox" },
         { id: "settings", label: "Settings", current: tab === "settings" },
@@ -1738,6 +1753,7 @@ export default function App() {
             [
               { id: "ops" as Tab, icon: <Radio className="h-3.5 w-3.5" />, label: "Live Ops" },
               { id: "spatial" as Tab, icon: <Hexagon className="h-3.5 w-3.5" />, label: "Spatial" },
+              { id: "progress" as Tab, icon: <Rocket className="h-3.5 w-3.5" />, label: "Progress" },
               { id: "automations" as Tab, icon: <Timer className="h-3.5 w-3.5" />, label: "Scheduled Jobs" },
               { id: "inbox" as Tab, icon: <Inbox className="h-3.5 w-3.5" />, label: "Inbox" },
               { id: "settings" as Tab, icon: <Settings className="h-3.5 w-3.5" />, label: "Settings" },
@@ -1849,6 +1865,10 @@ export default function App() {
               <LiveOpsBoard onOpenSession={openSessionByCwd} />
             )}
           </div>
+        ) : tab === "progress" ? (
+          <Suspense fallback={<PaneFallback />}>
+            <ProgressBoard onOpenSession={openSession} onOpenProject={openProject} />
+          </Suspense>
         ) : tab === "automations" ? (
           <AutomationsBoard />
         ) : tab === "inbox" ? (
@@ -2108,6 +2128,9 @@ export default function App() {
             } else if (action.id === "go-to-automations") {
               setChatSeed(null);
               setTab("automations");
+            } else if (action.id === "go-to-progress") {
+              setChatSeed(null);
+              setTab("progress");
             }
           }}
           onSearchTasks={() => {
