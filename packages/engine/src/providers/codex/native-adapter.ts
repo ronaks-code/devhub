@@ -1127,6 +1127,15 @@ export class CodexNativeAdapter implements ProviderAdapter {
     return this.refreshChain;
   }
 
+  /** Hot-reload MCP config into the retained app-server generation, when one is active. */
+  async reloadMcpConfig(): Promise<boolean> {
+    if (this.disposed) throw adapterError("DISPOSED", "Codex native adapter is disposed");
+    const lease = this.lease;
+    if (lease === null) return false;
+    await lease.call("config/mcpServer/reload");
+    return true;
+  }
+
   dispose(): Promise<void> {
     if (this.disposePromise !== null) return this.disposePromise;
     this.disposed = true;

@@ -31,15 +31,15 @@ import type { Stats } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import type { FastifyInstance } from "fastify";
-import type { Engine } from "@devhub/engine";
+import type { CodexMcpManager, Engine } from "@devhub/engine";
 import { config, paths } from "@devhub/engine";
 
-// ---- Shared helpers --------------------------------------------------------
-
-/** `~/.claude.json` — holds the mcpServers map (global + per-project). */
 function claudeJsonPath(): string {
-  return path.join(os.homedir(), ".claude.json");
+  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return override ? path.join(override, ".claude.json") : path.join(os.homedir(), ".claude.json");
 }
+
+// ---- Shared helpers --------------------------------------------------------
 
 /**
  * The settings.json a hooks write targets:
@@ -117,45 +117,6 @@ async function atomicWrite(file: string, data: string): Promise<void> {
   await rename(tmp, file);
 }
 
-/**
- * SAFE remove of an MCP server from `~/.claude.json`. Mirrors the engine's
- * `setMcpServer` contract (backup + atomic write, preserve every other key); the
- * engine has no remover, so this narrow, config-only delete lives here. `projectCwd`
- * targets `projects[<cwd>].mcpServers`; otherwise the top-level `mcpServers`.
- * Returns whether the named server existed.
- */
-async function removeMcpServer(name: string, projectCwd?: string): Promise<boolean> {
-  const file = claudeJsonPath();
-  const cfg = await readJsonObject(file);
-
-  const getMap = (parent: Record<string, unknown>): Record<string, unknown> | undefined => {
-    const m = parent.mcpServers;
-    return m && typeof m === "object" && !Array.isArray(m) ? (m as Record<string, unknown>) : undefined;
-  };
-
-  let map: Record<string, unknown> | undefined;
-  if (projectCwd) {
-    const projects = cfg.projects;
-    const block =
-      projects && typeof projects === "object" && !Array.isArray(projects)
-        ? (projects as Record<string, unknown>)[projectCwd]
-        : undefined;
-    map =
-      block && typeof block === "object" && !Array.isArray(block)
-        ? getMap(block as Record<string, unknown>)
-        : undefined;
-  } else {
-    map = getMap(cfg);
-  }
-
-  if (!map || !(name in map)) return false;
-  delete map[name];
-
-  await backup(file);
-  await atomicWrite(file, JSON.stringify(cfg, null, 2) + "\n");
-  return true;
-}
-
 // ---- Backups (list + restore) ----------------------------------------------
 //
 // Every safe-write in this package backs the prior file up to `<file>.bak` (see
@@ -222,6 +183,7 @@ const scopeQuerySchema = {
   properties: {
     cwd: { type: "string", minLength: 1 },
     projectId: { type: "string", minLength: 1 },
+    provider: { type: "string", enum: ["anthropic", "openai"] },
   },
 } as const;
 
@@ -252,6 +214,7 @@ const mcpPutSchema = {
   required: ["name"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 200 },
+    provider: { type: "string", enum: ["anthropic", "openai"] },
     cwd: { type: "string", minLength: 1 },
     projectId: { type: "string", minLength: 1 },
     server: {
@@ -274,6 +237,20 @@ const mcpDeleteSchema = {
   required: ["name"],
   properties: {
     name: { type: "string", minLength: 1, maxLength: 200 },
+    provider: { type: "string", enum: ["anthropic", "openai"] },
+    cwd: { type: "string", minLength: 1 },
+    projectId: { type: "string", minLength: 1 },
+  },
+} as const;
+
+const mcpToggleSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "enabled"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: 200 },
+    enabled: { type: "boolean" },
+    provider: { type: "string", enum: ["anthropic", "openai"] },
     cwd: { type: "string", minLength: 1 },
     projectId: { type: "string", minLength: 1 },
   },
@@ -323,7 +300,11 @@ const restorePostSchema = {
  * per request (cheap, in-memory) so a project added at runtime is reachable without
  * a restart, matching the git routes' behavior.
  */
-export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void {
+export function registerConfigRoutes(app: FastifyInstance, engine: Engine, options: {
+  codexMcp?: CodexMcpManager;
+  reloadCodexMcp?: () => Promise<boolean>;
+  reloadClaudeMcp?: () => Promise<boolean>;
+} = {}): void {
   /** Resolve an optional cwd/projectId to a KNOWN project cwd (undefined when none given). */
   const resolveCwd = (q: { cwd?: string; projectId?: string }): string | undefined => {
     const projects = engine.getProjects({ includeArchived: true });
@@ -370,7 +351,6 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
     path: string;
     fn: (cwd?: string) => Promise<unknown>;
   }> = [
-    { path: "/api/config/mcp", fn: config.listMcpServers },
     { path: "/api/config/agents", fn: config.listAgents },
     { path: "/api/config/skills", fn: config.listSkills },
     { path: "/api/config/commands", fn: config.listCommands },
@@ -389,6 +369,26 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
       },
     );
   }
+
+  app.get<{ Querystring: { provider?: "anthropic" | "openai"; cwd?: string; projectId?: string } }>(
+    "/api/config/mcp",
+    { schema: { querystring: scopeQuerySchema } },
+    async (req, reply) => {
+      if (hasProjectParam(req.query) && !resolveCwd(req.query)) return reply.code(400).send({ error: "unknown project" });
+      const provider = req.query.provider ?? "anthropic";
+      if (provider === "openai") {
+        if (!options.codexMcp) return reply.code(503).send({ error: "codex mcp unavailable" });
+        return (await options.codexMcp.list()).map((server) => ({ ...server, provider }));
+      }
+      const cwd = resolveCwd(req.query);
+      const toggles = cwd ? new Map((await engine.listMcpToggles(cwd)).map((item) => [item.name, item.enabled])) : new Map<string, boolean>();
+      return (await config.listMcpServers(cwd)).map((server) => ({
+        ...server,
+        provider,
+        enabled: server.scope === "project" ? (toggles.get(server.name) ?? true) : true,
+      }));
+    },
+  );
 
   // Hooks are layered (global < project < project-local); return the source paths too.
   app.get<{ Querystring: { cwd?: string; projectId?: string } }>(
@@ -490,6 +490,7 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
   app.put<{
     Body: {
       name: string;
+      provider?: "anthropic" | "openai";
       cwd?: string;
       projectId?: string;
       server?: config.McpServerInput;
@@ -503,15 +504,23 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
       }
       const cwd = resolveCwd(req.body);
       try {
+        if ((req.body.provider ?? "anthropic") === "openai") {
+          if (!options.codexMcp) return reply.code(503).send({ error: "codex mcp unavailable" });
+          if (cwd) return reply.code(400).send({ error: "Codex MCP servers use user scope" });
+          await options.codexMcp.upsert(req.body.name, req.body.server ?? {});
+          const live = await options.reloadCodexMcp?.() ?? false;
+          return { ok: true, name: req.body.name, provider: "openai", scope: "global", applied: live ? "live" : "next-turn" };
+        }
         const saved = await config.setMcpServer(req.body.name, req.body.server ?? {}, cwd);
-        return { ok: true, name: req.body.name, scope: cwd ? "project" : "global", server: saved };
+        await options.reloadClaudeMcp?.();
+        return { ok: true, name: req.body.name, provider: "anthropic", scope: cwd ? "project" : "global", server: saved, applied: "next-turn" };
       } catch (err) {
         return reply.code(400).send({ error: (err as Error).message });
       }
     },
   );
 
-  app.delete<{ Body: { name: string; cwd?: string; projectId?: string } }>(
+  app.delete<{ Body: { name: string; provider?: "anthropic" | "openai"; cwd?: string; projectId?: string } }>(
     "/api/config/mcp",
     { schema: { body: mcpDeleteSchema } },
     async (req, reply) => {
@@ -519,9 +528,36 @@ export function registerConfigRoutes(app: FastifyInstance, engine: Engine): void
         return reply.code(400).send({ error: "unknown project" });
       }
       const cwd = resolveCwd(req.body);
-      const removed = await removeMcpServer(req.body.name, cwd);
+      if ((req.body.provider ?? "anthropic") === "openai") {
+        if (!options.codexMcp) return reply.code(503).send({ error: "codex mcp unavailable" });
+        if (cwd) return reply.code(400).send({ error: "Codex MCP servers use user scope" });
+        await options.codexMcp.remove(req.body.name);
+        const live = await options.reloadCodexMcp?.() ?? false;
+        return { ok: true, name: req.body.name, provider: "openai", scope: "global", applied: live ? "live" : "next-turn" };
+      }
+      const removed = await config.removeMcpServer(req.body.name, cwd);
       if (!removed) return reply.code(404).send({ error: "no such mcp server" });
-      return { ok: true, name: req.body.name, scope: cwd ? "project" : "global" };
+      await options.reloadClaudeMcp?.();
+      return { ok: true, name: req.body.name, provider: "anthropic", scope: cwd ? "project" : "global", applied: "next-turn" };
+    },
+  );
+
+  app.patch<{ Body: { name: string; enabled: boolean; provider?: "anthropic" | "openai"; cwd?: string; projectId?: string } }>(
+    "/api/config/mcp",
+    { schema: { body: mcpToggleSchema } },
+    async (req, reply) => {
+      if (hasProjectParam(req.body) && !resolveCwd(req.body)) return reply.code(400).send({ error: "unknown project" });
+      if ((req.body.provider ?? "anthropic") === "openai") {
+        if (!options.codexMcp) return reply.code(503).send({ error: "codex mcp unavailable" });
+        await options.codexMcp.setEnabled(req.body.name, req.body.enabled);
+        const live = await options.reloadCodexMcp?.() ?? false;
+        return { ok: true, provider: "openai", name: req.body.name, enabled: req.body.enabled, applied: live ? "live" : "next-turn" };
+      }
+      const cwd = resolveCwd(req.body);
+      if (!cwd) return reply.code(400).send({ error: "Claude MCP toggles require a project" });
+      const result = await engine.setMcpEnabled(cwd, req.body.name, req.body.enabled);
+      await options.reloadClaudeMcp?.();
+      return { ok: true, provider: "anthropic", ...result, applied: "next-turn" };
     },
   );
 

@@ -13,6 +13,8 @@ import {
   paths,
   resolveCompatEnv,
   createProviderTaskIndexCoordinator,
+  createCodexMcpManager,
+  type CodexMcpManager,
   type ConfiguredProviderHome,
   type ProviderTaskIndexCoordinator,
 } from "@devhub/engine";
@@ -129,6 +131,10 @@ export interface BuildOptions {
   nativeCodex?: false | Omit<CreateNativeCodexRuntimeOptions, "registry" | "isEnabled">;
   /** false disables discovery; an object provides explicit hermetic/runtime overrides. */
   nativeClaude?: false | Omit<CreateNativeClaudeRuntimeOptions, "registry" | "isEnabled">;
+  /** Hermetic MCP-management seams; production derives these from the native Codex runtime. */
+  codexMcp?: CodexMcpManager;
+  reloadCodexMcp?: () => Promise<boolean>;
+  reloadClaudeMcp?: () => Promise<boolean>;
   /**
    * Explicit trusted provider homes registered with the unified task index at startup. This is a
    * DoD-sanctioned registration source alongside installed-runtime discovery and DEVHUB_*_HOME
@@ -421,7 +427,21 @@ export function buildApp(opts: BuildOptions = {}): {
 
   registerAllowlistSuggestRoutes(app, engine);
 
-  registerConfigRoutes(app, engine);
+  const codexMcp = opts.codexMcp ?? (nativeCodexRuntime === null ? undefined : createCodexMcpManager({
+    executable: nativeCodexRuntime.installation.executable,
+    home: nativeCodexRuntime.installation.home,
+  }));
+  const reloadCodexMcp = opts.reloadCodexMcp ?? (nativeCodexRuntime === null
+    ? undefined
+    : () => nativeCodexRuntime.adapter.reloadMcpConfig());
+  const reloadClaudeMcp = opts.reloadClaudeMcp ?? (nativeClaudeRuntime === null
+    ? undefined
+    : () => nativeClaudeRuntime.adapter.reloadMcpConfig());
+  registerConfigRoutes(app, engine, {
+    ...(codexMcp === undefined ? {} : { codexMcp }),
+    ...(reloadCodexMcp === undefined ? {} : { reloadCodexMcp }),
+    ...(reloadClaudeMcp === undefined ? {} : { reloadClaudeMcp }),
+  });
 
   registerConfigLintRoutes(app, engine);
 

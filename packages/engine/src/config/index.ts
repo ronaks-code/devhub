@@ -36,6 +36,8 @@ export type { BackupInfo } from "./safe-write.js";
 // Re-exported here so they surface on the `config` namespace alongside the readers above.
 export { setMcpEnabled, listMcpToggles } from "./mcp-toggle.js";
 export type { McpToggle } from "./mcp-toggle.js";
+export { createCodexMcpManager } from "./codex-mcp.js";
+export type { CodexMcpManager, CodexMcpServerDef, CodexMcpRunner } from "./codex-mcp.js";
 
 // ---- Types -----------------------------------------------------------------
 
@@ -652,4 +654,25 @@ export async function setMcpServer(
 
   await safeWriteFile(file, JSON.stringify(cfg, null, 2) + "\n");
   return clean;
+}
+
+/** SAFE removal counterpart to {@link setMcpServer}; preserves unrelated config. */
+export async function removeMcpServer(name: string, projectCwd?: string): Promise<boolean> {
+  if (typeof name !== "string" || !name.trim()) throw new Error("removeMcpServer: name must be non-empty");
+  const file = claudeJsonPath();
+  const cfg = (await readJson<Record<string, unknown>>(file)) ?? {};
+  const parent = projectCwd
+    ? (() => {
+        const projects = cfg.projects;
+        const block = projects && typeof projects === "object" && !Array.isArray(projects)
+          ? (projects as Record<string, unknown>)[projectCwd]
+          : undefined;
+        return block && typeof block === "object" && !Array.isArray(block) ? block as Record<string, unknown> : undefined;
+      })()
+    : cfg;
+  const map = parent?.mcpServers;
+  if (!map || typeof map !== "object" || Array.isArray(map) || !(name in map)) return false;
+  delete (map as Record<string, unknown>)[name];
+  await safeWriteFile(file, JSON.stringify(cfg, null, 2) + "\n");
+  return true;
 }
