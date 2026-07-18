@@ -100,6 +100,12 @@ export interface CrossProviderForkPanelProps {
   fetchPreview: () => Promise<CrossProviderForkPreviewResult>;
   commitPreview: (previewId: string) => Promise<CrossProviderForkCommitResult>;
   onCommitted?: (result: CrossProviderForkCommitResult) => void;
+  /** Open the real preview immediately when another surface routes a fork intent here. */
+  autoOpen?: boolean;
+  /** Called once the routed intent has been consumed, so navigation cannot replay it. */
+  onAutoOpenConsumed?: () => void;
+  /** Notifies a routing owner when Cancel, Escape, or Done closes the flow. */
+  onClosed?: () => void;
   className?: string;
 }
 
@@ -126,10 +132,14 @@ export function CrossProviderForkPanel({
   fetchPreview,
   commitPreview,
   onCommitted,
+  autoOpen = false,
+  onAutoOpenConsumed,
+  onClosed,
   className,
 }: CrossProviderForkPanelProps) {
   const [stage, setStage] = useState<Stage>({ kind: "closed" });
   const dialogRef = useRef<HTMLDivElement>(null);
+  const autoOpenConsumedRef = useRef(false);
   const titleId = useId();
   const busy = stage.kind === "loading" || stage.kind === "committing";
 
@@ -147,7 +157,10 @@ export function CrossProviderForkPanel({
     }
   };
 
-  const close = () => setStage({ kind: "closed" });
+  const close = () => {
+    setStage({ kind: "closed" });
+    onClosed?.();
+  };
 
   const confirm = async (data: CrossProviderForkPreviewResult) => {
     setStage({ kind: "committing", data });
@@ -164,6 +177,15 @@ export function CrossProviderForkPanel({
       });
     }
   };
+
+  useEffect(() => {
+    if (!enabled || !autoOpen || autoOpenConsumedRef.current) return;
+    autoOpenConsumedRef.current = true;
+    onAutoOpenConsumed?.();
+    void openPreview();
+    // A routed intent is single-use. Subsequent renders must not replay a preview.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpen, enabled]);
 
   useEffect(() => {
     if (stage.kind === "closed") return;

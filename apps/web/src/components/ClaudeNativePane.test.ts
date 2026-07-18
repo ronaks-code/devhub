@@ -7,7 +7,6 @@ import type {
   ProviderEvent,
 } from "../lib/provider-api.js";
 import {
-  CLAUDE_MODEL_DISCLOSURE,
   CodexNativePane,
   PROVIDER_LOCK_DISCLOSURE,
   descriptorSupportsNativeHistory,
@@ -36,9 +35,7 @@ describe("provider-native pane Anthropic presentation", () => {
     });
   });
 
-  it("uses the approved exact capability and provider-lock disclosures", () => {
-    expect(CLAUDE_MODEL_DISCLOSURE)
-      .toBe("Claude model selection unavailable until runtime support is verified.");
+  it("uses the approved exact provider-lock disclosure", () => {
     expect(PROVIDER_LOCK_DISCLOSURE)
       .toBe("Provider is fixed after creation. Fork to another provider to continue there.");
   });

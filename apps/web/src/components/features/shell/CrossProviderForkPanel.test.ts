@@ -79,6 +79,21 @@ function baseProps(overrides: Partial<CrossProviderForkPanelProps> = {}): CrossP
 }
 
 describe("CrossProviderForkPanel (M7 concept 06)", () => {
+  it("can consume a routed fork intent by opening the real preview on mount", async () => {
+    const fetchPreview = vi.fn().mockResolvedValue(PREVIEW);
+    const onAutoOpenConsumed = vi.fn();
+
+    rtlRender(createElement(CrossProviderForkPanel, baseProps({
+      autoOpen: true,
+      fetchPreview,
+      onAutoOpenConsumed,
+    })));
+
+    await screen.findByRole("dialog");
+    expect(fetchPreview).toHaveBeenCalledTimes(1);
+    expect(onAutoOpenConsumed).toHaveBeenCalledTimes(1);
+  });
+
   it("flag-off hides the entry point entirely — no button, no way to open the dialog", () => {
     const fetchPreview = vi.fn();
     rtlRender(createElement(CrossProviderForkPanel, baseProps({ enabled: false, fetchPreview })));
@@ -147,7 +162,8 @@ describe("CrossProviderForkPanel (M7 concept 06)", () => {
   it("cancelling the preview discards it without ever calling commitPreview", async () => {
     const user = userEvent.setup();
     const commitPreview = vi.fn();
-    rtlRender(createElement(CrossProviderForkPanel, baseProps({ commitPreview })));
+    const onClosed = vi.fn();
+    rtlRender(createElement(CrossProviderForkPanel, baseProps({ commitPreview, onClosed })));
 
     await user.click(screen.getByText(CROSS_PROVIDER_FORK_COPY.entryLabel));
     await screen.findByRole("dialog");
@@ -155,6 +171,7 @@ describe("CrossProviderForkPanel (M7 concept 06)", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(commitPreview).not.toHaveBeenCalled();
+    expect(onClosed).toHaveBeenCalledTimes(1);
   });
 
   it("Escape closes an open preview without committing", async () => {

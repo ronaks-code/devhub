@@ -6,6 +6,7 @@ import {
   codexNavPresentation,
   isLatestSettingsResponse,
   nativeClaudePreferredTaskId,
+  nativeClaudeHomeFromSessionFile,
   nativeLoadFailureMessage,
   nativePaneRouteKey,
   navigationAriaCurrent,
@@ -17,6 +18,11 @@ import {
 import type { AppSettings } from "./lib/api.js";
 
 describe("App native Codex shell gate", () => {
+  it("derives a Claude provider home from its canonical transcript path, never from cwd", () => {
+    expect(nativeClaudeHomeFromSessionFile("/Users/test/.claude/projects/-workspace/session.jsonl"))
+      .toBe("/Users/test/.claude");
+    expect(nativeClaudeHomeFromSessionFile("/workspace/project/session.jsonl")).toBeUndefined();
+  });
   it("rejects stale settings responses that finish after a newer request", () => {
     expect(isLatestSettingsResponse(4, 5)).toBe(false);
     expect(isLatestSettingsResponse(5, 5)).toBe(true);
