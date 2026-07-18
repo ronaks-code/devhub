@@ -7,6 +7,7 @@ import type {
 } from "../components/features/search/TaskSearchDialog.js";
 import type { TaskRailSection, TaskRailTask } from "../components/features/shell/TaskRail.js";
 import { boundRawDiagnostic, type ThreadItem } from "../components/features/shell/ThreadWorkspace.js";
+import { displaySearchHitTitle, displaySessionTitle } from "./session-title.js";
 import type { GitStatus, NormalizedMessage, SearchHitWithSeq, SessionSummary } from "./types.js";
 
 /**
@@ -44,7 +45,7 @@ export function buildTaskRailSections(
     .slice(0, maxRows)
     .map((s) => ({
       id: s.sessionId,
-      title: s.title || "Untitled session",
+      title: displaySessionTitle(s, sectionLabel),
       provider: LEGACY_SESSION_PROVIDER,
     }));
   return [{ id: "sessions", label: sectionLabel, tasks }];
@@ -59,7 +60,7 @@ export function buildTaskRailSections(
 export function searchHitToResult(hit: SearchHitWithSeq): SearchResult {
   return {
     taskKey: [LEGACY_SESSION_PROVIDER, hit.projectId, hit.sessionId].join(KEY_SEPARATOR),
-    title: hit.title,
+    title: displaySearchHitTitle(hit),
     projectName: hit.projectName,
     snippet: hit.snippet,
     seq: hit.seq,

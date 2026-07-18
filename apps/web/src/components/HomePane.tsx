@@ -4,13 +4,7 @@ import type { SessionSummary } from "../lib/types";
 import type { CodexSession, CodexStats } from "../lib/types";
 import { Spinner } from "./ui";
 import { loadHomeData } from "../lib/home-data";
-
-/** Last path segment of a working directory path. */
-function lastSegment(cwd: string | null | undefined): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
-}
+import { displayCodexSessionTitle, displaySessionTitle } from "../lib/session-title";
 
 /** Simple relative-time helper — no external deps. */
 function relTime(iso: string | null | undefined): string {
@@ -29,7 +23,7 @@ function relTime(iso: string | null | undefined): string {
 interface UnifiedItem {
   kind: "claude" | "codex";
   id: string;
-  cwd: string | null;
+  title: string;
   startedAt: string | null;
   model: string | null;
 }
@@ -82,14 +76,14 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
     ...claudeSessions.map((s): UnifiedItem => ({
       kind: "claude",
       id: s.sessionId,
-      cwd: s.projectId ?? null,
+      title: displaySessionTitle(s),
       startedAt: s.lastTimestamp ?? null,
       model: s.model ?? null,
     })),
     ...codexSessions.map((s): UnifiedItem => ({
       kind: "codex",
       id: s.id,
-      cwd: s.cwd,
+      title: displayCodexSessionTitle(s),
       startedAt: s.startedAt,
       model: s.model,
     })),
@@ -180,9 +174,9 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                         {isClaude ? "Claude" : "Codex"}
                       </span>
 
-                      {/* cwd */}
+                      {/* Human title (Codex falls back to its cwd project). */}
                       <span className="min-w-0 flex-1 truncate text-[13px] text-zinc-200">
-                        {lastSegment(item.cwd)}
+                        {item.title}
                       </span>
 
                       {/* Model */}

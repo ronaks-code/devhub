@@ -59,9 +59,19 @@ describe("buildTaskRailSections", () => {
     }
   });
 
-  it("falls back to a placeholder title only when the session title is empty", () => {
-    const sections = buildTaskRailSections([session({ title: "" })], "Sessions");
-    expect(sections[0]!.tasks[0]!.title).toBe("Untitled session");
+  it("uses human titles, then the known project name before cwd or raw identity", () => {
+    const sections = buildTaskRailSections([
+      session({ sessionId: "custom", title: "Release audit", titleSource: "custom", cwd: "/repo/devhub" }),
+      session({ sessionId: "hashed", title: "2b7ef4eb251a", titleSource: "session-id", cwd: "/repo/mission-studio" }),
+      session({ sessionId: "empty", title: "", titleSource: "first-prompt", cwd: "/repo/capture/" }),
+      session({ sessionId: "raw-only", title: "", titleSource: "session-id", cwd: null }),
+    ], "DevHub");
+    expect(sections[0]!.tasks.map((task) => task.title)).toEqual([
+      "Release audit",
+      "DevHub",
+      "DevHub",
+      "DevHub",
+    ]);
   });
 
   it("caps the row count so the rail never renders an unbounded list", () => {
@@ -91,6 +101,24 @@ describe("searchHitToResult / legacyDestinationForTarget round-trip", () => {
     expect(result.degraded).toBe(false);
     expect(result.title).toBe("Session title");
     expect(result.snippet).toBe("hello [world]");
+  });
+
+  it("replaces only an authoritative session-id fallback with the project name", () => {
+    expect(searchHitToResult({
+      ...hit,
+      sessionId: "2b7ef4eb251a-full-session-id",
+      title: "2b7ef4eb",
+      projectName: "DevHub",
+    }).title).toBe("DevHub");
+  });
+
+  it("preserves a hex-looking human title that is not the session id or its prefix", () => {
+    expect(searchHitToResult({
+      ...hit,
+      sessionId: "different-session-id",
+      title: "deadbeef release audit",
+      projectName: "DevHub",
+    }).title).toBe("deadbeef release audit");
   });
 
   it("round-trips back to the legacy (projectId, sessionId, seq) destination", () => {

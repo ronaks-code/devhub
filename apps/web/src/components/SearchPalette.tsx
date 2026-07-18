@@ -6,6 +6,7 @@ import { readCompat, writeCompat } from "../lib/compat-storage";
 import { Spinner } from "./ui";
 import { SearchDateFilter } from "./SearchDateFilter";
 import { api } from "../lib/api";
+import { displaySearchHitTitle } from "../lib/session-title";
 
 /** Search scope: everything, or just the active project. */
 type SearchScope = "global" | "project";
@@ -254,7 +255,7 @@ export function SearchPalette({
                           isActive ? "text-clay-100" : "text-zinc-200",
                         )}
                       >
-                        {hit.title}
+                        {displaySearchHitTitle(hit)}
                       </span>
                       <span className="shrink-0 text-[10.5px] text-zinc-600">{hit.projectName}</span>
                     </div>

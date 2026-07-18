@@ -6,6 +6,7 @@ import {
   RegionBoundary,
   SHELL_BRAND,
   SHELL_GEOMETRY,
+  SHELL_LAYOUT,
   isShellChromeApplied,
   resolveShellChromeMode,
   type ShellStatus,
@@ -21,6 +22,15 @@ function render(props: Parameters<typeof DevHubShell>[0] = {}): string {
 }
 
 describe("DevHubShell locked geometry (design-lock §4)", () => {
+  it("exposes a full-width route host while preserving measured thread child caps", () => {
+    expect(SHELL_LAYOUT.routeHost).toBe("full-width");
+    const html = render();
+    expect(html).toContain('data-dh-route-host="full-width"');
+    expect(html).not.toContain('data-dh-route-host="full-width" data-dh-width="736"');
+    expect(SHELL_GEOMETRY.transcriptWidth).toBe(736);
+    expect(SHELL_GEOMETRY.composerWidth).toBe(736);
+  });
+
   it("exposes the exact measured wide-shell dimensions as a single source of truth", () => {
     // design-lock.md §4 + reference-capture-manifest.md "Measured wide-shell geometry".
     expect(SHELL_GEOMETRY.railWidth).toBe(273);

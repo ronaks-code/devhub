@@ -17,6 +17,7 @@ export interface WorkModeSurfaceProps {
   nativeTaskId: string;
   folderRoot: string;
   taskId: string;
+  onDismiss?: () => void;
   client?: WorkModeApiClient;
   className?: string;
 }
@@ -36,6 +37,7 @@ export function WorkModeSurface({
   nativeTaskId,
   folderRoot,
   taskId,
+  onDismiss,
   client = defaultWorkModeApi,
   className,
 }: WorkModeSurfaceProps) {
@@ -64,5 +66,12 @@ export function WorkModeSurface({
     };
   }, [enabled, provider, home, nativeTaskId, folderRoot, taskId, title, client]);
 
-  return <WorkModePanel enabled={enabled} task={task} {...(className !== undefined ? { className } : {})} />;
+  return (
+    <WorkModePanel
+      enabled={enabled}
+      task={task}
+      onDismiss={onDismiss}
+      {...(className !== undefined ? { className } : {})}
+    />
+  );
 }

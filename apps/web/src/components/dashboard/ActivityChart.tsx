@@ -5,17 +5,11 @@ import { api } from "../../lib/api";
 import { compactNumber, formatUsd, relativeTime } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Spinner } from "../ui";
+import { displaySessionTitle, projectNameFromCwd } from "../../lib/session-title";
 
 /** Sum of the four token buckets for one rolled-up day. */
 function dayTokens(d: DailyUsage): number {
   return d.inputTokens + d.outputTokens + d.cacheReadTokens + d.cacheCreationTokens;
-}
-
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
 }
 
 /**
@@ -197,7 +191,7 @@ function DayDrilldown({
           ) : (
             <div className="flex flex-col divide-y divide-zinc-800/60">
               {rows.map((s) => {
-                const project = lastSegment(s.cwd);
+                const project = projectNameFromCwd(s.cwd) ?? "unknown";
                 const open = () => {
                   onOpenSession?.(s.projectId, s.sessionId);
                   onClose();
@@ -215,7 +209,7 @@ function DayDrilldown({
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium text-zinc-200 group-hover:text-zinc-100">
-                        {s.title || "(untitled session)"}
+                        {displaySessionTitle(s)}
                       </div>
                       <div className="flex items-center gap-1.5 text-[11px] text-zinc-600">
                         <span className="truncate">{project}</span>

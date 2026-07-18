@@ -5,13 +5,7 @@ import { api } from "../../lib/api";
 import { costUsd } from "../../lib/pricing";
 import { compactNumber, formatUsd } from "../../lib/format";
 import { Spinner } from "../ui";
-
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
-}
+import { displaySessionTitle, projectNameFromCwd } from "../../lib/session-title";
 
 /** One session with its estimated USD spend, ready to render + sort. */
 interface SpenderRow {
@@ -90,7 +84,7 @@ export function TopSpenders({
   return (
     <div className="flex flex-col divide-y divide-zinc-800/60 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/30">
       {rows.map(({ session: s, cost }) => {
-        const project = lastSegment(s.cwd);
+        const project = projectNameFromCwd(s.cwd) ?? "unknown";
         const open = () => onOpenSession?.(s.projectId, s.sessionId);
         return (
           <button
@@ -109,7 +103,7 @@ export function TopSpenders({
             <Coins className="relative h-3.5 w-3.5 shrink-0 text-clay-400/80" />
             <div className="relative min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium text-zinc-200 group-hover:text-zinc-100">
-                {s.title || "(untitled session)"}
+                {displaySessionTitle(s)}
               </div>
               <div className="flex items-center gap-1.5 text-[11px] text-zinc-600">
                 <span className="truncate">{project}</span>

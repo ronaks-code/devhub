@@ -6,13 +6,7 @@ import { costUsd } from "../../lib/pricing";
 import { formatUsd } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Spinner } from "../ui";
-
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
-}
+import { displaySessionTitle, projectNameFromCwd } from "../../lib/session-title";
 
 /** How many sessions to sample (by tokens) before re-ranking by cost client-side. */
 const FETCH_LIMIT = 100;
@@ -232,10 +226,10 @@ export function CostForecast({
                   <Coins className="h-3.5 w-3.5 shrink-0 text-amber-400/80" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] font-medium text-zinc-200 group-hover:text-zinc-100">
-                      {s.title || "(untitled session)"}
+                      {displaySessionTitle(s)}
                     </div>
                     <div className="flex items-center gap-1.5 text-[11px] text-zinc-600">
-                      <span className="truncate">{lastSegment(s.cwd)}</span>
+                      <span className="truncate">{projectNameFromCwd(s.cwd) ?? "unknown"}</span>
                       <span>·</span>
                       <span className="shrink-0 tabular-nums text-amber-300/70">
                         {Math.round(xMedian)}× median

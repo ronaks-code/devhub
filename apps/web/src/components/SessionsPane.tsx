@@ -22,6 +22,7 @@ import { IconButton } from "./ui";
 import { ListSkeleton } from "./Skeleton";
 import { useListKeyboardNav } from "../hooks/useListKeyboardNav";
 import { TagFilterBar, filterByTags } from "./TagFilterBar";
+import { displaySessionTitle } from "../lib/session-title";
 
 export function SessionsPane({
   project,
@@ -467,7 +468,7 @@ export function SessionsPane({
                           active ? "text-clay-100" : "text-zinc-200",
                         )}
                       >
-                        {s.title}
+                        {displaySessionTitle(s, project?.name)}
                       </span>
                       {s.titleSource === "custom" && (
                         <span className="text-[9px] text-zinc-600">renamed</span>

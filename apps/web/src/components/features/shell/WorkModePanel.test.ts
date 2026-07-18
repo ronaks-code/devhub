@@ -2,7 +2,7 @@
 import { createElement } from "react";
 import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   WORK_MODE_COPY,
   WORK_MODE_DELIVERABLE_STATUS_LABEL,
@@ -88,16 +88,12 @@ describe("WorkModePanel", () => {
     }
   });
 
-  it("is a real, focusable tab control a user can interact with via keyboard/click", async () => {
-    render();
+  it("dismisses Work mode when the user selects Code", async () => {
+    const onDismiss = vi.fn();
+    rtlRender(createElement(WorkModePanel, { enabled: true, task: TASK, onDismiss }));
     const user = userEvent.setup();
     const codeTab = screen.getByRole("tab", { name: WORK_MODE_COPY.modeLabelCode });
     await user.click(codeTab);
-    // Clicking Code is a no-op in this slice (Work stays the rendered mode); the
-    // important assertion is that the click doesn't throw and Work stays selected.
-    expect(screen.getByRole("tab", { name: WORK_MODE_COPY.modeLabelWork })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

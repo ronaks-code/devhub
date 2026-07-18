@@ -6,7 +6,8 @@ import type { DevHubFeatureFlags } from "@devhub/engine/providers";
  *
  * This is the measured container/geometry frame from `design-lock.md` §4 and
  * `design-system.md` §3: a 273-unit left rail, a 46-unit header, an open `#181818`
- * canvas with no page card, a shared 736-unit transcript+composer column, and a
+ * canvas with no page card, route content using the full canvas, capped 736-unit
+ * thread/composer children, and a
  * 300-unit content-height inspector dock (in a 316-unit lane = 300 + 16 right
  * gutter). It owns the shell landmarks (one `main`, a named rail `navigation`, an
  * optional named `complementary` inspector) plus the skip link and the `DevHub`
@@ -50,6 +51,9 @@ export const SHELL_GEOMETRY = Object.freeze({
   userBubbleMax: 566,
   narrowBreakpoint: 1024,
 } as const);
+
+/** The shell gives routes the full canvas; capped thread geometry belongs to ThreadWorkspace. */
+export const SHELL_LAYOUT = Object.freeze({ routeHost: "full-width" } as const);
 
 /** Product wordmark. Never a provider wordmark (design-lock §3, invariant 9). */
 export const SHELL_BRAND = "DevHub";
@@ -95,7 +99,7 @@ export interface DevHubShellProps {
   rail?: ReactNode;
   /** Thin header content (title/identity/actions). Rendered inside the 46-unit header. */
   header?: ReactNode;
-  /** Canvas/transcript content on the shared 736 column. */
+  /** Route canvas content. Thread routes own their measured inner content cap. */
   children?: ReactNode;
   /** Bottom-anchored composer content on the shared 736 column. Omit to hide the slot. */
   composer?: ReactNode;
@@ -165,7 +169,7 @@ export function DevHubShell({
             <div
               className="dh-transcript-col"
               data-dh-transcript=""
-              data-dh-width={SHELL_GEOMETRY.transcriptWidth}
+              data-dh-route-host={SHELL_LAYOUT.routeHost}
             >
               <RegionBoundary fallback={canvasFallback}>{children}</RegionBoundary>
             </div>

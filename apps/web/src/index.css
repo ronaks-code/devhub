@@ -496,14 +496,12 @@
   position: relative;
 }
 
-/* Transcript + composer share one centered 736 column; hiding the inspector at
- * wide width must not move it, so the stage stays centered in the flexible area. */
+/* Route content owns the full canvas width. ThreadWorkspace applies the measured
+ * 736px transcript/composer cap itself; broad routes such as Home must not inherit it. */
 .dh-transcript-col {
   flex: 1 1 0;
   min-height: 0;
   width: 100%;
-  max-width: var(--dh-transcript-width);
-  margin: 0 auto;
   overflow: hidden; /* the transcript owns its own scroll region internally */
   display: flex;
   flex-direction: column;
@@ -933,7 +931,7 @@ html[data-reduce-motion="true"] {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  align-items: center;
+  align-items: flex-start;
 }
 
 /* Native scroll — deliberately NOT a shadcn ScrollArea (invariant 8). */

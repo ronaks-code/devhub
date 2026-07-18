@@ -1,4 +1,16 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+  type RefObject,
+  type SetStateAction,
+} from "react";
 import {
   Bot,
   Command as CommandIcon,
@@ -98,6 +110,7 @@ import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion"
 import { useTheme, type ThemePreference } from "./hooks/useTheme";
 import { useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { readCompat, writeCompat } from "./lib/compat-storage";
+import { displayCodexSessionTitle, displaySessionTitle } from "./lib/session-title";
 import { cn } from "./lib/utils";
 
 // Heavier, non-initial surfaces are code-split: each loads its own chunk the
@@ -361,10 +374,12 @@ function RecentMenu({
   recents,
   onOpen,
   onClear,
+  onBeforeOpen,
 }: {
   recents: RecentSession[];
   onOpen: (projectId: string, sessionId: string) => void;
   onClear: () => void;
+  onBeforeOpen: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -391,7 +406,10 @@ function RecentMenu({
   return (
     <div className="relative" ref={ref}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) onBeforeOpen();
+          setOpen((value) => !value);
+        }}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-2 py-1 text-[12px] ring-1 ring-zinc-800 transition",
           open ? "text-zinc-200" : "text-zinc-500 hover:text-zinc-300",
@@ -502,7 +520,7 @@ function CodexHistoryPane() {
           const date = new Date(s.startedAt);
           const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
           const timeStr = date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-          const dirName = s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? s.cwd : "—";
+          const dirName = displayCodexSessionTitle(s);
           return (
             <div
               key={s.id}
@@ -565,7 +583,7 @@ const PERF_META: Record<PerfPreference, { label: string; title: string }> = {
   off: { label: "Motion: on", title: "Full motion forced ON — click to follow your OS setting" },
 };
 
-function TopBar({
+export function TopBar({
   tab,
   onTab,
   onOpenSearch,
@@ -583,8 +601,13 @@ function TopBar({
   recents,
   onOpenRecent,
   onClearRecents,
+  onBeforeOpenRecent,
   projectSessions,
   projectName,
+  workModeAvailable,
+  workModeOpen,
+  onToggleWorkMode,
+  workModeTriggerRef,
 }: {
   tab: Tab;
   onTab: (t: Tab) => void;
@@ -603,8 +626,13 @@ function TopBar({
   recents: RecentSession[];
   onOpenRecent: (projectId: string, sessionId: string) => void;
   onClearRecents: () => void;
+  onBeforeOpenRecent: () => void;
   projectSessions: SessionSummary[];
   projectName?: string | null;
+  workModeAvailable: boolean;
+  workModeOpen: boolean;
+  onToggleWorkMode: () => void;
+  workModeTriggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-950 px-4">
@@ -613,31 +641,9 @@ function TopBar({
         <span className="text-sm font-semibold tracking-tight text-zinc-100">DevHub</span>
       </div>
 
-      <nav
-        aria-label="Primary views"
-        className="ml-3 inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
-      >
-        {(["home", "browse", "chat", "ops", "inbox", "dashboard"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            aria-current={navigationAriaCurrent(tab === t)}
-            onClick={() => onTab(t)}
-            className={cn(
-              "rounded-md px-3 py-1 text-[12px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-              tab === t
-                ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-                : "text-zinc-400 hover:text-zinc-300",
-            )}
-          >
-            {t}
-          </button>
-        ))}
-      </nav>
-
       <button
         onClick={onOpenSearch}
-        className="ml-2 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+        className="ml-3 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
         title="Search sessions (⌘K)"
       >
         <Search className="h-3.5 w-3.5" />
@@ -654,6 +660,25 @@ function TopBar({
         <CommandIcon className="h-3.5 w-3.5" />
         <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
       </button>
+
+      {workModeAvailable ? (
+        <button
+          ref={workModeTriggerRef}
+          type="button"
+          onClick={onToggleWorkMode}
+          aria-label="Work mode"
+          aria-expanded={workModeOpen}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+            workModeOpen
+              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+              : "text-zinc-400 hover:text-zinc-300",
+          )}
+        >
+          <Folder className="h-3.5 w-3.5" />
+          Work
+        </button>
+      ) : null}
 
       <div className={TOP_BAR_SECONDARY_CLASS}>
         {/* Perf / reduced-motion toggle. Cycles auto → on → off; tinted clay
@@ -692,6 +717,7 @@ function TopBar({
           recents={recents}
           onOpen={onOpenRecent}
           onClear={onClearRecents}
+          onBeforeOpen={onBeforeOpenRecent}
         />
         {/* Running total of the active project's loaded-session spend (est.). */}
         <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
@@ -728,6 +754,50 @@ function TopBar({
   );
 }
 
+/** Close the transient Work overlay and return keyboard focus to its trigger. */
+export function dismissWorkModeOverlay(
+  setOpen: Dispatch<SetStateAction<boolean>>,
+  triggerRef: RefObject<HTMLButtonElement | null>,
+): void {
+  setOpen(false);
+  triggerRef.current?.focus();
+}
+
+/** Give a header overlay topmost ownership without moving focus back to Work. */
+export function openHeaderOverlay(
+  setWorkOpen: Dispatch<SetStateAction<boolean>>,
+  openOverlay: () => void,
+): void {
+  setWorkOpen(false);
+  openOverlay();
+}
+
+/** Open Work exclusively, or close it normally when its focused trigger toggles it. */
+export function toggleWorkModeOverlay(
+  open: boolean,
+  setOpen: Dispatch<SetStateAction<boolean>>,
+  closeHeaderOverlays: () => void,
+): void {
+  if (open) {
+    setOpen(false);
+    return;
+  }
+  closeHeaderOverlays();
+  setOpen(true);
+}
+
+/** Escape dismissal shared by App and interaction tests. */
+export function useWorkModeEscapeDismiss(open: boolean, onDismiss: () => void): void {
+  useEffect(() => {
+    if (!open) return;
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDismiss();
+    };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => window.removeEventListener("keydown", dismissOnEscape);
+  }, [open, onDismiss]);
+}
+
 export default function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(() => readUiState().projectId ?? null);
@@ -747,6 +817,11 @@ export default function App() {
     return t && VALID_TABS.includes(t) ? t : "home";
   });
   const [searchOpen, setSearchOpen] = useState(false);
+  const [workModeOpen, setWorkModeOpen] = useState(false);
+  const workModeTriggerRef = useRef<HTMLButtonElement>(null);
+  const dismissWorkMode = useCallback(() => {
+    dismissWorkModeOverlay(setWorkModeOpen, workModeTriggerRef);
+  }, []);
   // Ops tab view: the at-a-glance running-sessions "board", or the "grid" of
   // compact live panels that watch/drive several sessions at once. Local to the
   // tab; the board stays the default so the existing view is untouched.
@@ -964,7 +1039,7 @@ export default function App() {
         // first, de-duped). Uses the loaded page's authoritative title/project.
         pushRecent({
           sessionId: p.session.sessionId,
-          title: p.session.title,
+          title: displaySessionTitle(p.session),
           projectId: p.session.projectId,
         });
       })
@@ -1055,20 +1130,29 @@ export default function App() {
       const isP = e.key === "p" || e.key === "P";
       if (mod && e.shiftKey && isP) {
         e.preventDefault();
-        setSearchOpen(false);
-        setProjectSwitcherOpen(false);
-        setCommandOpen((v) => !v);
+        openHeaderOverlay(setWorkModeOpen, () => {
+          setSearchOpen(false);
+          setProjectSwitcherOpen(false);
+          setShortcutOpen(false);
+          setCommandOpen((v) => !v);
+        });
       } else if (mod && !e.shiftKey && isP) {
         // Plain ⌘P — overrides the browser's print dialog for the switcher.
         e.preventDefault();
-        setSearchOpen(false);
-        setCommandOpen(false);
-        setProjectSwitcherOpen((v) => !v);
+        openHeaderOverlay(setWorkModeOpen, () => {
+          setSearchOpen(false);
+          setCommandOpen(false);
+          setShortcutOpen(false);
+          setProjectSwitcherOpen((v) => !v);
+        });
       } else if (mod && !e.shiftKey && (e.key === "k" || e.key === "K")) {
         e.preventDefault();
-        setCommandOpen(false);
-        setProjectSwitcherOpen(false);
-        setSearchOpen((v) => !v);
+        openHeaderOverlay(setWorkModeOpen, () => {
+          setCommandOpen(false);
+          setProjectSwitcherOpen(false);
+          setShortcutOpen(false);
+          setSearchOpen((v) => !v);
+        });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1087,7 +1171,12 @@ export default function App() {
         return;
       }
       e.preventDefault();
-      setShortcutOpen((v) => !v);
+      openHeaderOverlay(setWorkModeOpen, () => {
+        setSearchOpen(false);
+        setCommandOpen(false);
+        setProjectSwitcherOpen(false);
+        setShortcutOpen((v) => !v);
+      });
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1377,6 +1466,18 @@ export default function App() {
   }, []);
 
   const project = projects.find((p) => p.id === projectId) ?? null;
+  const workModeAvailable = tab !== "spatial" && shouldMountWorkModeSurface(settings, project);
+
+  useEffect(() => {
+    if (!workModeAvailable) {
+      setWorkModeOpen(false);
+    }
+  }, [workModeAvailable]);
+  useWorkModeEscapeDismiss(
+    workModeOpen && !searchOpen && !commandOpen && !projectSwitcherOpen && !shortcutOpen,
+    dismissWorkMode,
+  );
+
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
   const openCrossProviderFork = useCallback((nativeTaskId: string | null) => {
@@ -1409,7 +1510,7 @@ export default function App() {
   // a breadcrumb on narrow ones. The stage auto-advances as the user drills in.
   const shell = useResponsiveShell({ hasProject: !!projectId, hasSession: !!sessionId });
   // The open session's title for the transcript breadcrumb crumb (when loaded).
-  const sessionTitle = page?.session.title ?? null;
+  const sessionTitle = page ? displaySessionTitle(page.session, project?.name) : null;
 
   // M6 slice 1: mount the measured Codex-style DevHubShell only when the server
   // resolves the `shellChrome` flag true; otherwise keep the legacy chrome. Default
@@ -1612,7 +1713,10 @@ export default function App() {
             defaultPermissionMode={settings?.defaultPermissionMode as PermissionMode | undefined}
             title={
               activeSeed
-                ? sessions.find((s) => s.sessionId === activeSeed.sessionId)?.title ?? "Resumed session"
+                ? (() => {
+                    const session = sessions.find((s) => s.sessionId === activeSeed.sessionId);
+                    return session ? displaySessionTitle(session, project.name) : "Resumed session";
+                  })()
                 : "New task"
             }
             showInspector={inspectorDockMode === "devhub" && inspectorVisible}
@@ -1648,9 +1752,24 @@ export default function App() {
               setChatSeed(null);
               setTab(t);
             }}
-            onOpenSearch={() => setSearchOpen(true)}
-            onOpenCommands={() => setCommandOpen(true)}
-            onOpenShortcuts={() => setShortcutOpen(true)}
+            onOpenSearch={() => openHeaderOverlay(setWorkModeOpen, () => {
+              setCommandOpen(false);
+              setProjectSwitcherOpen(false);
+              setShortcutOpen(false);
+              setSearchOpen(true);
+            })}
+            onOpenCommands={() => openHeaderOverlay(setWorkModeOpen, () => {
+              setSearchOpen(false);
+              setProjectSwitcherOpen(false);
+              setShortcutOpen(false);
+              setCommandOpen(true);
+            })}
+            onOpenShortcuts={() => openHeaderOverlay(setWorkModeOpen, () => {
+              setSearchOpen(false);
+              setCommandOpen(false);
+              setProjectSwitcherOpen(false);
+              setShortcutOpen(true);
+            })}
             perfPreference={perf.preference}
             perfReduced={perf.reduced}
             onCyclePerf={perf.cyclePreference}
@@ -1663,8 +1782,22 @@ export default function App() {
             recents={recents}
             onOpenRecent={openSession}
             onClearRecents={clearRecents}
+            onBeforeOpenRecent={() => setWorkModeOpen(false)}
             projectSessions={sessions}
             projectName={project?.name}
+            workModeAvailable={workModeAvailable}
+            workModeOpen={workModeOpen}
+            onToggleWorkMode={() => toggleWorkModeOverlay(
+              workModeOpen,
+              setWorkModeOpen,
+              () => {
+                setSearchOpen(false);
+                setCommandOpen(false);
+                setProjectSwitcherOpen(false);
+                setShortcutOpen(false);
+              },
+            )}
+            workModeTriggerRef={workModeTriggerRef}
           />
         }
         rail={
@@ -2045,7 +2178,7 @@ export default function App() {
           mode, never "Cowork" — see concepts/07-work-mode-corrected.png. Flag-off
           (default) OR no active project renders nothing; the server independently
           re-checks `workMode` on every request this surface issues. */}
-      {tab !== "spatial" && shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
+      {workModeOpen && shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
         <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[420px] max-w-[calc(100vw-2rem)]">
           <div className="pointer-events-auto">
             <WorkModeSurface
@@ -2056,6 +2189,7 @@ export default function App() {
               nativeTaskId={`work-mode-source-${project.id}`}
               folderRoot={project.cwd}
               taskId={`work-mode-${project.id}`}
+              onDismiss={dismissWorkMode}
             />
           </div>
         </div>
@@ -2129,7 +2263,7 @@ export default function App() {
           onSearchTasks={() => {
             setCommandOpen(false);
             setDhCommandQuery("");
-            setSearchOpen(true);
+            openHeaderOverlay(setWorkModeOpen, () => setSearchOpen(true));
           }}
         />
       ) : null}

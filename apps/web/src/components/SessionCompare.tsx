@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { ContentBlock, NormalizedMessage, SessionMessagesPage, SessionSummary } from "../lib/types";
+import { displaySessionTitle } from "../lib/session-title";
 import { MessageView } from "./MessageView";
 import { Spinner } from "./ui";
 import { compactNumber, formatUsd, totalTokens } from "../lib/format";
@@ -320,8 +321,11 @@ export function SessionCompare({
         {/* Title row: the base session (left) and the picker (right). */}
         <div className="flex shrink-0 items-stretch border-b border-zinc-800">
           <div className="min-w-0 flex-1 border-r border-zinc-800 px-5 py-2.5">
-            <div className="truncate text-[13px] font-medium text-zinc-200" title={baseSession.title}>
-              {baseSession.title}
+            <div
+              className="truncate text-[13px] font-medium text-zinc-200"
+              title={displaySessionTitle(baseSession)}
+            >
+              {displaySessionTitle(baseSession)}
             </div>
           </div>
           <div className="min-w-0 flex-1 px-5 py-2.5">
@@ -337,7 +341,7 @@ export function SessionCompare({
                 >
                   {otherSessions.map((s) => (
                     <option key={s.sessionId} value={s.sessionId}>
-                      {s.title}
+                      {displaySessionTitle(s)}
                     </option>
                   ))}
                 </select>

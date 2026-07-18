@@ -9,6 +9,7 @@ import {
   Tag as TagIcon,
 } from "lucide-react";
 import type { SessionSummary } from "../lib/types";
+import { displaySessionTitle } from "../lib/session-title";
 import { api } from "../lib/api";
 import { compactNumber, relativeTime, totalTokens } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -69,7 +70,9 @@ function InboxRow({
           className="min-w-0 flex-1 text-left disabled:cursor-default"
           title="Open in Browse"
         >
-          <div className="truncate text-[13px] font-medium text-zinc-100">{s.title}</div>
+          <div className="truncate text-[13px] font-medium text-zinc-100">
+            {displaySessionTitle(s)}
+          </div>
         </button>
         {s.pinned ? <Pin className="h-3 w-3 shrink-0 fill-clay-400 text-clay-400" /> : null}
         {onOpen ? (

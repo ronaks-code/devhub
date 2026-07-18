@@ -51,6 +51,7 @@ import { pairToolResults } from "../lib/transcript";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useMessagePermalink } from "../hooks/useMessagePermalink";
 import { cn } from "../lib/utils";
+import { displaySessionTitle } from "../lib/session-title";
 
 export function TranscriptPane({
   page,
@@ -475,7 +476,9 @@ export function TranscriptPane({
       />
       <div className="border-b border-zinc-800/80 px-5 py-3">
         <div className="flex items-center gap-2">
-          <h1 className="truncate text-[15px] font-semibold text-zinc-100">{s.title}</h1>
+          <h1 className="truncate text-[15px] font-semibold text-zinc-100">
+            {displaySessionTitle(s)}
+          </h1>
           {loading && <Spinner className="h-3.5 w-3.5" />}
 
           {/* Error navigator: jump to / step through tool errors in this

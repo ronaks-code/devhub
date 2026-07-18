@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
 import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { WorkModeSurface } from "./WorkModeSurface.js";
 import type { WorkModeApiClient, WorkModeTaskDto } from "../../../lib/work-mode-api.js";
@@ -78,5 +79,18 @@ describe("WorkModeSurface", () => {
     const { container } = rtlRender(createElement(WorkModeSurface, baseProps({ client })));
     await waitFor(() => expect(getOrCreateTask).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("forwards Code-mode dismissal from the loaded panel", async () => {
+    const onDismiss = vi.fn();
+    const client: WorkModeApiClient = {
+      fetchStatus: vi.fn(),
+      fetchTask: vi.fn(),
+      createTask: vi.fn(),
+      getOrCreateTask: vi.fn().mockResolvedValue(TASK_DTO),
+    };
+    rtlRender(createElement(WorkModeSurface, baseProps({ client, onDismiss })));
+    await userEvent.setup().click(await screen.findByRole("tab", { name: "Code" }));
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

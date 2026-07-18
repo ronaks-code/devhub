@@ -73,12 +73,14 @@ export interface WorkModePanelProps {
   /** The resolved `workMode` feature flag. `false` hides this panel entirely. */
   enabled: boolean;
   task: WorkModeTaskView | null;
+  /** Return to the normal Code surface. */
+  onDismiss?: () => void;
   className?: string;
 }
 
 /** Renders nothing when `enabled` is false OR there is no task to show — Work mode
  * never fabricates placeholder task content when it has no real backing task. */
-export function WorkModePanel({ enabled, task, className }: WorkModePanelProps) {
+export function WorkModePanel({ enabled, task, onDismiss, className }: WorkModePanelProps) {
   const headingId = useId();
   if (!enabled || !task) return null;
 
@@ -98,6 +100,7 @@ export function WorkModePanel({ enabled, task, className }: WorkModePanelProps) 
           role="tab"
           aria-selected="false"
           data-work-mode-tab="code"
+          onClick={onDismiss}
           className="rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-400"
         >
           {WORK_MODE_COPY.modeLabelCode}
