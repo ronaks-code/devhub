@@ -9,6 +9,7 @@ import type {
   NormalizedMessage,
   CodexSession,
   CodexStats,
+  SearchHitWithSeq,
 } from "./types";
 import type { AppSettings } from "@devhub/engine/types";
 // Git result shapes. Mirrored locally (not imported from the engine root, which
@@ -518,6 +519,11 @@ function getSettingsAfterWrites(): Promise<AppSettings> {
 
 export const api = {
   health: () => get<Health>("/api/health"),
+  search: (query: string, limit = 30, projectId?: string | null) =>
+    get<SearchHitWithSeq[]>(
+      `/api/search?q=${encodeURIComponent(query)}&limit=${limit}` +
+        (projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""),
+    ),
   // Projects. ProjectSummary carries the per-project chat defaults
   // (defaultModel/defaultPermissionMode), null when the user hasn't set them.
   projects: () => get<ProjectSummary[]>("/api/projects"),

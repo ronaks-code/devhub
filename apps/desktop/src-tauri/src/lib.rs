@@ -1,53 +1,49 @@
-//! Tauri desktop shell for Claude UI.
+//! Native DevHub launcher.
 //!
-//! On launch we start the Claude UI server (the Fastify app over the engine) as
-//! a child process so the user never needs a separate `pnpm dev` terminal. The
-//! child is killed when the app exits. If a server is already listening on the
-//! target port (e.g. the user ran `pnpm dev` themselves) we detect it and skip
-//! spawning, then just point the webview at the live UI.
-//!
-//! Everything is configurable via env so power users / CI can override:
-//!   CLAUDE_UI_SERVER_CMD   full shell command to launch the server
-//!                          (default: `pnpm --filter @devhub/server start`)
-//!   CLAUDE_UI_REPO_DIR     working dir for the command (default: detected repo root)
-//!   CLAUDE_UI_SERVER_HOST  host to probe for readiness    (default: 127.0.0.1)
-//!   CLAUDE_UI_SERVER_PORT  port to probe for readiness    (default: 8787)
-//!   CLAUDE_UI_NO_SPAWN     if set ("1"/"true"), never spawn — assume external server
+//! A release bundle carries a relocatable pnpm deployment of `@devhub/server`
+//! plus the built Vite application. The launcher starts that deployment with the
+//! user's real Node binary, waits for DevHub's strict health identity, then points
+//! the WebView at the server. UI, HTTP, SSE, and WebSocket traffic consequently
+//! share one localhost origin and retain the exact web-app behavior.
 
 mod notify;
 mod shortcut;
 mod tray;
 
-use std::io::Read;
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Handle to the spawned server, kept in Tauri-managed state so we can reap it
-/// on exit. `None` means we never spawned (external server already running, or
-/// spawning was disabled).
+use tauri::Manager;
+
+const DEVHUB_SERVER_SERVICE_ID: &str = "devhub-server";
+const HEALTH_PROBE_READ_CAP: usize = 8192;
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Default)]
 struct ServerProcess(Mutex<Option<Child>>);
 
 impl ServerProcess {
-    /// Store the spawned child (if any). Keeps the lock fully contained so no
-    /// guard escapes into the caller's borrow of Tauri-managed state.
     fn set(&self, child: Option<Child>) {
         if let Ok(mut guard) = self.0.lock() {
             *guard = child;
         }
     }
 
-    /// Kill the child if we own one. Idempotent — safe to call from both the
-    /// window-destroyed event and the exit-requested event.
     fn shutdown(&self) {
         if let Ok(mut guard) = self.0.lock() {
             if let Some(mut child) = guard.take() {
-                log::info!("[claude-ui] stopping server (pid {})", child.id());
-                let _ = child.kill();
-                let _ = child.wait();
+                log::info!(
+                    "[devhub] stopping server process group (pid {})",
+                    child.id()
+                );
+                stop_child(&mut child);
             }
         }
     }
@@ -55,7 +51,7 @@ impl ServerProcess {
 
 fn env_or(name: &str, default: &str) -> String {
     match std::env::var(name) {
-        Ok(v) if !v.trim().is_empty() => v,
+        Ok(value) if !value.trim().is_empty() => value,
         _ => default.to_string(),
     }
 }
@@ -67,255 +63,329 @@ fn env_flag(name: &str) -> bool {
     )
 }
 
-/// Probe whether something is already accepting TCP connections at host:port.
-/// We only need a connect() to know the port is taken — the readiness loop does
-/// the deeper HTTP health check.
-fn port_open(host: &str, port: u16) -> bool {
-    let addr = format!("{host}:{port}");
-    let Ok(mut addrs) = addr.to_socket_addrs() else {
-        return false;
-    };
-    let Some(sockaddr) = addrs.next() else {
-        return false;
-    };
-    TcpStream::connect_timeout(&sockaddr, Duration::from_millis(300)).is_ok()
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
 }
 
-/// The exact identity string `GET /api/health` echoes (see
-/// `packages/server/src/routes/health.ts`'s `DEVHUB_SERVER_SERVICE_ID` and
-/// `packages/server/src/app.ts`'s `/api/health` handler — this is the Rust half of
-/// that cross-language contract). A bare 2xx on a port proves nothing: any process,
-/// including a foreign/stale server that happens to be bound there, can answer with
-/// its own `ok: true`. We only trust a response that also carries this identity.
-const DEVHUB_SERVER_SERVICE_ID: &str = "devhub-server";
+/// Finder launches with a deliberately small environment. Prepend every stable
+/// executable location DevHub needs, then retain the inherited PATH entries.
+fn finder_safe_path(inherited: Option<&OsStr>, home: Option<&Path>) -> OsString {
+    let mut candidates = vec![
+        PathBuf::from("/usr/local/opt/node/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+    ];
+    if let Some(home) = home {
+        candidates.insert(1, home.join(".local/bin"));
+        candidates.insert(2, home.join(".claude/bin"));
+        candidates.insert(3, home.join(".claude/local"));
+    }
+    candidates.extend([PathBuf::from("/usr/bin"), PathBuf::from("/bin")]);
+    if let Some(path) = inherited {
+        candidates.extend(std::env::split_paths(path));
+    }
 
-/// Cap on the bytes we'll read from a health probe response. The real body is a
-/// small flat JSON object; this is generous headroom while still bounding a
-/// pathological/chatty responder.
-const HEALTH_PROBE_READ_CAP: usize = 8192;
+    let mut seen = HashSet::new();
+    candidates.retain(|entry| seen.insert(entry.clone()));
+    std::env::join_paths(candidates).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
+}
 
-/// Read up to `cap` bytes from `stream` (which the caller already gave a read
-/// timeout), stopping early on EOF/short reads. Best-effort: a read error just
-/// means we stop with whatever we already have.
 fn read_capped(stream: &mut TcpStream, cap: usize) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(cap.min(4096));
-    let mut chunk = [0u8; 1024];
-    while buf.len() < cap {
-        match stream.read(&mut chunk) {
-            Ok(0) => break, // EOF — server closed (expected for HTTP/1.0 Connection: close)
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+    let mut output = Vec::with_capacity(cap.min(4096));
+    let mut chunk = [0_u8; 1024];
+    while output.len() < cap {
+        let remaining = cap - output.len();
+        let read_len = remaining.min(chunk.len());
+        match stream.read(&mut chunk[..read_len]) {
+            Ok(0) => break,
+            Ok(count) => output.extend_from_slice(&chunk[..count]),
             Err(_) => break,
         }
     }
-    buf
+    output
 }
 
-/// Minimal, dependency-free HTTP GET against the server health endpoint. Returns
-/// true only when the server answers with a 2xx status AND a body that carries our
-/// strict `service: "devhub-server"` identity — not merely that *some* process is
-/// listening and happens to return 2xx. This is what lets `ensure_server` safely
-/// skip spawning only when it has proven the DevHub server (not an unrelated
-/// process, e.g. another tool that grabbed the same port) is already up.
-fn health_ok(host: &str, port: u16) -> bool {
-    let addr = format!("{host}:{port}");
-    let Ok(mut addrs) = addr.to_socket_addrs() else {
-        return false;
-    };
-    let Some(sockaddr) = addrs.next() else {
-        return false;
-    };
-    let Ok(mut stream) = TcpStream::connect_timeout(&sockaddr, Duration::from_millis(500)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-    let req = format!(
-        "GET /api/health HTTP/1.0\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
-    );
-    use std::io::Write;
-    if stream.write_all(req.as_bytes()).is_err() {
-        return false;
-    }
-    let buf = read_capped(&mut stream, HEALTH_PROBE_READ_CAP);
-    response_proves_devhub_identity(&buf)
-}
-
-/// Pure check over a raw HTTP response byte buffer: 2xx status line AND a body that
-/// contains BOTH `"service"` and our exact identity value. Checking the two
-/// substrings independently (rather than one fixed-spacing JSON fragment) tolerates
-/// any valid JSON formatting the server's serializer chooses to use.
-fn response_proves_devhub_identity(buf: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(buf);
+fn response_proves_devhub_identity(response: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(response);
     let is_2xx = text.starts_with("HTTP/1.0 2") || text.starts_with("HTTP/1.1 2");
     is_2xx && text.contains("\"service\"") && text.contains(DEVHUB_SERVER_SERVICE_ID)
 }
 
-#[cfg(test)]
-mod health_probe_tests {
-    use super::*;
-
-    #[test]
-    fn accepts_a_2xx_response_carrying_the_devhub_identity() {
-        let body = "{\"ok\":true,\"ready\":true,\"sessionCount\":0,\"service\":\"devhub-server\",\"version\":\"0.1.0\"}";
-        let resp = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        assert!(response_proves_devhub_identity(resp.as_bytes()));
+fn health_ok(host: &str, port: u16) -> bool {
+    let address = format!("{host}:{port}");
+    let Some(socket) = address
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+    else {
+        return false;
+    };
+    let Ok(mut stream) = TcpStream::connect_timeout(&socket, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+    let request =
+        format!("GET /api/health HTTP/1.0\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
     }
-
-    #[test]
-    fn rejects_a_2xx_response_from_an_unrelated_process_on_the_same_port() {
-        // This is exactly the failure mode a bare-2xx check can't catch: some other
-        // tool (a static file server, another app's dev server, ...) happens to be
-        // bound to the probed port and answers 200, but it is NOT the DevHub server.
-        let resp = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nhello world";
-        assert!(!response_proves_devhub_identity(resp.as_bytes()));
-    }
-
-    #[test]
-    fn rejects_a_2xx_json_response_missing_the_service_field_entirely() {
-        let resp = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"ok\":true}";
-        assert!(!response_proves_devhub_identity(resp.as_bytes()));
-    }
-
-    #[test]
-    fn rejects_a_non_2xx_status_even_with_the_right_body() {
-        let resp = "HTTP/1.1 500 Internal Server Error\r\n\r\n{\"service\":\"devhub-server\"}";
-        assert!(!response_proves_devhub_identity(resp.as_bytes()));
-    }
-
-    #[test]
-    fn accepts_regardless_of_json_key_order_or_spacing() {
-        let resp = "HTTP/1.0 200 OK\r\n\r\n{ \"version\" : \"0.1.0\" , \"service\" : \"devhub-server\" }";
-        assert!(response_proves_devhub_identity(resp.as_bytes()));
-    }
+    response_proves_devhub_identity(&read_capped(&mut stream, HEALTH_PROBE_READ_CAP))
 }
 
-/// Walk up from `start` looking for the monorepo root (the dir holding
-/// `pnpm-workspace.yaml`). In `tauri dev` the binary runs from
-/// `apps/desktop/src-tauri`; in a bundled app cwd is unpredictable, so callers
-/// should prefer the compile-time fallback below when this returns None.
+fn port_open(host: &str, port: u16) -> bool {
+    let address = format!("{host}:{port}");
+    address
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .is_some_and(|socket| {
+            TcpStream::connect_timeout(&socket, Duration::from_millis(300)).is_ok()
+        })
+}
+
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
-    let mut dir = Some(start);
-    while let Some(d) = dir {
-        if d.join("pnpm-workspace.yaml").is_file() {
-            return Some(d.to_path_buf());
-        }
-        dir = d.parent();
-    }
-    None
+    start
+        .ancestors()
+        .find(|directory| directory.join("pnpm-workspace.yaml").is_file())
+        .map(Path::to_path_buf)
 }
 
-/// Best-effort repo root: env override → walk up from cwd → walk up from the
-/// compile-time crate dir (this file lives at <repo>/apps/desktop/src-tauri/src).
 fn repo_root() -> PathBuf {
-    if let Ok(dir) = std::env::var("CLAUDE_UI_REPO_DIR") {
-        if !dir.trim().is_empty() {
-            return PathBuf::from(dir);
-        }
+    if let Some(override_dir) =
+        std::env::var_os("CLAUDE_UI_REPO_DIR").filter(|value| !value.is_empty())
+    {
+        return PathBuf::from(override_dir);
     }
     if let Ok(cwd) = std::env::current_dir() {
         if let Some(root) = find_repo_root(&cwd) {
             return root;
         }
     }
-    // CARGO_MANIFEST_DIR = <repo>/apps/desktop/src-tauri at build time. Ascend 3.
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if let Some(root) = find_repo_root(manifest) {
-        return root;
-    }
-    manifest
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| manifest.to_path_buf())
+    find_repo_root(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
 }
 
-/// Split the configured command into program + args. We deliberately run it
-/// through the platform shell so users can pass a full command line (pipes,
-/// env, `pnpm --filter ...`) in CLAUDE_UI_SERVER_CMD without us re-parsing it.
-fn build_server_command(cmd: &str, cwd: &Path, port: u16, host: &str) -> Command {
-    let mut command = if cfg!(target_os = "windows") {
-        let mut c = Command::new("cmd");
-        c.arg("/C").arg(cmd);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-lc").arg(cmd);
-        c
-    };
+fn launch_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 32];
+    File::open("/dev/urandom")
+        .and_then(|mut source| source.read_exact(&mut bytes))
+        .map_err(|error| format!("Could not generate the desktop launch token: {error}"))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn apply_child_environment(
+    command: &mut Command,
+    host: &str,
+    port: u16,
+    desktop_token: Option<&str>,
+) {
+    let path = finder_safe_path(std::env::var_os("PATH").as_deref(), home_dir().as_deref());
     command
-        .current_dir(cwd)
-        // Hand the server its port/host so a custom CLAUDE_UI_SERVER_PORT lines
-        // up with what we probe. The server reads PORT/HOST from env.
+        .env("PATH", path)
         .env("PORT", port.to_string())
         .env("HOST", host)
+        .stdin(Stdio::null())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
+    if let Some(token) = desktop_token {
+        let desktop_host = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        command
+            .env("DEVHUB_TOKEN", token)
+            .env("DEVHUB_DESKTOP_TOKEN", token)
+            .env("DEVHUB_DESKTOP_HOST", desktop_host);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+}
+
+fn shell_server_command(
+    command_line: &str,
+    cwd: &Path,
+    host: &str,
+    port: u16,
+    desktop_token: Option<&str>,
+) -> Command {
+    let mut command = if cfg!(target_os = "windows") {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(command_line);
+        command
+    } else {
+        // Do not use a login shell: it may replace the Finder-safe PATH below.
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(command_line);
+        command
+    };
+    command.current_dir(cwd);
+    apply_child_environment(&mut command, host, port, desktop_token);
     command
 }
 
-/// Start the server if it isn't already up. Returns the child (if we spawned
-/// one) so the caller can hand it to managed state for later cleanup.
-fn ensure_server(host: &str, port: u16) -> Option<Child> {
-    // Already serving? (External `pnpm dev`, or a prior instance.) Don't spawn.
-    if health_ok(host, port) || port_open(host, port) {
-        log::info!("[claude-ui] server already reachable on {host}:{port}; not spawning");
-        return None;
-    }
-
-    if env_flag("CLAUDE_UI_NO_SPAWN") {
-        log::warn!("[claude-ui] CLAUDE_UI_NO_SPAWN set but no server on {host}:{port}");
-        return None;
-    }
-
-    let cmd = env_or(
-        "CLAUDE_UI_SERVER_CMD",
-        "pnpm --filter @devhub/server start",
-    );
-    let cwd = repo_root();
-    log::info!("[claude-ui] starting server: `{cmd}` (cwd: {})", cwd.display());
-
-    match build_server_command(&cmd, &cwd, port, host).spawn() {
-        Ok(child) => {
-            log::info!("[claude-ui] server spawned (pid {})", child.id());
-            Some(child)
-        }
-        Err(err) => {
-            log::error!("[claude-ui] failed to spawn server: {err}");
-            None
+fn packaged_server_command(
+    resource_dir: &Path,
+    host: &str,
+    port: u16,
+    desktop_token: &str,
+) -> Result<Command, String> {
+    let root = resource_dir.join("sidecar");
+    let entry = root.join("node_modules/tsx/dist/cli.mjs");
+    let server = root.join("src/index.ts");
+    let web = root.join("web");
+    for required in [&entry, &server, &web.join("index.html")] {
+        if !required.exists() {
+            return Err(format!(
+                "Packaged DevHub resource is missing: {}",
+                required.display()
+            ));
         }
     }
+
+    let node = std::env::var_os("DEVHUB_NODE_EXECUTABLE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/local/opt/node/bin/node"));
+    if node.is_absolute() && !node.is_file() {
+        return Err(format!("Node executable is missing: {}", node.display()));
+    }
+
+    let mut command = Command::new(node);
+    command
+        .arg(entry)
+        .arg(server)
+        .current_dir(&root)
+        .env("DEVHUB_WEB_DIST", web);
+    apply_child_environment(&mut command, host, port, Some(desktop_token));
+    Ok(command)
 }
 
-/// Block (on a background thread) until the server answers /api/health, or until
-/// `timeout` elapses. Polls cheaply so first paint isn't delayed once it's up.
-fn wait_for_health(host: &str, port: u16, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
+fn spawn_server(
+    resource_dir: &Path,
+    host: &str,
+    port: u16,
+    desktop_token: Option<&str>,
+) -> Result<Child, String> {
+    let mut command = if let Ok(override_command) = std::env::var("CLAUDE_UI_SERVER_CMD") {
+        shell_server_command(&override_command, &repo_root(), host, port, desktop_token)
+    } else if cfg!(debug_assertions) {
+        shell_server_command(
+            "pnpm --filter @devhub/server start",
+            &repo_root(),
+            host,
+            port,
+            desktop_token,
+        )
+    } else {
+        packaged_server_command(
+            resource_dir,
+            host,
+            port,
+            desktop_token.ok_or("A release launch requires a desktop token")?,
+        )?
+    };
+    command
+        .spawn()
+        .map_err(|error| format!("Failed to launch DevHub server: {error}"))
+}
+
+fn wait_for_server(child: &mut Child, host: &str, port: u16) -> Result<(), String> {
+    let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
         if health_ok(host, port) {
-            return true;
+            return Ok(());
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Could not inspect DevHub server: {error}"))?
+        {
+            return Err(format!(
+                "DevHub server exited before becoming ready: {status}"
+            ));
         }
         if Instant::now() >= deadline {
-            return false;
+            return Err(format!(
+                "DevHub server did not become ready at http://{host}:{port} within {} seconds",
+                STARTUP_TIMEOUT.as_secs()
+            ));
         }
         std::thread::sleep(Duration::from_millis(200));
     }
+}
+
+fn ensure_server(
+    resource_dir: &Path,
+    host: &str,
+    port: u16,
+    desktop_token: Option<&str>,
+) -> Result<Child, String> {
+    if port_open(host, port) {
+        return Err(format!(
+            "Port {port} is already occupied; DevHub requires an app-owned server"
+        ));
+    }
+    if env_flag("CLAUDE_UI_NO_SPAWN") {
+        return Err(format!(
+            "CLAUDE_UI_NO_SPAWN is set but no DevHub server is available on {host}:{port}"
+        ));
+    }
+
+    let mut child = spawn_server(resource_dir, host, port, desktop_token)?;
+    if let Err(error) = wait_for_server(&mut child, host, port) {
+        stop_child(&mut child);
+        return Err(error);
+    }
+    Ok(child)
+}
+
+fn stop_child(child: &mut Child) {
+    let process_group = child.id() as i32;
+    #[cfg(unix)]
+    unsafe {
+        // The child was placed in its own process group. SIGTERM reaches Node and
+        // every pnpm/tsx descendant, allowing Fastify's shutdown hooks to run.
+        let _ = libc::kill(-process_group, libc::SIGTERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(4);
+    while Instant::now() < deadline {
+        #[cfg(unix)]
+        unsafe {
+            if libc::kill(-process_group, 0) != 0 {
+                let _ = child.wait();
+                return;
+            }
+        }
+        #[cfg(not(unix))]
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    #[cfg(unix)]
+    unsafe {
+        let _ = libc::kill(-process_group, libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .manage(ServerProcess::default())
-        // Global-shortcut plugin powers the "summon window" hotkey (see
-        // src/shortcut.rs). Register the plugin on the builder; the chord ->
-        // action wiring is attached in setup() once the app handle exists.
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // Native desktop notifications: fired when a running session finishes a turn
-        // (see src/notify.rs). The plugin is registered here; the busy->idle watcher
-        // is attached in setup() once the app handle + server host/port exist.
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -327,69 +397,114 @@ pub fn run() {
             }
 
             let host = env_or("CLAUDE_UI_SERVER_HOST", "127.0.0.1");
-            let port: u16 = env_or("CLAUDE_UI_SERVER_PORT", "8787")
-                .parse()
-                .unwrap_or(8787);
-
-            // Spawn (or detect) the server and stash the child for cleanup.
-            let child = ensure_server(&host, port);
-            {
-                use tauri::Manager;
-                app.state::<ServerProcess>().set(child);
+            if !cfg!(debug_assertions) && host != "127.0.0.1" {
+                return Err("A packaged DevHub server must bind to 127.0.0.1".into());
             }
-
-            // Menu-bar tray icon + dock badge (running-session count). Best-effort:
-            // a tray build failure shouldn't stop the app from opening its window.
-            if let Err(err) = tray::setup_tray(app.handle(), host.clone(), port) {
-                log::warn!("[claude-ui] failed to set up tray: {err}");
-            }
-
-            // Global hotkey (CmdOrCtrl+Shift+K) to summon the window from anywhere.
-            // Best-effort, same as the tray: a registration failure (e.g. the chord
-            // is already claimed by another app) shouldn't stop the window opening.
-            if let Err(err) = shortcut::setup_shortcut(app.handle()) {
-                log::warn!("[claude-ui] failed to set up summon shortcut: {err}");
-            }
-
-            // Native notification when a session finishes a turn (busy -> idle). Polls
-            // the same /api/running endpoint as the tray badge. Best-effort, same as
-            // the tray/shortcut: a permission denial or watcher hiccup must not stop
-            // the window opening.
-            if let Err(err) = notify::setup_notify(app.handle(), host.clone(), port) {
-                log::warn!("[claude-ui] failed to set up finish notifications: {err}");
-            }
-
-            // Give the server a moment to come up. The webview talks to the API
-            // same-origin (vite proxies /api in dev), so the UI is resilient to
-            // the API lagging a beat — but waiting here makes first load smooth.
-            // Done on a background thread so we never block the UI/event loop.
-            let probe_host = host.clone();
-            std::thread::spawn(move || {
-                if wait_for_health(&probe_host, port, Duration::from_secs(20)) {
-                    log::info!("[claude-ui] server healthy on {probe_host}:{port}");
-                } else {
-                    log::warn!(
-                        "[claude-ui] server not healthy after 20s on {probe_host}:{port}; UI will retry"
-                    );
+            let port = env_or("CLAUDE_UI_SERVER_PORT", "8787")
+                .parse::<u16>()
+                .map_err(|_| "CLAUDE_UI_SERVER_PORT must be a valid port")?;
+            let resource_dir = app.path().resource_dir()?;
+            let desktop_token = if cfg!(debug_assertions) {
+                None
+            } else {
+                Some(
+                    launch_token()
+                        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
+                )
+            };
+            let mut child = ensure_server(&resource_dir, &host, port, desktop_token.as_deref())
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            let start_ui = || -> Result<(), Box<dyn std::error::Error>> {
+                let window = app.get_webview_window("main").ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "Tauri did not create the main DevHub window",
+                    )
+                })?;
+                if !cfg!(debug_assertions) {
+                    let url = format!("http://{host}:{port}").parse::<tauri::Url>()?;
+                    window.navigate(url)?;
                 }
-            });
+                window.show()?;
+                window.set_focus()?;
+                Ok(())
+            };
+            if let Err(error) = start_ui() {
+                stop_child(&mut child);
+                return Err(error);
+            }
+            app.state::<ServerProcess>().set(Some(child));
 
+            if let Err(error) = tray::setup_tray(app.handle(), host.clone(), port) {
+                log::warn!("[devhub] failed to set up tray: {error}");
+            }
+            if let Err(error) = shortcut::setup_shortcut(app.handle()) {
+                log::warn!("[devhub] failed to set up summon shortcut: {error}");
+            }
+            if let Err(error) = notify::setup_notify(app.handle(), host, port) {
+                log::warn!("[devhub] failed to set up notifications: {error}");
+            }
             Ok(())
         })
-        .on_window_event(|window, event| {
-            // When the last window is destroyed, reap the server child.
-            if let tauri::WindowEvent::Destroyed = event {
-                use tauri::Manager;
-                window.state::<ServerProcess>().shutdown();
-            }
-        })
         .build(tauri::generate_context!())
-        .expect("error while building tauri application")
-        .run(|app_handle, event| {
-            // Catch-all: also reap on explicit exit (Cmd-Q, app.exit, etc.).
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                use tauri::Manager;
-                app_handle.state::<ServerProcess>().shutdown();
+        .expect("error while building DevHub")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                app.state::<ServerProcess>().shutdown();
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_a_2xx_response_with_devhub_identity() {
+        assert!(response_proves_devhub_identity(
+            b"HTTP/1.1 200 OK\r\n\r\n{\"service\":\"devhub-server\"}"
+        ));
+        assert!(!response_proves_devhub_identity(
+            b"HTTP/1.1 200 OK\r\n\r\n{\"ok\":true}"
+        ));
+        assert!(!response_proves_devhub_identity(
+            b"HTTP/1.1 500 Error\r\n\r\n{\"service\":\"devhub-server\"}"
+        ));
+    }
+
+    #[test]
+    fn finder_path_has_required_prefixes_and_retains_inherited_entries() {
+        let home = Path::new("/Users/example");
+        let path = finder_safe_path(Some(OsStr::new("/custom/bin:/usr/bin")), Some(home));
+        let entries: Vec<_> = std::env::split_paths(&path).collect();
+        assert_eq!(entries[0], PathBuf::from("/usr/local/opt/node/bin"));
+        assert!(entries.contains(&home.join(".local/bin")));
+        assert!(entries.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(entries.contains(&PathBuf::from("/custom/bin")));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| *entry == Path::new("/usr/bin"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn repo_root_walk_finds_workspace_marker() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(find_repo_root(manifest).is_some());
+    }
+
+    #[test]
+    fn launch_tokens_are_unguessable_hex() {
+        let first = launch_token().expect("first token");
+        let second = launch_token().expect("second token");
+        assert_eq!(first.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
+    }
 }

@@ -15,7 +15,14 @@ const { buildApp, startEngineLifecycle } = await import("./app.js");
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "127.0.0.1";
 
-const { app, engine } = buildApp();
+const webDist = process.env.DEVHUB_WEB_DIST?.trim();
+const desktopToken = process.env.DEVHUB_DESKTOP_TOKEN?.trim();
+const desktopHost = process.env.DEVHUB_DESKTOP_HOST?.trim();
+const { app, engine } = buildApp({
+  ...(webDist ? { webDist } : {}),
+  ...(desktopToken ? { desktopToken } : {}),
+  ...(desktopHost ? { desktopHost } : {}),
+});
 const stop = startEngineLifecycle(engine);
 
 app

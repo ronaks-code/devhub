@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "dev.sixthsense.claude-ui",
   "build": {
-    "frontendDist": "../../web/dist",
-    "devUrl": "http://localhost:5173",
+    "frontendDist": "../loading",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeDevCommand": "pnpm --filter @devhub/web dev",
-    "beforeBuildCommand": "pnpm --filter @devhub/web build"
+    "beforeBuildCommand": "pnpm --filter @devhub/web build && pnpm --filter @devhub/desktop prepare:sidecar"
   },
   "app": {
     "windows": [
@@ -17,6 +17,7 @@
         "height": 900,
         "minWidth": 920,
         "minHeight": 600,
+        "visible": false,
         "resizable": true,
         "fullscreen": false,
         "titleBarStyle": "Overlay"
@@ -29,6 +30,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../dist/sidecar/": "sidecar/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

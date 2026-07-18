@@ -5,6 +5,7 @@ import { cn } from "../lib/utils";
 import { readCompat, writeCompat } from "../lib/compat-storage";
 import { Spinner } from "./ui";
 import { SearchDateFilter } from "./SearchDateFilter";
+import { api } from "../lib/api";
 
 /** Search scope: everything, or just the active project. */
 type SearchScope = "global" | "project";
@@ -100,11 +101,7 @@ export function SearchPalette({
       // params; this future-proofs server-side narrowing). We ALSO filter the
       // returned hits to the project client-side so scoping works today against a
       // server that doesn't yet narrow.
-      const url =
-        `/api/search?q=${encodeURIComponent(term)}&limit=30` +
-        (effectiveProject ? `&projectId=${encodeURIComponent(effectiveProject)}` : "");
-      fetch(url, { headers: { accept: "application/json" } })
-        .then((r) => (r.ok ? (r.json() as Promise<SearchHitWithSeq[]>) : []))
+      api.search(term, 30, effectiveProject)
         .then((res) => {
           if (cancelled) return;
           const scoped = effectiveProject
