@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { streamRawLines } from "./parser.js";
 
 export interface CodexSession {
   id: string;
@@ -29,24 +30,21 @@ export interface CodexStats {
 /**
  * Recursively find all rollout-*.jsonl files under a directory.
  */
-async function findJsonlFiles(dir: string): Promise<string[]> {
-  const results: string[] = [];
-  let entries: fs.Dirent[];
+async function* findJsonlFiles(dir: string): AsyncGenerator<string> {
+  let entries: fs.Dir;
   try {
-    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    entries = await fs.promises.opendir(dir);
   } catch {
-    return results;
+    return;
   }
-  for (const entry of entries) {
+  for await (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      const sub = await findJsonlFiles(full);
-      results.push(...sub);
+      yield* findJsonlFiles(full);
     } else if (entry.isFile() && entry.name.startsWith("rollout-") && entry.name.endsWith(".jsonl")) {
-      results.push(full);
+      yield full;
     }
   }
-  return results;
 }
 
 async function resolveSessionsDir(codexHome: string): Promise<string | null> {
@@ -72,28 +70,19 @@ async function resolveSessionsDir(codexHome: string): Promise<string | null> {
  * Parse one .jsonl session file into a CodexSession.
  * Returns null if the file is unreadable or missing a valid session_meta first line.
  */
-async function parseSessionFile(filePath: string): Promise<CodexSession | null> {
-  let content: string;
+type CodexSessionMetadata = CodexSession;
+
+/** Metadata is always the first parsed record; never buffer the remainder here. */
+async function parseSessionMetadata(filePath: string): Promise<CodexSessionMetadata | null> {
+  let meta: Record<string, unknown> | undefined;
   try {
-    content = await fs.promises.readFile(filePath, "utf8");
+    for await (const row of streamRawLines(filePath, { maxLines: 1 })) {
+      meta = row;
+    }
   } catch {
     return null;
   }
-
-  const lines = content.split("\n").filter((l) => l.trim().length > 0);
-  if (lines.length === 0) return null;
-
-  // First line must be session_meta
-  const firstLine = lines[0];
-  if (!firstLine) return null;
-  let meta: Record<string, unknown>;
-  try {
-    meta = JSON.parse(firstLine) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-
-  if ((meta as { type?: string }).type !== "session_meta") return null;
+  if (!meta || meta.type !== "session_meta") return null;
 
   const payload = (meta.payload ?? {}) as Record<string, unknown>;
   const id = (payload.id as string | undefined) ?? path.basename(filePath, ".jsonl");
@@ -109,25 +98,6 @@ async function parseSessionFile(filePath: string): Promise<CodexSession | null> 
     model = baseInstructions;
   }
 
-  let userMessageCount = 0;
-  let turnCount = 0;
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (!line) continue;
-    let row: Record<string, unknown>;
-    try {
-      row = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    if (row.type !== "event_msg") continue;
-    const p = (row.payload ?? {}) as Record<string, unknown>;
-    const t = p.type as string | undefined;
-    if (t === "user_message") userMessageCount++;
-    if (t === "task_started") turnCount++;
-  }
-
   return {
     id,
     filename: filePath,
@@ -136,9 +106,115 @@ async function parseSessionFile(filePath: string): Promise<CodexSession | null> 
     model,
     provider,
     cliVersion,
-    userMessageCount,
-    turnCount,
+    userMessageCount: 0,
+    turnCount: 0,
   };
+}
+
+/** Fold only the two listing counters while streaming one rollout line at a time. */
+async function parseSessionCounts(
+  filePath: string,
+): Promise<{ userMessageCount: number; turnCount: number }> {
+  let userMessageCount = 0;
+  let turnCount = 0;
+  try {
+    for await (const row of streamRawLines(filePath)) {
+      if (row.type !== "event_msg") continue;
+      const p = (row.payload ?? {}) as Record<string, unknown>;
+      const t = p.type as string | undefined;
+      if (t === "user_message") userMessageCount++;
+      if (t === "task_started") turnCount++;
+    }
+  } catch {
+    // Preserve the old best-effort contract for files changed/removed mid-scan.
+  }
+  return { userMessageCount, turnCount };
+}
+
+/** Maximum simultaneous rollout streams for metadata and counter scans. */
+export const CODEX_LIST_CONCURRENCY = 4;
+const CODEX_SESSION_LIMIT = 200;
+
+/** Consume an async source with a fixed worker count and no input-sized Promise array. */
+async function runBounded<T>(
+  source: AsyncIterable<T>,
+  concurrency: number,
+  task: (value: T) => Promise<void>,
+): Promise<void> {
+  const iterator = source[Symbol.asyncIterator]();
+  const worker = async (): Promise<void> => {
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) return;
+      await task(next.value);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+}
+
+function newestFirst(a: CodexSession, b: CodexSession): number {
+  const delta = Date.parse(b.startedAt) - Date.parse(a.startedAt);
+  return Number.isFinite(delta) && delta !== 0 ? delta : b.filename.localeCompare(a.filename);
+}
+
+interface CodexCorpus {
+  sessions: CodexSession[];
+  stats: CodexStats;
+}
+
+async function scanCodexCorpus(sessionsDir: string): Promise<CodexCorpus> {
+  const recent: CodexSessionMetadata[] = [];
+  const cwdCounts = new Map<string, number>();
+  const now = Date.now();
+  const day30 = now - 30 * 24 * 60 * 60 * 1000;
+  const day7 = now - 7 * 24 * 60 * 60 * 1000;
+  let totalSessions = 0;
+  let last30Days = 0;
+  let last7Days = 0;
+
+  await runBounded(findJsonlFiles(sessionsDir), CODEX_LIST_CONCURRENCY, async (file) => {
+    const session = await parseSessionMetadata(file);
+    if (!session) return;
+    totalSessions++;
+    const ts = Date.parse(session.startedAt);
+    if (ts >= day30) last30Days++;
+    if (ts >= day7) last7Days++;
+    if (session.cwd) cwdCounts.set(session.cwd, (cwdCounts.get(session.cwd) ?? 0) + 1);
+
+    // Retain only the response page; corpus-sized metadata never accumulates.
+    recent.push(session);
+    recent.sort(newestFirst);
+    if (recent.length > CODEX_SESSION_LIMIT) recent.pop();
+  });
+
+  await runBounded(
+    (async function* () {
+      yield* recent;
+    })(),
+    CODEX_LIST_CONCURRENCY,
+    async (session) => {
+      Object.assign(session, await parseSessionCounts(session.filename));
+    },
+  );
+
+  const topCwds = [...cwdCounts.entries()]
+    .map(([cwd, count]) => ({ cwd, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
+  return { sessions: recent, stats: { totalSessions, last30Days, last7Days, topCwds } };
+}
+
+// The Home view requests sessions + stats together. Share that in-flight scan so
+// concurrent HTTP requests cannot duplicate a multi-gigabyte corpus traversal.
+const corpusScans = new Map<string, Promise<CodexCorpus>>();
+function scanCodexCorpusOnce(sessionsDir: string): Promise<CodexCorpus> {
+  const active = corpusScans.get(sessionsDir);
+  if (active) return active;
+  const scan = scanCodexCorpus(sessionsDir).finally(() => {
+    if (corpusScans.get(sessionsDir) === scan) corpusScans.delete(sessionsDir);
+  });
+  corpusScans.set(sessionsDir, scan);
+  return scan;
 }
 
 /**
@@ -152,55 +228,18 @@ export async function listCodexSessions(
   const sessionsDir = await resolveSessionsDir(codexHome);
   if (sessionsDir === null) return [];
 
-  const files = await findJsonlFiles(sessionsDir);
-  if (files.length === 0) return [];
-
-  // Parse all files concurrently
-  const parsed = await Promise.all(files.map(parseSessionFile));
-  const sessions = parsed.filter((s): s is CodexSession => s !== null);
-
-  // Sort newest first
-  sessions.sort((a, b) => {
-    const ta = new Date(a.startedAt).getTime();
-    const tb = new Date(b.startedAt).getTime();
-    return tb - ta;
-  });
-
-  // Limit to 200 most recent
-  return sessions.slice(0, 200);
+  return (await scanCodexCorpusOnce(sessionsDir)).sessions;
 }
 
 /**
  * Aggregate stats across Codex sessions.
  */
-export async function getCodexStats(): Promise<CodexStats> {
-  const sessions = await listCodexSessions();
-  const now = Date.now();
-  const day30 = now - 30 * 24 * 60 * 60 * 1000;
-  const day7 = now - 7 * 24 * 60 * 60 * 1000;
-
-  let last30Days = 0;
-  let last7Days = 0;
-  const cwdCounts = new Map<string, number>();
-
-  for (const s of sessions) {
-    const ts = new Date(s.startedAt).getTime();
-    if (ts >= day30) last30Days++;
-    if (ts >= day7) last7Days++;
-    if (s.cwd) {
-      cwdCounts.set(s.cwd, (cwdCounts.get(s.cwd) ?? 0) + 1);
-    }
+export async function getCodexStats(
+  codexHome = path.join(os.homedir(), ".codex"),
+): Promise<CodexStats> {
+  const sessionsDir = await resolveSessionsDir(codexHome);
+  if (sessionsDir === null) {
+    return { totalSessions: 0, last30Days: 0, last7Days: 0, topCwds: [] };
   }
-
-  const topCwds = Array.from(cwdCounts.entries())
-    .map(([cwd, count]) => ({ cwd, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 10);
-
-  return {
-    totalSessions: sessions.length,
-    last30Days,
-    last7Days,
-    topCwds,
-  };
+  return (await scanCodexCorpusOnce(sessionsDir)).stats;
 }
