@@ -11,3 +11,4 @@ coverage/
 # local app data (SQLite index/cache)
 .claude-ui-data/
 data/
+.gstack/

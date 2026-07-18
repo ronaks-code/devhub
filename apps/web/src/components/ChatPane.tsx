@@ -15,7 +15,7 @@ import { CwdProvider } from "./OpenInEditor";
 import { StoppedBadge, isStoppedSubtype, stoppedReason } from "./StoppedBadge";
 import { RetryingLabel, parseRetryStatus, type RetryStatus } from "./StatusLabel";
 import { LiveBubble, LiveStream } from "./LiveBubble";
-import { SlashPalette, filterCommands } from "./SlashPalette";
+import { SlashPalette, filterCommands, BUILTIN_COMMANDS } from "./SlashPalette";
 import { MentionPicker, detectMention } from "./MentionPicker";
 import { PermissionCard, type PendingPermission, type PermissionDecision } from "./PermissionCard";
 import { SnippetLibrary } from "./SnippetLibrary";
@@ -182,6 +182,11 @@ export function ChatPane({
   // Transient UI state for the "set as project default" affordance: null idle,
   // "saving" mid-PATCH, "ok"/"fail" briefly after.
   const [savingDefault, setSavingDefault] = useState<"saving" | "ok" | "fail" | null>(null);
+
+  // /help overlay — shows all available slash commands.
+  const [helpOpen, setHelpOpen] = useState(false);
+  // /model inline picker — true while the model-switch popover is shown.
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
 
   // "@" file-mention picker state. `mention` holds the active query + the
   // [start,end) range of the "@token" in the draft to replace on insert; null
@@ -674,10 +679,26 @@ export function ChatPane({
     [draft, setDraft],
   );
 
-  // Insert a chosen slash command into the composer as "/name " (trailing space
-  // so the user can type arguments) and refocus the textarea.
+  // Execute or insert a chosen slash command. Built-ins (/clear, /model, /help)
+  // run their UI action and clear the draft. Session-advertised commands that
+  // aren't built-ins are inserted as "/name " text for the agent to handle.
   const insertSlash = useCallback(
     (command: string) => {
+      const builtin = BUILTIN_COMMANDS.find((b) => b.name === command);
+      if (builtin) {
+        // Always clear the draft + close the palette first.
+        setDraft("");
+        setSlashIndex(0);
+        if (command === "clear") {
+          newChat();
+        } else if (command === "model") {
+          setModelPickerOpen(true);
+        } else if (command === "help") {
+          setHelpOpen(true);
+        }
+        return;
+      }
+      // Non-built-in: insert as text so the agent can process it.
       setDraft(`/${command} `);
       setSlashIndex(0);
       const el = textareaRef.current;
@@ -688,7 +709,8 @@ export function ChatPane({
         });
       }
     },
-    [setDraft],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [setDraft, newChat],
   );
 
   // Recompute the active "@" mention from the current draft + caret. Slash mode
@@ -839,6 +861,12 @@ export function ChatPane({
         setSlashIndex(0);
         return;
       }
+    }
+
+    // Escape closes the model picker or help overlay if they're open.
+    if (e.key === "Escape") {
+      if (modelPickerOpen) { e.preventDefault(); setModelPickerOpen(false); return; }
+      if (helpOpen) { e.preventDefault(); setHelpOpen(false); return; }
     }
 
     if (e.key === "Enter" && !e.shiftKey) {
@@ -1224,6 +1252,80 @@ export function ChatPane({
             activeIndex={slashIndex}
             onPick={insertSlash}
           />
+        ) : null}
+        {/* /model inline picker — appears above the composer when the user runs
+            /model. Lets them pick a model without leaving the chat. */}
+        {modelPickerOpen ? (
+          <div className="mb-2 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl shadow-black/40 ring-1 ring-black/20">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 px-3 py-1.5 text-[11px] text-zinc-500">
+              <span>Switch model</span>
+              <button
+                type="button"
+                onClick={() => setModelPickerOpen(false)}
+                className="rounded p-0.5 hover:bg-zinc-800 hover:text-zinc-300"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <ul className="py-1">
+              {MODELS.map((m) => (
+                <li key={m}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setModel(m);
+                      setModelPickerOpen(false);
+                      textareaRef.current?.focus();
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[13px] transition",
+                      m === model
+                        ? "bg-clay-500/15 text-clay-200"
+                        : "text-zinc-300 hover:bg-zinc-800/70",
+                    )}
+                  >
+                    {m === model ? <Check className="h-3.5 w-3.5 shrink-0 text-clay-400" /> : <span className="h-3.5 w-3.5 shrink-0" />}
+                    <span className="font-mono text-[12.5px]">{m}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {/* /help overlay — shows all available slash commands. */}
+        {helpOpen ? (
+          <div className="mb-2 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-xl shadow-black/40 ring-1 ring-black/20">
+            <div className="flex items-center justify-between border-b border-zinc-800/80 px-3 py-1.5 text-[11px] text-zinc-500">
+              <span>Slash commands</span>
+              <button
+                type="button"
+                onClick={() => { setHelpOpen(false); textareaRef.current?.focus(); }}
+                className="rounded p-0.5 hover:bg-zinc-800 hover:text-zinc-300"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <ul className="py-1">
+              {BUILTIN_COMMANDS.map((b) => (
+                <li key={b.name} className="flex items-center gap-3 px-3 py-1.5 text-[13px]">
+                  <span className="font-mono font-medium text-clay-300">/{b.name}</span>
+                  <span className="text-zinc-500">{b.description}</span>
+                </li>
+              ))}
+              {slashCommands.filter((c) => !BUILTIN_COMMANDS.find((b) => b.name === c)).map((c) => (
+                <li key={c} className="flex items-center gap-3 px-3 py-1.5 text-[13px]">
+                  <span className="font-mono font-medium text-zinc-300">/{c}</span>
+                  <span className="text-zinc-600">session command</span>
+                </li>
+              ))}
+              {slashCommands.length === 0 && (
+                <li className="px-3 py-1.5 text-[12px] text-zinc-600">
+                  No session commands available — start a chat to load them.
+                </li>
+              )}
+            </ul>
+          </div>
         ) : null}
         {/* Fork-from-here banner: shown after "Edit & resend" until the message
             is sent or the user cancels. Sending resumes the session, so it
