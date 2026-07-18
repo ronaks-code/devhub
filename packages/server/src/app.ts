@@ -43,6 +43,7 @@ import { registerConfigRoutes } from "./routes/config.js";
 import { registerConfigLintRoutes } from "./routes/config-lint.js";
 import { registerAllSessionsRoutes } from "./routes/all-sessions.js";
 import { registerRollupsRoutes } from "./routes/rollups.js";
+import { registerProgressRoutes } from "./routes/progress.js";
 import { registerSearchRoutes } from "./routes/search.js";
 import { registerProjectsRoutes } from "./routes/projects.js";
 import { registerProjectOverviewRoutes } from "./routes/project-overview.js";
@@ -448,6 +449,8 @@ export function buildApp(opts: BuildOptions = {}): {
   registerAllSessionsRoutes(app, engine);
 
   registerRollupsRoutes(app, engine);
+
+  registerProgressRoutes(app, engine);
 
   registerSearchRoutes(app, engine);
 

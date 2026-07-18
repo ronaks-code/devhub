@@ -185,6 +185,102 @@ export interface AutomationsResponse {
   generatedAt: string;
 }
 
+// Progress / Shipped Work board shapes for GET /api/progress. Mirrored locally
+// (not imported from the server) so the web bundle stays free of Node-only code.
+// Kept in lockstep with packages/server/src/routes/progress.ts.
+export type ProgressStatus =
+  | "shipped"
+  | "verified"
+  | "staged"
+  | "wip"
+  | "in-progress"
+  | "blocked"
+  | "proposed"
+  | (string & {});
+export type ProgressType =
+  | "feature"
+  | "fix"
+  | "docs"
+  | "infra"
+  | "refactor"
+  | "test"
+  | "research"
+  | "decision"
+  | (string & {});
+
+export interface ProgressItem {
+  id: string;
+  date: string;
+  project: string;
+  type: ProgressType;
+  title: string;
+  summary: string;
+  status: ProgressStatus;
+  evidence: string | null;
+  impact: string | null;
+  source: { workflowId: string; journal: string };
+}
+
+export interface ProgressFeature {
+  key: string;
+  title: string;
+  itemCount: number;
+  statusCounts: Record<string, number>;
+  firstDate: string;
+  lastDate: string;
+  items: ProgressItem[];
+}
+
+export interface ProgressProjectEffort {
+  tokens: number | null;
+  approx: boolean;
+  itemCount: number;
+}
+
+export interface ProgressProject {
+  slug: string;
+  name: string;
+  itemCount: number;
+  statusCounts: Record<string, number>;
+  typeCounts: Record<string, number>;
+  firstDate: string;
+  lastDate: string;
+  features: ProgressFeature[];
+  effort: ProgressProjectEffort;
+}
+
+export interface HarnessEffort {
+  tokens: number;
+  sessions: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheTokens: number;
+}
+
+export interface ProgressEffort {
+  approx: true;
+  source: "transcripts";
+  totalTokens: number;
+  byHarness: { claude: HarnessEffort; codex: HarnessEffort };
+  byProject: Record<string, { tokens: number; sessions: number }>;
+  byDate: { date: string; tokens: number; sessions: number }[];
+  generatedFrom: { claudeSessions: number; codexSessions: number };
+}
+
+export interface ProgressResponse {
+  ok: true;
+  generatedAt: string;
+  window: { since: string | null; until: string | null };
+  totals: {
+    items: number;
+    projects: number;
+    shipped: number;
+    statusCounts: Record<string, number>;
+  };
+  projects: ProgressProject[];
+  effort: ProgressEffort;
+}
+
 export interface GitLogEntry {
   hash: string;
   shortHash: string;
