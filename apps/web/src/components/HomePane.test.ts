@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createElement } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "../lib/types.js";
 import { loadHomeData } from "../lib/home-data.js";
@@ -45,5 +45,15 @@ describe("HomePane Recent Activity titles", () => {
 
     expect(await screen.findByText("Polish DevHub navigation")).toBeInTheDocument();
     expect(screen.queryByText("2b7ef4eb251a")).toBeNull();
+  });
+
+  it("starts a new session without forwarding the React click event", async () => {
+    const onNewChat = vi.fn((_unexpectedArgument?: unknown) => undefined);
+    render(createElement(HomePane, { onNewChat }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "New Claude Session" }));
+
+    expect(onNewChat).toHaveBeenCalledOnce();
+    expect(onNewChat.mock.calls[0]).toEqual([]);
   });
 });

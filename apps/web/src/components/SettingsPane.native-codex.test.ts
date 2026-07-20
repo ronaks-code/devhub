@@ -1,6 +1,9 @@
+// @vitest-environment jsdom
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings } from "../lib/api.js";
 import {
   deliverSettingsResponse,
@@ -32,6 +35,18 @@ const FEATURES = {
 } as const;
 
 describe("SettingsPane native Codex feature persistence", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", class {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: (() => void) | null = null;
+      close() {}
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("delivers a completed response to the shell even after the pane unmounts", () => {
     const delivered: Array<{ settings: AppSettings; version?: number }> = [];
     const next: AppSettings = { theme: "light" };
@@ -183,6 +198,20 @@ describe("SettingsPane native Codex feature persistence", () => {
     expect(dirtySettingsUpdatePayload(settings, new Set(["devHubFeatures"]))).toEqual({
       devHubFeatures: FEATURES,
     });
+  });
+
+  it("lets rollback users switch the default mechanics back to Claude", async () => {
+    const user = userEvent.setup();
+    render(createElement(SettingsPane, {
+      authoritativeSettings: { defaultMechanics: "codex", devHubFeatures: FEATURES },
+    }));
+
+    const toggle = screen.getByRole("switch", {
+      name: "Default agent mechanics: Claude Code / Codex",
+    });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    expect(toggle).not.toBeChecked();
   });
 
   it("rebases a reconciliation snapshot beneath unsaved local intent", () => {

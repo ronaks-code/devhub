@@ -1380,6 +1380,10 @@ export interface CodexNativePaneProps {
   client?: ProviderApiClient;
   preferredHome?: string;
   preferredTaskId?: string;
+  /** Route this mount into the native create form instead of the read-only task list. */
+  initialShowCreate?: boolean;
+  /** Clears the caller's transient create intent after this mount consumes it. */
+  onInitialShowCreateConsumed?: () => void;
   /** A legacy shell routed an explicit fork intent for `preferredTaskId`. */
   autoOpenCrossProviderFork?: boolean;
   /** Clears the routed intent once the real native fork panel consumes it. */
@@ -1405,10 +1409,11 @@ export interface CodexNativePaneProps {
  */
 export function CodexNativePane(props: CodexNativePaneProps) {
   const routedForkRef = useRef(props.autoOpenCrossProviderFork === true);
+  const routedCreateRef = useRef(props.initialShowCreate === true);
   // The indexed home picker does not own task mutations. A routed fork intent
-  // must enter the direct native task surface, which discovers the provider home
-  // and constructs the exact NativeTaskKey before calling the fork routes.
-  if (routedForkRef.current) {
+  // or create intent must enter the direct native task surface, which discovers
+  // the provider home and constructs the exact NativeTaskKey for mutations.
+  if (routedForkRef.current || routedCreateRef.current) {
     return <CodexNativeDirectPane {...props} />;
   }
   if (isUnifiedTaskIndexApplied(props.features)) {
@@ -1431,6 +1436,8 @@ export function CodexNativeDirectPane({
   client = providerApi,
   preferredHome,
   preferredTaskId,
+  initialShowCreate = false,
+  onInitialShowCreateConsumed,
   autoOpenCrossProviderFork = false,
   onCrossProviderForkAutoOpen,
   onCrossProviderForkClosed,
@@ -1465,7 +1472,7 @@ export function CodexNativeDirectPane({
   const [reconciliationScope, setReconciliationScope] = useState<ReconciliationScope | null>(null);
   const [acknowledgingReconciliation, setAcknowledgingReconciliation] = useState(false);
   const [busy, setBusy] = useState<BusyOperation>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(initialShowCreate);
   const [createCwd, setCreateCwd] = useState("");
   const [createModel, setCreateModel] = useState("");
   const [createPermission, setCreatePermission] = useState<PermissionMode>(
@@ -1518,6 +1525,10 @@ export function CodexNativeDirectPane({
   useEffect(() => {
     preferredTaskIdRef.current = preferredTaskId ?? null;
   }, [preferredTaskId, provider]);
+
+  useEffect(() => {
+    if (initialShowCreate) onInitialShowCreateConsumed?.();
+  }, [initialShowCreate, onInitialShowCreateConsumed]);
 
   useEffect(() => {
     setCreateModel("");

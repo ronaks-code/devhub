@@ -272,3 +272,8 @@
 - When current registered-home authority exists, a native task ID that embeds the canonical home is corrupt persisted data. Reject it without returning the path-bearing locator or consulting the filesystem.
 - Never trust a syntactically valid persisted canonical home as fingerprint authority. Recompute the pure provider/home fingerprint first; otherwise a decoy home can make the raw-home exclusion check validate the wrong string.
 - A negative fixture must reach the branch it claims to prove. Pair intact-authority rejection with a positive control using the same valid registered home so a new earlier guard cannot silently make the intended privacy check untested.
+# 2026-07-20 - Test generic task creation at the rendered provider boundary
+
+- A pure route resolver can stay green while the selected provider renders a read-only surface. Exercise the real UI entry point and assert the provider's create form or fresh composer is mounted.
+- Never pass a zero-argument command callback directly as a React click handler; wrap it so a `SyntheticEvent` cannot become an accidental runtime override.
+- Every provider must consume the same new-session remount signal, including under default-on feature-flag combinations that otherwise route through read-only setup/index surfaces.

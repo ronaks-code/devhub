@@ -65,7 +65,7 @@ export interface DevHubFeatureFlags {
    */
   searchCommands: boolean;
   /**
-   * M6 slice 8 (Settings + secondary utilities). Default false. When requested true AND
+   * M6 slice 8 (Settings + secondary utilities). Default true. When requested true AND
    * the server reports it applied, the web app mounts the canonical `SettingsRoute`
    * (accessible `Appearance`/`Providers`/`Permissions` field groups, all preserved
    * config workflows still reachable) plus routes Ops/Inbox/Dashboard under secondary
