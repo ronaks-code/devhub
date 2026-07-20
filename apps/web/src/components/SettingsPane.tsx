@@ -116,6 +116,7 @@ export function withPersistentClaudePreference(
 export function settingsUpdatePayload(settings: AppSettings): Partial<AppSettings> {
   return {
     defaultModel: settings.defaultModel,
+    defaultMechanics: settings.defaultMechanics,
     defaultPermissionMode: settings.defaultPermissionMode,
     theme: settings.theme,
     density: settings.density,
@@ -128,6 +129,7 @@ export function settingsUpdatePayload(settings: AppSettings): Partial<AppSetting
 
 const EDITABLE_SETTING_KEYS = [
   "defaultModel",
+  "defaultMechanics",
   "defaultPermissionMode",
   "theme",
   "density",

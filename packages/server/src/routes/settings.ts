@@ -153,6 +153,7 @@ const settingsBodySchema = {
   additionalProperties: false,
   properties: {
     defaultModel: { type: "string" },
+    defaultMechanics: { type: "string", enum: ["claude", "codex"] },
     defaultPermissionMode: { type: "string" },
     theme: { type: "string", enum: ["dark", "light", "system"] },
     density: { type: "string" },

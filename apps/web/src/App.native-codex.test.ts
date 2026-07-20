@@ -12,12 +12,21 @@ import {
   navigationAriaCurrent,
   resolveClaudeShellMode,
   resolveCodexShellMode,
+  resolveNewTaskTab,
   TOP_BAR_SECONDARY_CLASS,
   type CodexShellMode,
 } from "./App.js";
 import type { AppSettings } from "./lib/api.js";
 
 describe("App native Codex shell gate", () => {
+  it("dispatches generic new tasks by default mechanics while explicit overrides win", () => {
+    expect(resolveNewTaskTab({ defaultMechanics: "claude" })).toBe("chat");
+    expect(resolveNewTaskTab({ defaultMechanics: "codex" })).toBe("codex-history");
+    expect(resolveNewTaskTab(null)).toBe("chat");
+    expect(resolveNewTaskTab({ defaultMechanics: "codex" }, "claude")).toBe("chat");
+    expect(resolveNewTaskTab({ defaultMechanics: "claude" }, "codex")).toBe("codex-history");
+  });
+
   it("derives a Claude provider home from its canonical transcript path, never from cwd", () => {
     expect(nativeClaudeHomeFromSessionFile("/Users/test/.claude/projects/-workspace/session.jsonl"))
       .toBe("/Users/test/.claude");

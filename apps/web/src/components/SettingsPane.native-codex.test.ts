@@ -168,6 +168,7 @@ describe("SettingsPane native Codex feature persistence", () => {
   it("sends only fields edited in Settings so concurrent header patches survive", () => {
     const settings: AppSettings = {
       defaultModel: "claude-sonnet-4-6",
+      defaultMechanics: "codex",
       theme: "dark",
       devHubFeatures: { ...FEATURES, nativeCodex: false },
       requestedDevHubFeatures: FEATURES,
@@ -175,6 +176,9 @@ describe("SettingsPane native Codex feature persistence", () => {
 
     expect(dirtySettingsUpdatePayload(settings, new Set(["defaultModel"]))).toEqual({
       defaultModel: "claude-sonnet-4-6",
+    });
+    expect(dirtySettingsUpdatePayload(settings, new Set(["defaultMechanics"]))).toEqual({
+      defaultMechanics: "codex",
     });
     expect(dirtySettingsUpdatePayload(settings, new Set(["devHubFeatures"]))).toEqual({
       devHubFeatures: FEATURES,

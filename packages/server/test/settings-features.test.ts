@@ -79,6 +79,21 @@ afterEach(async () => {
 });
 
 describe("DevHub feature settings HTTP resolution", () => {
+  it("round-trips the default agent mechanics through PUT", async () => {
+    const handle = await makeApp();
+    apps.push(handle.app);
+
+    const response = await handle.app.inject({
+      method: "PUT",
+      url: "/api/settings",
+      payload: { defaultMechanics: "codex" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().defaultMechanics).toBe("codex");
+    expect(handle.stored().defaultMechanics).toBe("codex");
+  });
+
   it("returns all six flags false when no runtime capability is available", async () => {
     const handle = await makeApp(allEnabled);
     apps.push(handle.app);

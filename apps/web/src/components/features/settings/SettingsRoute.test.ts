@@ -19,6 +19,7 @@ import {
 
 const BASE_SETTINGS: AppSettings = {
   defaultModel: "claude-sonnet-4-6",
+  defaultMechanics: "claude",
   defaultPermissionMode: "default",
   theme: "dark",
   density: "comfortable",
@@ -300,6 +301,15 @@ describe("SettingsRoute — live interaction (mounted DOM)", () => {
     const user = userEvent.setup();
     rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
     const toggle = screen.getByRole("switch", { name: "Enable native Codex" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+  });
+
+  it("toggles the default mechanics between Claude Code and Codex", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    const toggle = screen.getByRole("switch", { name: "Default agent mechanics: Claude Code / Codex" });
     expect(toggle).not.toBeChecked();
     await user.click(toggle);
     expect(toggle).toBeChecked();

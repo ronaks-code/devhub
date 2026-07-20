@@ -266,6 +266,16 @@ const APP_COMMANDS: readonly CommandAction[] = Object.freeze([
 
 export type CodexShellMode = "native" | "history";
 export type ClaudeShellMode = "native" | "legacy";
+export type AgentMechanics = NonNullable<AppSettings["defaultMechanics"]>;
+
+/** Resolve the generic New task destination; an explicit task choice always wins. */
+export function resolveNewTaskTab(
+  settings: AppSettings | null,
+  explicitMechanics?: AgentMechanics,
+): "chat" | "codex-history" {
+  const mechanics = explicitMechanics ?? settings?.defaultMechanics ?? "claude";
+  return mechanics === "codex" ? "codex-history" : "chat";
+}
 
 /** Only a server-resolved true flag may expose the native provider surface. */
 export function resolveCodexShellMode(settings: AppSettings | null): CodexShellMode {
@@ -1662,11 +1672,12 @@ export default function App() {
     setDhSearchError(false);
   }, [searchOpen]);
 
-  const startNewChat = useCallback(() => {
+  const defaultMechanics = settings?.defaultMechanics;
+  const startNewChat = useCallback((explicitMechanics?: AgentMechanics) => {
     setChatSeed(null);
     setChatNonce((n) => n + 1);
-    setTab("chat");
-  }, []);
+    setTab(resolveNewTaskTab({ defaultMechanics }, explicitMechanics));
+  }, [defaultMechanics]);
 
   // A single resolved mode drives both nav chrome and route content so the
   // shell cannot label the legacy parser as native (or vice versa).
