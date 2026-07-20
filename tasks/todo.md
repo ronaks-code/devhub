@@ -729,3 +729,22 @@ Every item below is backed by real, on-disk evidence — no fabricated results.
 - Fresh typecheck: engine PASS, server PASS, web PASS after restoring the lockfile-matched dependency tree from the exact spatial-tip sibling worktree (npm DNS is blocked in this sandbox).
 - Fresh lint: engine/server/web PASS. Focused gates: engine provider-index 639/639; web provider-index/router/route-preservation 39/39; web spatial 25/25; server spatial 12/12. Server provider-index is 28/29 with the sole SSE case blocked before assertions by sandbox `listen EPERM`; an independent minimal Node listener reproduces the same restriction.
 - Full suites/builds remain unrun because the mandatory shared heavy queue cannot identify its process (`ps` is sandbox-denied), so bypassing it is prohibited. `git add`, fetch, and the final commit are also blocked because `.git` is read-only (`index.lock`/`FETCH_HEAD` permission denied).
+
+---
+
+## Fixture-fed FleetSnapshot office visualizer (2026-07-20)
+
+- [x] Mirror the canonical `FleetSnapshot` / `AgentState` / `RoomState` / `FleetEdge` shapes in the web app without importing across repositories.
+- [x] Create one deterministic fixture with eight department rooms: Hermes active; Athena, Vulcan, Apollo, Thoth, Talos, Vesta, and Argus reserved.
+- [x] Render the fixture as a legible responsive office on the existing `spatial` route, with active/reserved room treatment and agent nameplates for role, status, and task.
+- [x] Add a mounted Vitest proving 8 rooms, 1 active / 7 reserved styling, and the exact fixture agent count.
+- [ ] Run `pnpm -r typecheck && pnpm --filter @devhub/web test` through the shared heavy-job queue and leave all changes uncommitted.
+
+### Review / results
+
+- Canonical contract audit: GO; the four mirrored declarations match the source exactly, and every fixture room/member/owner/edge reference resolves consistently.
+- RED-first component test failed on the missing renderer, then on zero rooms; final focused result is 2/2 green, including the quality-review regressions for landmark safety and timestamp derivation.
+- Focused post-repair spatial/router preservation run: 59/59 green. Web `tsc --noEmit` and `oxlint src` are clean.
+- Independent SPEC review: GO. Independent QUALITY re-review: GO after removing the nested main landmark and whole-card reserved opacity, widening responsive nameplates, and deriving the timestamp from the supplied snapshot.
+- Full requested gate is blocked before command execution: mandatory queue wrapper exits `could not identify queue process`; queue status reports `admission=blocked`, no owner, and an empty queue. It was not bypassed.
+- Rendered browser QA is blocked by host browser policy rejecting `http://127.0.0.1:5173`; the policy also forbids alternate-browser fallback. No screenshot claim is made.

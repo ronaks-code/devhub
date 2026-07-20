@@ -3,6 +3,23 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
+Last updated: 2026-07-20 by CODEX (ADDED AFTER FREEZE — not part of the frozen
+9-milestone denominator). Implemented the fixture-only FleetSnapshot office on
+`overnight/ws2d-visualizer`, reusing the existing `spatial` route. The web app
+now mirrors the canonical AgentState/RoomState/FleetEdge/FleetSnapshot types,
+renders one deterministic 8-department / 10-agent fixture (Hermes active; seven
+departments reserved), and mounts accessible DOM/Tailwind room zones with
+role/status/task nameplates. Added a RED-first mounted jsdom test covering 8
+rooms, 1 active / 7 reserved styling, all 10 agents, landmark safety, and
+snapshot-driven timestamp copy. Focused evidence GREEN: component 2/2; spatial
++ router preservation 59/59 after the review repair; web typecheck and lint
+clean. Independent contract/spec/quality reviews GO. Full requested gate remains
+UNRUN: the mandated heavy-queue wrapper exits `could not identify queue process`
+because sandbox policy blocks process introspection; queue status confirms no
+owner/waiter residue. Browser screenshot QA is likewise unrun because the host
+browser policy explicitly rejects the local preview URL and forbids fallback.
+Changes are intentionally uncommitted per Ronak.
+
 Last updated: 2026-07-18 by PROGRESS-UI (ADDED AFTER FREEZE — not part of the
 frozen 9-milestone denominator). Completed the "Progress / Shipped Work" board UI
 on `feat/progress-dashboard` by adding the one missing task requirement:
@@ -1017,6 +1034,7 @@ No [ALEX], [HARDWARE], or [S3] dependency exists for this project.
 - None.
 
 ## Active worktrees / WIP branches
+- `overnight/ws2d-visualizer` at `/Users/ronak/Documents/01-code/active/devhub` — ACTIVE (CODEX, 2026-07-20). Fixture-fed FleetSnapshot office visualizer implemented and focused-green on the existing `spatial` route; full gate blocked at queue admission (`could not identify queue process`). Sole editor in this worktree; changes remain uncommitted per Ronak's instruction.
 - `feat/progress-dashboard` at `/Users/ronak/Documents/01-code/active/claude-ui-progress-wt` — ACTIVE (PROGRESS-DATA-ENGINE, 2026-07-18). Additive-only "Progress / Shipped Work" tab: new `apps/web/src/components/ProgressBoard.tsx`, `packages/server/src/routes/progress.ts`, `packages/server/scripts/gen-progress.mjs`, launchd plist; edits to `App.tsx` (tab/nav/command), `lib/api.ts`, `lib/types.ts`, `server/src/app.ts`. Mines the two workflow journals (glob picks up new `wf_*` runs) into a per-project→feature progress snapshot + a cheap transcript-derived token/session effort tally (Claude `~/.claude/projects/**` + Codex `~/.codex/archived_sessions/**`), served at `GET /api/progress` (cached, degrade-graceful, since/until window) with `POST /api/progress/refresh`. Does NOT touch `DashboardPane` or any existing chart. Not pushed to `main`.
 - `wip/devhub-background-runner` at `this commit` — PAUSED handoff branch (sole resume target unless Ronak names another checkout). Carries additive, un-promoted WIP built in the background runner: Task 3 M5 coordinator observation lanes (`observeListPage`/`observeTask`, bounded per-locator FIFO lanes, `maxObservationOperations` reservations, per-locator observation epochs). 589/589 provider-index tests, full engine 2083/2083, typecheck + public-surface + `git diff --check` clean. NOT promoted to `campaign/auto-improve`; no independent SPEC/QUALITY/SECURITY GO yet; `nativeCodex`/`persistentClaude`/`unifiedTaskIndex` remain false; no rebuild/read-through/server/flag work. The goal-level pause still stands.
 - `campaign/auto-improve` — tested shared branch; M5 E/F plus the FULL Task 3 (native-missing, verified-legacy mapping, opaque observation, atomic-missing, coordinator foundation, observation lanes, T3B readThrough/projector, T3C rebuild, and T3D server-composition wiring) are integrated after exact mainline gates and independent SPEC/QUALITY/SECURITY GO. `nativeCodex`/`persistentClaude`/`unifiedTaskIndex` remain false.
