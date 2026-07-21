@@ -161,11 +161,14 @@ export function CalendarHeatmap({
     };
     measure();
     el.addEventListener("scroll", measure, { passive: true });
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
+    // ResizeObserver is a progressive enhancement over the scroll listener — guard
+    // it so non-browser envs (jsdom tests / SSR) don't throw and crash the render.
+    const ro =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
     return () => {
       el.removeEventListener("scroll", measure);
-      ro.disconnect();
+      ro?.disconnect();
     };
   }, [weeks]);
 
