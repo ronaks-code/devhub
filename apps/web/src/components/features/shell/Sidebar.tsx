@@ -17,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { DeckMark } from "../../DeckMark.js";
 import { readCompat, writeCompat } from "../../../lib/compat-storage.js";
 import { ProviderChip, type ChipProvider } from "../../ui/ProviderChip.js";
 import { StatusDot, type StatusKind } from "../../ui/StatusDot.js";
@@ -289,7 +290,9 @@ export function Sidebar({
     <div className={cn("dh-sidebar", collapsed && "dh-sidebar--collapsed")} data-dh-sidebar="">
       {/* Icon rail — also the window drag grab-zone at the top-left (§4). */}
       <div className="dh-iconrail" data-dh-iconrail="" data-tauri-drag-region>
-        <div className="dh-logo" data-dh-logo="" aria-label={brand} title={brand} />
+        <div className="dh-logo" data-dh-logo="" aria-label={brand} title={brand}>
+          <DeckMark size={26} />
+        </div>
         {iconDests.map((d) => {
           const meta = NAV_ICONS[d.id]!;
           const Icon = meta.icon;

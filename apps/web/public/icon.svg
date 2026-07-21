@@ -1,19 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Claude UI">
-  <!--
-    App icon: the same clay hexagon used as the in-app logo (lucide "Hexagon"),
-    drawn full-bleed on a dark clay-tinted plate so it doubles as a MASKABLE icon
-    (the hexagon sits well inside the 40% safe zone, so a circular/rounded mask
-    never clips it). Colors mirror the clay theme: plate ≈ zinc-950, accent =
-    clay-500 (#d97757). One scalable SVG covers every manifest size.
-  -->
-  <rect width="512" height="512" rx="96" fill="#09090b" />
-  <g transform="translate(256 256)">
-    <!-- Hexagon, centered, ~300px across. Flat-top hex matching the logo glyph. -->
-    <polygon
-      points="0,-150 129.9,-75 129.9,75 0,150 -129.9,75 -129.9,-75"
-      fill="#d97757" fill-opacity="0.2"
-      stroke="#d97757" stroke-width="22"
-      stroke-linejoin="round"
-    />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="DevHub app icon — Deck">
+  <!-- DevHub app icon: full-detail Deck mark on the charcoal-glass squircle.
+       Source for 512/256/128 PNGs. Corners are transparent. -->
+  <defs>
+    <linearGradient id="tileG" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#201a2f"/>
+      <stop offset=".72" stop-color="#131017"/>
+    </linearGradient>
+    <radialGradient id="tileSheen" cx=".3" cy=".16" r=".8">
+      <stop offset="0" stop-color="#818CF8" stop-opacity=".20"/>
+      <stop offset=".6" stop-color="#818CF8" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="haze" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="11"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="116" fill="url(#tileG)"/>
+  <rect width="512" height="512" rx="116" fill="url(#tileSheen)"/>
+  <rect x="3" y="3" width="506" height="506" rx="113" fill="none" stroke="#A096FA" stroke-opacity=".32" stroke-width="4"/>
+  <g transform="translate(76 66) scale(3.75)">
+    <ellipse cx="48" cy="58" rx="34" ry="24" fill="#818CF8" opacity=".28" filter="url(#haze)"/>
+    <g style="isolation:isolate">
+      <g transform="rotate(-17 48 86)" style="mix-blend-mode:screen">
+        <rect x="25" y="26" width="46" height="34" rx="9" fill="#6E7BF7" opacity=".6"/>
+        <rect x="25" y="26" width="46" height="34" rx="9" fill="none" stroke="#C9CFFF" stroke-opacity=".5" stroke-width="1"/>
+      </g>
+      <g style="mix-blend-mode:screen">
+        <rect x="25" y="22" width="46" height="34" rx="9" fill="#A855F7" opacity=".62"/>
+        <rect x="25" y="22" width="46" height="34" rx="9" fill="none" stroke="#DFC9FF" stroke-opacity=".55" stroke-width="1"/>
+      </g>
+      <g transform="rotate(17 48 86)" style="mix-blend-mode:screen">
+        <rect x="25" y="26" width="46" height="34" rx="9" fill="#EC6BF0" opacity=".68"/>
+        <rect x="25" y="26" width="46" height="34" rx="9" fill="none" stroke="#FAD4FF" stroke-opacity=".6" stroke-width="1"/>
+        <circle cx="34" cy="35" r="2.6" fill="#FFFFFF" opacity=".85"/>
+        <rect x="40" y="33.4" width="22" height="3.2" rx="1.6" fill="#FFFFFF" opacity=".55"/>
+        <rect x="31" y="43" width="26" height="3" rx="1.5" fill="#FFFFFF" opacity=".3"/>
+      </g>
+    </g>
   </g>
 </svg>

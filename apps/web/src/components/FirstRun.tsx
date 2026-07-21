@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import {
   Command as CommandIcon,
   DatabaseZap,
-  Hexagon,
   Keyboard,
   LayoutDashboard,
   MessagesSquare,
@@ -10,6 +9,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
+import { DeckMark } from "./DeckMark";
 import { readCompat, writeCompat } from "../lib/compat-storage";
 
 /**
@@ -148,36 +148,36 @@ export function FirstRun({ open, onDismiss }: { open: boolean; onDismiss: () => 
         role="dialog"
         aria-modal="true"
         aria-labelledby="first-run-title"
-        className="flex max-h-[84vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/50"
+        className="glass-hi flex max-h-[84vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-[var(--dh-surface)] shadow-2xl shadow-black/50"
       >
-        <div className="flex items-center gap-2.5 border-b border-zinc-800 px-6 py-4">
-          <Hexagon className="h-5 w-5 fill-clay-500/20 text-clay-500" />
-          <h2 id="first-run-title" className="text-[15px] font-semibold text-zinc-100">
+        <div className="flex items-center gap-2.5 border-b border-[var(--dh-border-subtle)] px-6 py-4">
+          <DeckMark size={20} className="shrink-0" />
+          <h2 id="first-run-title" className="text-[15px] font-semibold text-[var(--dh-text-strong)]">
             Welcome to DevHub
           </h2>
         </div>
 
         <div className="overflow-y-auto px-6 py-5">
-          <p className="text-[12.5px] leading-relaxed text-zinc-400">
+          <p className="text-[12.5px] leading-relaxed text-[var(--dh-text-muted)]">
             Your personal dev hub — browse Claude &amp; Codex sessions, start new chats, track usage across all your AI tools.
           </p>
 
           <div className="mt-4 flex flex-col gap-3">
             {PILLARS.map((p) => (
               <div key={p.title} className="flex items-start gap-3">
-                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/25">
+                <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--accent-soft)] text-[var(--accent)] ring-1 ring-[var(--dh-glass-border-hi)]">
                   {p.icon}
                 </span>
                 <div className="min-w-0">
-                  <div className="text-[13px] font-semibold text-zinc-100">{p.title}</div>
-                  <p className="mt-0.5 text-[12px] leading-relaxed text-zinc-500">{p.body}</p>
+                  <div className="text-[13px] font-semibold text-[var(--dh-text-strong)]">{p.title}</div>
+                  <p className="mt-0.5 text-[12px] leading-relaxed text-[var(--dh-text-muted)]">{p.body}</p>
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="mt-5 rounded-xl border border-zinc-800/80 bg-zinc-900/50 px-4 py-3">
-            <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-zinc-500">
+          <div className="mt-5 rounded-xl border border-[var(--dh-border-subtle)] bg-[var(--dh-control)]/60 px-4 py-3">
+            <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-wide text-[var(--dh-text-muted)]">
               Handy shortcuts
             </div>
             <ul className="space-y-1.5">
@@ -188,8 +188,8 @@ export function FirstRun({ open, onDismiss }: { open: boolean; onDismiss: () => 
                       <Kbd key={j}>{k}</Kbd>
                     ))}
                   </span>
-                  <span className="flex items-center gap-1.5 text-[12.5px] text-zinc-300">
-                    <span className="text-zinc-600">{s.icon}</span>
+                  <span className="flex items-center gap-1.5 text-[12.5px] text-[var(--dh-text)]">
+                    <span className="text-[var(--dh-text-dim)]">{s.icon}</span>
                     {s.label}
                   </span>
                 </li>
@@ -198,13 +198,14 @@ export function FirstRun({ open, onDismiss }: { open: boolean; onDismiss: () => 
           </div>
         </div>
 
-        <div className="flex items-center justify-between gap-3 border-t border-zinc-800 px-6 py-4">
-          <span className="text-[11px] text-zinc-600">You can reopen shortcuts any time with ?</span>
+        <div className="flex items-center justify-between gap-3 border-t border-[var(--dh-border-subtle)] px-6 py-4">
+          <span className="text-[11px] text-[var(--dh-text-dim)]">You can reopen shortcuts any time with ?</span>
           <button
             ref={ctaRef}
             type="button"
             onClick={onDismiss}
-            className="inline-flex items-center gap-2 rounded-lg bg-clay-500 px-4 py-1.5 text-[13px] font-medium text-white transition hover:bg-clay-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+            style={{ background: "var(--dh-grad-brand)" }}
+            className="inline-flex items-center gap-2 rounded-lg px-4 py-1.5 text-[13px] font-medium text-white transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
           >
             Get started
           </button>

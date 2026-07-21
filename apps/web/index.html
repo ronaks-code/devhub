@@ -4,12 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DevHub</title>
-    <!-- Favicon (the clay hexagon logo) — Vite copies public/ verbatim to dist/. -->
+    <!-- Resolve the theme BEFORE first paint so token-driven surfaces (and any
+         modal that mounts early) never flash the wrong palette. Mirrors
+         useTheme's resolution: stored preference first (devhub:theme, legacy
+         claude-ui:theme), then the OS scheme, defaulting dark. -->
+    <script>
+      (function () {
+        try {
+          var pref = localStorage.getItem("devhub:theme") || localStorage.getItem("claude-ui:theme");
+          var theme =
+            pref === "light" || pref === "dark"
+              ? pref
+              : window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          /* storage unavailable — the no-attr default (dark) applies */
+        }
+      })();
+    </script>
+    <!-- Favicon (the Deck mark app icon) — Vite copies public/ verbatim to dist/. -->
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <!-- Installable PWA: manifest + theme color (clay-500) so the app installs as
-         a standalone window. The browser fills the title bar / splash from these. -->
+    <!-- Installable PWA: manifest + theme color (Nebula charcoal) so the app
+         installs as a standalone window. The browser fills the title bar / splash
+         from these. -->
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#d97757" />
+    <meta name="theme-color" content="#131017" />
     <!-- iOS standalone hints (Android/desktop read these from the manifest). -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="DevHub" />

@@ -404,7 +404,7 @@ function CodexHistoryPane() {
 
   if (error) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+      <div className="dh-aurora-bg--soft flex min-h-0 flex-1 items-center justify-center">
         <p className="text-sm text-zinc-500">Codex history unavailable (server may not support it yet).</p>
       </div>
     );
@@ -412,7 +412,7 @@ function CodexHistoryPane() {
 
   if (sessions === null) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+      <div className="dh-aurora-bg--soft flex min-h-0 flex-1 items-center justify-center">
         <Spinner className="h-5 w-5" />
       </div>
     );
@@ -420,7 +420,7 @@ function CodexHistoryPane() {
 
   if (sessions.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950">
+      <div className="dh-aurora-bg--soft flex min-h-0 flex-1 items-center justify-center">
         <EmptyState
           icon={<History className="h-12 w-12" />}
           title="No Codex sessions yet"
@@ -431,10 +431,10 @@ function CodexHistoryPane() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
-      <div className="border-b border-zinc-800/80 px-6 py-3">
-        <h2 className="text-sm font-semibold text-zinc-200">Codex Session History</h2>
-        <p className="mt-0.5 text-[11px] text-zinc-500">{sessions.length} sessions</p>
+    <div className="dh-aurora-bg--soft flex min-h-0 flex-1 flex-col">
+      <div className="glass-chrome border-x-0 border-t-0 px-6 py-3">
+        <h2 className="text-sm font-semibold text-[var(--dh-text-strong)]">Codex session history</h2>
+        <p className="mt-0.5 text-[11px] text-[var(--dh-text-muted)]">{sessions.length} sessions</p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {sessions.map((s) => {
@@ -738,18 +738,34 @@ export default function App() {
     }
   }, []);
 
+  // Whether the initial projects+health fetches have finished, and whether they
+  // both succeeded. The onboarding decision below keys off this instead of a
+  // fixed delay: a timer raced a slow/cold server (~15-20s first index), saw the
+  // still-empty state, and mis-showed the welcome to RETURNING users on every
+  // reload — often popping in late over an already-interactive app.
+  const [bootstrapReady, setBootstrapReady] = useState<"pending" | "ok" | "failed">("pending");
+
   // initial load
   useEffect(() => {
-    void refreshProjects();
-    api.health().then((h) => setSessionCount(h.sessionCount)).catch(() => {});
+    let cancelled = false;
+    void Promise.allSettled([
+      refreshProjects(),
+      api.health().then((h) => setSessionCount(h.sessionCount)),
+    ]).then((results) => {
+      if (cancelled) return;
+      setBootstrapReady(results.every((r) => r.status === "fulfilled") ? "ok" : "failed");
+    });
     void refreshSettings();
+    return () => {
+      cancelled = true;
+    };
   }, [refreshProjects, refreshSettings]);
 
-  // Decide whether to show first-run onboarding — exactly once, shortly after the
-  // initial load settles. We only welcome a genuinely NEW user: the "seen" flag is
-  // unset AND the index is empty (no projects and no indexed sessions). A returning
-  // user (flag set, or any history) is never interrupted. The short delay lets the
-  // health/projects fetches land so we don't flash the welcome before data arrives.
+  // Decide whether to show first-run onboarding — exactly once, after the initial
+  // load has genuinely settled. We only welcome a genuinely NEW user: the "seen"
+  // flag is unset AND the successfully-loaded index is empty (no projects and no
+  // indexed sessions). A returning user (flag set, or any history) is never
+  // interrupted, and a failed load never counts as "empty".
   const onboardingDecidedRef = useRef(false);
   useEffect(() => {
     if (onboardingDecidedRef.current) return;
@@ -757,14 +773,13 @@ export default function App() {
       onboardingDecidedRef.current = true;
       return;
     }
-    const t = window.setTimeout(() => {
-      if (onboardingDecidedRef.current) return;
-      onboardingDecidedRef.current = true;
-      // Empty index = a fresh install with nothing discovered yet.
-      if (projects.length === 0 && sessionCount === 0) setOnboardingOpen(true);
-    }, 1200);
-    return () => window.clearTimeout(t);
-  }, [projects.length, sessionCount]);
+    if (bootstrapReady === "pending") return;
+    onboardingDecidedRef.current = true;
+    // Empty index = a fresh install with nothing discovered yet.
+    if (bootstrapReady === "ok" && projects.length === 0 && sessionCount === 0) {
+      setOnboardingOpen(true);
+    }
+  }, [bootstrapReady, projects.length, sessionCount]);
 
   const dismissOnboarding = useCallback(() => {
     markOnboardingSeen();

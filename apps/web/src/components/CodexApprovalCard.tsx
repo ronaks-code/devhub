@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldCheck } from "lucide-react";
 import type {
   IndexedProviderEvent,
   IndexedProviderRequestIdentity,
@@ -282,12 +282,22 @@ export function IndexedApprovalInbox({
 
   if (!canApprove) return null;
   return (
-    <div className="border-t border-zinc-900 p-3" aria-live="polite">
+    <div className="border-t border-[var(--dh-border-subtle)] p-3" aria-live="polite">
       {error ? <p role="alert" className="mb-2 text-[11px] text-amber-300">{error}</p> : null}
       {pending.length === 0 ? (
-        <p className="text-[11px] text-zinc-600">
-          {connected ? "Waiting for Codex approval requests." : "Connecting approval monitor…"}
-        </p>
+        // A real empty state (M5) — the bare one-liner in a dark void read as an
+        // unfinished debug page rather than "nothing needs you".
+        <div className="flex flex-col items-center gap-1.5 px-4 py-8 text-center">
+          <ShieldCheck className="h-8 w-8 text-[var(--dh-text-faint)]" aria-hidden />
+          <p className="text-[12.5px] font-medium text-[var(--dh-text)]">
+            {connected ? "No approvals waiting" : "Connecting…"}
+          </p>
+          <p className="max-w-xs text-[11.5px] leading-relaxed text-[var(--dh-text-muted)]">
+            {connected
+              ? "When a running Codex task asks to run a command or change files, the request shows up here for you to allow or deny."
+              : "Waiting for Codex approval requests."}
+          </p>
+        </div>
       ) : (
         <div className="space-y-2">
           {pending.map((entry) => (

@@ -5,11 +5,14 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  /* Claude-native clay accent */
-  --color-clay-300: #efbfa9;
-  --color-clay-400: #e59a7c;
-  --color-clay-500: #d97757;
-  --color-clay-600: #c25e3f;
+  /* Nebula indigo accent. The `clay-*` names are legacy (the app's original clay
+   * accent); remapping the literals here retints every bg/text/ring-clay-* utility
+   * to the Nebula brand in one place — the same one-block technique as the zinc
+   * remap below. */
+  --color-clay-300: #a5b4fc;
+  --color-clay-400: #818cf8;
+  --color-clay-500: #6366f1;
+  --color-clay-600: #4f46e5;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
@@ -43,11 +46,11 @@
   --text-dim: #6f6583;
   --text-faint: #554c68;
 
-  /* Accent (violet is now the brand accent; clay retired) */
-  --accent: #a78bfa; /* was clay #d97757 */
-  --accent-hover: #8b6cf0;
-  --accent-fg: #17121f; /* dark text on violet */
-  --accent-soft: rgba(167, 139, 250, 0.14);
+  /* Accent (Nebula indigo is the brand accent; violet/clay retired) */
+  --accent: #818cf8; /* was violet #a78bfa */
+  --accent-hover: #6366f1;
+  --accent-fg: #12101f; /* dark text on indigo */
+  --accent-soft: rgba(129, 140, 248, 0.14);
 
   /* Status */
   --danger: #ff6b5e;
@@ -99,7 +102,7 @@
   --dh-canvas: #151119; /* was #181818 */
   --dh-header: rgba(26, 21, 34, 0.6); /* was #181818 — header is now translucent glass */
   --dh-rail-inactive: #14101a; /* was #202020 — icon rail, darkest chrome */
-  --dh-rail-active: rgba(167, 139, 250, 0.13); /* was #404040 */
+  --dh-rail-active: rgba(129, 140, 248, 0.13); /* was #404040 */
   --dh-surface: #1e1927; /* was #2d2d2d */
   --dh-user-bubble: #221a2f; /* was #242424 (gradient overlay comes from --dh-chat-*, §1.1B) */
   --dh-control: #191420; /* was #262626 — inset input/control wells */
@@ -121,8 +124,8 @@
   --dh-border-subtle: #262031;
   --dh-border: #342c47;
   --dh-border-rail: #2c2439;
-  --dh-focus: #a78bfa; /* was #8ab4f8 blue — violet focus ring */
-  --dh-link: #b9a2ff; /* was #86b9f9 */
+  --dh-focus: #818cf8; /* was violet #a78bfa — Nebula indigo focus ring */
+  --dh-link: #a5b4fc; /* was #b9a2ff */
 
   /* Status; always pair color with text and/or an icon */
   --dh-success: #4fd6a4;
@@ -132,7 +135,7 @@
   --dh-diff-remove: #f2708c;
 
   /* Product brand; never reuse as neutral selection */
-  --dh-brand: #a78bfa; /* was clay #d97757 */
+  --dh-brand: #818cf8; /* Nebula indigo (was violet #a78bfa) */
 
   /* Provider/elevated-access accents, never provider logos */
   --dh-provider-openai: #4fd6a4; /* mint — Codex/OpenAI identity */
@@ -147,17 +150,17 @@
  */
 :root,
 :root[data-theme="dark"] {
-  /* Aurora backdrop — the ambient wash behind main surfaces */
+  /* Aurora backdrop — the ambient wash behind main surfaces (Nebula indigo→magenta) */
   --dh-aurora:
-    radial-gradient(900px 600px at 12% -10%, rgba(139, 108, 240, 0.2), transparent 60%),
-    radial-gradient(700px 500px at 95% 8%, rgba(244, 114, 140, 0.09), transparent 55%),
-    radial-gradient(1000px 800px at 50% 115%, rgba(139, 108, 240, 0.12), transparent 60%),
-    linear-gradient(160deg, #181322 0%, #14101a 45%, #171223 100%);
+    radial-gradient(900px 600px at 12% -10%, rgba(99, 102, 241, 0.22), transparent 60%),
+    radial-gradient(700px 500px at 95% 8%, rgba(232, 121, 249, 0.09), transparent 55%),
+    radial-gradient(1000px 800px at 50% 115%, rgba(99, 102, 241, 0.12), transparent 60%),
+    linear-gradient(160deg, #171326 0%, #14101a 45%, #161226 100%);
   /* Quieter wash for chrome-adjacent routes (dashboard/ops/settings) */
   --dh-aurora-soft:
-    radial-gradient(1100px 600px at 78% -10%, rgba(139, 92, 246, 0.14), transparent 62%),
-    radial-gradient(900px 540px at -8% 108%, rgba(244, 114, 182, 0.07), transparent 60%),
-    linear-gradient(168deg, #191424 0%, #15111c 52%, #171226 100%);
+    radial-gradient(1100px 600px at 78% -10%, rgba(99, 102, 241, 0.14), transparent 62%),
+    radial-gradient(900px 540px at -8% 108%, rgba(232, 121, 249, 0.07), transparent 60%),
+    linear-gradient(168deg, #181428 0%, #15111c 52%, #161229 100%);
 
   /* Glass recipe — chrome grade (sidebar, top bar, status bar, nav) */
   --dh-glass-chrome-bg: rgba(26, 20, 36, 0.55);
@@ -169,23 +172,27 @@
   --dh-glass-hi-bg: rgba(44, 34, 62, 0.6);
   --dh-glass-hi-blur: 28px;
 
-  --dh-glass-border: rgba(167, 139, 250, 0.14);
-  --dh-glass-border-hi: rgba(167, 139, 250, 0.28);
+  --dh-glass-border: rgba(129, 140, 248, 0.14);
+  --dh-glass-border-hi: rgba(129, 140, 248, 0.28);
   --dh-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --dh-glass-shadow: 0 16px 48px rgba(10, 6, 18, 0.5);
   --dh-glass-shadow-float: 0 20px 50px rgba(8, 5, 16, 0.65);
 
-  /* Warm accent pair (Claude-coral + rose) used for gradients & live states */
+  /* Nebula accent pair (indigo → magenta) for brand gradients & live states.
+   * --dh-coral stays as the Claude/warm PROVIDER identity only (chips, Claude
+   * launch mark) — it is no longer a brand accent. */
   --dh-coral: #ff7f6e;
-  --dh-rose: #f2708c;
-  --dh-violet: #a78bfa;
-  --dh-violet-deep: #8b6cf0;
-  --dh-grad-brand: linear-gradient(135deg, var(--dh-violet-deep), var(--dh-rose));
-  --dh-grad-warm: linear-gradient(135deg, var(--dh-coral), var(--dh-rose));
+  --dh-rose: #e879f9; /* Nebula magenta (was rose #f2708c) */
+  --dh-violet: #818cf8; /* Nebula indigo (was violet #a78bfa) */
+  --dh-violet-deep: #6366f1;
+  --dh-grad-brand: linear-gradient(135deg, var(--dh-violet), var(--dh-rose));
+  /* Claude-identity warm gradient: coral → warm rose (kept literal so it stays
+   * warm now that --dh-rose is the Nebula magenta). */
+  --dh-grad-warm: linear-gradient(135deg, var(--dh-coral), #f2708c);
 
-  /* Chat-surface vibrancy (§3.3) */
-  --dh-chat-user-bubble: linear-gradient(140deg, rgba(139, 108, 240, 0.24), rgba(244, 114, 140, 0.14));
-  --dh-chat-user-border: rgba(167, 139, 250, 0.3);
+  /* Chat-surface vibrancy (§3.3) — indigo → magenta */
+  --dh-chat-user-bubble: linear-gradient(140deg, rgba(99, 102, 241, 0.24), rgba(232, 121, 249, 0.14));
+  --dh-chat-user-border: rgba(129, 140, 248, 0.3);
   --dh-chat-ai-bubble: rgba(255, 255, 255, 0.028);
 
   /* Typography scale (§1.1D). font-size / weight — line-height/spacing applied per class. */
@@ -433,14 +440,22 @@ kbd {
   background: var(--dh-rail-inactive);
   border-right: 1px solid var(--dh-border-rail);
 }
+/* The Deck mark (inline SVG) sits in the rail; the tile itself is just a hover
+ * target with the brand glow — the mark carries the color. */
 .dh-logo {
   width: 26px;
   height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 8px;
-  background: var(--dh-grad-brand);
   flex-shrink: 0;
   margin-bottom: 6px;
-  box-shadow: 0 2px 10px rgba(139, 108, 240, 0.4);
+  filter: drop-shadow(0 2px 10px rgba(99, 102, 241, 0.45));
+}
+.dh-logo svg {
+  width: 100%;
+  height: 100%;
 }
 .dh-navicon {
   position: relative;
@@ -461,8 +476,8 @@ kbd {
   color: var(--dh-text);
 }
 .dh-navicon[aria-current="page"] {
-  color: var(--dh-coral);
-  background: rgba(255, 127, 110, 0.1);
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 .dh-navicon[aria-current="page"]::before {
   content: "";
@@ -472,7 +487,7 @@ kbd {
   bottom: 8px;
   width: 2.5px;
   border-radius: 2px;
-  background: var(--dh-grad-warm);
+  background: var(--dh-grad-brand);
 }
 .dh-navicon:focus-visible {
   outline: 2px solid var(--dh-focus);
@@ -585,7 +600,7 @@ kbd {
 }
 .dh-panel-filter:focus-within {
   border-color: var(--dh-focus);
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.12);
 }
 .dh-panel-filter input {
   flex: 1 1 auto;
@@ -620,9 +635,9 @@ kbd {
   color: var(--dh-text);
 }
 .dh-chip[aria-pressed="true"] {
-  color: var(--dh-coral);
-  background: rgba(255, 124, 104, 0.08);
-  border-color: rgba(255, 127, 110, 0.35);
+  color: var(--accent);
+  background: rgba(129, 140, 248, 0.08);
+  border-color: rgba(129, 140, 248, 0.35);
 }
 .dh-chip:focus-visible {
   outline: 2px solid var(--dh-focus);
@@ -679,14 +694,14 @@ kbd {
   background: color-mix(in srgb, var(--dh-warning) 6%, transparent);
 }
 .dh-scard--running {
-  border-color: color-mix(in srgb, var(--dh-coral) 22%, transparent);
-  background: color-mix(in srgb, var(--dh-coral) 3%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: color-mix(in srgb, var(--accent) 3%, transparent);
 }
 .dh-scard:hover {
   border-color: var(--dh-glass-border-hi);
 }
 .dh-scard--selected {
-  box-shadow: inset 2px 0 0 var(--dh-coral);
+  box-shadow: inset 2px 0 0 var(--accent);
   background: var(--dh-selected);
 }
 .dh-scard:focus-visible {
@@ -719,7 +734,7 @@ kbd {
   flex-shrink: 0;
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--dh-coral);
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 .dh-scard-reason {
@@ -818,7 +833,7 @@ kbd {
 }
 .dh-srowc--selected {
   background: var(--dh-selected);
-  border-left-color: var(--dh-coral);
+  border-left-color: var(--accent);
 }
 .dh-srowc:focus-visible {
   outline: 2px solid var(--dh-focus);
@@ -1144,7 +1159,7 @@ html[data-reduce-motion="true"] .dh-statusbar,
   height: 44px;
   border-radius: 14px;
   background: var(--dh-grad-brand);
-  box-shadow: 0 8px 28px rgba(139, 108, 240, 0.45);
+  box-shadow: 0 8px 28px rgba(99, 102, 241, 0.45);
 }
 .dh-launch-title {
   font-size: 21px;
@@ -1211,7 +1226,7 @@ html[data-reduce-motion="true"] .dh-statusbar,
 }
 .dh-launch-composer:focus-within {
   border-color: var(--dh-glass-border-hi);
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12), var(--dh-glass-shadow-float);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.12), var(--dh-glass-shadow-float);
 }
 .dh-launch-input {
   width: 100%;
@@ -1778,10 +1793,10 @@ html[data-reduce-motion="true"] .dh-statusbar,
   --text-dim: #8b81a3;
   --text-faint: #a99fbb;
 
-  --accent: #7c5cf0; /* violet identity in light */
-  --accent-hover: #6a4ae0;
+  --accent: #6366f1; /* Nebula indigo identity in light */
+  --accent-hover: #4f46e5;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(124, 92, 240, 0.12);
+  --accent-soft: rgba(99, 102, 241, 0.12);
 
   --danger: #dc3d2f;
   --warning: #b07617;
@@ -1847,8 +1862,8 @@ body {
   --color-sky-400: #0284c7; /* sky-600 */
   --color-red-300: #b91c1c; /* red-700 */
   --color-red-400: #dc2626; /* red-600 */
-  --color-clay-300: #b34e30; /* darkened clay for text-on-light */
-  --color-clay-400: #c25e3f; /* clay-600 */
+  --color-clay-300: #4f46e5; /* darkened indigo for text-on-light */
+  --color-clay-400: #4338ca; /* indigo-700 */
 }
 
 /*
@@ -1863,7 +1878,7 @@ body {
   --dh-canvas: #f4f2f9;
   --dh-header: rgba(255, 255, 255, 0.62);
   --dh-rail-inactive: #efeaf7;
-  --dh-rail-active: rgba(124, 92, 240, 0.12);
+  --dh-rail-active: rgba(99, 102, 241, 0.12);
   --dh-surface: #ffffff;
   --dh-user-bubble: #efeaf7;
   --dh-control: #edeaf6;
@@ -1884,8 +1899,8 @@ body {
   --dh-border-subtle: #e6e0f4;
   --dh-border: #d8d0e8;
   --dh-border-rail: #ddd6ec;
-  --dh-focus: #7c5cf0;
-  --dh-link: #6a4ae0;
+  --dh-focus: #6366f1;
+  --dh-link: #4f46e5;
 
   /* Status (darkened for contrast on light) */
   --dh-success: #0e9f6e;
@@ -1895,7 +1910,7 @@ body {
   --dh-diff-remove: #d94f74;
 
   /* Brand + provider accents */
-  --dh-brand: #7c5cf0;
+  --dh-brand: #6366f1;
   --dh-provider-openai: #0e9f6e;
   --dh-provider-anthropic: #e8604d;
   --dh-access-elevated: #b07617;
@@ -1904,27 +1919,27 @@ body {
   --dh-glass-chrome-bg: rgba(255, 255, 255, 0.62);
   --dh-glass-bg: rgba(255, 255, 255, 0.55);
   --dh-glass-hi-bg: rgba(255, 255, 255, 0.72);
-  --dh-glass-border: rgba(124, 92, 240, 0.14);
-  --dh-glass-border-hi: rgba(124, 92, 240, 0.26);
+  --dh-glass-border: rgba(99, 102, 241, 0.14);
+  --dh-glass-border-hi: rgba(99, 102, 241, 0.26);
   --dh-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
   --dh-glass-shadow: 0 16px 48px rgba(60, 40, 110, 0.1);
   --dh-glass-shadow-float: 0 20px 50px rgba(60, 40, 110, 0.14);
 
   --dh-coral: #e8604d;
-  --dh-rose: #d94f74;
-  --dh-violet: #7c5cf0;
-  --dh-violet-deep: #6a4ae0;
+  --dh-rose: #d946ef; /* Nebula magenta, darkened for light */
+  --dh-violet: #6366f1;
+  --dh-violet-deep: #4f46e5;
 
-  --dh-chat-user-bubble: linear-gradient(140deg, rgba(124, 92, 240, 0.16), rgba(217, 79, 116, 0.1));
-  --dh-chat-user-border: rgba(124, 92, 240, 0.28);
+  --dh-chat-user-bubble: linear-gradient(140deg, rgba(99, 102, 241, 0.16), rgba(217, 70, 239, 0.1));
+  --dh-chat-user-border: rgba(99, 102, 241, 0.28);
   --dh-chat-ai-bubble: rgba(40, 26, 70, 0.03);
 
   --dh-aurora:
-    radial-gradient(900px 600px at 12% -10%, rgba(124, 92, 240, 0.1), transparent 60%),
-    radial-gradient(700px 500px at 95% 8%, rgba(217, 79, 116, 0.05), transparent 55%),
+    radial-gradient(900px 600px at 12% -10%, rgba(99, 102, 241, 0.1), transparent 60%),
+    radial-gradient(700px 500px at 95% 8%, rgba(217, 70, 239, 0.05), transparent 55%),
     linear-gradient(160deg, #f7f5fc 0%, #f2eff8 100%);
   --dh-aurora-soft:
-    radial-gradient(1100px 600px at 78% -10%, rgba(124, 92, 240, 0.08), transparent 62%),
+    radial-gradient(1100px 600px at 78% -10%, rgba(99, 102, 241, 0.08), transparent 62%),
     linear-gradient(168deg, #f7f5fc 0%, #f1edf8 100%);
 }
 
@@ -2319,8 +2334,8 @@ html[data-reduce-motion="true"] {
 /* Aurora Cockpit §3.3: inline code gets the violet tint in chat prose. */
 .dh-thread-assistant :not(pre) > code,
 .dh-thread-user :not(pre) > code {
-  background: rgba(167, 139, 250, 0.13);
-  color: #cbb8ff;
+  background: rgba(129, 140, 248, 0.13);
+  color: #b7bffd;
   border-radius: 4px;
   padding: 1px 4px;
   font-size: 0.92em;
@@ -2900,7 +2915,7 @@ html[data-reduce-motion="true"] {
   color: var(--dh-success);
 }
 .dh-inspector-delta-del {
-  color: var(--dh-rose);
+  color: var(--dh-diff-remove);
 }
 
 /* Narrow/PWA disclosure: NOT the desktop dock — an explicit desktop-required note. */
@@ -3237,7 +3252,7 @@ html[data-reduce-motion="true"] {
 .dh-settings-search:focus {
   outline: none;
   border-color: var(--dh-focus);
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.12);
 }
 .dh-settings-search::placeholder {
   color: var(--dh-text-dim);
@@ -3402,17 +3417,72 @@ html[data-reduce-motion="true"] {
   font-size: 13px;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
+/* Native <select> chrome looks foreign in the glass app (M4) — draw our own
+ * control with a themed chevron instead of the OS widget. */
+.dh-settings-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 28px;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23857a9c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+}
 .dh-settings-select:focus,
 .dh-settings-input:focus {
   outline: none;
   border-color: var(--dh-focus);
-  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.12);
 }
 
 .dh-settings-switch-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+/* Themed toggle for the role="switch" checkboxes (M4) — the default-blue native
+ * checkbox read as foreign chrome in the glass app. */
+.dh-settings-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 34px;
+  height: 20px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  position: relative;
+  border-radius: var(--dh-radius-pill);
+  background: var(--dh-control);
+  border: 1px solid var(--dh-border);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.dh-settings-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--dh-radius-pill);
+  background: var(--dh-text-muted);
+  transition: transform 140ms ease, background 140ms ease;
+}
+.dh-settings-switch:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.dh-settings-switch:checked::after {
+  transform: translateX(14px);
+  background: #fff;
+}
+.dh-settings-switch:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 2px;
+}
+.dh-settings-switch:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .dh-settings-switch-copy {
@@ -3522,8 +3592,9 @@ html[data-reduce-motion="true"] {
   gap: 12px;
   margin: 0 -4px;
   padding: 10px 4px;
-  background: color-mix(in srgb, var(--dh-canvas) 94%, transparent);
-  backdrop-filter: blur(6px);
+  /* Opaque: field hints scrolled beneath used to show through the translucent
+   * bar and read as text clipped mid-word behind the Save button (M4). */
+  background: var(--dh-canvas);
   border-top: 1px solid var(--dh-border-subtle);
 }
 

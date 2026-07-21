@@ -112,18 +112,28 @@ export function ProviderHomePicker({
 }: ProviderHomePickerProps) {
   const selectedHome =
     homes.find((home) => home.homeFingerprint === selectedFingerprint) ?? null;
+  const chipClass =
+    product === "Codex" ? "dh-provider-chip--openai" : "dh-provider-chip--anthropic";
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950 text-zinc-200">
-      <div className="border-b border-zinc-800/80 p-3">
-        <div className="text-[11px] font-medium text-zinc-300">{label}</div>
+    <div className="flex min-h-0 flex-col text-[var(--dh-text)]">
+      <div className="flex items-start justify-between gap-3 border-b border-[var(--dh-border-subtle)] px-4 py-3.5">
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-semibold text-[var(--dh-text-strong)]">
+            {product} runtime
+          </div>
+          <div className="mt-0.5 text-[11px] text-[var(--dh-text-muted)]">{label}</div>
+        </div>
+        <span className={`dh-provider-chip ${chipClass}`}>{product === "Codex" ? "CDX" : "CLD"}</span>
+      </div>
+      <div className="flex flex-col gap-2 px-4 py-3">
         {homes.length > 1 ? (
-          <label className="mt-1 block">
+          <label className="block">
             <span className="sr-only">{product} home</span>
             <select
               aria-label={`${product} home`}
               value={selectedFingerprint ?? ""}
               onChange={(event) => onSelect(event.target.value)}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1 font-mono text-[10.5px] text-zinc-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              className="dh-settings-select w-full font-mono text-[11px]"
             >
               {homes.map((home) => (
                 <option key={home.homeFingerprint} value={home.homeFingerprint}>
@@ -133,20 +143,23 @@ export function ProviderHomePicker({
             </select>
           </label>
         ) : (
-          <div
-            className="mt-1 truncate font-mono text-[10.5px] text-zinc-600"
-            title={selectedHome?.homeFingerprint}
-          >
-            {selectedHome ? shortHomeFingerprint(selectedHome.homeFingerprint) : ""}
+          <div className="flex items-baseline gap-2 text-[11px]">
+            <span className="text-[var(--dh-text-muted)]">Runtime ID</span>
+            <span
+              className="truncate font-mono text-[10.5px] text-[var(--dh-text-dim)]"
+              title={selectedHome?.homeFingerprint}
+            >
+              {selectedHome ? shortHomeFingerprint(selectedHome.homeFingerprint) : ""}
+            </span>
           </div>
         )}
+        {selectedHome ? (
+          <div className="text-[11px] text-[var(--dh-text-dim)]">
+            <span className="text-[var(--dh-text-muted)]">Session access:</span>{" "}
+            {providerHomeCapabilitySummary(selectedHome)}
+          </div>
+        ) : null}
       </div>
-      {selectedHome ? (
-        <div className="p-3 text-[11px] text-zinc-500">
-          <span className="text-zinc-400">Verified capabilities:</span>{" "}
-          {providerHomeCapabilitySummary(selectedHome)}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -226,9 +239,9 @@ export function ProviderHomeSetup({
         aria-live="polite"
         aria-atomic="true"
         aria-busy="true"
-        className="flex min-h-0 flex-1 items-center justify-center bg-zinc-950"
+        className="dh-aurora-bg--soft flex min-h-0 flex-1 items-center justify-center"
       >
-        <div className="flex items-center gap-2 text-sm text-zinc-500">
+        <div className="flex items-center gap-2 text-sm text-[var(--dh-text-muted)]">
           <Spinner className="h-4 w-4" />
           Discovering native {product} homes…
         </div>
@@ -238,54 +251,64 @@ export function ProviderHomeSetup({
 
   if (homes.length === 0) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
-        <div
-          role="status"
-          className="border-b border-amber-900/40 bg-amber-500/5 px-4 py-3 text-amber-200"
-        >
-          <div className="flex items-center gap-2 text-xs font-medium">
-            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> No native {label} home is
-            available
-          </div>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            {error ??
-              `No verified ${label} home was discovered. Native controls stay hidden until one is registered.`}
-          </p>
-        </div>
-        {fallback ?? (
-          <EmptyState
-            icon={<AlertTriangle className="h-11 w-11" />}
-            title="No native home connected"
-            hint="Native setup stays hidden while no verified provider home is available."
-          />
-        )}
-        <div className="border-t border-zinc-900 px-4 py-3 text-center">
-          <button
-            type="button"
-            onClick={() => {
-              setError(null);
-              setHomes(null);
-              setDiscoveryNonce((current) => current + 1);
-            }}
-            className="rounded-md px-2.5 py-1 text-xs text-zinc-400 ring-1 ring-zinc-800 hover:bg-zinc-900 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+      <div className="dh-aurora-bg--soft flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
+        <div className="mx-auto flex w-full max-w-2xl flex-col">
+          <div
+            role="status"
+            className="glass-card border-amber-500/25 px-4 py-3 text-amber-200"
           >
-            Retry native runtime
-          </button>
+            <div className="flex items-center gap-2 text-xs font-medium">
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" /> No native {label} home is
+              available
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--dh-text-muted)]">
+              {error ??
+                `No verified ${label} home was discovered. Native controls stay hidden until one is registered.`}
+            </p>
+            <div className="mt-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setHomes(null);
+                  setDiscoveryNonce((current) => current + 1);
+                }}
+                className="rounded-md px-2.5 py-1 text-xs text-[var(--dh-text-muted)] ring-1 ring-[var(--dh-border)] hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              >
+                Retry native runtime
+              </button>
+            </div>
+          </div>
+          <div className="mt-4">
+            {fallback ?? (
+              <EmptyState
+                icon={<AlertTriangle className="h-11 w-11" />}
+                title="No native home connected"
+                hint="Native setup stays hidden while no verified provider home is available."
+              />
+            )}
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-zinc-950">
-      <ProviderHomePicker
-        homes={homes}
-        selectedFingerprint={selectedFingerprint}
-        onSelect={setSelectedFingerprint}
-        label={label}
-        product={product}
-      />
-      {selectedHome ? <IndexedApprovalInbox home={selectedHome} client={transport.client} /> : null}
+    <div className="dh-aurora-bg--soft flex min-h-0 flex-1 flex-col overflow-y-auto p-6">
+      <div className="mx-auto w-full max-w-2xl">
+        <div className="glass-card overflow-hidden">
+          <ProviderHomePicker
+            homes={homes}
+            selectedFingerprint={selectedFingerprint}
+            onSelect={setSelectedFingerprint}
+            label={label}
+            product={product}
+          />
+          {selectedHome ? (
+            <IndexedApprovalInbox home={selectedHome} client={transport.client} />
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

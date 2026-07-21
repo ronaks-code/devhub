@@ -157,8 +157,10 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                       className="flex items-center gap-3 px-4 py-3"
                     >
                       {/* Icon */}
+                      {/* Provider identity stays coral (Claude) vs sky (Codex) —
+                          never the Nebula brand indigo (which clay-* now maps to). */}
                       {isClaude ? (
-                        <Bot className="h-4 w-4 shrink-0 text-clay-400" />
+                        <Bot className="h-4 w-4 shrink-0 text-[var(--dh-provider-anthropic)]" />
                       ) : (
                         <Cpu className="h-4 w-4 shrink-0 text-sky-400" />
                       )}
@@ -167,7 +169,7 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           isClaude
-                            ? "bg-clay-500/15 text-clay-300"
+                            ? "bg-[#ff7f6e]/15 text-[#ffab9d]"
                             : "bg-sky-500/15 text-sky-300"
                         }`}
                       >

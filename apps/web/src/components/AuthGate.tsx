@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Hexagon, KeyRound, LogOut } from "lucide-react";
+import { KeyRound, LogOut } from "lucide-react";
+import { DeckMark } from "./DeckMark";
 import { api, getToken, onUnauthorized, setToken, UnauthorizedError } from "../lib/api";
 import { Spinner } from "./ui";
 import { cn } from "../lib/utils";
@@ -90,7 +91,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         className="w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 shadow-xl ring-1 ring-zinc-800/60"
       >
         <div className="mb-4 flex items-center gap-2.5">
-          <Hexagon className="h-5 w-5 fill-clay-500/20 text-clay-500" />
+          <DeckMark size={20} className="shrink-0" />
           <span className="text-base font-semibold tracking-tight text-zinc-100">DevHub</span>
         </div>
         <h1 className="text-[15px] font-semibold text-zinc-100">Access token required</h1>

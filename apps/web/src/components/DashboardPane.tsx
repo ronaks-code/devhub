@@ -90,8 +90,10 @@ function providerOfModel(model: string): "anthropic" | "openai" | "unknown" {
   return "unknown";
 }
 
-/** Categorical palette for the cost-by-model donut (§3.6): violet → pink → coral → mint → muted violets. */
-const DONUT_PALETTE = ["#a78bfa", "#f0abfc", "#fb7185", "#5eead4", "#8b6cf0", "#c4b5fd", "#7c5cf0", "#e879f9"];
+/** Categorical palette for the cost-by-model donut (§3.6): Nebula-anchored but hue-distinct
+ * (indigo → magenta → mint → amber → coral → sky → lime → deep indigo), so adjacent legend
+ * swatches never read as the same color (QA P4). */
+const DONUT_PALETTE = ["#818cf8", "#e879f9", "#5eead4", "#fbbf24", "#fb7185", "#60a5fa", "#a3e635", "#4f46e5"];
 
 /** Map a running-session status to a dot/text color (violet-family, clay retired). */
 function statusColor(status: string): { dot: string; text: string } {

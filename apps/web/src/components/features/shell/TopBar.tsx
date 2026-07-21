@@ -3,7 +3,6 @@ import {
   Command as CommandIcon,
   Folder,
   Gauge,
-  Hexagon,
   History,
   Keyboard,
   MessagesSquare,
@@ -14,6 +13,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "../../AuthGate";
+import { DeckMark } from "../../DeckMark";
 import { SessionCostBadge } from "../../SessionCostBadge";
 import { ThemeSwitcher } from "../../ThemeSwitcher";
 import { Spinner } from "../../ui";
@@ -225,7 +225,7 @@ export function TopBar({
       className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
     >
       <div className="flex items-center gap-2" data-tauri-drag-region>
-        <Hexagon className="h-4 w-4 fill-[var(--dh-brand)]/20 text-[var(--dh-brand)]" />
+        <DeckMark size={18} className="shrink-0" />
         {projectName ? (
           <span className="flex items-center gap-1.5 text-sm" data-tauri-drag-region>
             <span className="font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>

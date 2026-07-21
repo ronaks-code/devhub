@@ -462,7 +462,7 @@ export function SettingsRoute({
     ) : (
       <>
         <FieldGroup id="dh-settings-appearance" heading="Appearance">
-          <Field id="dh-settings-theme" label="Theme" hint="Stored for now; full theming lands later.">
+          <Field id="dh-settings-theme" label="Theme" hint="Dark, light, or follow your OS. Applies immediately.">
             <Select
               id="dh-settings-theme"
               value={settings.theme ?? "system"}

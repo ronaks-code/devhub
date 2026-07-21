@@ -34,7 +34,7 @@ export function dedupeBySessionId(sessions: RunningSession[]): RunningSession[] 
 
 /** The 3px left edge-light color per bucket (violet=busy, red=dead, amber=needs-you, none=idle). */
 const EDGE_LIGHT: Record<OpsEntry["bucket"], string> = {
-  running: "linear-gradient(180deg, #a78bfa, #8b6cf0)",
+  running: "linear-gradient(180deg, #818cf8, #6366f1)",
   stale: "linear-gradient(180deg, #ff6b5e, #f2708c)",
   needsYou: "linear-gradient(180deg, #f0b25e, #e59a4e)",
   finished: "transparent",
