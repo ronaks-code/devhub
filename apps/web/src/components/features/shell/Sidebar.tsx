@@ -132,6 +132,14 @@ export interface SidebarProps {
   onMechanicsChange?: (m: "claude" | "codex") => void;
   modelLabel?: string;
   spend?: SidebarSpend;
+  /**
+   * True while the active project's session list is (re)fetching. Cold start
+   * can take 10-20s while the index rebuilds; without this the panel showed a
+   * confident "No sessions" during that whole window — read as "this project
+   * has nothing", not "still loading" (QA). Only affects the truly-empty,
+   * unfiltered case; a filtered/chip-narrowed empty result keeps its own copy.
+   */
+  loading?: boolean;
 }
 
 /** Icon + keyboard chord for each known destination id (icon rail, §3.1). */
@@ -198,6 +206,7 @@ export function Sidebar({
   onMechanicsChange,
   modelLabel,
   spend,
+  loading,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<boolean>(() => readCompat(COLLAPSE_KEY) === "1");
   const [filter, setFilter] = useState("");
@@ -392,7 +401,13 @@ export function Sidebar({
         </div>
 
         <div className="dh-sessions" data-dh-sessions="">
-          {filteredGroups.length === 0 ? (
+          {filteredGroups.length === 0 && loading && !q && chip === "all" ? (
+            <div className="flex flex-col gap-1.5 px-1 py-0.5" aria-hidden>
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-11 animate-pulse rounded-lg bg-[var(--dh-control)]" />
+              ))}
+            </div>
+          ) : filteredGroups.length === 0 ? (
             <p className="dh-sempty">{q || chip !== "all" ? "No matching sessions" : "No sessions"}</p>
           ) : (
             filteredGroups.map((g) => (

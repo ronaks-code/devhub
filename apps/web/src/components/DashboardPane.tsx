@@ -95,6 +95,18 @@ function providerOfModel(model: string): "anthropic" | "openai" | "unknown" {
  * swatches never read as the same color (QA P4). */
 const DONUT_PALETTE = ["#818cf8", "#e879f9", "#5eead4", "#fbbf24", "#fb7185", "#60a5fa", "#a3e635", "#4f46e5"];
 
+/**
+ * Cost-by-model rows always show 2 decimals, matching every other $ figure on the
+ * dashboard. `formatUsd` intentionally keeps 3-4 decimals for very small amounts
+ * (so a sub-cent turn doesn't round to $0.00) — the right call for a per-turn
+ * badge, but it made a cheap model like `<synthetic>` show "$0.111" next to
+ * every other row's 2-decimal figure (QA P5). This donut is a coarse per-model
+ * breakdown, not a precision instrument, so it rounds like the rest of the page.
+ */
+function formatModelCost(n: number): string {
+  return `$${Math.max(0, n).toFixed(2)}`;
+}
+
 /** Map a running-session status to a dot/text color (violet-family, clay retired). */
 function statusColor(status: string): { dot: string; text: string } {
   const s = status.toLowerCase();
@@ -221,7 +233,7 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
           className="absolute inset-[19px] flex flex-col items-center justify-center rounded-full"
           style={{ background: "var(--dh-surface)" }}
         >
-          <span className="dh-nums text-[15px] font-semibold text-[color:var(--dh-text-strong)]">{formatUsd(total)}</span>
+          <span className="dh-nums text-[15px] font-semibold text-[color:var(--dh-text-strong)]">{formatModelCost(total)}</span>
           <span className="dh-label" style={{ fontSize: "8px", letterSpacing: "0.14em" }}>
             total
           </span>
@@ -249,7 +261,7 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
                 </span>
               </div>
               <div className="dh-nums flex items-center gap-1.5 pl-[18px] text-[color:var(--dh-text-dim)]">
-                <span className="text-[color:var(--dh-text-muted)]">{formatUsd(m.costUsd)}</span>
+                <span className="text-[color:var(--dh-text-muted)]">{formatModelCost(m.costUsd)}</span>
                 <span aria-hidden>·</span>
                 <span>{Math.round((m.costUsd / total) * 100)}%</span>
               </div>
@@ -606,8 +618,11 @@ function DashboardBody({
           </Card>
         </div>
 
-        {/* Row 5 — tool analytics + dirty repos */}
-        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+        {/* Row 5 — tool analytics + dirty repos. `items-start` (P1): the two
+            cards routinely differ a lot in content height (a long tool list vs.
+            a short dirty-repo list); without it CSS grid stretches both to the
+            taller card's height, leaving a big dead void under the shorter one. */}
+        <div className="grid grid-cols-1 items-start gap-3.5 md:grid-cols-2">
           <Card>
             <CardHead icon={<Wrench className="h-3.5 w-3.5" />} title="By tool" />
             <ToolAnalytics />

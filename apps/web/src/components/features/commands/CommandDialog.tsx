@@ -127,24 +127,41 @@ export function visibleCommands(
 }
 
 /**
- * Subsequence fuzzy match (same idea as editor command palettes): every char of the
- * query must appear in order. Returns a rough score (lower = better) or null on no match.
+ * Fuzzy match (same idea as editor command palettes). Prefers a literal substring
+ * match (scored by position — earlier is better); falls back to a subsequence match
+ * (every char of the query in order) for typo/no-space tolerance, but caps how
+ * scattered that subsequence may be. Without the cap, "spatial" — s-p-a-t-i-a-l —
+ * is a valid (if wildly scattered) subsequence of "go to progress progress shipped
+ * work features milestones changelog", so it matched "Go to Progress" (QF5).
+ * Returns a rough score (lower = better) or null on no match.
  */
 function fuzzyScore(query: string, haystack: string): number | null {
   if (!query) return 0;
   const q = query.toLowerCase();
   const h = haystack.toLowerCase();
+
+  const idx = h.indexOf(q);
+  if (idx >= 0) return idx;
+
   let qi = 0;
   let score = 0;
+  let first = -1;
   let last = -1;
   for (let hi = 0; hi < h.length && qi < q.length; hi++) {
     if (h[hi] === q[qi]) {
+      if (first < 0) first = hi;
       if (last >= 0) score += hi - last;
       last = hi;
       qi++;
     }
   }
-  return qi === q.length ? score : null;
+  if (qi !== q.length) return null;
+  // A real subsequence match stays roughly word-tight; one this scattered
+  // (spanning more than ~3x the query length) reads as a coincidence, not a
+  // match. Substring matches above always win (lower score), so this only
+  // ranks the fuzzy fallback.
+  if (last - first + 1 > q.length * 3) return null;
+  return 1000 + score;
 }
 
 /** Filter + rank commands (visibility first, then fuzzy), preserving order on ties. */

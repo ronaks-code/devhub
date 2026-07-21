@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { DailyUsage } from "../../lib/types";
 import { compactNumber, formatUsd } from "../../lib/format";
 import { cn } from "../../lib/utils";
@@ -142,9 +142,51 @@ export function CalendarHeatmap({
 
   const metricLabel = metric === "tokens" ? "tokens" : "sessions";
 
+  // Scroll affordance (QA P6): the grid is ~53 weeks wide and routinely wider
+  // than its card, but a bare `overflow-x-auto` gives no visual hint that
+  // there's more to see — macOS hides idle scrollbars by default. Track
+  // whether there's unseen content on either edge and fade it in/out so the
+  // card reads as "scrollable" without adding a permanent scrollbar.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollState, setScrollState] = useState({ left: false, right: false });
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const measure = () => {
+      const { scrollLeft, scrollWidth, clientWidth } = el;
+      setScrollState({
+        left: scrollLeft > 1,
+        right: scrollLeft + clientWidth < scrollWidth - 1,
+      });
+    };
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+    };
+  }, [weeks]);
+
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-      <div className="overflow-x-auto">
+      <div className="relative">
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-y-0 left-7 z-10 w-6 bg-gradient-to-r from-zinc-900/90 to-transparent transition-opacity",
+            scrollState.left ? "opacity-100" : "opacity-0",
+          )}
+          aria-hidden
+        />
+        <div
+          className={cn(
+            "pointer-events-none absolute inset-y-0 right-0 z-10 w-6 bg-gradient-to-l from-zinc-900/90 to-transparent transition-opacity",
+            scrollState.right ? "opacity-100" : "opacity-0",
+          )}
+          aria-hidden
+        />
+        <div ref={scrollRef} className="overflow-x-auto">
         <div className="inline-flex min-w-full flex-col gap-1.5">
           {/* Month labels row, aligned to week columns. */}
           <div className="flex pl-7 text-[10px] text-zinc-600">
@@ -197,6 +239,7 @@ export function CalendarHeatmap({
               ))}
             </div>
           </div>
+        </div>
         </div>
       </div>
 

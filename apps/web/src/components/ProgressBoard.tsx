@@ -402,6 +402,11 @@ export function ProgressBoard(_props?: {
   const totals = data?.totals;
   const blocked = totals?.statusCounts.blocked ?? 0;
   const effort = data?.effort;
+  // A missing/epoch-0 `generatedAt` (no snapshot mined yet) rendered as "mined
+  // 57y ago" — technically correct math over a zero timestamp, but reads as a
+  // bug. Only show the relative time once it's a real, positive timestamp.
+  const generatedAtMs = data ? Date.parse(data.generatedAt) : NaN;
+  const hasGeneratedAt = Number.isFinite(generatedAtMs) && generatedAtMs > 0;
 
   // Status chips are data-driven from the corpus-wide status counts, ordered
   // canonically (shipped/staged/blocked first). This adapts if the miner emits
@@ -465,7 +470,7 @@ export function ProgressBoard(_props?: {
             <Rocket className="h-4 w-4 text-clay-400" />
             Progress
           </h1>
-          {data ? (
+          {data && hasGeneratedAt ? (
             <span className="text-[12px] text-zinc-500" title={`snapshot mined ${data.generatedAt}`}>
               mined {relativeTime(data.generatedAt)}
             </span>
@@ -492,7 +497,7 @@ export function ProgressBoard(_props?: {
             <EmptyState
               icon={<Rocket className="h-10 w-10" />}
               title="No progress items yet"
-              hint="Work items are mined from the workflow journals. Run the miner (gen-progress) or hit Refresh once a Workflow run has produced results."
+              hint="Work items are mined from the workflow journals. Hit Refresh once a Workflow run has produced results."
             />
           </div>
         ) : (

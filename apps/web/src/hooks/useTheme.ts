@@ -78,6 +78,16 @@ export interface Theme {
    * button that walks the three states on click.
    */
   cyclePreference: () => void;
+  /**
+   * True if THIS browser already had a stored preference at mount — i.e. the
+   * user (or a prior "adopt the server's theme" pass) has explicitly set one
+   * before. Callers that want to adopt a server-backed default on first run
+   * (e.g. a synced setting) should check this and skip adopting once it's
+   * true, so that a later local choice always wins over a stale server value
+   * (QA: an explicit header theme toggle got clobbered back on reload by the
+   * server-settings adopt effect racing the save).
+   */
+  hasStoredPreference: boolean;
 }
 
 /**
@@ -88,6 +98,11 @@ export interface Theme {
 export function useTheme(): Theme {
   const [preference, setPreferenceState] = useState<ThemePreference>(() => readPreference());
   const [osDark, setOsDark] = useState<boolean>(() => osPrefersDark());
+  // Captured once at mount, BEFORE any "adopt a server default" effect can run,
+  // so that check reflects "did the user already choose", not "did we just adopt".
+  const [hasStoredPreference, setHasStoredPreference] = useState<boolean>(
+    () => isThemePreference(readCompat(STORAGE_KEY)),
+  );
 
   // Track the OS media query live so a "system" preference reacts to changes.
   useEffect(() => {
@@ -126,6 +141,7 @@ export function useTheme(): Theme {
   const setPreference = useCallback((pref: ThemePreference) => {
     setPreferenceState(pref);
     writePreference(pref);
+    setHasStoredPreference(true);
   }, []);
 
   const cyclePreference = useCallback(() => {
@@ -134,10 +150,11 @@ export function useTheme(): Theme {
       writePreference(next);
       return next;
     });
+    setHasStoredPreference(true);
   }, []);
 
   return useMemo(
-    () => ({ theme, preference, setPreference, cyclePreference }),
-    [theme, preference, setPreference, cyclePreference],
+    () => ({ theme, preference, setPreference, cyclePreference, hasStoredPreference }),
+    [theme, preference, setPreference, cyclePreference, hasStoredPreference],
   );
 }

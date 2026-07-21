@@ -48,12 +48,22 @@ function statusStyle(status: AutomationJob["status"]): { dot: string; text: stri
 
 /** One job row: status dot, name, purpose, schedule, next/last run. Skimmable
  * in one glance — no click needed to see whether a job is healthy. */
+/** The server's placeholder for a job with no description comment. Swapped for
+ * a friendlier label — "(undocumented)" reads like a raw internal marker. */
+const NO_PURPOSE = "(undocumented)";
+
 function JobRow({ job, nowMs }: { job: AutomationJob; nowMs: number }) {
   const style = statusStyle(job.status);
+  const purpose = job.purpose && job.purpose !== NO_PURPOSE ? job.purpose : "No description";
   return (
     <div
       className={cn(
-        "grid grid-cols-[auto,1.4fr,1.6fr,1fr,0.9fr,0.9fr] items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/30 px-3 py-2.5",
+        // NOTE: CSS grid-template-columns takes a SPACE-separated track list, not
+        // comma-separated — `grid-cols-[a,b,c]` compiles to an invalid value that
+        // the browser drops entirely, silently falling back to a single column
+        // (every child stacks full-width, ~200px tall for one job). Tailwind's
+        // arbitrary-value syntax uses `_` for a literal space.
+        "grid grid-cols-[auto_1.4fr_1.6fr_1fr_0.9fr_0.9fr] items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/30 px-3 py-2.5",
         job.status === "failed" && "bg-red-500/[0.04] ring-1 ring-red-500/20",
       )}
     >
@@ -66,8 +76,8 @@ function JobRow({ job, nowMs }: { job: AutomationJob; nowMs: number }) {
         <div className={cn("text-[10.5px] capitalize", style.text)}>{style.label}</div>
       </div>
 
-      <div className="min-w-0 truncate text-[12px] text-zinc-400" title={job.purpose}>
-        {job.purpose}
+      <div className="min-w-0 truncate text-[12px] text-zinc-400" title={purpose}>
+        {purpose}
       </div>
 
       <div className="truncate text-[11.5px] text-zinc-500" title={job.schedule_human ?? undefined}>
@@ -223,7 +233,7 @@ export function AutomationsBoard() {
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="flex items-center gap-2 text-[15px] font-semibold text-zinc-100">
             <Timer className="h-4 w-4 text-clay-400" />
-            Scheduled jobs
+            Scheduled Jobs
           </h1>
           {data ? (
             <span className="text-[12px] text-zinc-500">

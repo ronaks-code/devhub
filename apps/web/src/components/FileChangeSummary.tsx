@@ -37,16 +37,23 @@ export function buildFileChanges(messages: NormalizedMessage[]): FileChange[] {
     for (const b of m.blocks) {
       if (b.type !== "tool_use" || !EDIT_TOOLS.has(b.name)) continue;
       const edit = parseEditInput(b.name, b.input);
-      if (!edit?.filePath) continue;
+      if (!edit) continue;
+      // Edit/Write/MultiEdit/NotebookEdit always target a FILE, never a
+      // directory — a trailing slash on `file_path` is always spurious (seen
+      // from some tool calls), so strip it here, the one place every consumer
+      // (this rail + the InspectorDock's changed-files list) reads the path
+      // from, rather than patching each display site (QA: ".../pending.md/").
+      const filePath = edit.filePath?.replace(/\/+$/, "");
+      if (!filePath) continue;
       const { added, removed } = countEditLines(edit);
-      const existing = byFile.get(edit.filePath);
+      const existing = byFile.get(filePath);
       if (existing) {
         existing.added += added;
         existing.removed += removed;
         existing.edits += 1;
       } else {
-        byFile.set(edit.filePath, {
-          filePath: edit.filePath,
+        byFile.set(filePath, {
+          filePath,
           added,
           removed,
           edits: 1,

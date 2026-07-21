@@ -507,7 +507,7 @@ export function MultiSessionDrive({
         <div className="flex flex-wrap items-center gap-3">
           <h1 className="flex items-center gap-2 text-[15px] font-semibold text-zinc-100">
             <RadioTower className="h-4 w-4 text-clay-400" />
-            Multi-session
+            Drive
           </h1>
           {panels.length > 0 ? (
             <span className="text-[12px] text-zinc-500">

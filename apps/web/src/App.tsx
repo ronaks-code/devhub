@@ -216,6 +216,9 @@ export function PaneFallback() {
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
+/** Sentinel id for the ephemeral "new chat, no session id yet" tab (see `chatTabs`). */
+const NEW_CHAT_TAB_ID = "__new-chat__";
+
 export type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations" | "progress";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
@@ -967,13 +970,25 @@ export default function App() {
   // Settings tab) is honored on launch. The hook then owns the live rendering
   // (data-theme + the `.dark` class) from there; the header/palette toggles drive
   // it directly. Guarded so it runs a single time and never fights the hook.
+  //
+  // QA: this used to adopt unconditionally whenever the server value differed
+  // from the current preference — including when that current preference was
+  // itself the user's own correctly-persisted localStorage choice, just ahead
+  // of the server (e.g. the save from a header toggle hadn't round-tripped
+  // yet). That clobbered an explicit local toggle back to the stale server
+  // default on the very next reload. Only adopt on a device that has NEVER
+  // had a local choice — `hasStoredPreference` is captured at mount, before
+  // this effect can run, so a real prior choice always wins over the server.
   const adoptedServerThemeRef = useRef(false);
   useEffect(() => {
     if (adoptedServerThemeRef.current) return;
+    if (theme.hasStoredPreference) {
+      adoptedServerThemeRef.current = true;
+      return;
+    }
     const t = settings?.theme;
     if (!t) return;
     adoptedServerThemeRef.current = true;
-    // Only override the local default when the server has a different stored value.
     if (t !== theme.preference) theme.setPreference(t);
   }, [settings?.theme, theme]);
 
@@ -1522,7 +1537,7 @@ export default function App() {
 
   const chatTabs = useMemo<ChatTab[]>(() => {
     const runById = indexRunningBySession(liveRunning);
-    return openTabs.map((id) => {
+    const real = openTabs.map((id) => {
       const s = sessions.find((x) => x.sessionId === id) ?? (page?.session.sessionId === id ? page.session : null);
       return {
         sessionId: id,
@@ -1531,7 +1546,25 @@ export default function App() {
         status: deriveRunStatus(runById.get(id)),
       };
     });
-  }, [openTabs, sessions, page, project, liveRunning]);
+    // QF6: a fresh "+ New chat" has no session id yet (waiting on the WS to
+    // report one), so it has no real tab — every tab strip entry correctly
+    // reported aria-selected=false, but that left NOTHING marked selected
+    // while its composer was the visible, active surface. A non-closable
+    // placeholder tab keeps the strip's selection state honest until the real
+    // tab takes over (same id it'll get once `openTabs`/`activeTabId` catch up).
+    if (tab === "chat" && isNewChat && !chatSessionId) {
+      return [
+        { sessionId: NEW_CHAT_TAB_ID, title: "New chat", provider: LEGACY_SESSION_PROVIDER, closable: false },
+        ...real,
+      ];
+    }
+    return real;
+  }, [openTabs, sessions, page, project, liveRunning, tab, isNewChat, chatSessionId]);
+  // The tab strip's own notion of "selected" — normally the same `activeTabId`
+  // every other surface uses, but pointed at the placeholder above while it's
+  // the only thing on screen (no real id exists yet to select).
+  const chatTabsActiveId =
+    tab === "chat" && isNewChat && !chatSessionId ? NEW_CHAT_TAB_ID : activeTabId;
 
   // ⌘1..9 select tab N; ⌘⇧W close active (⌘W is reserved by browsers, so ⌘⇧W on web).
   useEffect(() => {
@@ -1835,7 +1868,7 @@ export default function App() {
             )}
             workModeTriggerRef={workModeTriggerRef}
             chatTabs={chatTabs}
-            activeTabId={activeTabId}
+            activeTabId={chatTabsActiveId}
             onSelectTab={selectChatTab}
             onCloseTab={closeTab}
             onNewTab={openLaunchpad}
@@ -1851,6 +1884,7 @@ export default function App() {
               }))}
               onSelectDestination={(id) => { setChatSeed(null); setTab(id as Tab); }}
               groups={sidebarGroups}
+              loading={loadingSessions}
               worktrees={worktrees}
               sessionCount={sessionCount}
               selectedSessionId={activeTabId}
@@ -2215,16 +2249,27 @@ export default function App() {
                       (QA B3: the transcript was a ~50px sliver at 1280). */}
                   {inspectorDockMode === "devhub" && inspectorVisible ? (
                     <span className="dh-browse-inspector">
-                    <InspectorDock
-                      provider="anthropic"
-                      worktree={{
-                        branch: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? [])).branch,
-                        changesSummary: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? [])).changes,
-                        project: project?.name,
-                      }}
-                      session={{ model: page?.session?.model ?? undefined }}
-                      changedFiles={buildChangedFiles(buildFileChanges(page?.messages ?? []))}
-                    />
+                    {page ? (
+                      <InspectorDock
+                        provider="anthropic"
+                        worktree={{
+                          branch: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page.messages ?? [])).branch,
+                          changesSummary: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page.messages ?? [])).changes,
+                          project: project?.name,
+                        }}
+                        session={{ model: page.session?.model ?? undefined }}
+                        changedFiles={buildChangedFiles(buildFileChanges(page.messages ?? []))}
+                      />
+                    ) : (
+                      // QA: with nothing selected, the dock still showed the
+                      // PROJECT's real git branch ("main") plus a defaulted
+                      // SESSION "—" and "No changes" — technically real data,
+                      // but with no session open it reads as fake placeholder
+                      // chrome. An honest "nothing to inspect yet" state instead.
+                      <div className="dh-inspector dh-inspector-dock" data-dh-surface="" aria-label="Task inspector">
+                        <p className="dh-inspector-quiet">Select a session to see its details</p>
+                      </div>
+                    )}
                     </span>
                   ) : null}
                 </div>

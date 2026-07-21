@@ -9,6 +9,41 @@ import { Spinner } from "../ui";
 /** Error rate at/above this is "high" and gets the loud amber/red treatment. */
 const HIGH_ERROR_RATE = 0.1;
 
+/** Title-case a `snake_case`/space-separated tool-name fragment, e.g. "browser_click" -> "Browser Click". */
+function titleCase(s: string): string {
+  return s
+    .replace(/_/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+/** Collapse an exact repeated segment (e.g. "playwright_playwright" -> "playwright"),
+ * a common MCP server-id artifact, then turn separators into spaces. */
+function humanizeServerId(id: string): string {
+  const stripped = id.replace(/^plugin_/, "");
+  const collapsed = stripped.replace(/^(.+)_\1$/, "$1");
+  return collapsed.replace(/[_-]+/g, " ").trim();
+}
+
+/**
+ * Friendly label for a tool id (QA P2). MCP tool ids come through as the raw
+ * `mcp__<server>__<tool>` wire format (e.g. `mcp__plugin_playwright_playwright__
+ * browser_click`), which reads as internal plumbing, not a tool name. Native
+ * tools (Bash, Read, Edit, …) already read fine and pass through unchanged.
+ * The raw id is never lost — callers keep it in a `title` attribute.
+ */
+function friendlyToolName(tool: string): string {
+  if (!tool.startsWith("mcp__")) return tool;
+  const parts = tool.split("__").filter(Boolean);
+  if (parts.length < 2) return tool;
+  const server = parts[1]!;
+  const toolTitle = titleCase(parts.slice(2).join(" ") || server);
+  const serverLabel = humanizeServerId(server);
+  return serverLabel ? `${toolTitle} (${serverLabel})` : toolTitle;
+}
+
 /** Format a duration in ms compactly: 850ms / 1.4s / 2m. */
 function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return "—";
@@ -132,7 +167,7 @@ export function ToolAnalytics() {
               <span className="flex min-w-0 items-center gap-1.5">
                 <Wrench className="h-3 w-3 shrink-0 text-violet-400" />
                 <span className="truncate font-medium text-zinc-200" title={r.tool}>
-                  {r.tool}
+                  {friendlyToolName(r.tool)}
                 </span>
                 {/* Error-rate chip. Loud amber/red once it crosses the "high"
                     threshold so failing tools jump out; a quiet zinc otherwise.

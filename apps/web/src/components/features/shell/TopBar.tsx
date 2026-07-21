@@ -341,22 +341,32 @@ export function TopBar({
         {/* Clear the saved remote-access token. Self-hides when none is stored
             (the local default), so it never appears in an un-gated session. */}
         <LogoutButton />
-        <button
-          type="button"
-          onClick={() => onTab("settings")}
-          aria-current={navigationAriaCurrent(tab === "settings")}
-          className={cn(
-            "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            tab === "settings"
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-          title="Settings"
-          aria-label="Settings"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
       </div>
+      {/*
+       * Settings lives OUTSIDE the `lg:flex`-gated secondary cluster (unlike
+       * perf/theme/shortcuts/recent/spend/counts, which are fine to condense
+       * away below 1024px — Settings is also reachable from the icon rail, but
+       * it shouldn't be TopBar-only-and-then-vanish). `ml-auto` here is inert
+       * once the secondary cluster's own `ml-auto` has already claimed the row's
+       * free space (≥1024px); below that the cluster is `hidden` and out of
+       * flow, so this becomes the row's sole right-pushed item (QA: gear was
+       * unreachable from the TopBar below ~1024px).
+       */}
+      <button
+        type="button"
+        onClick={() => onTab("settings")}
+        aria-current={navigationAriaCurrent(tab === "settings")}
+        className={cn(
+          "ml-auto rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+          tab === "settings"
+            ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+            : "text-zinc-400 hover:text-zinc-300",
+        )}
+        title="Settings"
+        aria-label="Settings"
+      >
+        <Settings className="h-4 w-4" />
+      </button>
     </header>
   );
 }

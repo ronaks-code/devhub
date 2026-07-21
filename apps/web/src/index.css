@@ -502,6 +502,15 @@ kbd {
   line-height: 1;
   color: var(--dh-text-disabled);
   pointer-events: none;
+  /* Permanently-visible "gh"/"gb"/… hints read as cryptic clutter on every rail
+   * icon at once (QA). Discoverable on hover/focus instead — the full chord
+   * list still lives in the shortcuts overlay ("?"). */
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.dh-navicon:hover .dh-navicon-chord,
+.dh-navicon:focus-visible .dh-navicon-chord {
+  opacity: 1;
 }
 .dh-navicon-badge {
   position: absolute;

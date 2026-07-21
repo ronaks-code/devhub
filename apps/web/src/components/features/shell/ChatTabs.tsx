@@ -14,6 +14,10 @@ export interface ChatTab {
   title: string;
   provider: ChipProvider;
   status?: StatusKind;
+  /** False for an ephemeral tab with nothing real to close yet (e.g. a
+   * new-chat composer still waiting on its first reported session id).
+   * Defaults to true. */
+  closable?: boolean;
 }
 
 export interface ChatTabsProps {
@@ -42,21 +46,27 @@ export function ChatTabs({ tabs, activeTabId, onSelect, onClose, onNew }: ChatTa
                 role="tab"
                 aria-selected={active}
                 className="dh-chattab-main"
-                onClick={() => onSelect(t.sessionId)}
+                // A no-op on the already-active tab, not just a convenience: a
+                // non-closable placeholder tab (no real session behind it yet)
+                // has nothing valid to "select" — reselecting it would hand its
+                // sentinel id to onSelect as if it were a real session.
+                onClick={active ? undefined : () => onSelect(t.sessionId)}
                 title={t.title}
               >
                 {t.status ? <StatusDot status={t.status} /> : null}
                 <span className="dh-chattab-title">{t.title}</span>
                 <ProviderChip provider={t.provider} />
               </button>
-              <button
-                type="button"
-                className="dh-chattab-close"
-                aria-label={`Close ${t.title}`}
-                onClick={() => onClose(t.sessionId)}
-              >
-                <X size={11} strokeWidth={2.5} aria-hidden />
-              </button>
+              {t.closable !== false ? (
+                <button
+                  type="button"
+                  className="dh-chattab-close"
+                  aria-label={`Close ${t.title}`}
+                  onClick={() => onClose(t.sessionId)}
+                >
+                  <X size={11} strokeWidth={2.5} aria-hidden />
+                </button>
+              ) : null}
             </div>
           );
         })}
