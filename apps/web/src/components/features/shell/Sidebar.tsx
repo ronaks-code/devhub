@@ -345,7 +345,12 @@ export function Sidebar({
       <div className="dh-panel" data-dh-panel="">
         <div className="dh-panel-header" data-tauri-drag-region>
           <span className="dh-label">Sessions</span>
-          <span className="dh-panel-header-count">{sessionCount} open</span>
+          {/* F6: this is the indexed Claude session TOTAL (api.health()'s
+              sessionCount), not how many are currently running — "open" read as
+              "active" and contradicted the running/needs-you counts elsewhere.
+              It's also Claude-only (a separate count from Codex's), so label the
+              scope rather than a vaguer, misleading word. */}
+          <span className="dh-panel-header-count">{sessionCount} Claude</span>
           <button
             type="button"
             className="dh-panel-newbtn"

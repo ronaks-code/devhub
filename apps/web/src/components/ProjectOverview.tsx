@@ -305,12 +305,21 @@ export function ProjectOverview({
    *  while the richer overview loads (and if the server omits them). */
   fallbackName,
   fallbackCwd,
+  /**
+   * The REAL session count from the already-loaded `ProjectSummary` for this
+   * project (D3/M7: the overview endpoint's own `project.sessionCount` can land
+   * as an aggregation gap — 0 on a project the host already knows has dozens of
+   * sessions — so this borrows the number the sidebar/leaderboard already agree
+   * on rather than trusting a second, independently-computed count that can drift).
+   */
+  fallbackSessionCount,
   /** Called once if the endpoint 404s (older server) so the host hides the affordance. */
   onUnavailable,
 }: {
   projectId: string;
   fallbackName?: string;
   fallbackCwd?: string;
+  fallbackSessionCount?: number;
   onUnavailable?: () => void;
 }) {
   // null = still loading; the data once it lands.
@@ -383,9 +392,19 @@ export function ProjectOverview({
   // Header fields — prefer the server's, fall back to the host-supplied summary.
   const name = data.project?.name || fallbackName || "Project";
   const cwd = data.project?.cwd || fallbackCwd || "";
+  // D3/M7: prefer the server's session count, but a falsy one (the aggregation
+  // gap this endpoint can hit — see the `fallbackSessionCount` doc above) falls
+  // back to the real count the host already knows, rather than showing "0
+  // sessions" on a project the sidebar/leaderboard both show has dozens.
   const sessionCount =
-    typeof data.project?.sessionCount === "number" ? data.project.sessionCount : 0;
+    (typeof data.project?.sessionCount === "number" ? data.project.sessionCount : 0) ||
+    fallbackSessionCount ||
+    0;
   const lastActivity = data.project?.lastActivity ?? null;
+
+  // ModelBreakdown consumes ModelStat[]; ProjectOverviewModel is structurally
+  // identical, so the cast is purely nominal (no runtime change).
+  const models = (data.byModel ?? []) as ModelStat[];
 
   const usage = data.totalUsage ?? {
     inputTokens: 0,
@@ -393,7 +412,15 @@ export function ProjectOverview({
     cacheReadTokens: 0,
     cacheCreationTokens: 0,
   };
-  const tokens = totalTokens(usage);
+  // D3/M7: `totalUsage` and `byModel` are two independently-computed rollups from
+  // the same overview response; QA caught them disagreeing on the SAME screen
+  // ("TOTAL TOKENS 0" beside a "BY MODEL" section totaling real tokens) — a join
+  // gap in the aggregate total, not a genuinely-empty project. Trust the model
+  // breakdown's sum when it has real tokens (it's the SAME numbers "By model"
+  // below already renders), falling back to the aggregate only when there's no
+  // model breakdown to sum.
+  const modelTokens = models.reduce((n, m) => n + (typeof m.tokens === "number" ? m.tokens : 0), 0);
+  const tokens = modelTokens > 0 ? modelTokens : totalTokens(usage);
   // Prefer the server's total cost; otherwise estimate from aggregate usage at the
   // fallback tier (the same APPROXIMATE basis the dashboard / project header use).
   const cost =
@@ -409,9 +436,6 @@ export function ProjectOverview({
         ? relativeTime(lastActivity)
         : "—";
 
-  // ModelBreakdown consumes ModelStat[]; ProjectOverviewModel is structurally
-  // identical, so the cast is purely nominal (no runtime change).
-  const models = (data.byModel ?? []) as ModelStat[];
   const daily = data.daily ?? [];
   const tools = data.topTools ?? [];
   const tags = data.tags ?? [];

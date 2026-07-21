@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RadioTower, RefreshCw, Send, Square, Wifi, X } from "lucide-react";
 import type { PermissionMode } from "@devhub/engine/driver";
 import type { NormalizedMessage } from "@devhub/engine/types";
-import type { RunningSession } from "../lib/types";
+import type { RunningSession, SessionSummary } from "../lib/types";
 import { api, tailSession } from "../lib/api";
 import { openChat, type ChatConn } from "../lib/ws";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { cn } from "../lib/utils";
 import { EmptyState, IconButton, Spinner } from "./ui";
+import { indexSessions, lastSegment, resolveOpsTitle } from "./features/ops/opsHelpers";
 
 /** How often to re-poll /api/running for the picker (paused while hidden). */
 const POLL_MS = 4000;
@@ -15,13 +16,6 @@ const POLL_MS = 4000;
 const MAX_PANELS = 6;
 /** Permission mode each panel drives turns with (a sensible auto-accept default). */
 const PANEL_PERMISSION: PermissionMode = "acceptEdits";
-
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
-}
 
 /**
  * Keep only ONE entry per sessionId (first wins — the server already sorts and
@@ -63,10 +57,14 @@ function statusStyle(s: RunningSession): { dot: string; text: string; label: str
  */
 function SessionPanel({
   session,
+  title,
   pollStatus,
   onRemove,
 }: {
   session: RunningSession;
+  /** Real display title (D2), resolved once by the parent via `resolveOpsTitle` —
+   *  the SAME derivation Grid/Board use — so Drive never shows a raw counter. */
+  title: string;
   /** Latest polled status for this session (from the grid's /api/running poll). */
   pollStatus: RunningSession | null;
   onRemove: () => void;
@@ -234,7 +232,6 @@ function SessionPanel({
   // snapshot the panel was opened with; fall back to the seed when the poll drops it.
   const live = pollStatus ?? session;
   const style = statusStyle(live);
-  const project = live.name || lastSegment(live.cwd);
   const canSend = !!session.cwd && !running;
 
   return (
@@ -242,8 +239,8 @@ function SessionPanel({
       {/* Panel header: status + project + close. */}
       <div className="flex items-center gap-2 border-b border-zinc-800/80 px-3 py-2">
         <span className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)} />
-        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-zinc-100" title={live.cwd ?? project}>
-          {project}
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-zinc-100" title={live.cwd ?? title}>
+          {title}
         </span>
         {reconnecting ? (
           <span
@@ -297,7 +294,7 @@ function SessionPanel({
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
-            placeholder={running ? "Turn in flight…" : `Message ${project}…`}
+            placeholder={running ? "Turn in flight…" : `Message ${title}…`}
             disabled={!session.cwd}
             className="max-h-24 min-h-[1.75rem] w-full resize-none bg-transparent px-1.5 py-1 text-[12.5px] leading-relaxed text-zinc-100 placeholder:text-zinc-600 focus:outline-none disabled:opacity-50"
           />
@@ -330,15 +327,17 @@ function SessionPanel({
 /** A pickable running session in the "add panel" dropdown. */
 function PickerRow({
   s,
+  title,
   added,
   onPick,
 }: {
   s: RunningSession;
+  /** Real display title (D2), resolved by the parent via `resolveOpsTitle`. */
+  title: string;
   added: boolean;
   onPick: () => void;
 }) {
   const style = statusStyle(s);
-  const project = s.name || lastSegment(s.cwd);
   return (
     <button
       onClick={onPick}
@@ -347,8 +346,8 @@ function PickerRow({
       role="menuitem"
     >
       <span className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)} />
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200" title={s.cwd ?? project}>
-        {project}
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200" title={s.cwd ?? title}>
+        {title}
       </span>
       <span className={cn("shrink-0 text-[10.5px] font-medium capitalize", style.text)}>
         {added ? "added" : style.label}
@@ -369,7 +368,12 @@ function PickerRow({
  * panel's status dot stay fresh. Auto-fills with the first running sessions on
  * first load so the grid isn't empty out of the gate.
  */
-export function MultiSessionDrive() {
+export function MultiSessionDrive({
+  sessions,
+}: {
+  /** Indexed sessions, joined by sessionId for real titles (D2) — same shape Grid/Board take. */
+  sessions?: readonly SessionSummary[];
+} = {}) {
   const [running, setRunning] = useState<RunningSession[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   // The sessionIds the user has opened as panels (insertion order preserved).
@@ -467,6 +471,14 @@ export function MultiSessionDrive() {
     return m;
   }, [running]);
 
+  // Indexed sessions for the title join (D2) — the SAME `resolveOpsTitle` Grid/
+  // Board use, so a panel/picker row never falls back to a raw process counter.
+  const sessionsById = useMemo(() => indexSessions(sessions), [sessions]);
+  const titleFor = useCallback(
+    (s: RunningSession) => resolveOpsTitle(s, s.sessionId ? sessionsById.get(s.sessionId) : undefined),
+    [sessionsById],
+  );
+
   const panels = useMemo(
     () =>
       picked
@@ -530,6 +542,7 @@ export function MultiSessionDrive() {
                       <PickerRow
                         key={s.sessionId}
                         s={s}
+                        title={titleFor(s)}
                         added={picked.includes(s.sessionId)}
                         onPick={() => addPanel(s.sessionId)}
                       />
@@ -574,6 +587,7 @@ export function MultiSessionDrive() {
               <SessionPanel
                 key={s.sessionId}
                 session={s}
+                title={titleFor(byId.get(s.sessionId) ?? s)}
                 pollStatus={byId.get(s.sessionId) ?? null}
                 onRemove={() => removePanel(s.sessionId)}
               />

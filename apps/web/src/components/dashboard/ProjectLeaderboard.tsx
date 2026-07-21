@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, FolderGit2 } from "lucide-react";
 import type { ProjectSummary, Stats } from "../../lib/types";
 import { api } from "../../lib/api";
-import { compactNumber, formatUsd, relativeTime } from "../../lib/format";
+import { compactNumber, formatUsd, relativeTime, totalTokens } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Spinner } from "../ui";
 
@@ -26,15 +26,20 @@ interface Row {
  * Merge the project list with the per-project spend from Stats.topProjects.
  *
  * `/api/projects` is the authoritative list (every project, with name/cwd/last
- * activity/session count); `Stats.topProjects` adds APPROXIMATE cost + token
- * totals but only for the top few. We key the spend by projectId and fold it onto
- * each project — projects outside the top set simply show 0 cost/tokens (still
- * listed, so the leaderboard is complete rather than truncated to the top N).
+ * activity/session count/token usage); `Stats.topProjects` adds APPROXIMATE
+ * cost, but only for the top 8 by tokens (the engine caps that array for the
+ * compact dashboard glance card). Tokens and sessions do NOT need that capped
+ * source at all — `ProjectSummary` already carries each project's own real,
+ * uncapped `totalUsage`/`sessionCount` — so we read tokens straight off the
+ * project (D4: this is what turns a real "0 tokens" join gap on ~30 rows into
+ * the project's actual, non-zero token total). Cost has no such uncapped source
+ * on the web side; projects outside the top 8 honestly show "—" rather than a
+ * fabricated estimate.
  */
 function buildRows(projects: ProjectSummary[], stats: Stats | null): Row[] {
-  const spend = new Map<string, { cost: number; tokens: number; sessions: number }>();
+  const spend = new Map<string, { cost: number }>();
   for (const p of stats?.topProjects ?? []) {
-    spend.set(p.projectId, { cost: p.costUsd, tokens: p.tokens, sessions: p.sessions });
+    spend.set(p.projectId, { cost: p.costUsd });
   }
   return projects.map((p) => {
     const s = spend.get(p.id);
@@ -43,11 +48,30 @@ function buildRows(projects: ProjectSummary[], stats: Stats | null): Row[] {
       name: p.name,
       cwd: p.cwd,
       cost: s?.cost ?? 0,
-      tokens: s?.tokens ?? 0,
-      // Prefer the project's own session count; fall back to the stats figure.
-      sessions: p.sessionCount || s?.sessions || 0,
+      tokens: totalTokens(p.totalUsage),
+      sessions: p.sessionCount,
       lastActivity: p.lastActivity,
     };
+  });
+}
+
+/**
+ * Disambiguate rows whose display `name` collides with another row's (D5: two
+ * genuinely DIFFERENT projects — different cwd, different projectId, separate
+ * spend — can share the same basename, e.g. "6thSense-capture" checked out
+ * under two different parent directories). Never merges them: that would mix
+ * two real projects' spend into one line. Instead, append the real,
+ * distinguishing parent-directory segment so the list never reads as if it
+ * has a phantom duplicate.
+ */
+function disambiguateNames(rows: Row[]): Row[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+  return rows.map((r) => {
+    if ((counts.get(r.name) ?? 0) <= 1) return r;
+    const segments = r.cwd?.replace(/[/\\]+$/, "").split(/[/\\]/).filter(Boolean) ?? [];
+    const parent = segments.length >= 2 ? segments[segments.length - 2] : null;
+    return parent ? { ...r, name: `${r.name} (${parent})` } : r;
   });
 }
 
@@ -166,7 +190,8 @@ export function ProjectLeaderboard({
 
   const rows = useMemo<Row[]>(() => {
     if (!projects) return [];
-    const built = buildRows(projects, stats);
+    // Disambiguate BEFORE sorting so a "name" sort orders by what's actually shown.
+    const built = disambiguateNames(buildRows(projects, stats));
     const sorted = [...built].sort((a, b) => compareBy(sort, a, b));
     if (dir === "desc") sorted.reverse();
     return sorted;

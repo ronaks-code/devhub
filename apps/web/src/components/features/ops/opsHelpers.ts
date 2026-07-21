@@ -1,16 +1,28 @@
 import type { StatusKind } from "../../ui/StatusDot";
 import type { ChipProvider } from "../../ui/ProviderChip";
 import type { RunningSession, SessionSummary } from "../../../lib/types";
+import { deriveRunStatus } from "../../../lib/m6-compose";
+import { displaySessionTitle } from "../../../lib/session-title";
 
 /**
- * Shared Live Ops derivations (Aurora Cockpit §3.7). Both the Glass Grid
- * (`MultiSessionGrid`) and the Attention Board (`LiveOpsBoard`) render the SAME
- * running-session model, so the honest joins + status buckets live here once.
+ * Shared Live Ops derivations (Aurora Cockpit §3.7). The Glass Grid
+ * (`MultiSessionGrid`), the Attention Board (`LiveOpsBoard`), and the Drive panel
+ * (`MultiSessionDrive`) all render the SAME running-session model, so the honest
+ * joins + status buckets live here once.
  *
  * Every value is backed by real data: a session's run state comes only from its
  * `RunningSession` (from `api.running()`), and cost/title/branch come from the
  * indexed `SessionSummary` joined on `sessionId`. Nothing is invented — a field
  * we don't have simply doesn't render at the call site.
+ *
+ * The bucket classification below DELEGATES to `deriveRunStatus` (m6-compose) —
+ * the same function the sidebar tiers and StatusBar use. It used to reimplement
+ * its own, subtly different rules here, which is exactly how the app ended up
+ * showing contradictory counts from the SAME poll snapshot (D3/M7): a session
+ * parked waiting on a tool read as "waiting" in the sidebar but "running" in Ops,
+ * so "2 running" and "1 running" and "0 running" could all be true at once,
+ * depending which component you looked at. One classification function, fed the
+ * same data, can't disagree with itself.
  */
 
 /** Last path segment of a working directory (the "project" name). */
@@ -47,19 +59,26 @@ export function agoMs(sinceMs: number | null | undefined, nowMs: number): string
 
 /**
  * The four Attention-Board buckets (§3.7), in priority order. Also drives the
- * Glass Grid's status treatment. A session is placed by its live run state only:
- *   needsYou  → blocked on the user (loudest)
- *   stale     → busy-but-silent / dead PID (crashed mid-turn)
- *   finished  → idle (ran, now awaiting review)
- *   running   → actively working (busy / waiting-on-a-tool / alive)
+ * Glass Grid's status treatment. Mapped 1:1 from the shared `RailRunStatus`
+ * (m6-compose's `deriveRunStatus` — see the module doc above for why):
+ *   needsYou  ← "waiting"  (blocked on the user OR parked on a tool, loudest)
+ *   stale     ← "failed"   (busy-but-silent / dead PID — crashed mid-turn)
+ *   running   ← "running"  (actively working)
+ *   finished  ← "idle" (or no live entry) — ran, now awaiting review
  */
 export type OpsBucket = "needsYou" | "running" | "stale" | "finished";
 
 export function attentionBucket(s: RunningSession): OpsBucket {
-  if (s.needsYou) return "needsYou";
-  if (s.stale || s.alive === false || s.status === "dead") return "stale";
-  if (s.status === "idle") return "finished";
-  return "running";
+  switch (deriveRunStatus(s)) {
+    case "waiting":
+      return "needsYou";
+    case "failed":
+      return "stale";
+    case "running":
+      return "running";
+    default:
+      return "finished";
+  }
 }
 
 /** Map a bucket to the shared `StatusDot` variant (§1.1E). */
@@ -107,6 +126,36 @@ export function indexSessions(sessions: readonly SessionSummary[] | null | undef
 }
 
 /**
+ * A title that's really just a bare integer masquerading as a name — the root
+ * cause of D2 (a `<pid>.json`'s `name` field can carry a raw turn/message counter
+ * instead of a real title, which rendered as literal `"1"` cards in Ops/Drive/the
+ * add-panel picker). A genuine session or project name is never a bare digit
+ * string, so this is a narrow rejection of an obviously-wrong value — never a
+ * guess about which name IS right.
+ */
+function looksLikeBareIndex(name: string): boolean {
+  return /^\d+$/.test(name.trim());
+}
+
+/**
+ * The ops-surface title for a running session (D2, single source for Grid/Board/
+ * Drive/the add-panel picker). Prefers the REAL, derived title from the joined
+ * `SessionSummary` — the SAME `displaySessionTitle` the sidebar/rail use — over
+ * the process's raw self-reported `name`, since that field isn't always a title
+ * (see `looksLikeBareIndex`). Falls back to `r.name` only when it looks like a
+ * real name and there's no indexed session, then the cwd's basename, then an
+ * honest "Untitled session {shortId}" — never a raw counter.
+ */
+export function resolveOpsTitle(r: RunningSession, s: SessionSummary | undefined): string {
+  const cwdName = lastSegment(r.cwd);
+  const knownProjectName = cwdName === "unknown" ? undefined : cwdName;
+  if (s) return displaySessionTitle(s, knownProjectName);
+  if (r.name && !looksLikeBareIndex(r.name)) return r.name;
+  if (knownProjectName) return knownProjectName;
+  return r.sessionId ? `Untitled session ${r.sessionId.slice(0, 8)}` : "Untitled session";
+}
+
+/**
  * A running session enriched with its indexed `SessionSummary` (when the session
  * is indexed). `title`/`cost`/`branch`/`provider` are ALL nullable — the join may
  * miss (a brand-new session isn't indexed yet), and the card omits what's absent.
@@ -114,7 +163,7 @@ export function indexSessions(sessions: readonly SessionSummary[] | null | undef
 export interface OpsEntry {
   running: RunningSession;
   bucket: OpsBucket;
-  /** Best display name: the running process's own name, else the indexed title, else the cwd basename. */
+  /** Best display name, via `resolveOpsTitle`: the indexed session's real title, else the process's own name (if not a bare index), else the cwd basename. */
   title: string;
   /** Joined session cost (USD), when the session is indexed. */
   costUsd: number | null;
@@ -143,7 +192,7 @@ export function buildOpsEntries(
     entries.push({
       running: r,
       bucket,
-      title: r.name || s?.title || lastSegment(r.cwd),
+      title: resolveOpsTitle(r, s),
       costUsd: typeof s?.costUsd === "number" ? s.costUsd : null,
       branch: s?.gitBranch ?? null,
       provider: providerFromModel(r.model ?? s?.model ?? null),

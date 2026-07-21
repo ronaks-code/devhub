@@ -1241,6 +1241,17 @@ function num(v: unknown): number | null {
  * envelope, and the `config` is back-filled from the status when absent. Missing
  * fields fall back to safe defaults (no cap, 80% warn threshold, enforce off) so
  * the form always has something coherent to render.
+ *
+ * D1 (cluster C): the server's `/api/budget` route probes the engine for a budget
+ * snapshot and — depending on which engine method landed — can hand back either
+ * the canonical `BudgetStatus` shape (`monthToDateUsd`/`pct`/`alert`, the SAME one
+ * the Dashboard's `stats.budget` uses) OR the richer period-aware `BudgetGuardStatus`
+ * shape (`spentUsd`/`fraction`/`state`), which spells every field differently. Only
+ * reading the canonical names silently produced `monthToDateUsd: undefined → 0`
+ * against the guard shape — the Budget panel showed $0.00 spent while the Dashboard,
+ * fed from the same underlying spend, showed the real month-to-date figure. Reading
+ * both spellings here (never guessing which one is "right", just accepting either
+ * REAL field the server might have sent) makes the two panels agree.
  */
 function normalizeBudgetState(res: unknown): BudgetState {
   const obj = (res && typeof res === "object" ? (res as Record<string, unknown>) : {}) ?? {};
@@ -1253,14 +1264,19 @@ function normalizeBudgetState(res: unknown): BudgetState {
     obj.config && typeof obj.config === "object" ? (obj.config as Record<string, unknown>) : {};
 
   // The cap field spells differently across surfaces: the server's config uses
-  // `capUsd`, the status uses `monthlyBudgetUsd`. Read whichever is present.
+  // `capUsd`, the status uses `monthlyBudgetUsd` (canonical) or `capUsd` (guard).
   const cap =
     num(rawConfig.capUsd) ??
     num(rawConfig.monthlyBudgetUsd) ??
-    num(rawStatus.monthlyBudgetUsd);
-  const mtd = num(rawStatus.monthToDateUsd) ?? 0;
-  const pct = num(rawStatus.pct) ?? (cap && cap > 0 ? mtd / cap : 0);
-  const alertRaw = rawStatus.alert;
+    num(rawStatus.monthlyBudgetUsd) ??
+    num(rawStatus.capUsd);
+  // Month-to-date spend: canonical spells it `monthToDateUsd`; the guard shape
+  // spells the SAME real number `spentUsd` (D1 — see the doc comment above).
+  const mtd = num(rawStatus.monthToDateUsd) ?? num(rawStatus.spentUsd) ?? 0;
+  const pct = num(rawStatus.pct) ?? num(rawStatus.fraction) ?? (cap && cap > 0 ? mtd / cap : 0);
+  // Canonical spells the grade `alert` ("none"/"warn"/"over"); the guard spells it
+  // `state` ("ok"/"warn"/"over") — map "ok" onto "none" so both read the same.
+  const alertRaw = rawStatus.alert ?? (rawStatus.state === "ok" ? "none" : rawStatus.state);
   const alert: BudgetStatus["alert"] =
     alertRaw === "warn" || alertRaw === "over" || alertRaw === "none" ? alertRaw : "none";
   const projected = num(rawStatus.projectedUsd);

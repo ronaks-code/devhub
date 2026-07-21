@@ -28,6 +28,7 @@ import { DirtyRepos } from "./dashboard/DirtyRepos";
 import { ToolAnalytics } from "./dashboard/ToolAnalytics";
 import { Badge, EmptyState, LoadErrorState, Spinner } from "./ui";
 import { DashboardSkeleton } from "./Skeleton";
+import { resolveOpsTitle } from "./features/ops/opsHelpers";
 
 /** `YYYY-MM-DD` exactly one year ago (local), for the heatmap's rollups window. */
 function oneYearAgoYmd(): string {
@@ -75,13 +76,6 @@ const DASH_POLL_MS = 5000;
 /** This month's short label (e.g. "JUL"), used in the MTD scope tags. */
 function monthLabel(): string {
   return new Date().toLocaleString(undefined, { month: "short" }).toUpperCase();
-}
-
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
 }
 
 /**
@@ -139,7 +133,10 @@ function CardHead({ icon, title, scope }: { icon?: ReactNode; title: string; sco
 
 function RunningCard({ s }: { s: RunningSession }) {
   const { dot, text } = statusColor(s.status);
-  const project = s.name || lastSegment(s.cwd);
+  // D2: same fix as Ops Grid/Board/Drive — never trust a raw `name` that's really
+  // a bare index; no session index is loaded here, so this only clears the "1"
+  // case and falls back to the cwd basename (there's nothing richer to join to).
+  const project = resolveOpsTitle(s, undefined);
   return (
     <div className="glass-card flex flex-col gap-2 p-3">
       <div className="flex items-center gap-2">

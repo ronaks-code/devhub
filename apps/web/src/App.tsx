@@ -1393,13 +1393,19 @@ export default function App() {
   }, [sessions, liveRunning, project]);
 
   // StatusBar ambient counts (§3.7) — real running/needsYou from the app-root poll.
+  // D3/M7: `needsYouCount` used to count only the raw `r.needsYou` flag, a NARROWER
+  // signal than the sidebar's "Needs you" tier (`groupSessionsByRunStatus`'s
+  // `needsReview`, which is "waiting" OR "failed" via the SAME `deriveRunStatus`).
+  // That let the status bar under-report relative to the sidebar from the same
+  // poll snapshot. Using `deriveRunStatus` here too makes the two agree.
   const statusBarData = useMemo(() => {
     const rs = liveRunning ?? [];
     let running = 0;
     const waitingAts: number[] = [];
     for (const r of rs) {
-      if (deriveRunStatus(r) === "running") running += 1;
-      if (r.needsYou) waitingAts.push(r.statusUpdatedAt ?? r.startedAt ?? 0);
+      const status = deriveRunStatus(r);
+      if (status === "running") running += 1;
+      else if (status === "waiting" || status === "failed") waitingAts.push(r.statusUpdatedAt ?? r.startedAt ?? 0);
     }
     const real = waitingAts.filter((n) => n > 0);
     return {
@@ -2032,7 +2038,7 @@ export default function App() {
             </div>
             {opsMode === "drive" ? (
               <Suspense fallback={<PaneFallback />}>
-                <MultiSessionDrive />
+                <MultiSessionDrive sessions={sessions ?? undefined} />
               </Suspense>
             ) : opsMode === "grid" ? (
               <Suspense fallback={<PaneFallback />}>
@@ -2135,6 +2141,7 @@ export default function App() {
                     projectId={project.id}
                     fallbackName={project.name}
                     fallbackCwd={project.cwd}
+                    fallbackSessionCount={project.sessionCount}
                     onUnavailable={markOverviewUnavailable}
                   />
                 </Suspense>
