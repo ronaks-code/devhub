@@ -177,8 +177,10 @@
 :root {
   --dh-window-reference-width: 1800px;
   --dh-window-reference-height: 1130px;
-  --dh-rail-width: 273px;
-  --dh-rail-collapsed-width: 48px; /* proposed narrow fallback */
+  --dh-rail-width: 324px; /* Aurora Cockpit: 52 icon-rail + 272 panel (was 273) */
+  --dh-icon-rail-width: 52px;
+  --dh-panel-width: 272px;
+  --dh-rail-collapsed-width: 52px; /* collapsed = icon rail only */
   --dh-header-height: 46px;
   --dh-transcript-width: 736px;
   --dh-composer-width: 736px;
@@ -193,8 +195,8 @@
   /* Rail open-list measured constants (reference-capture-manifest.md: "256x30
    * selected row at 8 inset"). Consumed by TaskRail (M6 slice 2). */
   --dh-rail-inset: 8px;
-  --dh-selected-row-width: 256px;
-  --dh-selected-row-height: 30px;
+  --dh-selected-row-width: 248px; /* Aurora Cockpit two-line row (was 256) */
+  --dh-selected-row-height: 44px; /* two legible lines (was 30) */
 
   /* Transcript measured constant (reference-capture-manifest.md: user bubble max
    * ~566). Consumed by ThreadWorkspace (M6 slice 4). */
@@ -698,6 +700,33 @@ kbd {
 }
 .dh-srow:hover .dh-srow-cost {
   opacity: 1;
+}
+
+/* Worktrees group — read-only info rows (branch + main/locked). */
+.dh-wtrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dh-text-muted);
+}
+.dh-wtrow-branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dh-link);
+}
+.dh-wtrow-tag {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--dh-control);
+  color: var(--dh-text-disabled);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* Panel footer — provider segment + model line + spend meter. */
@@ -1318,7 +1347,7 @@ body {
  * so layout is untouched. New components SHOULD prefer var(--bg)/--panel/--text.
  */
 :root[data-theme="light"] {
-  /* Lavender-tinted neutrals so bg-zinc-*/text-zinc-* utilities read on lavender paper. */
+  /* Lavender-tinted neutrals so the bg-zinc / text-zinc utilities read on lavender paper. */
   --color-zinc-950: #f4f2f9;
   --color-zinc-900: #ffffff;
   --color-zinc-800: #ddd6ec;

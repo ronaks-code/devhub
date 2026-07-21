@@ -57,13 +57,14 @@ export const TASK_RAIL_COPY = Object.freeze({
 export const ARCHIVE_LOCAL_LABEL = TASK_RAIL_COPY.archiveLocal;
 
 /**
- * The measured selected-row fill and rail inset, transcribed from
- * `reference-capture-manifest.md` ("256x30 selected row at 8 inset"). Mirrors the
- * matching fields on the shell's `SHELL_GEOMETRY` so tests assert one source.
+ * Aurora Cockpit row geometry (§3.1): the redesign replaced the old single-line
+ * 256x30 row with a dialed-down two-line row (248 wide inside the 272 panel, 44 tall
+ * for two legible lines). Mirrors the matching fields on `SHELL_GEOMETRY` so tests
+ * assert one source. (Old measured values 256x30 belonged to the pre-redesign rail.)
  */
 export const TASK_RAIL_GEOMETRY = Object.freeze({
-  selectedRowWidth: 256,
-  selectedRowHeight: 30,
+  selectedRowWidth: 248,
+  selectedRowHeight: 44,
   railInset: 8,
 } as const);
 

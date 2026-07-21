@@ -29,6 +29,20 @@ import { StatusDot, type StatusKind } from "../../ui/StatusDot.js";
  * status/provider is fabricated (SessionSummary carries neither; see m6-compose).
  */
 
+/**
+ * The redesigned rail geometry (§3.1), the single source of truth for the cockpit's
+ * dimensions. Mirrors the matching fields on `SHELL_GEOMETRY` (52 icon-rail + 272
+ * panel = 324; two-line 44px rows) so the shell and the sidebar never drift.
+ */
+export const SIDEBAR_GEOMETRY = Object.freeze({
+  iconRailWidth: 52,
+  panelWidth: 272,
+  railWidth: 324,
+  collapsedWidth: 52,
+  rowMinHeight: 44,
+  railInset: 8,
+} as const);
+
 export interface SidebarDestination {
   id: string;
   label: string;
@@ -56,6 +70,19 @@ export interface SidebarGroup {
   rows: SidebarRow[];
 }
 
+/**
+ * A git worktree row (§3.1 worktrees group). Only fields the /api/git/worktrees
+ * endpoint actually returns — branch + main/locked flags. (The endpoint carries NO
+ * dirty +N/~M counts, so the spec's dirty display is intentionally omitted rather
+ * than faked.) Read-only.
+ */
+export interface SidebarWorktree {
+  path: string;
+  branch: string | null;
+  isMain?: boolean;
+  locked?: boolean;
+}
+
 export interface SidebarSpend {
   monthToDateUsd: number;
   monthlyBudgetUsd: number | null;
@@ -70,6 +97,8 @@ export interface SidebarProps {
   destinations: SidebarDestination[];
   onSelectDestination: (id: string) => void;
   groups: SidebarGroup[];
+  /** Read-only worktrees group; omit/empty to hide it (no data → no group). */
+  worktrees?: SidebarWorktree[];
   sessionCount: number;
   selectedSessionId?: string | null;
   onSelectSession: (id: string) => void;
@@ -126,6 +155,7 @@ export function Sidebar({
   destinations,
   onSelectDestination,
   groups,
+  worktrees,
   sessionCount,
   selectedSessionId,
   onSelectSession,
@@ -344,6 +374,22 @@ export function Sidebar({
               </div>
             ))
           )}
+
+          {worktrees && worktrees.length > 0 ? (
+            <div className="dh-sgroup" data-dh-worktrees="">
+              <div className="dh-sgroup-head">
+                <span className="dh-label">Worktrees</span>
+                <span className="dh-sgroup-count">{worktrees.length}</span>
+              </div>
+              {worktrees.map((w) => (
+                <div key={w.path} className="dh-wtrow" data-dh-wtrow="" title={w.path}>
+                  <span className="dh-wtrow-branch">{`⎇ ${w.branch ?? "detached"}`}</span>
+                  {w.isMain ? <span className="dh-wtrow-tag">main</span> : null}
+                  {w.locked ? <span className="dh-wtrow-tag">locked</span> : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         <div className="dh-panel-footer" data-dh-panel-footer="">

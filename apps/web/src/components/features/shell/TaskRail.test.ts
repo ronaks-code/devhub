@@ -77,10 +77,11 @@ describe("TaskRail is an open list (design-lock §4)", () => {
   });
 });
 
-describe("TaskRail selection state (measured 256x30 at 8 inset)", () => {
-  it("exposes the measured selected-row geometry as a single source of truth", () => {
-    expect(TASK_RAIL_GEOMETRY.selectedRowWidth).toBe(256);
-    expect(TASK_RAIL_GEOMETRY.selectedRowHeight).toBe(30);
+describe("TaskRail selection state (Aurora Cockpit two-line 248x44 at 8 inset)", () => {
+  it("exposes the redesigned selected-row geometry as a single source of truth", () => {
+    // Aurora Cockpit two-line row (§3.1): 248x44 (was the pre-redesign 256x30).
+    expect(TASK_RAIL_GEOMETRY.selectedRowWidth).toBe(248);
+    expect(TASK_RAIL_GEOMETRY.selectedRowHeight).toBe(44);
     expect(TASK_RAIL_GEOMETRY.railInset).toBe(8);
     // Mirrors the shell geometry so the rail and shell never drift.
     expect(TASK_RAIL_GEOMETRY.selectedRowWidth).toBe(SHELL_GEOMETRY.selectedRowWidth);

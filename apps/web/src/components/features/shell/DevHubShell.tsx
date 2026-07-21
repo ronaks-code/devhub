@@ -30,8 +30,12 @@ export type ShellStatus = "rest" | "loading" | "streaming";
 export const SHELL_GEOMETRY = Object.freeze({
   windowWidth: 1800,
   windowHeight: 1130,
-  railWidth: 273,
-  railCollapsedWidth: 48,
+  // Aurora Cockpit (§2.1/§3.1): the rail is now a 52px icon-rail + 272px session
+  // panel = 324 total (was a single 273 rail). The panel collapses to the icon rail.
+  railWidth: 324,
+  iconRailWidth: 52,
+  panelWidth: 272,
+  railCollapsedWidth: 52,
   headerHeight: 46,
   canvasColor: "#181818",
   transcriptWidth: 736,
@@ -45,8 +49,9 @@ export const SHELL_GEOMETRY = Object.freeze({
   inspectorRadius: 16,
   composerRadius: 21,
   shellGutter: 16,
-  selectedRowWidth: 256,
-  selectedRowHeight: 30,
+  // Two-line session row (§3.1): 248 wide inside the 272 panel, 44 tall (was 256x30).
+  selectedRowWidth: 248,
+  selectedRowHeight: 44,
   railInset: 8,
   userBubbleMax: 566,
   narrowBreakpoint: 1024,

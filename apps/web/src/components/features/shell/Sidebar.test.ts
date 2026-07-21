@@ -1,7 +1,8 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { Sidebar, type SidebarProps } from "./Sidebar.js";
+import { Sidebar, SIDEBAR_GEOMETRY, type SidebarProps } from "./Sidebar.js";
+import { SHELL_GEOMETRY } from "./DevHubShell.js";
 
 function render(overrides: Partial<SidebarProps> = {}): string {
   const props: SidebarProps = {
@@ -132,5 +133,40 @@ describe("Sidebar cockpit (§3.1)", () => {
   it("disables the provider segment when no change handler is wired (read-only, honest)", () => {
     const html = render({ onMechanicsChange: undefined });
     expect(html).toContain("disabled");
+  });
+
+  it("renders the worktrees group from real fields only (no dirty-count fakes)", () => {
+    const html = render({
+      worktrees: [
+        { path: "/repo", branch: "main", isMain: true },
+        { path: "/repo/.wt/x", branch: "feat/x", locked: true },
+      ],
+    });
+    expect(html).toContain('data-dh-worktrees=""');
+    expect(html).toContain(">Worktrees<");
+    expect(html).toContain("⎇ main");
+    expect(html).toContain("⎇ feat/x");
+    expect(html).toContain(">main<");
+    expect(html).toContain(">locked<");
+    // The endpoint has no dirty counts → we never invent a "+N ~M" display.
+    expect(html).not.toMatch(/\+\d+ ~\d+/);
+  });
+
+  it("hides the worktrees group when there is no worktree data", () => {
+    expect(render({ worktrees: [] })).not.toContain('data-dh-worktrees=""');
+    expect(render({ worktrees: undefined })).not.toContain('data-dh-worktrees=""');
+  });
+
+  it("exposes the redesigned rail geometry as a frozen source of truth mirroring the shell", () => {
+    expect(SIDEBAR_GEOMETRY.iconRailWidth).toBe(52);
+    expect(SIDEBAR_GEOMETRY.panelWidth).toBe(272);
+    expect(SIDEBAR_GEOMETRY.railWidth).toBe(324);
+    expect(SIDEBAR_GEOMETRY.rowMinHeight).toBe(44);
+    expect(Object.isFrozen(SIDEBAR_GEOMETRY)).toBe(true);
+    // Sidebar and shell never drift.
+    expect(SIDEBAR_GEOMETRY.railWidth).toBe(SHELL_GEOMETRY.railWidth);
+    expect(SIDEBAR_GEOMETRY.iconRailWidth).toBe(SHELL_GEOMETRY.iconRailWidth);
+    expect(SIDEBAR_GEOMETRY.panelWidth).toBe(SHELL_GEOMETRY.panelWidth);
+    expect(SIDEBAR_GEOMETRY.rowMinHeight).toBe(SHELL_GEOMETRY.selectedRowHeight);
   });
 });

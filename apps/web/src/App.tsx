@@ -45,6 +45,7 @@ import type {
   SearchHitWithSeq,
   SessionMessagesPage,
   SessionSummary,
+  Worktree,
 } from "./lib/types";
 import type { PermissionMode } from "@devhub/engine/driver";
 import { ProjectsPane } from "./components/ProjectsPane";
@@ -1635,6 +1636,29 @@ export default function App() {
     };
   }, [liveRunning]);
 
+  // Worktrees group (§3.1): real git worktrees for the open session's repo cwd.
+  // Degrades to [] (endpoint 404/501 or no open session) → the group hides itself.
+  const [worktrees, setWorktrees] = useState<Worktree[]>([]);
+  const activeCwd = page?.session?.cwd ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!activeCwd) {
+      setWorktrees([]);
+      return;
+    }
+    api
+      .gitWorktrees(activeCwd)
+      .then((w) => {
+        if (!cancelled) setWorktrees(w ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setWorktrees([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCwd]);
+
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
   // header otherwise. See `provider-capabilities.ts`.
@@ -1913,6 +1937,7 @@ export default function App() {
               }))}
               onSelectDestination={(id) => { setChatSeed(null); setTab(id as Tab); }}
               groups={sidebarGroups}
+              worktrees={worktrees}
               sessionCount={sessionCount}
               selectedSessionId={sessionId}
               onSelectSession={(id) => { if (projectId) openSession(projectId, id); }}

@@ -33,7 +33,10 @@ describe("DevHubShell locked geometry (design-lock §4)", () => {
 
   it("exposes the exact measured wide-shell dimensions as a single source of truth", () => {
     // design-lock.md §4 + reference-capture-manifest.md "Measured wide-shell geometry".
-    expect(SHELL_GEOMETRY.railWidth).toBe(273);
+    // Aurora Cockpit: 52 icon-rail + 272 panel = 324 total (was a single 273 rail).
+    expect(SHELL_GEOMETRY.railWidth).toBe(324);
+    expect(SHELL_GEOMETRY.iconRailWidth).toBe(52);
+    expect(SHELL_GEOMETRY.panelWidth).toBe(272);
     expect(SHELL_GEOMETRY.headerHeight).toBe(46);
     expect(SHELL_GEOMETRY.canvasColor).toBe("#181818");
     expect(SHELL_GEOMETRY.transcriptWidth).toBe(736);
@@ -47,8 +50,8 @@ describe("DevHubShell locked geometry (design-lock §4)", () => {
     expect(SHELL_GEOMETRY.inspectorRadius).toBe(16);
     expect(SHELL_GEOMETRY.composerRadius).toBe(21);
     expect(SHELL_GEOMETRY.shellGutter).toBe(16);
-    expect(SHELL_GEOMETRY.selectedRowWidth).toBe(256);
-    expect(SHELL_GEOMETRY.selectedRowHeight).toBe(30);
+    expect(SHELL_GEOMETRY.selectedRowWidth).toBe(248);
+    expect(SHELL_GEOMETRY.selectedRowHeight).toBe(44);
     expect(SHELL_GEOMETRY.railInset).toBe(8);
     expect(SHELL_GEOMETRY.userBubbleMax).toBe(566);
     expect(SHELL_GEOMETRY.narrowBreakpoint).toBe(1024);
