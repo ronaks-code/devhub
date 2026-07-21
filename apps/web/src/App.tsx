@@ -2221,7 +2221,19 @@ export default function App() {
                         this view genuinely has no live send capability (use Chat to
                         continue a conversation). */}
                     {threadWorkspaceMode === "devhub" ? (
-                      <ThreadWorkspace items={mapMessagesToThreadItems(page?.messages ?? [])} provider="anthropic" canSend={false} />
+                      // Keyed by session so switching sessions remounts a fresh
+                      // workspace (W3-TX): otherwise the transcript kept whatever
+                      // scroll position the PREVIOUS session left it at instead of
+                      // landing on the newly-opened session's latest message.
+                      <ThreadWorkspace
+                        key={sessionId ?? "none"}
+                        items={mapMessagesToThreadItems(page?.messages ?? [])}
+                        provider="anthropic"
+                        canSend={false}
+                        truncatedFromStart={page?.truncatedFromStart ?? false}
+                        onLoadOlder={handleLoadMore}
+                        loadingOlder={loadingPage}
+                      />
                     ) : (
                       <TranscriptPane
                         page={page}

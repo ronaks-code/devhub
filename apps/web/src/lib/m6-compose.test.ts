@@ -339,4 +339,29 @@ describe("mapMessagesToThreadItems", () => {
     expect(items[1]!.kind).toBe("tool");
     if (items[1]!.kind === "tool") expect(items[1]!.block.name).toBe("Bash");
   });
+
+  // W3-TX (M8 remainder): a `<task-notification>` subagent-completion block and an
+  // `[Image: original …]` scaling note both arrive on a real `user`-role message —
+  // Claude Code appends them, not the human — so they used to render as a
+  // fabricated "You" bubble. Content-based detection routes them through the same
+  // collapsed raw diagnostic as [hook]/[queue]/[attachment], never a chat bubble.
+  it("collapses a <task-notification> block on a user-role message instead of a fabricated You bubble", () => {
+    const notification =
+      '<task-notification>\n<task-id>wckj209zt</task-id>\n<status>completed</status>\n</task-notification>';
+    const items = mapMessagesToThreadItems([message("user", [{ type: "text", text: notification }], 0)]);
+    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: `[user] ${notification}`, collapsed: true }]);
+  });
+
+  it("collapses an [Image: original …] scaling note on a user-role message instead of a fabricated You bubble", () => {
+    const note = "[Image: original 1237x2200, displayed at 1125x2000. Multiply coordinates by 1.10 to map to original image.]";
+    const items = mapMessagesToThreadItems([message("user", [{ type: "text", text: note }], 0)]);
+    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: `[user] ${note}`, collapsed: true }]);
+  });
+
+  it("still renders ordinary user prose as a real bubble, even mentioning 'Image' or 'task' in passing", () => {
+    const items = mapMessagesToThreadItems([
+      message("user", [{ type: "text", text: "can you resize this Image for the task?" }], 0),
+    ]);
+    expect(items).toEqual([{ kind: "user", id: "u0-text", content: "can you resize this Image for the task?" }]);
+  });
 });

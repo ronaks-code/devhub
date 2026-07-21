@@ -2256,6 +2256,32 @@ html[data-reduce-motion="true"] {
   overflow-x: hidden;
 }
 
+/* Older-history banner (W3-TX): sits above the scroll region so it's always
+ * discoverable, never scrolls away. Same width contract as the transcript
+ * (fluid, capped at the measured max) — never a fixed px width. */
+.dh-thread-load-older {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--dh-transcript-width);
+  flex: none;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--dh-border-subtle);
+  background: none;
+  color: var(--dh-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.dh-thread-load-older:hover:not(:disabled) {
+  color: var(--dh-text);
+}
+.dh-thread-load-older:disabled {
+  color: var(--dh-text-disabled);
+  cursor: default;
+}
+
 /* Virtualized (@tanstack/react-virtual, the pattern legacy TranscriptPane.tsx
  * uses): items are absolutely positioned within this relative container, sized
  * to the virtualizer's measured total height. `list-style` stays reset;

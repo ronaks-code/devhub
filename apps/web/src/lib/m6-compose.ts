@@ -224,6 +224,20 @@ export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): Inspe
 }
 
 /**
+ * Harness-internal text that arrives on a `user`-role message — Claude Code
+ * itself appends these, never something the human actually typed — so role
+ * alone can't route them: a subagent-completion `<task-notification>…
+ * </task-notification>` XML block, or the `[Image: original …Multiply
+ * coordinates by N.NN…]` scaling note it prepends when a pasted screenshot
+ * gets downscaled. Matched by real, observed prefixes (not a guess) so this
+ * collapses to the same one-line raw diagnostic as [hook]/[queue]/[attachment]
+ * below, instead of rendering as a fabricated "You" bubble (W3-TX, M8 remainder).
+ */
+function isHarnessInternalUserText(text: string): boolean {
+  return text.startsWith("<task-notification") || text.startsWith("[Image: original ");
+}
+
+/**
  * Map real transcript messages onto `ThreadWorkspace`'s `ThreadItem` union. Plain
  * text renders as `user`/`assistant` prose; a `tool_use` block (with its paired
  * `tool_result` attached — see `pairToolResults`) renders as ONE compact tool card
@@ -236,10 +250,12 @@ export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): Inspe
  * honest (there was nothing to show), not a bug.
  *
  * Internal plumbing — a non-user/assistant role's text (system/hook/queue/
- * attachment/meta) and `thinking` blocks — is real data too, so it still becomes a
- * `raw` item, but `collapsed: true` (M8: these used to render as always-open JSON
- * dumps that read as chat content, e.g. `[queue] [queued: enqueue] {...}`). The full
- * bounded text stays one click away; only the default visual weight changes.
+ * attachment/meta), a `user`-role message whose TEXT is actually harness-internal
+ * (see `isHarnessInternalUserText`), and `thinking` blocks — is real data too, so it
+ * still becomes a `raw` item, but `collapsed: true` (M8: these used to render as
+ * always-open JSON dumps that read as chat content, e.g. `[queue] [queued: enqueue]
+ * {...}`). The full bounded text stays one click away; only the default visual
+ * weight changes.
  */
 export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[]): ThreadItem[] {
   const items: ThreadItem[] = [];
@@ -255,10 +271,13 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
       .join("\n\n")
       .trim();
     if (text) {
-      if (m.role === "user") items.push({ kind: "user", id: `${key}-text`, content: text });
-      else if (m.role === "assistant") items.push({ kind: "assistant", id: `${key}-text`, content: text });
-      // Internal plumbing (system/hook/queue/attachment/meta): collapsed, not dropped.
-      else {
+      if (m.role === "user" && !isHarnessInternalUserText(text)) {
+        items.push({ kind: "user", id: `${key}-text`, content: text });
+      } else if (m.role === "assistant") {
+        items.push({ kind: "assistant", id: `${key}-text`, content: text });
+      } else {
+        // Internal plumbing (system/hook/queue/attachment/meta), OR a `user`-role
+        // message that's actually harness-internal: collapsed, not dropped.
         items.push({
           kind: "raw",
           id: `${key}-text`,

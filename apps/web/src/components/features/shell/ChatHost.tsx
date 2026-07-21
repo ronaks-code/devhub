@@ -86,7 +86,20 @@ export function ChatHost({
   onSessionChange,
 }: ChatHostProps) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
-  const [messages, setMessages] = useState<NormalizedMessage[]>([]);
+  // History (from the indexed store's bounded tail) and live (pushed over the
+  // socket) are tracked SEPARATELY so "load older" (W3-TX) can re-fetch a bigger
+  // history window and REPLACE just that half without duplicating/dropping the
+  // live messages a running turn already appended. `messages` (below) is the
+  // combined, rendered view.
+  const [history, setHistory] = useState<NormalizedMessage[]>([]);
+  const [live, setLive] = useState<NormalizedMessage[]>([]);
+  const messages = useMemo(() => [...history, ...live], [history, live]);
+  // Grown (doubled) by "load older", mirroring Browse's `handleLoadMore` — the
+  // same bytes-window pagination legacy `TranscriptPane` already uses, just
+  // applied to this host's hydrate fetch instead of App.tsx's `tailBytes` state.
+  const [hydrateTailBytes, setHydrateTailBytes] = useState(HYDRATE_TAIL_BYTES);
+  const [historyTruncated, setHistoryTruncated] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [turnRunning, setTurnRunning] = useState(false);
   // Starts "reconnecting" (the socket is being opened), so the composer shows a
   // live connecting indicator instead of the dead-end "Reconnect to send" (F3).
@@ -128,7 +141,7 @@ export function ChatHost({
       onConnectionState: (s) => setConnection(s === "open" ? "connected" : "reconnecting"),
       onError: () => setConnection("disconnected"),
       onSession: (sid) => setSessionId(sid),
-      onMessage: (m) => setMessages((prev) => [...prev, m]),
+      onMessage: (m) => setLive((prev) => [...prev, m]),
       onResult: () => setTurnRunning(false),
       onTurnEnd: () => setTurnRunning(false),
     });
@@ -149,29 +162,39 @@ export function ChatHost({
   // (bounded tail), so opening a session from the sidebar/tabs shows its real
   // history without waiting on the live socket (the no-fallback-hydration gap
   // behind QF3/F4 — a session that reads fine in Browse showed blank here).
-  // Live WS messages only arrive after the user sends, so they append after
-  // this seed; the functional update keeps ordering safe either way.
+  // Re-runs whenever `hydrateTailBytes` grows (W3-TX "load older") and REPLACES
+  // `history` wholesale — the fetch is always the full window from the file's
+  // end, a superset of the previous one, so replacing (not prepending again)
+  // is what avoids duplicating the overlap. `live` (WS-pushed) is untouched.
   useEffect(() => {
     if (!initialSessionId) return;
     let cancelled = false;
+    setLoadingOlder(true);
     api
-      .messages(initialSessionId, HYDRATE_TAIL_BYTES)
+      .messages(initialSessionId, hydrateTailBytes)
       .then((p) => {
         if (cancelled) return;
         // The indexed page's `session.model` is the real model this session ran
         // on — set it even when the message tail comes back empty, so the dock
         // still reads the honest historical model rather than falling back.
         if (p.session.model) setResumedModel(p.session.model);
-        if (p.messages.length === 0) return;
-        setMessages((prev) => (prev.length > 0 ? [...p.messages, ...prev] : p.messages));
+        setHistory(p.messages);
+        setHistoryTruncated(p.truncatedFromStart);
       })
       .catch(() => {
         /* index unavailable — the live path still works, just without history */
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOlder(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [initialSessionId]);
+  }, [initialSessionId, hydrateTailBytes]);
+
+  // "Load older history" (W3-TX): grow the hydrate window and re-fetch, same
+  // doubling strategy App.tsx's Browse `handleLoadMore` already uses.
+  const loadOlderHistory = useCallback(() => setHydrateTailBytes((b) => b * 2), []);
 
   // Report the live session id up to the shell (Aurora §3.2) so a newly created
   // session surfaces as a chat tab and the tab strip can track/switch it.
@@ -240,6 +263,9 @@ export function ChatHost({
         <ThreadWorkspace
           items={items}
           provider="anthropic"
+          truncatedFromStart={historyTruncated}
+          onLoadOlder={loadOlderHistory}
+          loadingOlder={loadingOlder}
           composerSlot={
             <Composer
               provider="anthropic"

@@ -1,4 +1,4 @@
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import {
@@ -7,7 +7,9 @@ import {
   type PlanModel,
 } from "./ActivityTimeline.js";
 import { ToolCard } from "../../ToolCard.js";
+import { Markdown } from "../../Markdown.js";
 import type { PairedToolUse } from "../../../lib/transcript.js";
+import { useStickToBottom } from "../../../hooks/useStickToBottom.js";
 
 /**
  * ThreadWorkspace — the transcript IS the task (M6 slice 4).
@@ -94,6 +96,9 @@ export const THREAD_COPY = Object.freeze({
   stopLabel: "Stop current turn",
   placeholder: "Describe the outcome or change…",
   requestGroupLabel: "Request",
+  /** Banner above the transcript when older history exists before `items[0]`. */
+  loadOlder: "Showing recent messages — load older history",
+  loadingOlder: "Loading older messages…",
 });
 
 /** Max chars of a raw diagnostic that reaches the DOM. Unknown events are bounded, never unbounded. */
@@ -161,11 +166,16 @@ function WhoLine({ who }: { who: "assistant" | "user" }) {
 }
 
 function AssistantBlock({ content }: { content: ReactNode }) {
-  // Unframed prose: no surface, no card. Just a who-line + text block in the narrative.
+  // Unframed prose: no surface, no card. Just a who-line + text block in the
+  // narrative. Real transcript text is a plain string (see `mapMessagesToThreadItems`)
+  // — render it through the shared `Markdown` component (the mapper stays pure/
+  // data-only) so `**bold**`/lists/code fences render instead of literal asterisks
+  // (W3-TX). A non-string `content` (e.g. this file's own test fixtures) passes
+  // through unchanged.
   return (
     <div className="dh-thread-assistant" data-dh-assistant="" data-dh-unframed="">
       <WhoLine who="assistant" />
-      {content}
+      {typeof content === "string" ? <Markdown text={content} /> : content}
     </div>
   );
 }
@@ -325,6 +335,22 @@ export interface ThreadWorkspaceProps {
    * duplicating a second composer in the same view.
    */
   composerSlot?: ReactNode;
+  /**
+   * True when older history exists before `items[0]` (a huge-transcript tail
+   * window, mirroring `SessionMessagesPage.truncatedFromStart`). Paired with
+   * `onLoadOlder` to show the "load older history" banner; omitted/false hides
+   * it — a caller that never hydrates a bounded tail (or has no more to load)
+   * simply never passes it.
+   */
+  truncatedFromStart?: boolean;
+  /**
+   * Fetch the previous (older) window of history, e.g. by growing the tail
+   * fetch window (matches legacy `TranscriptPane`'s "load more" contract).
+   * Omit to hide the load-older affordance entirely.
+   */
+  onLoadOlder?: () => void;
+  /** True while a load-older fetch is in flight — disables the banner button. */
+  loadingOlder?: boolean;
 }
 
 /**
@@ -392,6 +418,9 @@ export function ThreadWorkspace({
   placeholder = THREAD_COPY.placeholder,
   canSend = false,
   composerSlot,
+  truncatedFromStart = false,
+  onLoadOlder,
+  loadingOlder = false,
 }: ThreadWorkspaceProps) {
   const isEmpty = items.length === 0;
   // The native-scroll transcript container (`overflow-y: auto`, never a shadcn
@@ -409,6 +438,31 @@ export function ThreadWorkspace({
     overscan: 10,
     initialRect: { width: THREAD_GEOMETRY.transcriptWidth, height: 800 },
   });
+  // "Follow only while pinned near the bottom" — the same rule legacy
+  // `TranscriptPane.tsx` uses (see `useStickToBottom`'s own doc comment).
+  const stick = useStickToBottom(transcriptRef);
+  // Land on the LATEST message the first time this task/session has content —
+  // never at the top of a huge loaded window (W3-TX: a resumed/opened transcript
+  // used to open scrolled to its oldest loaded message). Guarded by a ref so it
+  // fires once per mounted instance; callers that need a fresh landing per task
+  // (e.g. Browse switching sessions) key the component so it remounts.
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (openedRef.current || items.length === 0) return;
+    openedRef.current = true;
+    stick.pin();
+    const id = requestAnimationFrame(() => virtualizer.scrollToIndex(items.length - 1, { align: "end" }));
+    return () => cancelAnimationFrame(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items.length]);
+  // Follow live growth (new messages appended at the tail, e.g. a running turn)
+  // only while pinned. Loading OLDER history prepends at the front instead — the
+  // reader is (almost always) scrolled away from the bottom to see the "load
+  // older" banner, so `stick.isPinned` is already false and this is a no-op.
+  useEffect(() => {
+    if (items.length === 0) return;
+    return stick.followToIndex(() => virtualizer.scrollToIndex(items.length - 1, { align: "end" }));
+  }, [items.length, virtualizer, stick.followToIndex]);
   // The single polite, coarse live region for the whole workspace. It reflects the
   // anchored streaming item's acknowledged elapsed label — never per-token, never a
   // fabricated estimate. Empty (but present) when nothing is streaming.
@@ -422,9 +476,25 @@ export function ThreadWorkspace({
 
   return (
     <div className="dh-thread-workspace" data-dh-thread-workspace="" data-dh-provider={provider}>
+      {/* Older-history banner (W3-TX): only when a caller both reports more history
+          exists AND supplies a fetch — a caller that never hydrates a bounded tail
+          never renders this. Sits above the scroll region (like legacy
+          `TranscriptPane`'s banner), not inside it, so it never scrolls away. */}
+      {onLoadOlder && truncatedFromStart ? (
+        <button
+          type="button"
+          onClick={onLoadOlder}
+          disabled={loadingOlder}
+          className="dh-thread-load-older"
+          data-dh-load-older=""
+        >
+          {loadingOlder ? THREAD_COPY.loadingOlder : THREAD_COPY.loadOlder}
+        </button>
+      ) : null}
       {/* Transcript column at the measured 736 width. Native scroll — NOT ScrollArea. */}
       <div
         ref={transcriptRef}
+        onScroll={stick.onScroll}
         className="dh-thread-transcript"
         data-dh-transcript=""
         data-dh-transcript-width={THREAD_GEOMETRY.transcriptWidth}
