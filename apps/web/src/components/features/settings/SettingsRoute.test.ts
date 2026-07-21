@@ -306,13 +306,16 @@ describe("SettingsRoute — live interaction (mounted DOM)", () => {
     expect(toggle).toBeChecked();
   });
 
-  it("toggles the default mechanics between Claude Code and Codex", async () => {
+  it("toggles the default mechanics between Claude Code and Codex via the segmented control", async () => {
     const user = userEvent.setup();
     rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
-    const toggle = screen.getByRole("switch", { name: "Default agent mechanics: Claude Code / Codex" });
-    expect(toggle).not.toBeChecked();
-    await user.click(toggle);
-    expect(toggle).toBeChecked();
+    const claude = screen.getByRole("radio", { name: "Claude Code" });
+    const codex = screen.getByRole("radio", { name: "Codex" });
+    expect(claude).toHaveAttribute("aria-checked", "true");
+    expect(codex).toHaveAttribute("aria-checked", "false");
+    await user.click(codex);
+    expect(codex).toHaveAttribute("aria-checked", "true");
+    expect(claude).toHaveAttribute("aria-checked", "false");
   });
 
   it("Clear local connection data opens a confirmation focused on Cancel; Cancel closes it without clearing", async () => {

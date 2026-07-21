@@ -52,7 +52,7 @@ import { registerPrRoutes } from "./routes/pr.js";
 import { registerSavedViewsRoutes } from "./routes/saved-views.js";
 import { registerSummaryRoutes } from "./routes/summary.js";
 import { registerSymbolsRoutes } from "./routes/symbols.js";
-import { registerRunningRoutes } from "./routes/running.js";
+import { dedupeRunningSessions, registerRunningRoutes } from "./routes/running.js";
 import { registerAttachmentsRoutes } from "./routes/attachments.js";
 import { registerHookTestRoutes } from "./routes/hook-test.js";
 import { registerExportUsageRoutes } from "./routes/export-usage.js";
@@ -380,7 +380,10 @@ export function buildApp(opts: BuildOptions = {}): {
     async (req) => engine.search(req.query.q, { limit: req.query.limit ?? 50 }),
   );
 
-  app.get("/api/running", async () => engine.getRunningSessions());
+  // Duplicate `<pid>.json` entries sharing one sessionId are collapsed here (see
+  // dedupeRunningSessions) so faces keyed by sessionId never see the same session
+  // twice. The stop route keeps the raw pid-addressed list.
+  app.get("/api/running", async () => dedupeRunningSessions(await engine.getRunningSessions()));
 
   app.get("/api/stats", async () => engine.getStats());
 

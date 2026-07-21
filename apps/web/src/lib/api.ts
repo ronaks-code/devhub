@@ -1459,6 +1459,44 @@ function normalizeImportResult(res: unknown): ImportArchiveResult {
  * receives the engine union widened with the web-only `notify` event ({@link AppEvent}),
  * so toast handling type-checks without an engine edit; unknown kinds are simply ignored.
  */
+/**
+ * Follow one session's transcript LIVE over the server's tail SSE
+ * (`GET /api/sessions/:id/tail`). On connect the server replays the current tail,
+ * then pushes ONLY newly-appended messages as Claude Code writes them — so a
+ * watcher (e.g. a Live Ops grid panel) can stream a session's output even when
+ * the turn is being driven by an external CLI process, not this browser's chat
+ * WebSocket. Read-only; returns an unsubscribe fn. EventSource auto-reconnects
+ * on drops (the server re-sends the tail window; callers de-dupe by uuid/seq or
+ * simply render the latest message).
+ */
+export function tailSession(
+  sessionId: string,
+  onMessages: (messages: NormalizedMessage[]) => void,
+): () => void {
+  const token = getToken();
+  const es = new EventSource(
+    `/api/sessions/${encodeURIComponent(sessionId)}/tail` +
+      (token ? `?token=${encodeURIComponent(token)}` : ""),
+  );
+  es.onmessage = (ev) => {
+    try {
+      const frame = JSON.parse(ev.data) as {
+        kind?: string;
+        messages?: NormalizedMessage[];
+      };
+      if (frame.kind === "tail" && Array.isArray(frame.messages) && frame.messages.length > 0) {
+        onMessages(frame.messages);
+      }
+    } catch {
+      /* ignore malformed frames */
+    }
+  };
+  es.onerror = () => {
+    /* EventSource auto-reconnects */
+  };
+  return () => es.close();
+}
+
 export function subscribeEvents(onEvent: (e: AppEvent) => void): () => void {
   // EventSource has no header API, so a required token rides as a query param
   // (the server accepts either). No token locally → a plain same-origin stream.

@@ -45,4 +45,27 @@ describe("QA app-shell regressions", () => {
     expect(isShortcutHelpKey({ ...base, key: "/", code: "Slash", shiftKey: true })).toBe(true);
     expect(isShortcutHelpKey({ ...base, key: "/", code: "Slash", shiftKey: false })).toBe(false);
   });
+
+  it("keeps the native OpenAI/Codex panes reachable from the devhub TaskRail", () => {
+    // Regression: the TaskRail destination model once dropped `openai-chat` and
+    // `codex-history`, making the native Codex routes URL-only. Both must stay in
+    // the rail model (the legacy rail lists them under its "OpenAI" section).
+    const start = appSource.indexOf("const taskRailModel");
+    expect(start).toBeGreaterThan(-1);
+    const railModel = appSource.slice(
+      start,
+      appSource.indexOf("resolveTaskHeaderSetupMode(", start),
+    );
+    expect(railModel).toContain('id: "openai-chat"');
+    expect(railModel).toContain('id: "codex-history"');
+    expect(railModel).toContain('tab === "openai-chat"');
+    expect(railModel).toContain('tab === "codex-history"');
+  });
+
+  it("mounts the search/command dialogs inside a centered backdrop overlay", () => {
+    // Regression: both dialogs rendered in normal flow (a clipped bottom-left
+    // sheet with no scrim). Each must mount inside the modal overlay wrapper.
+    const overlays = appSource.split('className="dh-dialog-overlay"').length - 1;
+    expect(overlays).toBeGreaterThanOrEqual(2);
+  });
 });

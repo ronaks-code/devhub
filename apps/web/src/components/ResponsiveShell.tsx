@@ -204,18 +204,21 @@ export function ResponsiveShell({
         projectLabel={projectLabel}
         sessionLabel={sessionLabel}
       />
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         {/*
-         * Each pane sits in a wrapper that uses `lg:contents` on wide viewports —
-         * so the pane child becomes a DIRECT flex child of this row and keeps its
-         * own width class (ProjectsPane=w-72, SessionsPane=w-80, transcript=flex-1),
-         * making the desktop layout byte-for-byte identical to the prior hard-coded
-         * row. On narrow, the wrapper instead controls single-pane visibility:
-         * only the active stage shows, at full width.
+         * Each pane sits in a wrapper that OWNS its column geometry on wide
+         * viewports: projects=w-72 (288px), sessions=w-80 (320px), transcript takes
+         * the remaining flex space. The wrappers are real flex columns (never
+         * `display: contents`) — the old `lg:contents` + `lg:[&>*]:w-auto` pattern
+         * let the panes' intrinsic content width win inside the DevHubShell
+         * `dh-transcript-col` host, blowing the columns past the viewport and
+         * collapsing the transcript to 0px. The single pane child fills its wrapper
+         * (`w-full` + `lg:flex-1`). On narrow, the wrapper controls single-pane
+         * visibility: only the active stage shows, at full width.
          */}
         <div
           className={cn(
-            "min-h-0 lg:contents [&>*]:w-full lg:[&>*]:w-auto",
+            "min-h-0 [&>*]:w-full lg:flex lg:w-72 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
             stage === "projects" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
@@ -223,7 +226,7 @@ export function ResponsiveShell({
         </div>
         <div
           className={cn(
-            "min-h-0 lg:contents [&>*]:w-full lg:[&>*]:w-auto",
+            "min-h-0 [&>*]:w-full lg:flex lg:w-80 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
             stage === "sessions" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
@@ -231,7 +234,7 @@ export function ResponsiveShell({
         </div>
         <div
           className={cn(
-            "min-h-0 min-w-0 lg:contents",
+            "min-h-0 min-w-0 [&>*]:min-w-0 [&>*]:w-full lg:flex lg:min-w-0 lg:flex-1 lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
             stage === "transcript" ? "flex flex-1 flex-col" : "hidden",
           )}
         >

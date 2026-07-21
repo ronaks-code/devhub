@@ -133,8 +133,10 @@ export function WorkModePanel({ enabled, task, onDismiss, className }: WorkModeP
           <h3 className="text-xs font-medium text-zinc-400">{WORK_MODE_COPY.workScopeHeading}</h3>
           <dl className="mt-2 space-y-1.5 text-xs">
             <div className="flex justify-between gap-2">
-              <dt className="text-zinc-500">{WORK_MODE_COPY.folderScopeLabel}</dt>
-              <dd className="truncate text-zinc-200" data-work-mode-folder-scope="" title={task.folderScope}>
+              {/* shrink-0 + nowrap: the label never wraps against a long path;
+                  min-w-0 lets the dd actually truncate inside the flex row. */}
+              <dt className="shrink-0 whitespace-nowrap text-zinc-500">{WORK_MODE_COPY.folderScopeLabel}</dt>
+              <dd className="min-w-0 truncate text-zinc-200" data-work-mode-folder-scope="" title={task.folderScope}>
                 {task.folderScope}
               </dd>
             </div>
@@ -147,7 +149,9 @@ export function WorkModePanel({ enabled, task, onDismiss, className }: WorkModeP
           </dl>
 
           <h3 className="mt-4 text-xs font-medium text-zinc-400">{WORK_MODE_COPY.deliverablesHeading}</h3>
-          <ul className="mt-2 space-y-1.5 text-xs" data-work-mode-deliverables="">
+          {/* Bounded: a long deliverable list scrolls inside the panel instead of
+              growing it past the viewport bottom. */}
+          <ul className="mt-2 max-h-56 space-y-1.5 overflow-y-auto text-xs" data-work-mode-deliverables="">
             {task.deliverables.map((deliverable) => (
               <li key={deliverable.id} className="flex justify-between gap-2" data-work-mode-deliverable={deliverable.id}>
                 <span className="text-zinc-200">{deliverable.label}</span>

@@ -1547,13 +1547,24 @@ export default function App() {
   // native task row (a different provider's real task) is a separate, still-gated
   // data-wire (native Codex/Claude live in `CodexNativePane`, not this legacy list).
   const taskRailMode = resolveTaskRailMode(settings);
-  const taskRailModel = useMemo<TaskRailModel>(
-    () => ({
+  const taskRailModel = useMemo<TaskRailModel>(() => {
+    // The native OpenAI/Codex panes must stay rail-reachable (the legacy rail's
+    // "OpenAI" section had both); dropping them made those routes URL-only. The
+    // Codex row's label mirrors codexNavPresentation: "Codex" for the native
+    // shell, "Codex History" (the legacy read-only pane) otherwise.
+    const codexMode = resolveCodexShellMode(settings);
+    return {
       sections: buildTaskRailSections(sessions, project?.name ?? "Sessions"),
       destinations: [
         { id: "home", label: "Home", current: tab === "home" },
         { id: "browse", label: "Browse", current: tab === "browse" },
         { id: "chat", label: "Chat", current: tab === "chat" },
+        { id: "openai-chat", label: "New OpenAI Chat", current: tab === "openai-chat" },
+        {
+          id: "codex-history",
+          label: codexMode === "native" ? "Codex" : "Codex History",
+          current: tab === "codex-history",
+        },
         { id: "dashboard", label: "Dashboard", current: tab === "dashboard" },
         { id: "ops", label: "Live Ops", current: tab === "ops" },
         { id: "spatial", label: "Spatial", current: tab === "spatial" },
@@ -1562,9 +1573,8 @@ export default function App() {
         { id: "inbox", label: "Inbox", current: tab === "inbox" },
         { id: "settings", label: "Settings", current: tab === "settings" },
       ],
-    }),
-    [tab, sessions, project],
-  );
+    };
+  }, [tab, sessions, project, settings]);
 
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
@@ -2206,7 +2216,9 @@ export default function App() {
           re-checks `workMode` on every request this surface issues. */}
       {workModeOpen && shouldMountWorkModeSurface(settings, project) && project?.cwd ? (
         <div className="pointer-events-none fixed bottom-4 right-4 z-40 w-[420px] max-w-[calc(100vw-2rem)]">
-          <div className="pointer-events-auto">
+          {/* Cap the overlay to the viewport and scroll inside it, so a long
+              Deliverables list can never push the panel off-screen. */}
+          <div className="pointer-events-auto max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-xl">
             <WorkModeSurface
               enabled
               title={project.name}
@@ -2228,22 +2240,31 @@ export default function App() {
           path as the legacy palette's `onPickHit`. */}
       {searchCommandsMode === "devhub" ? (
         searchOpen ? (
-          <TaskSearchDialog
-            query={dhSearchQuery}
-            scope={dhSearchScope}
-            activeProjectId={projectId}
-            activeProjectName={project?.name}
-            dateFacet={dhSearchDateFacet}
-            loading={dhSearchLoading}
-            error={dhSearchError}
-            results={dhSearchResults}
-            onOpen={(target) => onOpenSearchResult(legacyDestinationForTarget(target))}
-            onQueryChange={setDhSearchQuery}
-            onScopeChange={setDhSearchScope}
-            onDateFacetChange={setDhSearchDateFacet}
-            onRetry={() => setDhSearchRetryNonce((n) => n + 1)}
-            onClose={() => setSearchOpen(false)}
-          />
+          <div
+            className="dh-dialog-overlay"
+            data-dh-dialog-overlay=""
+            onMouseDown={(e) => {
+              // Backdrop click (not a click inside the dialog) dismisses.
+              if (e.target === e.currentTarget) setSearchOpen(false);
+            }}
+          >
+            <TaskSearchDialog
+              query={dhSearchQuery}
+              scope={dhSearchScope}
+              activeProjectId={projectId}
+              activeProjectName={project?.name}
+              dateFacet={dhSearchDateFacet}
+              loading={dhSearchLoading}
+              error={dhSearchError}
+              results={dhSearchResults}
+              onOpen={(target) => onOpenSearchResult(legacyDestinationForTarget(target))}
+              onQueryChange={setDhSearchQuery}
+              onScopeChange={setDhSearchScope}
+              onDateFacetChange={setDhSearchDateFacet}
+              onRetry={() => setDhSearchRetryNonce((n) => n + 1)}
+              onClose={() => setSearchOpen(false)}
+            />
+          </div>
         ) : null
       ) : (
         <SearchPalette
@@ -2258,6 +2279,14 @@ export default function App() {
       {/* Commands are a global app utility. The searchCommands flag chooses the
           Search implementation, but must never turn the command palette into a no-op. */}
       {commandOpen ? (
+        <div
+          className="dh-dialog-overlay"
+          data-dh-dialog-overlay=""
+          onMouseDown={(e) => {
+            // Backdrop click (not a click inside the dialog) dismisses.
+            if (e.target === e.currentTarget) setCommandOpen(false);
+          }}
+        >
         <CommandDialog
           query={dhCommandQuery}
           commands={APP_COMMANDS}
@@ -2291,6 +2320,7 @@ export default function App() {
             openHeaderOverlay(setWorkModeOpen, () => setSearchOpen(true));
           }}
         />
+        </div>
       ) : null}
 
       <ProjectSwitcher

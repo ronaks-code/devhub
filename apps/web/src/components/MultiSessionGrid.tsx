@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, RadioTower, RefreshCw, Send, Square, Wifi, X } from "lucide-react";
 import type { PermissionMode } from "@devhub/engine/driver";
+import type { NormalizedMessage } from "@devhub/engine/types";
 import type { RunningSession } from "../lib/types";
-import { api } from "../lib/api";
+import { api, tailSession } from "../lib/api";
 import { openChat, type ChatConn } from "../lib/ws";
 import { LiveBubble, LiveStream } from "./LiveBubble";
 import { cn } from "../lib/utils";
@@ -20,6 +21,23 @@ function lastSegment(cwd: string | null): string {
   if (!cwd) return "unknown";
   const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || cwd;
+}
+
+/**
+ * Keep only ONE entry per sessionId (first wins — the server already sorts and
+ * dedupes, so this is a defensive mirror for older servers). Panels, picker rows,
+ * and counts are all keyed by sessionId here, so a duplicated id would produce
+ * duplicate React keys, phantom panels, and a count that disagrees with the Ops
+ * board. Entries with an empty sessionId aren't identifiable and pass through.
+ */
+export function dedupeBySessionId(sessions: RunningSession[]): RunningSession[] {
+  const seen = new Set<string>();
+  return sessions.filter((s) => {
+    if (!s.sessionId) return true;
+    if (seen.has(s.sessionId)) return false;
+    seen.add(s.sessionId);
+    return true;
+  });
 }
 
 /** Map a running-session status to a status dot + label color. Mirrors LiveOpsBoard. */
@@ -61,10 +79,14 @@ function SessionPanel({
   // The latest FINALIZED assistant text, kept as a short preview once a turn ends
   // (the live stream resets on turn-end, so we stash the last answer to display).
   const [lastText, setLastText] = useState<string | null>(null);
+  // True once the read-only transcript tail (SSE) is following this session.
+  const [watching, setWatching] = useState(false);
 
   const connRef = useRef<ChatConn | null>(null);
   const liveStreamRef = useRef<LiveStream>(new LiveStream());
   const liveActiveRef = useRef(false);
+  // Mirrors `running` for the tail callback (which must not re-subscribe per turn).
+  const runningRef = useRef(false);
   // The live CLI session id: seeded from the running session, then updated if the
   // server assigns a (forked) one on the first prompt. Sending it resumes the session.
   const sessionIdRef = useRef<string>(session.sessionId);
@@ -124,11 +146,13 @@ function SessionPanel({
         setReconnecting(false);
       },
       onError: () => {
+        runningRef.current = false;
         setRunning(false);
         setStatus(null);
         clearLive();
       },
       onTurnEnd: () => {
+        runningRef.current = false;
         setRunning(false);
         setStatus(null);
         clearLive();
@@ -145,12 +169,43 @@ function SessionPanel({
     };
   }, []);
 
+  // Follow the session's transcript LIVE over the read-only SSE tail. This is what
+  // makes a panel stream a session whose turn is driven by an EXTERNAL process
+  // (the CLI itself) — the chat WebSocket above only streams turns THIS panel
+  // sends. While this panel is driving its own turn, the WS stream is
+  // authoritative, so tail frames are ignored to avoid double-rendering.
+  useEffect(() => {
+    if (!session.sessionId) return;
+    const stop = tailSession(session.sessionId, (messages: NormalizedMessage[]) => {
+      if (runningRef.current || liveActiveRef.current) return;
+      // Newest assistant text in this batch wins as the panel's preview.
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i];
+        if (!m || m.role !== "assistant") continue;
+        const text = m.blocks
+          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .map((b) => b.text)
+          .join("");
+        if (text) {
+          setLastText(text);
+          return;
+        }
+      }
+    });
+    setWatching(true);
+    return () => {
+      setWatching(false);
+      stop();
+    };
+  }, [session.sessionId]);
+
   const send = useCallback(() => {
     const prompt = draft.trim();
     if (!prompt || running || !session.cwd) return;
     setDraft("");
     setLastText(null);
     setStatus("starting");
+    runningRef.current = true;
     setRunning(true);
     clearLive();
     const conn = ensureConn();
@@ -219,7 +274,11 @@ function SessionPanel({
           </div>
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center text-[11px] text-zinc-600">
-            {running ? "Working…" : "Send a prompt to drive this session."}
+            {running
+              ? "Working…"
+              : watching
+                ? "Watching live — output appears here as this session works."
+                : "Send a prompt to drive this session."}
           </div>
         )}
       </div>
@@ -326,7 +385,7 @@ export function MultiSessionGrid() {
     api
       .running()
       .then((r) => {
-        if (aliveRef.current) setRunning(r);
+        if (aliveRef.current) setRunning(dedupeBySessionId(r));
       })
       .catch(() => {
         if (aliveRef.current && running == null) setRunning([]);

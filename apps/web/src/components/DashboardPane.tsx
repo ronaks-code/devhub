@@ -7,7 +7,7 @@ import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
 import { useStatsPolling } from "../hooks/useStatsPolling";
 import { ModelBreakdown } from "./dashboard/ModelBreakdown";
-import { PeriodSelector, type PeriodRange } from "./dashboard/PeriodSelector";
+import { PeriodSelector, resolvePresetRange, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
 import { ActivityChart } from "./dashboard/ActivityChart";
 import { HourHeatmap } from "./dashboard/HourHeatmap";
@@ -35,15 +35,28 @@ function dayTokens(d: DailyUsage): number {
 }
 
 /**
- * Estimated total $ for the stats window. Prefers a server-provided `costUsd`
- * (added to the engine's Stats later) and otherwise derives an estimate from the
- * aggregate token usage. Stats carries no per-model breakdown, so the fallback
- * uses costUsd's default pricing — clearly an APPROXIMATE display figure.
+ * Estimated all-time $ for the stats window. Prefers the server's per-model
+ * `totalCostUsd` (the engine prices each model's usage individually — this is the
+ * accurate figure and the one every other panel derives from), then a legacy
+ * `costUsd` spelling, and only then a client-side estimate from the aggregate
+ * token usage. The fallback has no per-model breakdown, so it prices everything
+ * at the default (Sonnet-tier) rate — which UNDERSTATES Opus/Fable-heavy usage.
+ * That mismatch is exactly what made the "all-time" stat card show LESS than the
+ * 30-day rollup sum (rollups are priced per-model server-side).
  */
-function totalCostUsd(stats: Stats): number {
+export function totalCostUsd(stats: Stats): number {
+  const perModel = (stats as { totalCostUsd?: number }).totalCostUsd;
+  if (typeof perModel === "number" && Number.isFinite(perModel)) return perModel;
   const provided = (stats as { costUsd?: number }).costUsd;
   if (typeof provided === "number" && Number.isFinite(provided)) return provided;
   return costUsd(undefined, stats.totalUsage);
+}
+
+/** Human scope label for a period range, e.g. "30d" / "all-time" / "custom range". */
+export function periodScopeLabel(id: PeriodRange["id"]): string {
+  if (id === "all") return "all-time";
+  if (id === "custom") return "custom range";
+  return id;
 }
 
 /** How often to re-poll running/stats/rollups (paused while the tab is hidden). */
@@ -134,8 +147,10 @@ export function DashboardPane({
   onOpenProject?: (projectId: string) => void;
 } = {}) {
   // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
-  // to a 30-day window (resolved by PeriodSelector's first onChange below).
-  const [period, setPeriod] = useState<PeriodRange>({ id: "30d" });
+  // to a RESOLVED 30-day window (dates included). A bare `{ id: "30d" }` queried
+  // the whole history until the user's first selector click, so the panel showed
+  // all-time totals under a "30d" label — the source of the contradictory costs.
+  const [period, setPeriod] = useState<PeriodRange>(() => resolvePresetRange("30d"));
   // What the contribution heatmap colors by (sessions reads cleanest by default).
   const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>("sessions");
 
@@ -330,7 +345,7 @@ function DashboardBody({
           />
           <StatCard
             icon={<Coins className="h-3.5 w-3.5" />}
-            label="Est. cost"
+            label="Est. cost (all-time)"
             value={formatUsd(estTotalCost)}
           />
         </section>
@@ -351,7 +366,7 @@ function DashboardBody({
               </span>
             </span>
             <span className="flex items-baseline gap-1.5">
-              <span className="text-zinc-500">Est. cost</span>
+              <span className="text-zinc-500">Est. cost ({periodScopeLabel(period.id)})</span>
               <span className="font-semibold tabular-nums text-clay-300">
                 {formatUsd(usage.cost)}
               </span>

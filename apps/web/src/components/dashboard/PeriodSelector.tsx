@@ -37,6 +37,17 @@ function presetRange(id: Exclude<PeriodId, "custom">, days: number | null): Peri
   return { id, since: isoDay(since), until: isoDay(until) };
 }
 
+/**
+ * Resolve a preset id to its full {@link PeriodRange} (dates included). Hosts use
+ * this for their INITIAL period state: a bare `{ id: "30d" }` with no since/until
+ * queries the WHOLE history, so a dashboard that defaulted to it showed all-time
+ * totals under a "30d" label until the user first clicked the selector.
+ */
+export function resolvePresetRange(id: Exclude<PeriodId, "custom">): PeriodRange {
+  const preset = PRESETS.find((p) => p.id === id);
+  return presetRange(id, preset?.days ?? null);
+}
+
 const btnCls =
   "rounded-md px-2.5 py-1 text-[12px] font-medium transition focus:outline-none";
 const dateInputCls =

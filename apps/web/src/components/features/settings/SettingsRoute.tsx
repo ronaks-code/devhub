@@ -17,11 +17,13 @@ import { IntegrityPanel } from "../../config/IntegrityPanel.js";
 import { ArchiveTransfer } from "../../config/ArchiveTransfer.js";
 import { BudgetSettings } from "../../BudgetSettings.js";
 import {
+  applySettingsEdits,
   completeDevHubFeatures,
   deliverSettingsResponse,
   dirtySettingsUpdatePayload,
-  mergeAuthoritativeSettings,
   requestSettingsReconciliation,
+  retainUnsavedEdits,
+  settingsEditsDirtySet,
   withNativeCodexPreference,
   withPersistentClaudePreference,
 } from "../../SettingsPane.js";
@@ -96,6 +98,12 @@ const MODELS = [
 ] as const;
 const THEMES = ["dark", "light", "system"] as const;
 const DENSITIES = ["comfortable", "compact"] as const;
+
+/** The two-option mechanics choice, shown as a segmented control (not a bare checkbox). */
+const MECHANICS_OPTIONS = [
+  { value: "claude", label: "Claude Code" },
+  { value: "codex", label: "Codex" },
+] as const;
 
 /** Client-only connection settings, kept out of the server payload — see `SettingsPane`. */
 const CONN_KEY = "devhub:conn";
@@ -255,17 +263,31 @@ export function SettingsRoute({
   projectCwd?: string;
 }): ReactNode {
   const [section, setSection] = useState<SettingsSection>("preferences");
-  const [settings, setSettings] = useState<AppSettings | null>(authoritativeSettings ?? null);
+  // Latest authoritative server snapshot. Unsaved user edits live in the separate
+  // `edits` overlay, so a background refetch (App shell reconciliation, another
+  // surface's save) can replace this base at any time without dropping an edit —
+  // and the next PUT always carries every still-dirty field.
+  const [serverSettings, setServerSettings] = useState<AppSettings | null>(authoritativeSettings ?? null);
+  const [edits, setEdits] = useState<Partial<AppSettings>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [conn, setConn] = useState<ConnSettings>(() => readConn());
+  const [connDirty, setConnDirty] = useState(false);
   const [connSavedAt, setConnSavedAt] = useState<number | null>(null);
   const [clearDialogOpen, setClearDialogOpen] = useState(false);
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestVersion = useRef(0);
-  const dirtySettings = useRef(new Set<keyof AppSettings>());
+
+  const settings = applySettingsEdits(serverSettings, edits);
+  const hasUnsavedEdits = serverSettings != null && (Object.keys(edits).length > 0 || connDirty);
+
+  const flashSaved = () => {
+    setSavedAt(Date.now());
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+  };
 
   const loadSettings = useCallback(async (preserveNotice = false) => {
     const localVersion = ++requestVersion.current;
@@ -279,7 +301,7 @@ export function SettingsRoute({
         onSettingsSaved,
         requestVersion.current === localVersion,
       )) return;
-      setSettings((current) => mergeAuthoritativeSettings(current, next, dirtySettings.current));
+      setServerSettings(next);
     } catch (reason) {
       if (requestVersion.current !== localVersion) return;
       setLoadError(reason instanceof Error ? reason.message : String(reason));
@@ -289,7 +311,7 @@ export function SettingsRoute({
   useEffect(() => {
     if (authoritativeSettings) {
       requestVersion.current += 1;
-      setSettings((current) => mergeAuthoritativeSettings(current, authoritativeSettings, dirtySettings.current));
+      setServerSettings(authoritativeSettings);
       setLoadError((current) => (current?.startsWith("Save response was not confirmed") ? current : null));
       return;
     }
@@ -303,21 +325,36 @@ export function SettingsRoute({
     };
   }, []);
 
+  // Record the user's intent in the edits overlay. The key stays dirty until a
+  // save sends it — a concurrent authoritative refetch can never clear it.
   const patch = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    dirtySettings.current.add(key);
-    setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setEdits((current) => ({ ...current, [key]: value }));
+  };
+
+  // Feature-request toggles rewrite both feature maps together (see the
+  // withNativeCodexPreference/withPersistentClaudePreference contracts).
+  const patchFeatures = (transform: (current: AppSettings) => AppSettings) => {
+    setEdits((current) => {
+      const base = applySettingsEdits(serverSettings, current);
+      if (!base) return current;
+      const updated = transform(base);
+      return {
+        ...current,
+        devHubFeatures: updated.devHubFeatures,
+        requestedDevHubFeatures: updated.requestedDevHubFeatures,
+      };
+    });
   };
 
   const save = async () => {
     if (!settings) return;
-    const payload = dirtySettingsUpdatePayload(settings, dirtySettings.current);
-    const savedKeys = [...dirtySettings.current];
+    const sent = edits;
+    const payload = dirtySettingsUpdatePayload(settings, settingsEditsDirtySet(sent));
     if (Object.keys(payload).length === 0) {
       writeConn(conn);
+      setConnDirty(false);
       setConnSavedAt(Date.now());
-      setSavedAt(Date.now());
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+      flashSaved();
       return;
     }
     const localVersion = ++requestVersion.current;
@@ -326,20 +363,26 @@ export function SettingsRoute({
     setLoadError(null);
     try {
       const next = await api.putSettings(payload);
-      const keepLocalState = deliverSettingsResponse(
+      const adoptResponse = deliverSettingsResponse(
         next,
         shellVersion,
         onSettingsSaved,
         requestVersion.current === localVersion,
       );
       writeConn(conn);
+      setConnDirty(false);
       setConnSavedAt(Date.now());
-      if (!keepLocalState) return;
-      for (const key of savedKeys) dirtySettings.current.delete(key);
-      setSettings(next);
-      setSavedAt(Date.now());
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+      // The PUT committed on the server: clear exactly what was sent, keeping any
+      // edits made while the request was in flight.
+      setEdits((current) => retainUnsavedEdits(current, sent));
+      if (adoptResponse) {
+        setServerSettings(next);
+      } else {
+        // Response ordering went stale (a newer request started meanwhile) —
+        // re-read a fresh snapshot instead of adopting a superseded one.
+        requestSettingsReconciliation(onSettingsReconcile);
+      }
+      flashSaved();
     } catch (e) {
       requestSettingsReconciliation(onSettingsReconcile);
       if (requestVersion.current !== localVersion) return;
@@ -347,7 +390,7 @@ export function SettingsRoute({
         `Save response was not confirmed; reconciling settings. ${e instanceof Error ? e.message : String(e)}`,
       );
     } finally {
-      if (requestVersion.current === localVersion) setSaving(false);
+      setSaving(false);
     }
   };
 
@@ -413,15 +456,33 @@ export function SettingsRoute({
           </Field>
 
           <div className="dh-settings-switch-row" data-dh-settings-switch="defaultMechanics">
-            <Switch
-              id="dh-settings-default-mechanics"
-              label="Default agent mechanics: Claude Code / Codex"
-              describedBy="dh-settings-default-mechanics-hint"
-              checked={(settings.defaultMechanics ?? "claude") === "codex"}
-              onChange={(enabled) => patch("defaultMechanics", enabled ? "codex" : "claude")}
-            />
+            {/* Segmented control: both options visible, the current value explicit —
+                a bare checkbox hid which runtime "checked" meant. */}
+            <div
+              role="radiogroup"
+              aria-label="Default agent mechanics"
+              aria-describedby="dh-settings-default-mechanics-hint"
+              className="dh-settings-segmented"
+            >
+              {MECHANICS_OPTIONS.map((option) => {
+                const active = (settings.defaultMechanics ?? "claude") === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    data-dh-segment-active={active ? "true" : "false"}
+                    className="dh-settings-segment"
+                    onClick={() => patch("defaultMechanics", option.value)}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
             <span className="dh-settings-switch-copy">
-              <span className="dh-settings-switch-label">Default agent mechanics: Claude Code / Codex</span>
+              <span className="dh-settings-switch-label">Default agent mechanics</span>
               <span id="dh-settings-default-mechanics-hint" className="dh-settings-field-hint">
                 Selects the runtime for new tasks. Explicit task-level provider choices still take precedence.
               </span>
@@ -436,10 +497,7 @@ export function SettingsRoute({
               checked={
                 completeDevHubFeatures(settings.requestedDevHubFeatures ?? settings.devHubFeatures).nativeCodex
               }
-              onChange={(enabled) => {
-                dirtySettings.current.add("requestedDevHubFeatures");
-                setSettings((current) => (current ? withNativeCodexPreference(current, enabled) : current));
-              }}
+              onChange={(enabled) => patchFeatures((current) => withNativeCodexPreference(current, enabled))}
             />
             <span className="dh-settings-switch-copy">
               <span className="dh-settings-switch-label">Native Codex</span>
@@ -460,10 +518,7 @@ export function SettingsRoute({
               checked={
                 completeDevHubFeatures(settings.requestedDevHubFeatures ?? settings.devHubFeatures).persistentClaude
               }
-              onChange={(enabled) => {
-                dirtySettings.current.add("requestedDevHubFeatures");
-                setSettings((current) => (current ? withPersistentClaudePreference(current, enabled) : current));
-              }}
+              onChange={(enabled) => patchFeatures((current) => withPersistentClaudePreference(current, enabled))}
             />
             <span className="dh-settings-switch-copy">
               <span className="dh-settings-switch-label">Persistent Claude</span>
@@ -496,7 +551,10 @@ export function SettingsRoute({
                 value={conn.apiHost ?? ""}
                 placeholder="(same origin)"
                 describedBy="dh-settings-api-host-hint"
-                onChange={(v) => setConn((c) => ({ ...c, apiHost: v }))}
+                onChange={(v) => {
+                  setConnDirty(true);
+                  setConn((c) => ({ ...c, apiHost: v }));
+                }}
               />
             </Field>
             <Field id="dh-settings-api-token" label="API token" hint="Sent as a bearer token to a remote host.">
@@ -506,7 +564,10 @@ export function SettingsRoute({
                 value={conn.apiToken ?? ""}
                 placeholder="(none)"
                 describedBy="dh-settings-api-token-hint"
-                onChange={(v) => setConn((c) => ({ ...c, apiToken: v }))}
+                onChange={(v) => {
+                  setConnDirty(true);
+                  setConn((c) => ({ ...c, apiToken: v }));
+                }}
               />
             </Field>
             <Button variant="danger" onClick={() => setClearDialogOpen(true)}>
@@ -558,12 +619,19 @@ export function SettingsRoute({
         <IntegrityPanel />
         <ArchiveTransfer />
 
-        <div className="dh-settings-save-row">
+        {/* Sticky save bar: stays visible however far the form scrolls, and shows a
+            real dirty state — never a static "saved" that reads as success on failure. */}
+        <div className="dh-settings-save-row" data-dh-settings-unsaved={hasUnsavedEdits ? "true" : "false"}>
           <Button type="button" variant="default" disabled={saving} onClick={() => void save()}>
             {saving ? "Saving…" : "Save settings"}
           </Button>
           {saving ? <Progress label="Saving settings" /> : null}
-          {savedAt ? (
+          {!saving && hasUnsavedEdits ? (
+            <span role="status" className="dh-settings-unsaved">
+              Unsaved changes
+            </span>
+          ) : null}
+          {!saving && !hasUnsavedEdits && savedAt ? (
             <span role="status" className="dh-settings-saved">
               Saved
             </span>

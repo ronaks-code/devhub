@@ -52,6 +52,9 @@ export function SessionCostBadge({
       >
         <Coins className="h-3 w-3 text-clay-400/80" />
         {formatUsd(total)}
+        {/* Scope hint: this is the ACTIVE PROJECT's loaded-session total — not the
+            all-time or 30d dashboard figures, which cover every project. */}
+        <span className="font-normal text-zinc-500">project</span>
       </span>
       {hover ? (
         <span

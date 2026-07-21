@@ -641,6 +641,74 @@ body {
   --color-zinc-300: #27272a;
   --color-zinc-200: #18181b;
   --color-zinc-100: #09090b;
+
+  /*
+   * Status/accent LITERALS flipped for light, mirroring the zinc flip above.
+   * Components paint badges/status text with the pale dark-theme shades
+   * (amber-300, emerald-400, clay-300, …) which wash out on white — so under
+   * light the pale shades resolve to their darker siblings. Solid fills
+   * (clay-500, red-500, the -600s) are untouched.
+   */
+  --color-amber-300: #b45309; /* amber-700 */
+  --color-amber-400: #d97706; /* amber-600 */
+  --color-emerald-300: #047857; /* emerald-700 */
+  --color-emerald-400: #059669; /* emerald-600 */
+  --color-sky-300: #0369a1; /* sky-700 */
+  --color-sky-400: #0284c7; /* sky-600 */
+  --color-red-300: #b91c1c; /* red-700 */
+  --color-red-400: #dc2626; /* red-600 */
+  --color-clay-300: #b34e30; /* darkened clay for text-on-light */
+  --color-clay-400: #c25e3f; /* clay-600 */
+}
+
+/*
+ * Light palette for the M6 `--dh-*` shell tokens (TaskRail, DevHubShell top bar,
+ * dialogs, thread workspace, …). Previously dark-only, which left the rail + top
+ * bar dark while the content area flipped light. Every dh-consumer reads these
+ * vars (never raw hex), so this single block themes the whole shell chrome.
+ * Text values keep >=4.5:1 on the light surfaces they pair with.
+ */
+:root[data-theme="light"] {
+  /* Shell surfaces */
+  --dh-canvas: #fafafa;
+  --dh-header: #fafafa;
+  --dh-rail-inactive: #f4f4f5;
+  --dh-rail-active: #d9d9de;
+  --dh-surface: #ffffff;
+  --dh-user-bubble: #f4f4f5;
+  --dh-control: #f4f4f5;
+  --dh-control-seam: #e9e9eb;
+  --dh-selected: #e4e4e7;
+
+  --dh-hover: #ececee;
+  --dh-pressed: #d4d4d8;
+  --dh-scrim: rgb(0 0 0 / 0.4);
+
+  /* Text */
+  --dh-text-strong: #09090b;
+  --dh-text: #27272a;
+  --dh-text-muted: #52525b;
+  --dh-text-disabled: #a1a1aa;
+
+  /* Dividers and focus */
+  --dh-border-subtle: #e4e4e7;
+  --dh-border: #d4d4d8;
+  --dh-border-rail: #d4d4d8;
+  --dh-focus: #1a73e8;
+  --dh-link: #1a66d0;
+
+  /* Status */
+  --dh-success: #1a7f37;
+  --dh-warning: #9a6700;
+  --dh-danger: #cf222e;
+  --dh-diff-add: #1a7f37;
+  --dh-diff-remove: #cf222e;
+
+  /* Brand + provider accents (identity unchanged; darkened only where used as text) */
+  --dh-brand: #d97757;
+  --dh-provider-openai: #4f7360;
+  --dh-provider-anthropic: #9c5636;
+  --dh-access-elevated: #c25e3f;
 }
 
 * {
@@ -763,6 +831,9 @@ html[data-reduce-motion="true"] {
   gap: 8px;
   min-width: 0; /* allow the title to truncate */
   flex: 1 1 auto;
+  /* Clip (never overlap the actions with) the provider label when the transcript
+   * column is squeezed — e.g. Browse at 1440px with the inspector dock open. */
+  overflow: hidden;
 }
 
 .dh-task-header-title {
@@ -1502,6 +1573,21 @@ html[data-reduce-motion="true"] {
  * elevation. width min(672px, calc(100vw - 32px)), 12px radius, 55dvh body, 44px input
  * row, 36px result/action rows, `--dh-selected` for the keyboard-active row.
  * --------------------------------------------------------------------------- */
+/* Full-viewport modal scrim: centers the dialog and dims/locks the page behind
+ * it. Without this wrapper the dialog rendered in normal flow (a clipped sheet
+ * pinned to the page's bottom-left with no backdrop). Click-on-backdrop close is
+ * owned by the host (App.tsx). */
+.dh-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12vh 16px 16px;
+  background: var(--dh-scrim);
+}
+
 .dh-dialog {
   display: flex;
   flex-direction: column;
@@ -1511,6 +1597,22 @@ html[data-reduce-motion="true"] {
   border: 1px solid var(--dh-border-subtle);
   border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.45);
+}
+
+/* Themed focus treatment inside the dialogs — the query input's container shows
+ * the ring (the input itself is borderless), and every interactive row/facet gets
+ * the shared --dh-focus ring instead of the browser default outline. */
+.dh-dialog-query:focus {
+  outline: none;
+}
+.dh-dialog-input:focus-within {
+  box-shadow: inset 0 -1px 0 var(--dh-focus);
+}
+.dh-dialog button:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: -2px;
+  border-radius: 6px;
 }
 
 .dh-dialog-input {
@@ -1964,15 +2066,63 @@ html[data-reduce-motion="true"] {
   color: var(--dh-text-muted);
 }
 
+/* Sticky save bar — always in view with a live dirty/saved indicator, instead of a
+ * button ~1700px below the toggles whose state the user can't see. */
 .dh-settings-save-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   align-items: center;
   gap: 12px;
+  margin: 0 -4px;
+  padding: 10px 4px;
+  background: color-mix(in srgb, var(--dh-canvas) 94%, transparent);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid var(--dh-border-subtle);
 }
 
 .dh-settings-saved {
   font-size: 12px;
   color: var(--dh-success);
+}
+
+.dh-settings-unsaved {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dh-warning, #f59e0b);
+}
+
+/* Segmented two-option control (default agent mechanics): both options visible,
+ * the active one explicit — never a bare checkbox. */
+.dh-settings-segmented {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  gap: 2px;
+  border-radius: var(--dh-radius-control);
+  background: var(--dh-control);
+}
+
+.dh-settings-segment {
+  border: 0;
+  border-radius: calc(var(--dh-radius-control) - 2px);
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--dh-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.dh-settings-segment[data-dh-segment-active="true"] {
+  color: var(--dh-text-strong);
+  background: var(--dh-brand);
+}
+
+.dh-settings-segment:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: -2px;
 }
 
 .dh-settings-dialog-title {

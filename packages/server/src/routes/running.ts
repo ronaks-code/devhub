@@ -19,6 +19,59 @@
  */
 import type { FastifyInstance } from "fastify";
 import type { Engine } from "@devhub/engine";
+import type { RunningSession } from "@devhub/engine/types";
+
+/**
+ * Collapse duplicate `<pid>.json` entries that share one sessionId into a single
+ * session for the GET /api/running payload.
+ *
+ * WHY: Claude Code can leave more than one live `<pid>.json` pointing at the SAME
+ * sessionId (e.g. a session resumed under a new pid while the old process file —
+ * or even the old process — lingers). Faces key their cards/panels by sessionId,
+ * so serving the same id twice produced duplicate React keys, phantom cards, and
+ * contradictory counts ("4 running" vs a grid that can only watch 3 unique
+ * sessions). The stop route deliberately keeps using the RAW engine list — it is
+ * pid-addressed, so a shadowed pid stays stoppable.
+ *
+ * Winner per sessionId (first match wins):
+ *   1. alive over dead,
+ *   2. most recent `updatedAt`,
+ *   3. most recent `statusUpdatedAt`,
+ *   4. highest pid (newest process, as a final deterministic tiebreak).
+ * Entries with an EMPTY sessionId can't be identified as the same session, so they
+ * all pass through untouched. Output preserves the input's ordering (each winner
+ * sits where that session first appeared).
+ */
+export function dedupeRunningSessions(sessions: RunningSession[]): RunningSession[] {
+  const winners = new Map<string, RunningSession>();
+  const order: Array<string | RunningSession> = [];
+  const better = (a: RunningSession, b: RunningSession): boolean => {
+    if (a.alive !== b.alive) return a.alive;
+    const aUpd = a.updatedAt ?? 0;
+    const bUpd = b.updatedAt ?? 0;
+    if (aUpd !== bUpd) return aUpd > bUpd;
+    const aStat = a.statusUpdatedAt ?? 0;
+    const bStat = b.statusUpdatedAt ?? 0;
+    if (aStat !== bStat) return aStat > bStat;
+    return a.pid > b.pid;
+  };
+  for (const s of sessions) {
+    if (!s.sessionId) {
+      order.push(s); // unidentifiable — never merged
+      continue;
+    }
+    const seen = winners.get(s.sessionId);
+    if (!seen) {
+      winners.set(s.sessionId, s);
+      order.push(s.sessionId);
+    } else if (better(s, seen)) {
+      winners.set(s.sessionId, s);
+    }
+  }
+  return order.map((slot) =>
+    typeof slot === "string" ? (winners.get(slot) as RunningSession) : slot,
+  );
+}
 
 /** Body for the stop: a positive integer `pid` and a required `confirm` flag. */
 const stopSchema = {

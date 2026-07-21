@@ -152,7 +152,52 @@ export function dirtySettingsUpdatePayload(
   return patch;
 }
 
-/** Rebase an authoritative snapshot underneath unsaved local fields. */
+/**
+ * Overlay unsaved local edits on top of the latest authoritative snapshot.
+ * The edits overlay is the single source of "dirty" truth: background refetches
+ * replace only the base snapshot and can never clobber (or silently absorb) an
+ * unsaved edit — only an explicit successful save clears its keys.
+ */
+export function applySettingsEdits(
+  base: AppSettings | null,
+  edits: Partial<AppSettings>,
+): AppSettings | null {
+  if (!base) return null;
+  return { ...base, ...edits };
+}
+
+/** The dirty-key set for a pending edits overlay (payload building + indicators). */
+export function settingsEditsDirtySet(
+  edits: Partial<AppSettings>,
+): Set<keyof AppSettings> {
+  return new Set(Object.keys(edits) as (keyof AppSettings)[]);
+}
+
+/**
+ * After a PUT commits, drop exactly the edits that were sent — keeping any keys
+ * the user re-edited to a different value while the request was in flight.
+ */
+export function retainUnsavedEdits(
+  edits: Partial<AppSettings>,
+  sent: Partial<AppSettings>,
+): Partial<AppSettings> {
+  const next: Partial<AppSettings> = {};
+  for (const key of Object.keys(edits) as (keyof AppSettings)[]) {
+    if (!(key in sent) || JSON.stringify(edits[key]) !== JSON.stringify(sent[key])) {
+      (next as Record<string, unknown>)[key] = edits[key];
+    }
+  }
+  return next;
+}
+
+/**
+ * Rebase an authoritative snapshot underneath unsaved local fields.
+ *
+ * Superseded in the live editors by the `applySettingsEdits` overlay model above:
+ * deleting dirty keys on value-coincidence let a stale background refetch race an
+ * in-flight edit and drop it from the next PUT. Kept for the documented merge
+ * contract (and its tests); no product surface calls it anymore.
+ */
 export function mergeAuthoritativeSettings(
   current: AppSettings | null,
   authoritative: AppSettings,
@@ -268,15 +313,28 @@ export function SettingsPane({
   projectCwd?: string;
 }) {
   const [section, setSection] = useState<SettingsSection>("preferences");
-  const [settings, setSettings] = useState<AppSettings | null>(authoritativeSettings ?? null);
+  // Latest authoritative server snapshot. Unsaved user edits live in the separate
+  // `edits` overlay, so a background refetch (App shell reconciliation, another
+  // surface's save) can replace this base at any time without dropping an edit.
+  const [serverSettings, setServerSettings] = useState<AppSettings | null>(authoritativeSettings ?? null);
+  const [edits, setEdits] = useState<Partial<AppSettings>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
   const [conn, setConn] = useState<ConnSettings>(() => readConn());
+  const [connDirty, setConnDirty] = useState(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestVersion = useRef(0);
-  const dirtySettings = useRef(new Set<keyof AppSettings>());
+
+  const settings = applySettingsEdits(serverSettings, edits);
+  const hasUnsavedEdits = serverSettings != null && (Object.keys(edits).length > 0 || connDirty);
+
+  const flashSaved = () => {
+    setSavedAt(Date.now());
+    if (savedTimer.current) clearTimeout(savedTimer.current);
+    savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+  };
 
   const loadSettings = useCallback(async (preserveNotice = false) => {
     const localVersion = ++requestVersion.current;
@@ -290,11 +348,7 @@ export function SettingsPane({
         onSettingsSaved,
         requestVersion.current === localVersion,
       )) return;
-      setSettings((current) => mergeAuthoritativeSettings(
-        current,
-        next,
-        dirtySettings.current,
-      ));
+      setServerSettings(next);
     } catch (reason) {
       if (requestVersion.current !== localVersion) return;
       setLoadError(reason instanceof Error ? reason.message : String(reason));
@@ -304,11 +358,7 @@ export function SettingsPane({
   useEffect(() => {
     if (authoritativeSettings) {
       requestVersion.current += 1;
-      setSettings((current) => mergeAuthoritativeSettings(
-        current,
-        authoritativeSettings,
-        dirtySettings.current,
-      ));
+      setServerSettings(authoritativeSettings);
       setLoadError((current) => current?.startsWith("Save response was not confirmed")
         ? current
         : null);
@@ -324,21 +374,35 @@ export function SettingsPane({
     };
   }, []);
 
-  // Local edit helper: patch a single key in the in-memory settings object.
+  // Local edit helper: record the user's intent in the edits overlay. The key
+  // stays dirty until a save sends it — a concurrent refetch can never clear it.
   const patch = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
-    dirtySettings.current.add(key);
-    setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setEdits((current) => ({ ...current, [key]: value }));
+  };
+
+  // Feature-request toggles rewrite both feature maps together (see the
+  // withNativeCodexPreference/withPersistentClaudePreference contracts).
+  const patchFeatures = (transform: (current: AppSettings) => AppSettings) => {
+    setEdits((current) => {
+      const base = applySettingsEdits(serverSettings, current);
+      if (!base) return current;
+      const updated = transform(base);
+      return {
+        ...current,
+        devHubFeatures: updated.devHubFeatures,
+        requestedDevHubFeatures: updated.requestedDevHubFeatures,
+      };
+    });
   };
 
   const save = async () => {
     if (!settings) return;
-    const payload = dirtySettingsUpdatePayload(settings, dirtySettings.current);
-    const savedKeys = [...dirtySettings.current];
+    const sent = edits;
+    const payload = dirtySettingsUpdatePayload(settings, settingsEditsDirtySet(sent));
     if (Object.keys(payload).length === 0) {
       writeConn(conn);
-      setSavedAt(Date.now());
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+      setConnDirty(false);
+      flashSaved();
       return;
     }
     const localVersion = ++requestVersion.current;
@@ -347,27 +411,33 @@ export function SettingsPane({
     setLoadError(null);
     try {
       const next = await api.putSettings(payload);
-      const keepLocalState = deliverSettingsResponse(
+      const adoptResponse = deliverSettingsResponse(
         next,
         shellVersion,
         onSettingsSaved,
         requestVersion.current === localVersion,
       );
       writeConn(conn);
-      if (!keepLocalState) return;
-      for (const key of savedKeys) dirtySettings.current.delete(key);
-      // The response is authoritative: runtime-unavailable features are clamped
-      // false by the server, so neither this form nor the shell advertises them.
-      setSettings(next);
-      setSavedAt(Date.now());
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSavedAt(null), 2000);
+      setConnDirty(false);
+      // The PUT committed on the server: clear exactly what was sent, keeping any
+      // edits made while the request was in flight.
+      setEdits((current) => retainUnsavedEdits(current, sent));
+      if (adoptResponse) {
+        // The response is authoritative: runtime-unavailable features are clamped
+        // false by the server, so neither this form nor the shell advertises them.
+        setServerSettings(next);
+      } else {
+        // Response ordering went stale (a newer request started meanwhile) —
+        // re-read a fresh snapshot instead of adopting a superseded one.
+        requestSettingsReconciliation(onSettingsReconcile);
+      }
+      flashSaved();
     } catch (e) {
       requestSettingsReconciliation(onSettingsReconcile);
       if (requestVersion.current !== localVersion) return;
       setLoadError(`Save response was not confirmed; reconciling settings. ${e instanceof Error ? e.message : String(e)}`);
     } finally {
-      if (requestVersion.current === localVersion) setSaving(false);
+      setSaving(false);
     }
   };
 
@@ -523,10 +593,7 @@ export function SettingsPane({
                 ).nativeCodex}
                 onChange={(event) => {
                   const enabled = event.target.checked;
-                  dirtySettings.current.add("requestedDevHubFeatures");
-                  setSettings((current) => current
-                    ? withNativeCodexPreference(current, enabled)
-                    : current);
+                  patchFeatures((current) => withNativeCodexPreference(current, enabled));
                 }}
                 className="mt-0.5 h-4 w-4 shrink-0 accent-clay-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
               />
@@ -556,10 +623,7 @@ export function SettingsPane({
                 ).persistentClaude}
                 onChange={(event) => {
                   const enabled = event.target.checked;
-                  dirtySettings.current.add("requestedDevHubFeatures");
-                  setSettings((current) => current
-                    ? withPersistentClaudePreference(current, enabled)
-                    : current);
+                  patchFeatures((current) => withPersistentClaudePreference(current, enabled));
                 }}
                 className="mt-0.5 h-4 w-4 shrink-0 accent-clay-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
               />
@@ -585,7 +649,10 @@ export function SettingsPane({
                 placeholder="(same origin)"
                 className={inputCls}
                 value={conn.apiHost ?? ""}
-                onChange={(e) => setConn((c) => ({ ...c, apiHost: e.target.value }))}
+                onChange={(e) => {
+                  setConnDirty(true);
+                  setConn((c) => ({ ...c, apiHost: e.target.value }));
+                }}
               />
             </Field>
             <Field label="API token" hint="Sent as a bearer token to a remote host.">
@@ -595,7 +662,10 @@ export function SettingsPane({
                 autoComplete="off"
                 className={inputCls}
                 value={conn.apiToken ?? ""}
-                onChange={(e) => setConn((c) => ({ ...c, apiToken: e.target.value }))}
+                onChange={(e) => {
+                  setConnDirty(true);
+                  setConn((c) => ({ ...c, apiToken: e.target.value }));
+                }}
               />
             </Field>
           </div>
@@ -619,7 +689,9 @@ export function SettingsPane({
             index DB and never touches ~/.claude. */}
         <ArchiveTransfer />
 
-        <div className="mt-6 flex items-center gap-3">
+        {/* Sticky save bar: stays visible however far the form scrolls, and shows a
+            real dirty state — never a static "saved" that reads as success on failure. */}
+        <div className="sticky bottom-0 z-10 mt-6 -mx-2 flex items-center gap-3 rounded-t-lg border-t border-zinc-800/80 bg-zinc-950/95 px-2 py-3 backdrop-blur">
           <button
             onClick={save}
             disabled={saving}
@@ -630,7 +702,12 @@ export function SettingsPane({
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
             Save settings
           </button>
-          {savedAt && (
+          {!saving && hasUnsavedEdits && (
+            <span role="status" className="text-[12px] font-medium text-amber-400">
+              Unsaved changes
+            </span>
+          )}
+          {!saving && !hasUnsavedEdits && savedAt && (
             <span role="status" className="inline-flex items-center gap-1.5 text-[12px] text-emerald-400">
               <Check className="h-3.5 w-3.5" />
               Saved
