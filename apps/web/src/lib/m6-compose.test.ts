@@ -4,11 +4,15 @@ import {
   buildEnvironmentSummary,
   buildFilesContent,
   buildTaskRailSections,
+  deriveRunStatus,
+  groupSessionsByRunStatus,
+  indexRunningBySession,
   legacyDestinationForTarget,
   LEGACY_SESSION_PROVIDER,
   mapMessagesToThreadItems,
   searchHitToResult,
 } from "./m6-compose.js";
+import type { RunningSession } from "./types.js";
 import {
   navigationTargetForResult,
   providerFromTaskKey,
@@ -38,6 +42,57 @@ function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
     ...overrides,
   } as SessionSummary;
 }
+
+function running(overrides: Partial<RunningSession> = {}): RunningSession {
+  return { pid: 1, sessionId: "s1", cwd: "/repo", status: "busy", alive: true, ...overrides } as RunningSession;
+}
+
+describe("deriveRunStatus (honest run-state join)", () => {
+  it("returns undefined when there is no running entry (idle/recent, no dot)", () => {
+    expect(deriveRunStatus(undefined)).toBeUndefined();
+    expect(deriveRunStatus(null)).toBeUndefined();
+  });
+  it("maps needsYou → waiting (Needs review) ahead of every other signal", () => {
+    expect(deriveRunStatus(running({ needsYou: true, status: "busy", alive: true }))).toBe("waiting");
+  });
+  it("maps stale / dead / not-alive → failed", () => {
+    expect(deriveRunStatus(running({ stale: true }))).toBe("failed");
+    expect(deriveRunStatus(running({ status: "dead", alive: false }))).toBe("failed");
+    expect(deriveRunStatus(running({ alive: false, status: "busy" }))).toBe("failed");
+  });
+  it("maps busy/alive → running and a parked waiting status → waiting", () => {
+    expect(deriveRunStatus(running({ status: "busy", alive: true }))).toBe("running");
+    expect(deriveRunStatus(running({ status: "waiting", alive: true, needsYou: false }))).toBe("running");
+    expect(deriveRunStatus(running({ status: "idle", alive: false }))).toBe("failed");
+  });
+});
+
+describe("groupSessionsByRunStatus", () => {
+  it("groups by the running join and treats sessions with no entry as idle", () => {
+    const a = session({ sessionId: "a", lastTimestamp: "2026-07-03T00:00:00Z" });
+    const b = session({ sessionId: "b", lastTimestamp: "2026-07-02T00:00:00Z" });
+    const c = session({ sessionId: "c", lastTimestamp: "2026-07-01T00:00:00Z" });
+    const groups = groupSessionsByRunStatus(
+      [c, a, b],
+      [running({ sessionId: "a", status: "busy", alive: true }), running({ sessionId: "b", needsYou: true })],
+    );
+    expect(groups.running.map((s) => s.sessionId)).toEqual(["a"]);
+    expect(groups.needsReview.map((s) => s.sessionId)).toEqual(["b"]);
+    expect(groups.idle.map((s) => s.sessionId)).toEqual(["c"]); // no running entry
+  });
+  it("sorts most-recent-first within a group and never fabricates status", () => {
+    const older = session({ sessionId: "o", lastTimestamp: "2026-07-01T00:00:00Z" });
+    const newer = session({ sessionId: "n", lastTimestamp: "2026-07-09T00:00:00Z" });
+    const groups = groupSessionsByRunStatus([older, newer], null);
+    expect(groups.idle.map((s) => s.sessionId)).toEqual(["n", "o"]);
+    expect(groups.running).toEqual([]);
+  });
+  it("indexRunningBySession keys by sessionId", () => {
+    const idx = indexRunningBySession([running({ sessionId: "x" }), running({ sessionId: "y" })]);
+    expect(idx.get("x")?.sessionId).toBe("x");
+    expect(idx.size).toBe(2);
+  });
+});
 
 describe("buildTaskRailSections", () => {
   it("returns no sections for an empty session list", () => {

@@ -8,7 +8,13 @@ import type {
 import type { TaskRailSection, TaskRailTask } from "../components/features/shell/TaskRail.js";
 import { boundRawDiagnostic, type ThreadItem } from "../components/features/shell/ThreadWorkspace.js";
 import { displaySearchHitTitle, displaySessionTitle } from "./session-title.js";
-import type { GitStatus, NormalizedMessage, SearchHitWithSeq, SessionSummary } from "./types.js";
+import type {
+  GitStatus,
+  NormalizedMessage,
+  RunningSession,
+  SearchHitWithSeq,
+  SessionSummary,
+} from "./types.js";
 
 /**
  * Pure App.tsx→M6-shell data adapters (M6 Task 9, the non-cutover composition pass).
@@ -49,6 +55,75 @@ export function buildTaskRailSections(
       provider: LEGACY_SESSION_PROVIDER,
     }));
   return [{ id: "sessions", label: sectionLabel, tasks }];
+}
+
+/**
+ * Sidebar/topbar run-status derivation (Aurora Cockpit §3.1/§3.2).
+ *
+ * The ONLY honest source of a session's live run state is a `RunningSession` from
+ * `api.running()` (see hooks/useStatsPolling) joined to the session by `sessionId` —
+ * `SessionSummary` itself carries NO status/provider (spec §3.1's inventory was
+ * wrong; this is the corrected contract). A session with no running entry has no
+ * live state, so it groups as idle/recent and renders no status dot.
+ *
+ * Mapping (matches the shared `StatusDot` variants in components/ui/StatusDot.tsx):
+ *   needsYou            → "waiting"  (waiting on you — the "Needs review" signal)
+ *   stale/dead/!alive   → "failed"   (busy-but-silent / exited)
+ *   busy/alive          → "running"
+ *   status "waiting"    → "waiting"  (agent parked on a tool, not yet needsYou)
+ *   otherwise           → "idle"
+ */
+export type RailRunStatus = "running" | "waiting" | "idle" | "failed";
+
+export function deriveRunStatus(r: RunningSession | null | undefined): RailRunStatus | undefined {
+  if (!r) return undefined;
+  if (r.needsYou) return "waiting";
+  if (r.stale || r.alive === false || r.status === "dead") return "failed";
+  if (r.status === "busy" || r.alive === true) return "running";
+  if (r.status === "waiting") return "waiting";
+  return "idle";
+}
+
+/** Index the running list by sessionId for O(1) joins against the session list. */
+export function indexRunningBySession(
+  running: readonly RunningSession[] | null | undefined,
+): Map<string, RunningSession> {
+  const map = new Map<string, RunningSession>();
+  for (const r of running ?? []) map.set(r.sessionId, r);
+  return map;
+}
+
+/** The three sidebar session groups (§3.1), derived from the running join. */
+export interface SessionGroups {
+  /** Actively working now. */
+  running: SessionSummary[];
+  /** Waiting on you, or stale/failed — needs your eyes. */
+  needsReview: SessionSummary[];
+  /** No live run entry — recent/idle history. */
+  idle: SessionSummary[];
+}
+
+/**
+ * Group real sessions into Running / Needs review / Idle by joining `api.running()`
+ * on `sessionId`. Never fabricates status: a session absent from `running` is idle.
+ * Sessions stay sorted most-recent-first within each group.
+ */
+export function groupSessionsByRunStatus(
+  sessions: readonly SessionSummary[],
+  running: readonly RunningSession[] | null | undefined,
+): SessionGroups {
+  const byId = indexRunningBySession(running);
+  const sorted = [...sessions].sort((a, b) =>
+    (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? ""),
+  );
+  const groups: SessionGroups = { running: [], needsReview: [], idle: [] };
+  for (const s of sorted) {
+    const status = deriveRunStatus(byId.get(s.sessionId));
+    if (status === "running") groups.running.push(s);
+    else if (status === "waiting" || status === "failed") groups.needsReview.push(s);
+    else groups.idle.push(s);
+  }
+  return groups;
 }
 
 /**
