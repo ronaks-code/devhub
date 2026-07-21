@@ -27,7 +27,6 @@ import {
   withNativeCodexPreference,
   withPersistentClaudePreference,
 } from "../../SettingsPane.js";
-import { SecondaryNav } from "../shell/SecondaryNav.js";
 import {
   Alert,
   Button,
@@ -709,8 +708,9 @@ export function SettingsRoute({
       </>
     );
 
+  // The SecondaryNav text strip that used to wrap this route is GONE (Aurora
+  // shell QA F2/M9): it duplicated icon-rail destinations with unwired links.
   return (
-    <SecondaryNav active="settings">
       <div className="dh-settings-route" data-dh-settings-route="">
         <header className="dh-settings-header">
           <h1 className="dh-settings-title">Settings</h1>
@@ -774,6 +774,5 @@ export function SettingsRoute({
           </TabPanel>
         )}
       </div>
-    </SecondaryNav>
   );
 }

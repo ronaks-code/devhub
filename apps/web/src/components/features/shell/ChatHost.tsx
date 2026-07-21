@@ -44,6 +44,11 @@ import { ChatWorktreePanel } from "../../ChatWorktreePanel.js";
  * exact honest fallback `ThreadWorkspace`'s own model reserves for real data,
  * never a fabricated tool card.
  */
+
+// Bounded history tail for the indexed-store hydrate of a resumed session (the
+// same 2MB starting window Browse uses). Bounded on purpose: a huge session must
+// never dump its whole file into one render (QA B1 crashed the renderer that way).
+const HYDRATE_TAIL_BYTES = 2 * 1024 * 1024;
 export interface ChatHostProps {
   cwd: string;
   projectId: string;
@@ -83,7 +88,9 @@ export function ChatHost({
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   const [messages, setMessages] = useState<NormalizedMessage[]>([]);
   const [turnRunning, setTurnRunning] = useState(false);
-  const [connection, setConnection] = useState<ComposerConnection>("stale");
+  // Starts "reconnecting" (the socket is being opened), so the composer shows a
+  // live connecting indicator instead of the dead-end "Reconnect to send" (F3).
+  const [connection, setConnection] = useState<ComposerConnection>("reconnecting");
   const [gitBranch, setGitBranch] = useState<string | null>(null);
 
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
@@ -102,24 +109,57 @@ export function ChatHost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const conn = openChat({
+  // Open (or reopen) the live socket. `openChat` already auto-reconnects with
+  // backoff on unexpected drops; we surface its liveness ("open"/"reconnecting")
+  // so the composer can render a real connection indicator, and expose a manual
+  // reconnect that tears the whole connection down and dials fresh (F3).
+  const connect = useCallback(() => {
+    connRef.current?.close();
+    setConnection("reconnecting");
+    connRef.current = openChat({
       onOpen: () => setConnection("connected"),
+      onConnectionState: (s) => setConnection(s === "open" ? "connected" : "reconnecting"),
       onError: () => setConnection("disconnected"),
       onSession: (sid) => setSessionId(sid),
       onMessage: (m) => setMessages((prev) => [...prev, m]),
       onResult: () => setTurnRunning(false),
       onTurnEnd: () => setTurnRunning(false),
     });
-    connRef.current = conn;
+  }, []);
+
+  useEffect(() => {
+    connect();
     return () => {
-      conn.close();
+      connRef.current?.close();
       connRef.current = null;
     };
     // A fresh socket per mounted host (matches ChatPane: one WS per pane, torn
     // down on unmount). cwd changes remount this component via the caller's key.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd]);
+  }, [cwd, connect]);
+
+  // Hydrate a RESUMED session's transcript from the indexed store immediately
+  // (bounded tail), so opening a session from the sidebar/tabs shows its real
+  // history without waiting on the live socket (the no-fallback-hydration gap
+  // behind QF3/F4 — a session that reads fine in Browse showed blank here).
+  // Live WS messages only arrive after the user sends, so they append after
+  // this seed; the functional update keeps ordering safe either way.
+  useEffect(() => {
+    if (!initialSessionId) return;
+    let cancelled = false;
+    api
+      .messages(initialSessionId, HYDRATE_TAIL_BYTES)
+      .then((p) => {
+        if (cancelled || p.messages.length === 0) return;
+        setMessages((prev) => (prev.length > 0 ? [...p.messages, ...prev] : p.messages));
+      })
+      .catch(() => {
+        /* index unavailable — the live path still works, just without history */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [initialSessionId]);
 
   // Report the live session id up to the shell (Aurora §3.2) so a newly created
   // session surfaces as a chat tab and the tab strip can track/switch it.
@@ -199,6 +239,7 @@ export function ChatHost({
               footer={{ model: footer.modelValue, permissionMode: footer.permissionValue, folder: footer.folderValue }}
               onDraftChange={setDraft}
               onSend={send}
+              onReconnect={connect}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();

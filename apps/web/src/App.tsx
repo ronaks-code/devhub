@@ -880,13 +880,19 @@ export default function App() {
     });
   }, [refreshProjects, refreshSessions, projectId, handleNotify]);
 
-  // Global hotkeys: ⌘K search, ⌘⇧P command palette, ⌘P project switcher.
+  // Global hotkeys: ⌘K search, ⌘⇧P command palette, ⌘P project switcher,
+  // ⌘⇧I toggle inspector (the command-palette row's advertised chord — QF4).
   // Opening any one closes the others so they never stack. The ⌘⇧P (shift)
   // branch is checked before plain ⌘P so the command palette wins on shift.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       const isP = e.key === "p" || e.key === "P";
+      if (mod && e.shiftKey && (e.key === "i" || e.key === "I")) {
+        e.preventDefault();
+        setInspectorVisible((v) => !v);
+        return;
+      }
       if (mod && e.shiftKey && isP) {
         e.preventDefault();
         openHeaderOverlay(setWorkModeOpen, () => {
@@ -1464,10 +1470,22 @@ export default function App() {
   const closeTab = useCallback(
     (id: string) => {
       const idx = openTabs.indexOf(id);
-      setOpenTabs((prev) => prev.filter((x) => x !== id));
+      const remaining = openTabs.filter((x) => x !== id);
+      setOpenTabs(() => remaining);
+      if (remaining.length === 0) {
+        // Last tab closed → clear chat + Browse selection so the chat route shows
+        // the Launchpad (§3.2), not a blank composer. This must run even when the
+        // closed tab wasn't the "active" one: a {kind:"new"} chat seed has no tab
+        // (and no activeTabId), so gating this on the active-id match left a stale
+        // orphaned "New task" pane behind after the last × (QF1).
+        setChatSeed(null);
+        setChatSessionId(null);
+        setSessionId(null);
+        return;
+      }
       // Only re-focus if the tab that closed was the one on screen.
       if (id !== activeTabId) return;
-      const next = openTabs[idx + 1] ?? openTabs[idx - 1] ?? null;
+      const next = remaining[Math.min(idx, remaining.length - 1)] ?? null;
       if (next && projectId) {
         // Focus the neighbor in whichever surface we're in.
         if (tab === "chat") {
@@ -1476,12 +1494,6 @@ export default function App() {
         } else {
           setSessionId(next);
         }
-      } else {
-        // Last tab closed → clear chat + Browse selection so the chat route shows
-        // the Launchpad (§3.2), not a blank composer.
-        setChatSeed(null);
-        setChatSessionId(null);
-        setSessionId(null);
       }
     },
     [openTabs, activeTabId, tab, projectId, setOpenTabs],
@@ -1693,10 +1705,12 @@ export default function App() {
   // devhub together; any one of them false keeps `legacyClaudePane` above,
   // unedited. `ChatHost` opens its OWN real `openChat` connection — the same
   // transport `ChatPane` uses — so this is a real, not simulated, composer.
+  // The sidebar inbox IS the project/session navigation on this route, so the
+  // chat pane renders ONLY content — no ProjectsPane column (QA N2: the extra
+  // nav column left the transcript a sliver and duplicated the sidebar).
   const devhubClaudePane =
     chatHostMode === "devhub" ? (
       <div className="flex min-h-0 flex-1">
-        <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
         {project && activeSeed ? (
           <ChatHost
             key={resumeSeed ? `${project.id}:${resumeSeed.sessionId}` : `${project.id}:${chatNonce}`}
@@ -1818,8 +1832,12 @@ export default function App() {
               groups={sidebarGroups}
               worktrees={worktrees}
               sessionCount={sessionCount}
-              selectedSessionId={sessionId}
-              onSelectSession={(id) => { if (projectId) openSession(projectId, id); }}
+              selectedSessionId={activeTabId}
+              // The sidebar inbox is the PRIMARY session nav (QA N3): picking a
+              // session opens it FOCUSED in the live chat surface — the same
+              // path as clicking its chat tab — never the Browse 3-pane (which
+              // would duplicate the sidebar's own project/session columns).
+              onSelectSession={selectChatTab}
               onNewTask={() => startNewChat()}
               mechanics={settings?.defaultMechanics ?? "claude"}
               onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
@@ -2168,8 +2186,13 @@ export default function App() {
                   {/* Aurora Cockpit §3.3: the devhub InspectorDock shows the session's
                       WORKTREE (branch + change summary), SESSION state (model), and the
                       CHANGED-FILES list — NO diff-forward UI. Browse is read-only history,
-                      so every row is backed by real repo/session data or omitted. */}
+                      so every row is backed by real repo/session data or omitted.
+                      Wrapped in a display:contents span whose CSS hides the dock below
+                      1440: Browse keeps its Projects+Sessions explorer columns, so on
+                      compact desktops the dock must yield its 300px to the transcript
+                      (QA B3: the transcript was a ~50px sliver at 1280). */}
                   {inspectorDockMode === "devhub" && inspectorVisible ? (
+                    <span className="dh-browse-inspector">
                     <InspectorDock
                       provider="anthropic"
                       worktree={{
@@ -2180,6 +2203,7 @@ export default function App() {
                       session={{ model: page?.session?.model ?? undefined }}
                       changedFiles={buildChangedFiles(buildFileChanges(page?.messages ?? []))}
                     />
+                    </span>
                   ) : null}
                 </div>
               )

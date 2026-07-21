@@ -3,13 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { DashboardRoute, isSettingsSecondaryApplied, resolveSettingsSecondaryMode } from "./DashboardRoute.js";
 
-describe("DashboardRoute — DashboardPane routed under secondary navigation", () => {
-  it("wraps the preserved DashboardPane in exactly one SecondaryNav with dashboard active", () => {
+describe("DashboardRoute — the preserved DashboardPane, no duplicate nav strip", () => {
+  it("renders the preserved DashboardPane with NO SecondaryNav strip (QA F2/M9)", () => {
     const html = renderToStaticMarkup(createElement(DashboardRoute, {}));
-    expect((html.match(/<nav/g) ?? []).length).toBe(1);
-    const dashboardStart = html.indexOf(">Dashboard</button>");
-    const before = html.lastIndexOf("<button", dashboardStart);
-    expect(html.slice(before, dashboardStart)).toContain('aria-current="page"');
+    // The old duplicate "Settings/Live ops/Inbox/Dashboard" text strip is gone —
+    // the icon rail is the one owner of those destinations now.
+    expect(html).not.toContain("dh-secondary-nav");
     // The preserved DashboardPane's own loading state — never a dashboard grid
     // rendered as if it were the task canvas.
     expect(html).toContain('aria-label="Loading dashboard"');

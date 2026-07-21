@@ -1693,9 +1693,18 @@ html[data-reduce-motion="true"] .dh-statusbar,
 }
 
 /* Compact desktop (1024–1439): inspector hides behind an explicit control; the
- * transcript width clamps but does not overflow. */
+ * transcript width clamps but does not overflow. Browse's INLINE dock (the
+ * .dh-browse-inspector wrapper, display:contents at rest) follows the same rule:
+ * Browse keeps its Projects+Sessions explorer columns, so below 1440 the dock
+ * yields its 300px to the transcript (QA B3: a ~50px transcript at 1280). */
+.dh-browse-inspector {
+  display: contents;
+}
 @media (max-width: 1439px) {
   .dh-inspector-lane {
+    display: none;
+  }
+  .dh-browse-inspector {
     display: none;
   }
 }
@@ -1711,19 +1720,41 @@ html[data-reduce-motion="true"] .dh-statusbar,
     padding: 0;
     font-size: 0; /* wordmark collapses to its accessible text only at narrow width */
   }
+  /* Cockpit sidebar (chromeless rail): collapse to the icon rail ONLY. Without
+   * this, the 272px sessions panel overflowed the narrowed rail (its content is
+   * overflow:visible) and painted OVER the route content — the 768–1023
+   * "superimposed panels" breakage (QA R2/R3/R4). */
+  .dh-rail--chromeless {
+    width: auto;
+  }
+  .dh-rail--chromeless .dh-panel {
+    display: none;
+  }
 }
 
-/* PWA/phone (<768): no permanent rail; compact header/back navigation, one task
- * pane, safe-area-aware bottom composer. */
+/* PWA/phone (<768): no permanent legacy rail; compact header/back navigation, one
+ * task pane, safe-area-aware bottom composer. The cockpit ICON rail stays — it is
+ * the minimal always-reachable nav (QA R1: below 768 every primary destination
+ * was otherwise unreachable); its sessions panel stays hidden per the rule above. */
 @media (max-width: 767px) {
   .dh-rail {
     display: none;
+  }
+  .dh-rail--chromeless {
+    display: flex;
+    width: auto;
   }
   .dh-header {
     height: 44px;
   }
   .dh-composer-slot {
     padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+  /* <768 is the one-task-pane tier: the inline 300px inspector dock (Chat) has
+   * no room and was clipping off-canvas, so it yields entirely. (Double class =
+   * out-specifies the later base `.dh-inspector-dock { display:flex }`.) */
+  .dh-inspector.dh-inspector-dock {
+    display: none;
   }
 }
 
@@ -2577,6 +2608,49 @@ html[data-reduce-motion="true"] {
   font-size: 12px;
   line-height: 16px;
   color: var(--dh-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Connection indicator (F3): a live spinner while the socket is (re)dialing… */
+.dh-conn-spinner {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  border-radius: var(--dh-radius-pill);
+  border: 1.5px solid var(--dh-text-muted);
+  border-top-color: transparent;
+  animation: dh-spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dh-conn-spinner {
+    animation: none;
+  }
+}
+/* …and a static danger dot once the transport has genuinely given up. */
+.dh-conn-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: var(--dh-radius-pill);
+  background: var(--dh-danger);
+}
+.dh-composer-reconnect {
+  border: 1px solid var(--dh-border-subtle);
+  border-radius: var(--dh-radius-control);
+  background: transparent;
+  color: var(--dh-text);
+  font-size: 11.5px;
+  line-height: 16px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.dh-composer-reconnect:hover {
+  background: var(--dh-hover);
+}
+.dh-composer-reconnect:focus-visible {
+  outline: 2px solid var(--dh-focus);
 }
 
 .dh-composer .dh-composer-footer {

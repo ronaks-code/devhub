@@ -53,8 +53,13 @@ export function useMediaQuery(query: string): boolean {
   return matches;
 }
 
-/** The Tailwind `lg` breakpoint (1024px). At/above this we show all 3 panes. */
-const WIDE_QUERY = "(min-width: 1024px)";
+/**
+ * At/above this we show all 3 panes. Raised from the Tailwind `lg` 1024 to 1280:
+ * the Aurora shell's own sidebar (52 icon rail + 272 panel) now sits LEFT of these
+ * three columns, so at 1024–1279 the projects+sessions columns left the transcript
+ * a ~94px sliver (QA B3/N1). Below 1280 the proven one-pane drill-down takes over.
+ */
+const WIDE_QUERY = "(min-width: 1280px)";
 
 /**
  * `useResponsiveShell` derives the right narrow-viewport stage from selection
@@ -129,7 +134,7 @@ function MobileBreadcrumb({
   const back = idx > 0 ? order[idx - 1] : null;
 
   return (
-    <div className="glass-chrome flex items-center gap-1.5 border-x-0 border-t-0 px-3 py-1.5 lg:hidden">
+    <div className="glass-chrome flex items-center gap-1.5 border-x-0 border-t-0 px-3 py-1.5 xl:hidden">
       {back ? (
         <button
           onClick={() => onNavigate(back)}
@@ -169,8 +174,9 @@ function MobileBreadcrumb({
 /**
  * Lay out the three Browse panes responsively.
  *
- * - Wide (≥ lg): the panes render side by side in a flex row, identical to the
- *   prior hard-coded layout — each child keeps owning its own width.
+ * - Wide (≥ xl, 1280 — matches WIDE_QUERY): the panes render side by side in a
+ *   flex row, identical to the prior hard-coded layout — each child keeps owning
+ *   its own width.
  * - Narrow: only the active `stage` pane shows (full width), topped by a
  *   breadcrumb to move between Projects → Sessions → Transcript.
  *
@@ -209,18 +215,18 @@ export function ResponsiveShell({
          * Each pane sits in a wrapper that OWNS its column geometry on wide
          * viewports: projects=w-72 (288px), sessions=w-80 (320px), transcript takes
          * the remaining flex space. The wrappers are real flex columns (never
-         * `display: contents`) — the old `lg:contents` + `lg:[&>*]:w-auto` pattern
+         * `display: contents`) — the old `xl:contents` + `xl:[&>*]:w-auto` pattern
          * let the panes' intrinsic content width win inside the DevHubShell
          * `dh-transcript-col` host, blowing the columns past the viewport and
          * collapsing the transcript to 0px. The single pane child fills its wrapper
-         * (`w-full` + `lg:flex-1`). On narrow, the wrapper controls single-pane
+         * (`w-full` + `xl:flex-1`). On narrow, the wrapper controls single-pane
          * visibility: only the active stage shows, at full width.
          */}
         <div
           className={cn(
-            "min-h-0 [&>*]:w-full lg:flex lg:w-72 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
+            "min-h-0 [&>*]:w-full xl:flex xl:w-72 xl:flex-none xl:flex-col xl:[&>*]:min-h-0 xl:[&>*]:flex-1",
             // Glass panel with a violet seam on wide (§3.8) — reads as its own pane.
-            "lg:border-r lg:border-[var(--dh-glass-border)] lg:bg-[var(--dh-glass-bg)]",
+            "xl:border-r xl:border-[var(--dh-glass-border)] xl:bg-[var(--dh-glass-bg)]",
             stage === "projects" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
@@ -228,8 +234,8 @@ export function ResponsiveShell({
         </div>
         <div
           className={cn(
-            "min-h-0 [&>*]:w-full lg:flex lg:w-80 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
-            "lg:border-r lg:border-[var(--dh-glass-border)] lg:bg-[var(--dh-glass-bg)]",
+            "min-h-0 [&>*]:w-full xl:flex xl:w-80 xl:flex-none xl:flex-col xl:[&>*]:min-h-0 xl:[&>*]:flex-1",
+            "xl:border-r xl:border-[var(--dh-glass-border)] xl:bg-[var(--dh-glass-bg)]",
             stage === "sessions" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
@@ -237,7 +243,7 @@ export function ResponsiveShell({
         </div>
         <div
           className={cn(
-            "min-h-0 min-w-0 [&>*]:min-w-0 [&>*]:w-full lg:flex lg:min-w-0 lg:flex-1 lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
+            "min-h-0 min-w-0 [&>*]:min-w-0 [&>*]:w-full xl:flex xl:min-w-0 xl:flex-1 xl:flex-col xl:[&>*]:min-h-0 xl:[&>*]:flex-1",
             stage === "transcript" ? "flex flex-1 flex-col" : "hidden",
           )}
         >

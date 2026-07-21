@@ -142,12 +142,13 @@ describe("SettingsRoute — accessible field groups (not generic form cards)", (
 // --- Secondary nav placement ------------------------------------------------------
 
 describe("SettingsRoute — secondary navigation placement", () => {
-  it("is wrapped in exactly one SecondaryNav landmark with Settings as the active destination", () => {
+  it("renders NO SecondaryNav strip — the icon rail is the one nav owner (QA F2/M9)", () => {
     const html = render();
-    expect((html.match(/<nav/g) ?? []).length).toBe(1);
-    const settingsStart = html.indexOf(">Settings</button>");
-    const before = html.lastIndexOf("<button", settingsStart);
-    expect(html.slice(before, settingsStart)).toContain('aria-current="page"');
+    // The old duplicate "Settings/Live ops/Inbox/Dashboard" text strip is gone…
+    expect((html.match(/<nav/g) ?? []).length).toBe(0);
+    expect(html).not.toContain("dh-secondary-nav");
+    // …while the route's own content still renders.
+    expect(html).toContain("dh-settings-route");
   });
 });
 

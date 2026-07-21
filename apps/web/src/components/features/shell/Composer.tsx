@@ -35,8 +35,12 @@ export type { ProviderId };
 /** Composer send affordance. `stop` shows only when a native interrupt path is product-enabled. */
 export type ComposerSendState = "send" | "stop";
 
-/** Connection health of the task's transport. `stale` = a superseded revision. */
-export type ComposerConnection = "connected" | "disconnected" | "stale";
+/**
+ * Connection health of the task's transport. `stale` = a superseded revision;
+ * `reconnecting` = the socket is dialing (first connect or a backoff retry), so
+ * the composer shows a live spinner instead of the terminal disconnected copy.
+ */
+export type ComposerConnection = "connected" | "reconnecting" | "disconnected" | "stale";
 
 /**
  * The measured composer geometry, transcribed from `reference-capture-manifest.md`
@@ -59,6 +63,7 @@ const DISABLED_REASON = Object.freeze({
   pendingCreation: "Creating the task…",
   unsupported: "Sending isn't available for this provider task.",
   disconnectedStale: "Reconnect to send. Your draft is saved.",
+  reconnecting: "Connecting… Your draft is saved.",
   missingWriterLease: "Another session holds the write lock.",
   blockingRequest: "Respond to the request above to continue.",
   empty: "Write a message to send.",
@@ -115,6 +120,7 @@ export function computeSendDisabledReason(ctx: ComposerSendContext): string | nu
   const R = DISABLED_REASON;
   if (ctx.taskState === "pending-creation") return R.pendingCreation;
   if (ctx.sendSupported === false) return R.unsupported;
+  if (ctx.connection === "reconnecting") return R.reconnecting;
   if (ctx.connection === "disconnected" || ctx.connection === "stale") return R.disconnectedStale;
   if (ctx.hasWriterLease === false) return R.missingWriterLease;
   if (ctx.hasBlockingRequest === true) return R.blockingRequest;
@@ -303,6 +309,12 @@ export interface ComposerProps {
   onDraftChange?: (value: string) => void;
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend?: () => void;
+  /**
+   * Manual reconnect for the disconnected state (F3): renders a REAL Reconnect
+   * button in the connection notice instead of dead "Reconnect to send" copy.
+   * Omitted → the plain notice text, exactly as before.
+   */
+  onReconnect?: () => void;
 }
 
 function FooterContext({ provider, footer }: { provider?: ProviderId; footer?: ComposerFooterInput }) {
@@ -340,12 +352,14 @@ export function Composer({
   onDraftChange,
   onKeyDown,
   onSend,
+  onReconnect,
 }: ComposerProps): ReactNode {
   const isStop = sendState === "stop";
   // Stop is always actionable (a real interrupt path). Only a real Send can be blocked.
   const sendDisabled = !isStop && disabledReason != null;
   const resolvedPlaceholder = placeholder ?? COMPOSER_COPY.newTaskPlaceholder;
   const disconnected = connection !== "connected";
+  const reconnecting = connection === "reconnecting";
 
   return (
     // The stable geometry slot. Its data attrs are CONSTANT — they never depend on
@@ -386,8 +400,31 @@ export function Composer({
       />
 
       {disconnected ? (
-        <p className="dh-composer-notice" data-dh-composer-notice="">
-          {COMPOSER_COPY.reconnectNote}
+        // A live connection indicator (F3): a spinner while (re)dialing, a real
+        // Reconnect action once the transport has genuinely given up — never
+        // just the dead "Reconnect to send" copy with no control behind it.
+        <p
+          className="dh-composer-notice"
+          data-dh-composer-notice=""
+          data-dh-connection={connection}
+          role="status"
+          aria-live="polite"
+        >
+          <span
+            className={reconnecting ? "dh-conn-spinner" : "dh-conn-dot"}
+            aria-hidden
+          />
+          {reconnecting ? DISABLED_REASON.reconnecting : COMPOSER_COPY.reconnectNote}
+          {!reconnecting && onReconnect ? (
+            <button
+              type="button"
+              className="dh-composer-reconnect"
+              data-dh-composer-reconnect=""
+              onClick={onReconnect}
+            >
+              Reconnect
+            </button>
+          ) : null}
         </p>
       ) : null}
 

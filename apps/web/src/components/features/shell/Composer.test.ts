@@ -165,6 +165,9 @@ describe("Composer — send disabled reasons (accessible)", () => {
     expect(computeSendDisabledReason({ draft: "hi", sendSupported: false })).toBe(R.unsupported);
     expect(computeSendDisabledReason({ draft: "hi", connection: "disconnected" })).toBe(R.disconnectedStale);
     expect(computeSendDisabledReason({ draft: "hi", connection: "stale" })).toBe(R.disconnectedStale);
+    // A dialing socket (first connect or a backoff retry) gets its own honest
+    // "Connecting…" reason, distinct from the terminal disconnected copy (F3).
+    expect(computeSendDisabledReason({ draft: "hi", connection: "reconnecting" })).toBe(R.reconnecting);
     expect(computeSendDisabledReason({ draft: "hi", hasWriterLease: false })).toBe(R.missingWriterLease);
     expect(computeSendDisabledReason({ draft: "hi", hasBlockingRequest: true })).toBe(R.blockingRequest);
     expect(computeSendDisabledReason({ draft: "   " })).toBe(R.empty);
