@@ -8,6 +8,14 @@ Mockup references live at `/Users/ronak/.claude/jobs/977ae4f4/tmp/devhub-gallery
 
 ---
 
+## ⚠ CORRECTIONS — verified against the real code during Phase 1 (these OVERRIDE the sections below)
+The original data inventory was partly wrong. All Phase-2 agents + reviewers MUST honor these:
+1. **`ActivityTimeline.tsx` is NOT dead — do NOT delete it.** `ThreadWorkspace.tsx:227` imports and renders it. Ignore §2.2.3 / §5's delete instruction.
+2. **`SessionSummary` has NO `provider` and NO `status` field** (§3.1 was wrong). It has: `title`, `gitBranch` (nullable), `lastTimestamp`, `costUsd`, `model`, `usage`, `projectId` (NOT `projectName`). Legacy sessions are implicitly `provider=anthropic` via `LEGACY_SESSION_PROVIDER`; native Codex sessions are a SEPARATE `CodexSession` type, not in the `sessions` array. Derive provider/status from these sources — never render an invented field.
+3. **App.tsx does NOT poll `running`/`stats` at root.** Status groups (Running/Needs review/Idle), needsYou/running pills, and the budget spend-meter require joining `api.running()` / `useStatsPolling`, which Phase 1 adds as a NEW app-root poll. Phase-2 leaf routes consume that; do not add a second competing poll. Any element whose data source is absent must not render (no placeholder lies).
+
+---
+
 ## 0. Diagnosis (why it feels like two apps)
 
 Verified against the code (not guessed):

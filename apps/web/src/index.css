@@ -255,9 +255,19 @@
 :root[data-perf="reduced"] .glass-chrome,
 :root[data-perf="reduced"] .glass-card,
 :root[data-perf="reduced"] .glass-hi,
+:root[data-perf="reduced"] .dh-rail,
+:root[data-perf="reduced"] .dh-header,
+:root[data-perf="reduced"] .dh-inspector,
+:root[data-perf="reduced"] .dh-composer,
+:root[data-perf="reduced"] .dh-thread-composer,
 html[data-reduce-motion="true"] .glass-chrome,
 html[data-reduce-motion="true"] .glass-card,
-html[data-reduce-motion="true"] .glass-hi {
+html[data-reduce-motion="true"] .glass-hi,
+html[data-reduce-motion="true"] .dh-rail,
+html[data-reduce-motion="true"] .dh-header,
+html[data-reduce-motion="true"] .dh-inspector,
+html[data-reduce-motion="true"] .dh-composer,
+html[data-reduce-motion="true"] .dh-thread-composer {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   background: var(--dh-surface);
@@ -401,7 +411,8 @@ kbd {
   height: 100%;
   min-height: 0;
   overflow: hidden; /* the shell never scrolls horizontally; content owns its own scroll */
-  background: var(--dh-canvas);
+  /* Aurora wash painted ONCE behind the whole shell (§2.1); glass chrome floats on it. */
+  background: var(--dh-aurora);
   color: var(--dh-text);
 }
 
@@ -430,8 +441,11 @@ kbd {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--dh-rail-active); /* browser/PWA opaque fallback = active window */
-  border-right: 1px solid var(--dh-border-rail);
+  /* Glass chrome grade (§2.1). Single right border; blur reveals the aurora behind. */
+  background: var(--dh-glass-chrome-bg);
+  backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  border-right: 1px solid var(--dh-glass-border);
 }
 
 .dh-brand {
@@ -679,8 +693,11 @@ kbd {
   display: flex;
   align-items: center;
   padding: 0 var(--dh-shell-gutter);
+  /* Translucent glass chrome (§2.1); --dh-header is already the rgba glass fill. */
   background: var(--dh-header);
-  border-bottom: 1px solid var(--dh-border-subtle);
+  backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  border-bottom: 1px solid var(--dh-glass-border);
 }
 
 .dh-body {
@@ -696,7 +713,7 @@ kbd {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  background: var(--dh-canvas);
+  background: transparent; /* the shell's aurora wash shows through (§2.1) */
   outline: none;
   position: relative;
 }
@@ -733,7 +750,12 @@ kbd {
 
 .dh-inspector {
   width: var(--dh-inspector-width);
-  background: var(--dh-surface);
+  /* Glass card grade (§3.3 InspectorDock). Geometry unchanged; only the surface. */
+  background: var(--dh-glass-bg);
+  backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  border: 1px solid var(--dh-glass-border);
+  box-shadow: 0 18px 46px -18px rgba(0, 0, 0, 0.55), var(--dh-glass-highlight);
   border-radius: var(--dh-radius-inspector);
   padding: var(--dh-shell-gutter);
   max-height: calc(100dvh - 75px);
@@ -1474,8 +1496,12 @@ html[data-reduce-motion="true"] {
   height: var(--dh-composer-height);
   margin-bottom: var(--dh-composer-bottom);
   border-radius: var(--dh-radius-composer);
-  background: var(--dh-surface); /* #2d2d2d measured composer fill */
-  border: 1px solid var(--dh-border-subtle);
+  /* Vibrant glass composer (§3.3). Geometry (width/height/radius/gutter) unchanged. */
+  background: var(--dh-glass-hi-bg);
+  backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  box-shadow: var(--dh-glass-shadow-float), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--dh-glass-border-hi);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -1536,8 +1562,12 @@ html[data-reduce-motion="true"] {
   height: var(--dh-composer-height);
   margin-bottom: var(--dh-composer-bottom);
   border-radius: var(--dh-radius-composer);
-  background: var(--dh-surface); /* #2d2d2d measured composer fill */
-  border: 1px solid var(--dh-border-subtle);
+  /* Vibrant glass composer (§3.3). Geometry (width/height/radius/gutter) unchanged. */
+  background: var(--dh-glass-hi-bg);
+  backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  box-shadow: var(--dh-glass-shadow-float), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--dh-glass-border-hi);
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
