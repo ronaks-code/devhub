@@ -118,6 +118,46 @@ describe("ThreadWorkspace — unframed prose vs surfaced request separation", ()
   });
 });
 
+describe("ThreadWorkspace — real tool cards (§3.3) and who-line avatars", () => {
+  const toolItem: ThreadItem = {
+    id: "t1",
+    kind: "tool",
+    block: { type: "tool_use", id: "x1", name: "Bash", input: { command: "pnpm test" } },
+  };
+
+  it("renders a real tool_use block as a compact ToolCard (not a raw JSON diagnostic)", () => {
+    const html = render({ items: [toolItem] });
+    // The tool card lives in the transcript, unframed (it owns its own chrome).
+    expect(html).toContain('data-dh-thread-tool=""');
+    // It shows the tool name, not a bounded raw diagnostic dump.
+    expect(html).toContain("Bash");
+    expect(html).not.toContain('data-dh-raw=""');
+  });
+
+  it("keeps the tool card OUT of the reserved surface set (surfaces stay user/request/composer)", () => {
+    // A tool card is not one of the three canvas surfaces; adding one to a
+    // transcript must not add a `data-dh-surface` marker. The only surface here
+    // is the always-present composer.
+    const html = render({ items: [toolItem] });
+    expect(count(html, 'data-dh-surface=""')).toBe(1);
+    expect(html).toContain('data-dh-composer="" data-dh-surface=""');
+  });
+
+  it("puts a who-line avatar above assistant prose and user bubbles", () => {
+    const html = render({
+      items: [
+        { id: "a1", kind: "assistant", content: "Here you go" },
+        { id: "u1", kind: "user", content: "Do the thing" },
+      ],
+    });
+    expect(html).toContain('data-dh-who-line="assistant"');
+    expect(html).toContain('data-dh-who-line="user"');
+    // The avatars are decorative CSS tiles, never provider logos.
+    expect(html).not.toContain("<svg");
+    expect(html).not.toContain("<img");
+  });
+});
+
 describe("ThreadWorkspace — stable composer invariant", () => {
   it("keeps composer geometry identical when Send becomes Stop", () => {
     const sendHtml = render({ items: richItems, sendState: "send" });

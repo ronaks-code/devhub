@@ -2110,10 +2110,48 @@ html[data-reduce-motion="true"] {
   line-height: 22px;
 }
 
-/* User content: the one surfaced right-aligned bubble, capped at the measured max. */
+/* User content: the one surfaced right-aligned bubble, capped at the measured max.
+ * Stacks the who-line above the bubble, both right-aligned (Aurora Cockpit §3.3). */
 .dh-thread-user-wrap {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* Who-line (§3.3): a 20px avatar tile + role name above a bubble/block. Decorative. */
+.dh-who-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+.dh-who-line--user {
+  flex-direction: row-reverse;
+}
+.dh-who-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  flex: none;
+}
+.dh-who-avatar--assistant {
+  background: var(--dh-grad-warm);
+}
+.dh-who-avatar--user {
+  background: var(--dh-user-bubble);
+  border: 1px solid var(--dh-chat-user-border);
+}
+.dh-who-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--dh-text-muted);
+}
+
+/* A tool card in the transcript spans the column width; ToolCard owns its own chrome. */
+.dh-thread-tool {
+  width: 100%;
 }
 
 .dh-thread-user {

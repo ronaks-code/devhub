@@ -48,7 +48,7 @@ export function ToolGroup({
         <ChevronRight
           className={cn("h-3.5 w-3.5 shrink-0 text-zinc-500 transition-transform", open && "rotate-90")}
         />
-        <Wrench className="h-3.5 w-3.5 shrink-0 text-clay-400" />
+        <Wrench className="h-3.5 w-3.5 shrink-0 text-[var(--dh-brand)]" />
         <span className="text-zinc-300">{count} tool calls</span>
         {!open && shown.length ? (
           <span className="flex min-w-0 items-center gap-1 truncate text-[11px] text-zinc-600">

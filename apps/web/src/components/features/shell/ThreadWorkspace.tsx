@@ -6,6 +6,8 @@ import {
   type ActivityEntry,
   type PlanModel,
 } from "./ActivityTimeline.js";
+import { ToolCard } from "../../ToolCard.js";
+import type { PairedToolUse } from "../../../lib/transcript.js";
 
 /**
  * ThreadWorkspace — the transcript IS the task (M6 slice 4).
@@ -60,7 +62,14 @@ export type ThreadItem =
   /** The anchored in-progress region streaming native deltas — UNFRAMED. */
   | { kind: "streaming"; id: string; content?: ReactNode; elapsedLabel?: string }
   /** Unknown native event rendered as a bounded raw diagnostic — UNFRAMED, never a fabricated tool. */
-  | { kind: "raw"; id: string; raw: string };
+  | { kind: "raw"; id: string; raw: string }
+  /**
+   * A REAL tool call (tool_use + its paired tool_result) rendered as ONE compact,
+   * collapsed-by-default card (Aurora Cockpit §3.3). This replaces the old raw-JSON
+   * diagnostic for the tool blocks we can render richly; it is still backed only by
+   * real transcript data, never a fabricated call. Diff hunks stay collapsed.
+   */
+  | { kind: "tool"; id: string; block: PairedToolUse };
 
 /** Composer send affordance. `stop` is shown only when a native interrupt is product-enabled. */
 export type ComposerSendState = "send" | "stop";
@@ -128,19 +137,37 @@ export function boundRawDiagnostic(raw: string): string {
   return out;
 }
 
+/**
+ * The who-line (Aurora Cockpit §3.3): a small avatar tile + role name above a
+ * bubble/block so the vertical narrative reads at a glance. Honest by role only —
+ * it never fabricates a model/name the mapper doesn't carry (the AI tile takes the
+ * warm gradient identity, the user tile a dark violet). Decorative → aria-hidden;
+ * the role is already conveyed by DOM order + the bubble alignment.
+ */
+function WhoLine({ who }: { who: "assistant" | "user" }) {
+  return (
+    <div className={`dh-who-line dh-who-line--${who}`} data-dh-who-line={who} aria-hidden>
+      <span className={`dh-who-avatar dh-who-avatar--${who}`} />
+      <span className="dh-who-name">{who === "assistant" ? "Assistant" : "You"}</span>
+    </div>
+  );
+}
+
 function AssistantBlock({ content }: { content: ReactNode }) {
-  // Unframed prose: no surface, no card. Just a text block in the narrative.
+  // Unframed prose: no surface, no card. Just a who-line + text block in the narrative.
   return (
     <div className="dh-thread-assistant" data-dh-assistant="" data-dh-unframed="">
+      <WhoLine who="assistant" />
       {content}
     </div>
   );
 }
 
 function UserBubble({ content }: { content: ReactNode }) {
-  // The one surfaced bubble: right-aligned, `#242424`, capped at the measured max width.
+  // The one surfaced bubble: right-aligned, violet gradient, capped at the measured max width.
   return (
     <div className="dh-thread-user-wrap" data-dh-user-wrap="">
+      <WhoLine who="user" />
       <div
         className="dh-thread-user"
         data-dh-user=""
@@ -149,6 +176,17 @@ function UserBubble({ content }: { content: ReactNode }) {
       >
         {content}
       </div>
+    </div>
+  );
+}
+
+/** A real tool call rendered as one compact, collapsed-by-default card (§3.3). */
+function ToolBlock({ block }: { block: PairedToolUse }) {
+  // History rendering (not live): ToolCard shows the one-line result collapsed; no
+  // diff is auto-expanded (EditDiffCard is collapsed by default per §3.3).
+  return (
+    <div className="dh-thread-tool" data-dh-thread-tool="" data-dh-unframed="">
+      <ToolCard block={block} />
     </div>
   );
 }
@@ -231,6 +269,8 @@ function ThreadItemView({ item }: { item: ThreadItem }): ReactNode {
       return <StreamingBlock content={item.content} />;
     case "raw":
       return <RawDiagnostic raw={item.raw} />;
+    case "tool":
+      return <ToolBlock block={item.block} />;
     default:
       return null;
   }

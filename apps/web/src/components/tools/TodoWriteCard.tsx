@@ -48,7 +48,7 @@ const STATUS_META: Record<
   },
   in_progress: {
     icon: CircleDot,
-    iconCls: "text-clay-400",
+    iconCls: "text-[var(--dh-brand)]",
     textCls: "text-zinc-100 font-medium",
   },
   pending: {
@@ -73,7 +73,7 @@ export function TodoWriteCard({ block }: { block: PairedToolUse }) {
   if (todos.length === 0) {
     return (
       <details className="my-1.5 rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60">
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium text-clay-400">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium text-[var(--dh-brand)]">
           <ListChecks className="h-3.5 w-3.5" />
           <span>TodoWrite</span>
           <span className="text-zinc-600">· empty</span>
@@ -91,8 +91,8 @@ export function TodoWriteCard({ block }: { block: PairedToolUse }) {
       open
     >
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
-        <ListChecks className="h-3.5 w-3.5 text-clay-400" />
-        <span className="text-clay-400">Todos</span>
+        <ListChecks className="h-3.5 w-3.5 text-[var(--dh-brand)]" />
+        <span className="text-[var(--dh-brand)]">Todos</span>
         <span className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
           {done}/{todos.length} done
         </span>

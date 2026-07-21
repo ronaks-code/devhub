@@ -47,11 +47,14 @@ export function EditDiffCard({
   // the header so the magnitude of the change reads at a glance before expanding.
   const { added, removed } = countEditLines(edit);
 
+  // Aurora Cockpit §3.3: the diff is NEVER auto-expanded in chat — the header
+  // carries the file path + ±line totals, and the hunks stay one click away in the
+  // collapsed body (owner explicitly doesn't want diff-forward UI here).
   return (
-    <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60" open>
+    <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
-        <FileDiff className="h-3.5 w-3.5 shrink-0 text-clay-400" />
-        <span className="shrink-0 text-clay-400">{name}</span>
+        <FileDiff className="h-3.5 w-3.5 shrink-0 text-[var(--dh-brand)]" />
+        <span className="shrink-0 text-[var(--dh-brand)]">{name}</span>
         {edit.filePath ? (
           <span className="truncate font-mono text-[11px] text-zinc-400" title={edit.filePath}>
             {edit.filePath}

@@ -7,6 +7,7 @@ import type {
 } from "../components/features/search/TaskSearchDialog.js";
 import type { TaskRailSection, TaskRailTask } from "../components/features/shell/TaskRail.js";
 import { boundRawDiagnostic, type ThreadItem } from "../components/features/shell/ThreadWorkspace.js";
+import { pairToolResults, type PairedToolUse } from "./transcript.js";
 import { displaySearchHitTitle, displaySessionTitle } from "./session-title.js";
 import type {
   GitStatus,
@@ -210,18 +211,23 @@ export function buildFilesContent(fileChanges: readonly FileChangeLike[]): FileE
 
 /**
  * Map real transcript messages onto `ThreadWorkspace`'s `ThreadItem` union. Plain
- * text is the ONLY thing rendered as `user`/`assistant` prose; every other block
- * (tool_use, tool_result, image, thinking, unknown) becomes a bounded `raw`
- * diagnostic instead of a fabricated tool card — the exact honest fallback
- * `ThreadWorkspace`'s own model reserves for real data this mapper doesn't (yet)
- * render richly (`design-lock.md` §4's "unknown native event → bounded raw
- * diagnostic, never a fabricated tool"). Never drops a message silently: an
- * empty-text message with no other blocks contributes nothing, which is honest
- * (there was nothing to show), not a bug.
+ * text renders as `user`/`assistant` prose; a `tool_use` block (with its paired
+ * `tool_result` attached — see `pairToolResults`) renders as ONE compact tool card
+ * (Aurora Cockpit §3.3); every OTHER block (image, thinking, unknown, or an orphan
+ * tool_result whose tool_use scrolled out of the window) still becomes a bounded
+ * `raw` diagnostic rather than a fabricated card — the honest fallback the model
+ * reserves for real data we don't render richly (`design-lock.md` §4's "unknown
+ * native event → bounded raw diagnostic, never a fabricated tool"). Never drops a
+ * message silently: an empty-text message with no other blocks contributes nothing,
+ * which is honest (there was nothing to show), not a bug.
  */
 export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[]): ThreadItem[] {
   const items: ThreadItem[] = [];
-  for (const m of messages) {
+  // Attach each tool_result to its tool_use so a call is ONE card, not two entries;
+  // consumed standalone results are dropped. Orphan results (tool_use out of window)
+  // are left in place and fall through to the raw diagnostic below.
+  const paired = pairToolResults([...messages]);
+  for (const m of paired) {
     const key = m.uuid ?? `seq-${m.seq}`;
     const text = m.blocks
       .filter((b): b is { type: "text"; text: string } => b.type === "text")
@@ -238,6 +244,13 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
     let i = 0;
     for (const b of m.blocks) {
       if (b.type === "text") continue;
+      if (b.type === "tool_use") {
+        // A real tool call → one compact card. `pairToolResults` may have attached
+        // a `.result`; ToolCard renders the collapsed one-line result from it.
+        items.push({ kind: "tool", id: `${key}-${i}`, block: b as PairedToolUse });
+        i++;
+        continue;
+      }
       items.push({
         kind: "raw",
         id: `${key}-${i}`,

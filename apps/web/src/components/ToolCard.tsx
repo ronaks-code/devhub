@@ -51,7 +51,7 @@ function RunningChip() {
     return () => window.clearInterval(id);
   }, []);
   return (
-    <span className="ml-auto inline-flex items-center gap-1 rounded bg-clay-500/10 px-1.5 py-0.5 text-[10px] font-medium text-clay-300">
+    <span className="ml-auto inline-flex items-center gap-1 rounded bg-[var(--dh-accent-soft)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--dh-link)]">
       <Loader2 className="h-3 w-3 animate-spin" />
       running… {elapsed}s
     </span>
@@ -152,7 +152,7 @@ function GenericToolCard({ block, live }: { block: PairedToolUse; live: boolean 
         isError ? "border-red-900/60" : "border-zinc-800",
       )}
     >
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium text-clay-400">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium text-[var(--dh-brand)]">
         <Wrench className="h-3.5 w-3.5" />
         <span>{name}</span>
         <ToolStatus result={result} live={live} />

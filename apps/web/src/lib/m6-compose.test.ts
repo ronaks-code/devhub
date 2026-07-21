@@ -258,16 +258,39 @@ describe("mapMessagesToThreadItems", () => {
     expect(mapMessagesToThreadItems([message("user", [{ type: "text", text: "   " }], 0)])).toEqual([]);
   });
 
-  it("never fabricates a tool card: a tool_use block becomes a bounded raw diagnostic", () => {
+  it("renders a real tool_use block as a compact tool card (§3.3), never a fabricated one", () => {
     const items = mapMessagesToThreadItems([
       message("assistant", [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }], 0),
     ]);
     expect(items).toHaveLength(1);
-    expect(items[0]!.kind).toBe("raw");
-    if (items[0]!.kind === "raw") {
-      expect(items[0]!.raw).toContain("assistant:tool_use");
-      expect(items[0]!.raw).toContain("Bash");
+    expect(items[0]!.kind).toBe("tool");
+    if (items[0]!.kind === "tool") {
+      expect(items[0]!.block.name).toBe("Bash");
+      // Unpaired (no following tool_result in the window) → no attached result.
+      expect(items[0]!.block.result).toBeUndefined();
     }
+  });
+
+  it("pairs a following tool_result onto its tool_use so a call is ONE card, not two", () => {
+    const items = mapMessagesToThreadItems([
+      message("assistant", [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }], 0),
+      message("user", [{ type: "tool_result", toolUseId: "t1", content: "a.ts\nb.ts", isError: false }], 1),
+    ]);
+    // The standalone tool_result is absorbed; only the one tool card remains.
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("tool");
+    if (items[0]!.kind === "tool") {
+      expect(items[0]!.block.result?.content).toContain("a.ts");
+    }
+  });
+
+  it("routes an image/thinking/unknown block through the honest raw diagnostic", () => {
+    const items = mapMessagesToThreadItems([
+      message("assistant", [{ type: "thinking", thinking: "hmm" } as unknown as ContentBlock], 0),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("raw");
+    if (items[0]!.kind === "raw") expect(items[0]!.raw).toContain("assistant:thinking");
   });
 
   it("routes a non-user/assistant role's text through the raw diagnostic, never as prose", () => {
@@ -275,7 +298,7 @@ describe("mapMessagesToThreadItems", () => {
     expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: "[system] hook fired" }]);
   });
 
-  it("keeps both the text and a raw diagnostic when a message mixes prose with a tool block", () => {
+  it("keeps both the prose and a tool card when a message mixes text with a tool block", () => {
     const items = mapMessagesToThreadItems([
       message(
         "assistant",
@@ -288,6 +311,7 @@ describe("mapMessagesToThreadItems", () => {
     ]);
     expect(items).toHaveLength(2);
     expect(items[0]).toEqual({ kind: "assistant", id: "u0-text", content: "running a command" });
-    expect(items[1]!.kind).toBe("raw");
+    expect(items[1]!.kind).toBe("tool");
+    if (items[1]!.kind === "tool") expect(items[1]!.block.name).toBe("Bash");
   });
 });

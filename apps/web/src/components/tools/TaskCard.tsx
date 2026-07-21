@@ -100,8 +100,8 @@ export function TaskCard({ block }: { block: PairedToolUse }) {
   return (
     <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60" open>
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
-        <Bot className="h-3.5 w-3.5 shrink-0 text-clay-400" />
-        <span className="text-clay-400">Task</span>
+        <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--dh-brand)]" />
+        <span className="text-[var(--dh-brand)]">Task</span>
         {subagentType ? (
           <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400">
             {subagentType}
@@ -148,14 +148,14 @@ export function TaskCard({ block }: { block: PairedToolUse }) {
             {sub ? (
               <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950/60">
                 <div className="flex items-center gap-2 border-b border-zinc-800 px-2.5 py-1.5 text-[11px] font-medium text-zinc-400">
-                  <Bot className="h-3.5 w-3.5 text-clay-400" />
+                  <Bot className="h-3.5 w-3.5 text-[var(--dh-brand)]" />
                   subagent transcript
                   <span className="text-zinc-600">· {sub.length} messages</span>
                   {refs.length > 1 ? (
                     <select
                       value={loadedFor ?? ""}
                       onChange={(e) => loadSubagent(e.target.value)}
-                      className="ml-auto rounded-md bg-zinc-900 px-1.5 py-0.5 text-[10.5px] text-zinc-300 ring-1 ring-zinc-800 focus:outline-none focus:ring-clay-500/40"
+                      className="ml-auto rounded-md bg-zinc-900 px-1.5 py-0.5 text-[10.5px] text-zinc-300 ring-1 ring-zinc-800 focus:outline-none focus:ring-[var(--dh-focus)]/40"
                       title="Choose which subagent transcript to view"
                     >
                       {refs.map((r) => (
@@ -178,7 +178,7 @@ export function TaskCard({ block }: { block: PairedToolUse }) {
               <button
                 onClick={() => loadSubagent(refs[0]!.filePath)}
                 disabled={loading}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800/70 px-2.5 py-1 text-[12px] font-medium text-zinc-300 ring-1 ring-zinc-700/60 transition hover:bg-zinc-800 hover:text-clay-300 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800/70 px-2.5 py-1 text-[12px] font-medium text-zinc-300 ring-1 ring-zinc-700/60 transition hover:bg-zinc-800 hover:text-[var(--dh-link)] disabled:opacity-50"
               >
                 {loading ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />

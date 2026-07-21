@@ -32,7 +32,7 @@ function CopyButton({ text }: { text: string }) {
       className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md bg-zinc-800/80 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 ring-1 ring-zinc-700/70 transition hover:bg-zinc-700 hover:text-zinc-100"
       title="Copy command"
     >
-      {copied ? <Check className="h-3 w-3 text-clay-300" /> : <Copy className="h-3 w-3" />}
+      {copied ? <Check className="h-3 w-3 text-[var(--dh-link)]" /> : <Copy className="h-3 w-3" />}
       {copied ? "copied" : "copy"}
     </button>
   );
