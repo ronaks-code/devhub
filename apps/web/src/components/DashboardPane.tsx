@@ -238,19 +238,22 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
                 ? "var(--dh-provider-openai)"
                 : "var(--dh-text-dim)";
           return (
-            <li key={m.model} className="flex items-center gap-2 text-[11px]">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
-                style={{ background: DONUT_PALETTE[i % DONUT_PALETTE.length] }}
-              />
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: providerDot }} title={provider} />
-              <span className="min-w-0 flex-1 truncate text-[color:var(--dh-text)]" title={m.model}>
-                {m.model}
-              </span>
-              <span className="dh-nums shrink-0 text-[color:var(--dh-text-muted)]">{formatUsd(m.costUsd)}</span>
-              <span className="dh-nums w-9 shrink-0 text-right text-[color:var(--dh-text-dim)]">
-                {Math.round((m.costUsd / total) * 100)}%
-              </span>
+            <li key={m.model} className="flex flex-col gap-0.5 text-[11px]">
+              <div className="flex items-center gap-2">
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                  style={{ background: DONUT_PALETTE[i % DONUT_PALETTE.length] }}
+                />
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: providerDot }} title={provider} />
+                <span className="min-w-0 flex-1 truncate text-[color:var(--dh-text)]" title={m.model}>
+                  {m.model}
+                </span>
+              </div>
+              <div className="dh-nums flex items-center gap-1.5 pl-[18px] text-[color:var(--dh-text-dim)]">
+                <span className="text-[color:var(--dh-text-muted)]">{formatUsd(m.costUsd)}</span>
+                <span aria-hidden>·</span>
+                <span>{Math.round((m.costUsd / total) * 100)}%</span>
+              </div>
             </li>
           );
         })}

@@ -166,6 +166,10 @@ const DashboardRoute = lazy(() =>
 const MultiSessionGrid = lazy(() =>
   import("./components/MultiSessionGrid").then((m) => ({ default: m.MultiSessionGrid })),
 );
+// Live-drive: watch + send turns to multiple running sessions at once (Live Ops "Drive" mode).
+const MultiSessionDrive = lazy(() =>
+  import("./components/MultiSessionDrive").then((m) => ({ default: m.MultiSessionDrive })),
+);
 // The per-project Overview deep-dive — only shown when toggled on in Browse, so it
 // loads its own chunk on first open (and pulls the dashboard ModelBreakdown with it):
 const ProjectOverview = lazy(() =>
@@ -571,7 +575,7 @@ export default function App() {
   // Ops tab view (Aurora Cockpit §3.7): the "grid" = Glass Grid (dense monitoring
   // cards, the default) or "board" = Attention Board (four columns of what needs
   // your eyes). Local to the tab.
-  const [opsMode, setOpsMode] = useState<"board" | "grid">("grid");
+  const [opsMode, setOpsMode] = useState<"board" | "grid" | "drive">("grid");
   const [commandOpen, setCommandOpen] = useState(false);
   // M6 slice 7 (Task 9 data-wire): the devhub `TaskSearchDialog`'s own query/scope/
   // date-facet/results state. Only read/updated while `searchCommandsMode==="devhub"`
@@ -1982,6 +1986,7 @@ export default function App() {
                 {([
                   ["grid", "Grid"],
                   ["board", "Board"],
+                  ["drive", "Drive"],
                 ] as const).map(([m, label]) => (
                   <button
                     key={m}
@@ -1997,7 +2002,9 @@ export default function App() {
                     title={
                       m === "grid"
                         ? "Glass grid — dense cards of every running session"
-                        : "Attention board — grouped by what needs your eyes"
+                        : m === "board"
+                        ? "Attention board — grouped by what needs your eyes"
+                        : "Drive — watch and send turns to multiple live sessions at once"
                     }
                   >
                     {label}
@@ -2005,7 +2012,11 @@ export default function App() {
                 ))}
               </div>
             </div>
-            {opsMode === "grid" ? (
+            {opsMode === "drive" ? (
+              <Suspense fallback={<PaneFallback />}>
+                <MultiSessionDrive />
+              </Suspense>
+            ) : opsMode === "grid" ? (
               <Suspense fallback={<PaneFallback />}>
                 <MultiSessionGrid
                   running={liveRunning}
