@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildDiffContent,
+  buildChangedFiles,
   buildEnvironmentSummary,
-  buildFilesContent,
   buildTaskRailSections,
   deriveRunStatus,
   groupSessionsByRunStatus,
@@ -223,22 +222,20 @@ describe("buildEnvironmentSummary", () => {
   });
 });
 
-describe("buildDiffContent / buildFilesContent", () => {
-  it("carries every changed file path into both the diff and files content", () => {
+describe("buildChangedFiles (§3.3 CHANGED FILES — path + deltas only, no diff hunks)", () => {
+  it("carries every changed file path + its line deltas (no diff content)", () => {
     const changes = [
       { filePath: "a.ts", added: 3, removed: 1 },
       { filePath: "b.ts", added: 0, removed: 2 },
     ];
-    expect(buildDiffContent(changes)).toEqual({
-      files: ["a.ts", "b.ts"],
-      summary: "2 files · +3 -3",
-    });
-    expect(buildFilesContent(changes)).toEqual([{ path: "a.ts" }, { path: "b.ts" }]);
+    expect(buildChangedFiles(changes)).toEqual([
+      { path: "a.ts", added: 3, removed: 1 },
+      { path: "b.ts", added: 0, removed: 2 },
+    ]);
   });
 
-  it("has no summary and empty file lists when there are no changes", () => {
-    expect(buildDiffContent([])).toEqual({ files: [], summary: undefined });
-    expect(buildFilesContent([])).toEqual([]);
+  it("is an empty list when there are no changes (dock shows 'No changes')", () => {
+    expect(buildChangedFiles([])).toEqual([]);
   });
 });
 

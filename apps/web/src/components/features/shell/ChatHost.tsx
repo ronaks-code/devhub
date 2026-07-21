@@ -6,9 +6,8 @@ import { api } from "../../../lib/api.js";
 import { useDraft } from "../../../hooks/useDraft.js";
 import { buildFileChanges } from "../../FileChangeSummary.js";
 import {
-  buildDiffContent,
+  buildChangedFiles,
   buildEnvironmentSummary,
-  buildFilesContent,
   mapMessagesToThreadItems,
 } from "../../../lib/m6-compose.js";
 import { TaskHeader } from "./TaskHeader.js";
@@ -82,9 +81,6 @@ export function ChatHost({
   const [messages, setMessages] = useState<NormalizedMessage[]>([]);
   const [turnRunning, setTurnRunning] = useState(false);
   const [connection, setConnection] = useState<ComposerConnection>("stale");
-  const [inspectorSelected, setInspectorSelected] = useState<"diff" | "files" | "terminal" | "browser" | "artifacts">(
-    "diff",
-  );
   const [gitBranch, setGitBranch] = useState<string | null>(null);
 
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
@@ -207,13 +203,15 @@ export function ChatHost({
       {showInspector ? (
         <InspectorDock
           provider="anthropic"
-          selected={inspectorSelected}
-          onSelectDestination={setInspectorSelected}
-          environment={buildEnvironmentSummary(gitBranch ? { branch: gitBranch, ahead: 0, behind: 0, staged: [], unstaged: [], untracked: [] } : null, fileChanges)}
-          content={{
-            diff: buildDiffContent(fileChanges),
-            files: buildFilesContent(fileChanges),
+          worktree={{
+            branch: gitBranch ?? undefined,
+            changesSummary: buildEnvironmentSummary(null, fileChanges).changes,
           }}
+          session={{
+            model: defaultModel ?? undefined,
+            permissionMode: defaultPermissionMode,
+          }}
+          changedFiles={buildChangedFiles(fileChanges)}
         />
       ) : null}
     </div>

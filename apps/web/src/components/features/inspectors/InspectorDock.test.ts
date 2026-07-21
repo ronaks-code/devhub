@@ -1,21 +1,17 @@
 // @vitest-environment jsdom
-import { createElement, useEffect, useRef, useState } from "react";
-import { render as rtlRender, screen, within } from "@testing-library/react";
+import { createElement } from "react";
+import { render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   INSPECTOR_COPY,
-  INSPECTOR_DESTINATIONS,
   INSPECTOR_GEOMETRY,
   InspectorDock,
   type InspectorDockProps,
-  computeDestinationView,
-  describeDestructiveConfirmation,
   isInspectorDockApplied,
   nextTabIndex,
   resolveInspectorDockMode,
-  unavailableMessage,
 } from "./InspectorDock.js";
 import { SHELL_GEOMETRY } from "../shell/DevHubShell.js";
 
@@ -36,38 +32,11 @@ function dockTag(html: string): string {
   return html.slice(start, end + 1);
 }
 
-/** The persistent Environment summary region markup (a single non-nested <section>). */
-function environmentRegion(html: string): string {
-  const start = html.indexOf("<section");
-  expect(start).toBeGreaterThanOrEqual(0);
-  const close = html.indexOf("</section>", start);
-  expect(close).toBeGreaterThan(start);
-  return html.slice(start, close + "</section>".length);
-}
-
-/** The single rendered tabpanel markup. */
-function tabPanel(html: string): string {
-  const start = html.indexOf('role="tabpanel"');
-  expect(start).toBeGreaterThanOrEqual(0);
-  const open = html.lastIndexOf("<div", start);
-  // The panel is a self-contained <div>…</div>; find its matching close by scanning depth.
-  let depth = 0;
-  let i = open;
-  while (i < html.length) {
-    if (html.startsWith("<div", i)) depth++;
-    else if (html.startsWith("</div>", i)) {
-      depth--;
-      if (depth === 0) return html.slice(open, i + "</div>".length);
-    }
-    i++;
-  }
-  throw new Error("unbalanced tabpanel");
-}
-
-const baseEnv = {
-  changes: "2 files · +84 -19",
+const baseWorktree = {
   branch: "feat/inspector",
-  subagents: [],
+  base: "from main @ 9f3c2ea",
+  project: "devhub",
+  changesSummary: "2 files · +84 -19",
 };
 
 // --- Geometry: one measured content-height dock --------------------------------
@@ -87,392 +56,159 @@ describe("InspectorDock — measured content-height dock", () => {
   });
 
   it("writes 300 width / 16 radius / 16 padding as constant data attrs and is content-height", () => {
-    const tag = dockTag(render({ environment: baseEnv }));
+    const tag = dockTag(render({ worktree: baseWorktree }));
     expect(tag).toContain(`data-dh-inspector-width="${INSPECTOR_GEOMETRY.width}"`);
     expect(tag).toContain(`data-dh-inspector-radius="${INSPECTOR_GEOMETRY.radius}"`);
     expect(tag).toContain(`data-dh-inspector-padding="${INSPECTOR_GEOMETRY.padding}"`);
-    // Content-height, NOT a permanent full-height IDE split pane.
     expect(tag).toContain('data-dh-inspector-height-mode="content"');
     expect(tag).not.toContain('height-mode="full"');
-    // The dock is the elevated #2d2d2d surface.
     expect(tag).toContain("data-dh-surface");
   });
 
-  it("keeps the dock container tag byte-identical across selected destinations (never resizes)", () => {
-    const onDiff = dockTag(render({ environment: baseEnv, selected: "diff" }));
-    const onTerminal = dockTag(render({ environment: baseEnv, selected: "terminal" }));
-    const onArtifacts = dockTag(render({ environment: baseEnv, selected: "artifacts" }));
-    expect(onDiff).toBe(onTerminal);
-    expect(onDiff).toBe(onArtifacts);
+  it("keeps the dock container tag byte-identical as its section data changes (never resizes)", () => {
+    const empty = dockTag(render({}));
+    const full = dockTag(
+      render({ worktree: baseWorktree, session: { model: "opus" }, changedFiles: [{ path: "a.ts" }] }),
+    );
+    expect(empty).toBe(full);
   });
 
   it("renders no provider logo (no svg/img)", () => {
     const html = render({
       provider: "openai",
-      environment: baseEnv,
-      selected: "diff",
-      content: { diff: { files: ["a.ts"], summary: "1 file · +1 -0" } },
+      worktree: baseWorktree,
+      session: { model: "gpt-5" },
+      changedFiles: [{ path: "a.ts", added: 1 }],
     });
     expect(html).not.toContain("<svg");
     expect(html).not.toContain("<img");
+    // Provider identity is quiet screen-reader text, never a visible logo.
+    expect(html).toContain('data-dh-inspector-provider="openai"');
+  });
+
+  it("renders exactly three sections in order: worktree, session, changed-files", () => {
+    const html = render({ worktree: baseWorktree });
+    const wt = html.indexOf('data-dh-inspector-section="worktree"');
+    const ss = html.indexOf('data-dh-inspector-section="session"');
+    const cf = html.indexOf('data-dh-inspector-section="changed-files"');
+    expect(wt).toBeGreaterThanOrEqual(0);
+    expect(wt).toBeLessThan(ss);
+    expect(ss).toBeLessThan(cf);
+    // No diff-forward UI: never a diff viewer / terminal / browser panel.
+    expect(html).not.toContain('role="tablist"');
+    expect(html).not.toContain('role="tabpanel"');
+    expect(html).not.toContain("dh-inspector-diff-scroll");
   });
 });
 
-// --- Environment summary: persistent, compact, NOT a tab -----------------------
+// --- WORKTREE section -----------------------------------------------------------
 
-describe("InspectorDock — persistent Environment summary (not a sixth tab)", () => {
-  it("renders the Environment heading as a summary region, never a tab", () => {
-    const html = render({ environment: baseEnv });
-    expect(html).toContain(`>${INSPECTOR_COPY.environmentHeading}<`);
-    // The Environment region carries no tab role.
-    const env = environmentRegion(html);
-    expect(env).not.toContain('role="tab"');
-    expect(env).toContain('aria-label="Environment"');
-    // M8-PERF-A11Y: axe-core's heading-order rule flagged this as an `<h3>` with
-    // no `<h2>` anywhere earlier in the dock's own subtree (an invalid level-2
-    // jump). It's the ONLY heading the "dock" variant renders, at the same
-    // structural depth as the "disclosure" variant's own top-level `<h2>` — so
-    // `<h2>` is correct here, not `<h3>`.
-    expect(env).toContain(`<h2 class="dh-inspector-env-heading"`);
-    expect(env).not.toContain(`<h3 class="dh-inspector-env-heading"`);
+describe("InspectorDock — WORKTREE section", () => {
+  it("shows the branch, base/project subline and change summary when backed", () => {
+    const html = render({ worktree: baseWorktree });
+    expect(html).toContain(`>${INSPECTOR_COPY.worktreeHeading}<`);
+    expect(html).toContain("feat/inspector");
+    expect(html).toContain("from main @ 9f3c2ea");
+    expect(html).toContain("devhub");
+    expect(html).toContain("2 files · +84 -19");
   });
 
-  it("owns only backed environment/repository/subagent/source rows", () => {
+  it("shows a quiet 'no worktree' state (never a fake branch) when nothing is backed", () => {
+    const html = render({});
+    expect(html).toContain("data-dh-worktree-none");
+    expect(html).toContain(INSPECTOR_COPY.noWorktreeSuffix);
+    // Defaults to the honest `main` label, not a fabricated worktree name.
+    expect(html).toContain("main");
+    expect(html).not.toContain("data-dh-worktree-changes");
+  });
+
+  it("prefixes wt/ and flags the worktree when isWorktree is set", () => {
+    const html = render({ worktree: { branch: "eye2-hotplug", isWorktree: true } });
+    expect(html).toContain("wt/eye2-hotplug");
+    expect(html).toContain("data-dh-worktree");
+  });
+});
+
+// --- SESSION section ------------------------------------------------------------
+
+describe("InspectorDock — SESSION section (backed rows only)", () => {
+  it("renders only the session rows that are backed", () => {
     const html = render({
-      environment: {
-        changes: "2 files · +84 -19",
-        branch: "main",
-        repoActions: [INSPECTOR_COPY.env.commitOrPush, INSPECTOR_COPY.env.createPullRequest],
-        subagents: ["planner"],
-        sources: [INSPECTOR_COPY.env.webSearch],
-      },
+      session: { model: "claude-opus-4-8", permissionMode: "acceptEdits", cost: "$4.87" },
     });
-    const env = environmentRegion(html);
-    expect(env).toContain("2 files · +84 -19");
-    expect(env).toContain("main");
-    expect(env).toContain(INSPECTOR_COPY.env.commitOrPush);
-    expect(env).toContain("planner");
-    expect(env).toContain(INSPECTOR_COPY.env.webSearch);
+    expect(html).toContain(`>${INSPECTOR_COPY.sessionHeading}<`);
+    expect(html).toContain('data-dh-session-row="model"');
+    expect(html).toContain("claude-opus-4-8");
+    expect(html).toContain('data-dh-session-row="permission"');
+    expect(html).toContain('data-dh-session-row="cost"');
+    expect(html).toContain("$4.87");
+    // Unbacked rows do not render (no tokens/started/duration here).
+    expect(html).not.toContain('data-dh-session-row="tokens"');
+    expect(html).not.toContain('data-dh-session-row="started"');
   });
 
-  it("shows 'No active subagents' when none are backed", () => {
-    const env = environmentRegion(render({ environment: { subagents: [] } }));
-    expect(env).toContain(INSPECTOR_COPY.env.noSubagents);
-  });
-
-  it("keeps the Environment region byte-identical when the selected destination changes", () => {
-    const onDiff = environmentRegion(render({ environment: baseEnv, selected: "diff" }));
-    const onFiles = environmentRegion(render({ environment: baseEnv, selected: "files" }));
-    const onArtifacts = environmentRegion(render({ environment: baseEnv, selected: "artifacts" }));
-    expect(onDiff).toBe(onFiles);
-    expect(onDiff).toBe(onArtifacts);
-  });
-
-  it("places the Environment summary ABOVE the tablist and the panel in DOM order", () => {
-    const html = render({ environment: baseEnv, selected: "diff" });
-    const envIdx = html.indexOf("data-dh-inspector-env");
-    const tablistIdx = html.indexOf('role="tablist"');
-    const panelIdx = html.indexOf('role="tabpanel"');
-    expect(envIdx).toBeGreaterThanOrEqual(0);
-    expect(envIdx).toBeLessThan(tablistIdx);
-    expect(tablistIdx).toBeLessThan(panelIdx);
+  it("shows a quiet placeholder when no session state is backed", () => {
+    const html = render({ worktree: baseWorktree });
+    expect(html).toContain("data-dh-session-none");
   });
 });
 
-// --- Exactly five destinations + footer ----------------------------------------
+// --- CHANGED FILES section ------------------------------------------------------
 
-describe("InspectorDock — exactly five destinations and the runtime footer", () => {
-  it("exposes exactly five tabs Diff/Files/Terminal/Browser/Artifacts, in order", () => {
-    expect(INSPECTOR_DESTINATIONS.map((d) => d.label)).toEqual([
-      "Diff",
-      "Files",
-      "Terminal",
-      "Browser",
-      "Artifacts",
-    ]);
-    const html = render({ environment: baseEnv });
-    expect(count(html, 'role="tab"')).toBe(5);
-    for (const d of INSPECTOR_DESTINATIONS) {
-      expect(html).toContain(`data-dh-inspector-tab="${d.id}"`);
-      expect(html).toContain(`>${d.label}</button>`);
-    }
-  });
-
-  it("renders the footer 'Availability follows the task runtime'", () => {
-    const html = render({ environment: baseEnv });
-    expect(html).toContain(INSPECTOR_COPY.footer);
-    expect(INSPECTOR_COPY.footer).toBe("Availability follows the task runtime");
-  });
-});
-
-// --- Tablist + roving focus + tabpanel -----------------------------------------
-
-describe("InspectorDock — tablist roving focus and tabpanel entry", () => {
-  it("nextTabIndex moves Left/Right (wrapping) and jumps Home/End", () => {
-    expect(nextTabIndex("ArrowRight", 0, 5)).toBe(1);
-    expect(nextTabIndex("ArrowRight", 4, 5)).toBe(0); // wraps
-    expect(nextTabIndex("ArrowLeft", 0, 5)).toBe(4); // wraps
-    expect(nextTabIndex("ArrowLeft", 2, 5)).toBe(1);
-    expect(nextTabIndex("Home", 3, 5)).toBe(0);
-    expect(nextTabIndex("End", 1, 5)).toBe(4);
-    // Any other key holds position; empty tablist is -1.
-    expect(nextTabIndex("Enter", 2, 5)).toBe(2);
-    expect(nextTabIndex("ArrowRight", 0, 0)).toBe(-1);
-  });
-
-  it("marks role=tablist with a single roving-tabbable tab (selected = tabIndex 0)", () => {
-    const html = render({ environment: baseEnv, selected: "terminal" });
-    expect(html).toContain('role="tablist"');
-    expect(html).toContain('aria-orientation="horizontal"');
-    // Exactly one tab is in the tab order.
-    expect(count(html, 'tabindex="0"')).toBe(2); // the selected tab + the tabpanel
-    // The selected tab is aria-selected and the tabbable one.
-    const termTabIdx = html.indexOf('data-dh-inspector-tab="terminal"');
-    const termTag = html.slice(html.lastIndexOf("<button", termTabIdx), html.indexOf(">", termTabIdx) + 1);
-    expect(termTag).toContain('aria-selected="true"');
-    expect(termTag).toContain('tabindex="0"');
-  });
-
-  it("only the selected tab has aria-selected=true; the other four are false", () => {
-    const html = render({ environment: baseEnv, selected: "browser" });
-    expect(count(html, 'aria-selected="true"')).toBe(1);
-    expect(count(html, 'aria-selected="false"')).toBe(4);
-  });
-
-  it("puts the tabpanel in the tab order and labels it by the selected tab so Tab enters it", () => {
-    const html = render({ environment: baseEnv, selected: "files" });
-    const panel = tabPanel(html);
-    expect(panel).toContain('role="tabpanel"');
-    expect(panel).toContain('tabindex="0"');
-    expect(panel).toContain('aria-labelledby="dh-inspector-tab-files"');
-    expect(panel).toContain('id="dh-inspector-panel-files"');
-    // And the tab points at the panel.
-    expect(html).toContain('aria-controls="dh-inspector-panel-files"');
-  });
-
-  it("renders exactly ONE destination panel (only the selected one)", () => {
-    const html = render({ environment: baseEnv, selected: "diff" });
-    expect(count(html, 'role="tabpanel"')).toBe(1);
-    expect(html).toContain('data-dh-inspector-panel="diff"');
-    expect(html).not.toContain('data-dh-inspector-panel="files"');
-    expect(html).not.toContain('data-dh-inspector-panel="terminal"');
-  });
-});
-
-// --- Runtime-gated availability -------------------------------------------------
-
-describe("InspectorDock — runtime-gated destination views", () => {
-  it("resolves unsupported → unavailable, disconnected → cached, empty artifacts → empty", () => {
-    expect(computeDestinationView("diff", { supported: false })).toEqual({
-      kind: "unavailable",
-      cause: undefined,
-    });
-    expect(computeDestinationView("diff", { supported: false, cause: "Review not enabled" })).toEqual({
-      kind: "unavailable",
-      cause: "Review not enabled",
-    });
-    expect(computeDestinationView("files", { connection: "disconnected" })).toEqual({ kind: "cached" });
-    expect(computeDestinationView("files", { connection: "stale" })).toEqual({ kind: "cached" });
-    // Empty artifacts is a distinct state, NOT unsupported.
-    expect(computeDestinationView("artifacts", { hasContent: false })).toEqual({ kind: "empty" });
-    expect(computeDestinationView("artifacts", { hasContent: true })).toEqual({ kind: "content" });
-    // Default (all supported/connected) is live content.
-    expect(computeDestinationView("terminal", undefined)).toEqual({ kind: "content" });
-  });
-
-  it("unsupported takes precedence over disconnected", () => {
-    expect(
-      computeDestinationView("browser", { supported: false, connection: "disconnected" }).kind,
-    ).toBe("unavailable");
-  });
-
-  it("shows 'Not available for this task' for a gated destination (with cause when useful)", () => {
-    const gated = render({
-      environment: baseEnv,
-      selected: "browser",
-      runtime: { browser: { supported: false } },
-    });
-    expect(gated).toContain(INSPECTOR_COPY.notAvailable);
-    expect(gated).toContain("data-dh-inspector-unavailable");
-
-    const withCause = render({
-      environment: baseEnv,
-      selected: "diff",
-      runtime: { diff: { supported: false, cause: "Codex review not product-enabled" } },
-    });
-    expect(withCause).toContain("Not available for this task — Codex review not product-enabled");
-    expect(unavailableMessage()).toBe("Not available for this task");
-    expect(unavailableMessage("cause")).toBe("Not available for this task — cause");
-  });
-
-  it("shows 'No artifacts' (distinct from unsupported) for empty but supported Artifacts", () => {
+describe("InspectorDock — CHANGED FILES section (names + deltas, no diff hunks)", () => {
+  it("lists each changed file path with its +/- deltas", () => {
     const html = render({
-      environment: baseEnv,
-      selected: "artifacts",
-      runtime: { artifacts: { hasContent: false } },
-      content: { artifacts: [] },
+      changedFiles: [
+        { path: "packages/engine/src/types.ts", added: 12, removed: 3 },
+        { path: "apps/web/src/App.tsx", added: 4 },
+      ],
     });
-    expect(html).toContain(INSPECTOR_COPY.noArtifacts);
-    expect(html).toContain("data-dh-inspector-no-artifacts");
-    // It is NOT the unsupported message.
-    expect(html).not.toContain(INSPECTOR_COPY.notAvailable);
-    expect(INSPECTOR_COPY.noArtifacts).not.toBe(INSPECTOR_COPY.notAvailable);
+    expect(html).toContain(`>${INSPECTOR_COPY.changedFilesHeading}<`);
+    expect(html).toContain("packages/engine/src/types.ts");
+    expect(html).toContain("+12");
+    expect(html).toContain("-3");
+    expect(html).toContain("apps/web/src/App.tsx");
+    // Never a diff hunk — just the deltas.
+    expect(html).not.toContain("dh-inspector-diff");
   });
 
-  it("populated Artifacts lists label+source from real events", () => {
-    const html = render({
-      environment: baseEnv,
-      selected: "artifacts",
-      runtime: { artifacts: { hasContent: true } },
-      content: { artifacts: [{ label: "Build report", source: "ci" }, { label: "Screenshot", source: "browser" }] },
-    });
-    expect(html).toContain("Build report");
-    expect(html).toContain("Screenshot");
-    expect(html).not.toContain(INSPECTOR_COPY.noArtifacts);
-  });
-});
-
-// --- Terminal: provider output only, never an unsandboxed shell ----------------
-
-describe("InspectorDock — Terminal is provider-emitted output only", () => {
-  it("renders provider output with no input/prompt and never invokes an unsandboxed shell", () => {
-    const html = render({
-      environment: baseEnv,
-      selected: "terminal",
-      content: { terminal: ["pnpm test", "622 passed"] },
-    });
-    const panel = tabPanel(html);
-    expect(panel).toContain("pnpm test");
-    expect(panel).toContain("622 passed");
-    // No interactive shell input anywhere in the terminal panel.
-    expect(panel).not.toContain("<input");
-    expect(panel).not.toContain("<textarea");
-    expect(panel).not.toContain("<button");
-    // Never references the raw shell-command tool.
-    expect(html.toLowerCase()).not.toContain("shellcommand");
-    expect(html).not.toContain("thread/shellCommand");
+  it("shows 'No changes' when the changed-files list is empty", () => {
+    const html = render({ changedFiles: [] });
+    expect(html).toContain(INSPECTOR_COPY.noChanges);
+    expect(html).toContain("data-dh-changed-none");
   });
 
-  it("an empty terminal is honestly unavailable, not a fabricated shell prompt", () => {
-    const html = render({ environment: baseEnv, selected: "terminal", content: { terminal: [] } });
-    const panel = tabPanel(html);
-    expect(panel).toContain(INSPECTOR_COPY.notAvailable);
-    expect(panel).not.toContain("$ ");
-  });
-});
-
-// --- Browser: only a real browser runtime --------------------------------------
-
-describe("InspectorDock — Browser updates only from a real browser runtime", () => {
-  it("shows page/url only when real browser activity exists, else unavailable", () => {
-    const withActivity = render({
-      environment: baseEnv,
-      selected: "browser",
-      content: { browser: { title: "Docs", url: "https://example.test/docs" } },
-    });
-    expect(withActivity).toContain("Docs");
-    expect(withActivity).toContain("https://example.test/docs");
-
-    const noActivity = render({ environment: baseEnv, selected: "browser", content: { browser: {} } });
-    expect(tabPanel(noActivity)).toContain(INSPECTOR_COPY.notAvailable);
-  });
-});
-
-// --- Disconnected: cached read --------------------------------------------------
-
-describe("InspectorDock — disconnected panels read cached", () => {
-  it("shows the cached note when the panel's transport is disconnected", () => {
-    const html = render({
-      environment: baseEnv,
-      selected: "diff",
-      runtime: { diff: { connection: "disconnected" } },
-      content: { diff: { files: ["packages/engine/src/providers/types.ts"], summary: "1 file · +4 -1" } },
-    });
-    expect(html).toContain(INSPECTOR_COPY.cachedNote);
-    expect(html).toContain("data-dh-inspector-cached");
-    expect(INSPECTOR_COPY.cachedNote).toBe("Showing cached data — reconnect to refresh.");
-    // The cached content is still readable.
-    expect(html).toContain("packages/engine/src/providers/types.ts");
-  });
-});
-
-// --- Destructive actions: explicit confirmation, never in a tab ----------------
-
-describe("InspectorDock — destructive actions are confirmed outside the tab", () => {
-  it("describes a discard/unstage/worktree-deletion confirmation with focus on Cancel", () => {
-    const c = describeDestructiveConfirmation("delete-worktree", "wip/inspector");
-    expect(c.rendersInTab).toBe(false);
-    expect(c.initialFocus).toBe("cancel");
-    expect(c.cancelLabel).toBe("Cancel");
-    expect(c.target).toBe("wip/inspector");
-    // Names the target and states the provider task is unaffected.
-    expect(c.title).toContain("wip/inspector");
-    expect(c.body.toLowerCase()).toContain("provider task is unaffected");
-    expect(describeDestructiveConfirmation("discard", "a.ts").title).toContain("Discard");
-    expect(describeDestructiveConfirmation("unstage", "b.ts").title).toContain("Unstage");
+  it("renders file rows as buttons and fires onOpenFile on click", async () => {
+    const user = userEvent.setup();
+    const onOpenFile = vi.fn();
+    rtlRender(
+      createElement(InspectorDock, {
+        changedFiles: [{ path: "a.ts", added: 1 }],
+        onOpenFile,
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: /a\.ts/ }));
+    expect(onOpenFile).toHaveBeenCalledWith("a.ts");
   });
 
-  it("never renders a destructive control inside any destination tabpanel", () => {
-    for (const dest of INSPECTOR_DESTINATIONS.map((d) => d.id)) {
-      const html = render({
-        environment: baseEnv,
-        selected: dest,
-        content: {
-          diff: { files: ["a.ts"], summary: "1 file · +1 -0", lines: ["+ added"] },
-          files: [{ path: "a.ts", selected: true }],
-          terminal: ["pnpm test"],
-          browser: { title: "t", url: "u" },
-          artifacts: [{ label: "Build report", source: "ci" }],
-        },
-      });
-      const panel = tabPanel(html);
-      for (const banned of ["Discard", "Unstage", "Delete worktree", "delete-worktree"]) {
-        expect(panel).not.toContain(banned);
-      }
-    }
-  });
-});
-
-// --- ScrollArea only inside a bounded diff -------------------------------------
-
-describe("InspectorDock — ScrollArea only inside a bounded diff", () => {
-  it("only the diff panel carries a scroll region", () => {
-    const diff = render({
-      environment: baseEnv,
-      selected: "diff",
-      content: { diff: { files: ["a.ts"], lines: ["+ a", "- b"], summary: "1 file · +1 -1" } },
-    });
-    expect(diff).toContain("data-dh-diff-scroll");
-
-    for (const dest of ["files", "terminal", "browser", "artifacts"] as const) {
-      const html = render({
-        environment: baseEnv,
-        selected: dest,
-        content: {
-          files: [{ path: "a.ts" }],
-          terminal: ["pnpm test"],
-          browser: { title: "t", url: "u" },
-          artifacts: [{ label: "Build report", source: "ci" }],
-        },
-      });
-      expect(tabPanel(html)).not.toContain("data-dh-diff-scroll");
-    }
+  it("renders file rows as plain text (not buttons) when no onOpenFile handler is given", () => {
+    const html = render({ changedFiles: [{ path: "a.ts" }] });
+    expect(html).toContain('data-dh-file="a.ts"');
+    expect(html).not.toContain("dh-inspector-file--action");
   });
 });
 
 // --- Narrow / PWA disclosure ----------------------------------------------------
 
 describe("InspectorDock — narrow/PWA disclosure variant", () => {
-  it("renders a titled 'Desktop required for terminal and diff' disclosure, not the full dock", () => {
-    const html = render({ environment: baseEnv, variant: "disclosure", label: "Task inspector" });
+  it("renders a titled desktop-required disclosure, not the full dock", () => {
+    const html = render({ variant: "disclosure", label: "Task inspector" });
     expect(html).toContain(INSPECTOR_COPY.desktopRequired);
-    expect(INSPECTOR_COPY.desktopRequired).toBe("Desktop required for terminal and diff");
-    // A title is present.
     expect(html).toContain("data-dh-inspector-disclosure-title");
     expect(html).toContain(">Task inspector<");
-    // NOT the full desktop dock: no tablist, no terminal panel.
-    expect(html).not.toContain('role="tablist"');
-    expect(html).not.toContain('role="tabpanel"');
+    // NOT the full desktop dock.
+    expect(html).not.toContain("dh-inspector-dock");
+    expect(html).not.toContain('data-dh-inspector-section="worktree"');
   });
 });
 
@@ -496,83 +232,23 @@ describe("inspectorDock slice-flag gate", () => {
   });
 });
 
-/** A stateful host: owns `selected` and moves real DOM focus to the newly-active tab —
- * the roving-focus behavior a live host layers on top of InspectorDock's pure wiring. */
-function RovingDock({ onSelect }: { onSelect?: (id: string) => void }) {
-  const [selected, setSelected] = useState<InspectorDockProps["selected"]>("diff");
-  const tablistRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const active = tablistRef.current?.querySelector<HTMLElement>('[role="tab"][tabindex="0"]');
-    active?.focus();
-  }, [selected]);
-  return createElement(
-    "div",
-    { ref: tablistRef },
-    createElement(InspectorDock, {
-      selected,
-      onSelectDestination: (id) => {
-        setSelected(id);
-        onSelect?.(id);
-      },
-    }),
-  );
-}
+// --- nextTabIndex stays the shared roving-focus helper (settings-ui reuses it) ---
 
-describe("InspectorDock — live interaction (mounted DOM, roving tablist)", () => {
-  it("clicking a tab selects it and switches the visible tabpanel", async () => {
-    const user = userEvent.setup();
-    rtlRender(createElement(RovingDock));
-    await user.click(screen.getByRole("tab", { name: "Files" }));
-    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "files");
+describe("nextTabIndex — shared roving-focus math", () => {
+  it("moves Left/Right (wrapping) and jumps Home/End", () => {
+    expect(nextTabIndex("ArrowRight", 0, 5)).toBe(1);
+    expect(nextTabIndex("ArrowRight", 4, 5)).toBe(0);
+    expect(nextTabIndex("ArrowLeft", 0, 5)).toBe(4);
+    expect(nextTabIndex("ArrowLeft", 2, 5)).toBe(1);
+    expect(nextTabIndex("Home", 3, 5)).toBe(0);
+    expect(nextTabIndex("End", 1, 5)).toBe(4);
+    expect(nextTabIndex("Enter", 2, 5)).toBe(2);
+    expect(nextTabIndex("ArrowRight", 0, 0)).toBe(-1);
   });
+});
 
-  it("ArrowRight/ArrowLeft roves focus and selection across the five destinations, wrapping at the ends", async () => {
-    const user = userEvent.setup();
-    const onSelect = vi.fn();
-    rtlRender(createElement(RovingDock, { onSelect }));
-
-    const diffTab = screen.getByRole("tab", { name: "Diff" });
-    diffTab.focus();
-    expect(diffTab).toHaveFocus();
-
-    await user.keyboard("{ArrowRight}");
-    expect(onSelect).toHaveBeenLastCalledWith("files");
-    expect(screen.getByRole("tab", { name: "Files" })).toHaveFocus();
-    expect(screen.getByRole("tab", { name: "Files" })).toHaveAttribute("tabindex", "0");
-    expect(screen.getByRole("tab", { name: "Diff" })).toHaveAttribute("tabindex", "-1");
-
-    // Left from Files wraps back to Diff... then Left again wraps to the last (Artifacts).
-    await user.keyboard("{ArrowLeft}");
-    expect(onSelect).toHaveBeenLastCalledWith("diff");
-    await user.keyboard("{ArrowLeft}");
-    expect(onSelect).toHaveBeenLastCalledWith("artifacts");
-    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveFocus();
-  });
-
-  it("Home/End jump focus+selection to the first/last destination", async () => {
-    const user = userEvent.setup();
-    rtlRender(createElement(RovingDock));
-    screen.getByRole("tab", { name: "Files" }).focus();
-
-    await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveFocus();
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "artifacts");
-
-    await user.keyboard("{Home}");
-    expect(screen.getByRole("tab", { name: "Diff" })).toHaveFocus();
-    expect(screen.getByRole("tabpanel")).toHaveAttribute("data-dh-inspector-panel", "diff");
-  });
-
-  it("only ever exposes exactly one tab (tabIndex 0) in the roving tab order at a time", async () => {
-    const user = userEvent.setup();
-    rtlRender(createElement(RovingDock));
-    const tablist = screen.getByRole("tablist");
-    await user.click(within(tablist).getByRole("tab", { name: "Terminal" }));
-    const zeroTabIndex = within(tablist)
-      .getAllByRole("tab")
-      .filter((t) => t.getAttribute("tabindex") === "0");
-    expect(zeroTabIndex).toHaveLength(1);
-    expect(zeroTabIndex[0]).toHaveTextContent("Terminal");
+describe("InspectorDock — single dock container", () => {
+  it("renders exactly one dock container", () => {
+    expect(count(render({ worktree: baseWorktree }), 'data-dh-inspector-dock=""')).toBe(1);
   });
 });

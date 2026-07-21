@@ -91,9 +91,8 @@ import { OpsRoute } from "./components/features/ops/OpsRoute";
 import { WorkModeSurface } from "./components/features/shell/WorkModeSurface";
 import { InboxRoute } from "./components/features/inbox/InboxRoute";
 import {
-  buildDiffContent,
+  buildChangedFiles,
   buildEnvironmentSummary,
-  buildFilesContent,
   buildTaskRailSections,
   deriveRunStatus,
   groupSessionsByRunStatus,
@@ -608,9 +607,6 @@ export default function App() {
   // Environment summary + branch row. Null means "no repo / not fetched yet" — the
   // dock renders that honestly (an omitted row), never a placeholder value.
   const [browseGitStatus, setBrowseGitStatus] = useState<GitStatus | null>(null);
-  const [browseInspectorSelected, setBrowseInspectorSelected] = useState<
-    "diff" | "files" | "terminal" | "browser" | "artifacts"
-  >("diff");
   // The Commands `Toggle inspector` action (M6 slice 7) flips this; it only has an
   // effect where `inspectorDock` is actually mounted (Browse/Chat).
   const [inspectorVisible, setInspectorVisible] = useState(true);
@@ -2078,21 +2074,20 @@ export default function App() {
                       />
                     )}
                   </div>
-                  {/* M6 slice 6 (Task 9 data-wire): the devhub InspectorDock absorbs the
-                      legacy `GitPanel`/`FileChangeSummary` (normally mounted inside
-                      `TranscriptPane`) only for `inspectorDock===true`. Terminal/Browser/
-                      Artifacts have no backing runtime in Browse, so they honestly render
-                      "Not available"/"No artifacts" — never a faked capability. */}
+                  {/* Aurora Cockpit §3.3: the devhub InspectorDock shows the session's
+                      WORKTREE (branch + change summary), SESSION state (model), and the
+                      CHANGED-FILES list — NO diff-forward UI. Browse is read-only history,
+                      so every row is backed by real repo/session data or omitted. */}
                   {inspectorDockMode === "devhub" && inspectorVisible ? (
                     <InspectorDock
                       provider="anthropic"
-                      selected={browseInspectorSelected}
-                      onSelectDestination={setBrowseInspectorSelected}
-                      environment={buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? []))}
-                      content={{
-                        diff: buildDiffContent(buildFileChanges(page?.messages ?? [])),
-                        files: buildFilesContent(buildFileChanges(page?.messages ?? [])),
+                      worktree={{
+                        branch: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? [])).branch,
+                        changesSummary: buildEnvironmentSummary(browseGitStatus, buildFileChanges(page?.messages ?? [])).changes,
+                        project: project?.name,
                       }}
+                      session={{ model: page?.session?.model ?? undefined }}
+                      changedFiles={buildChangedFiles(buildFileChanges(page?.messages ?? []))}
                     />
                   ) : null}
                 </div>

@@ -1,5 +1,4 @@
-import type { FileEntry } from "../components/features/inspectors/InspectorDock.js";
-import type { DiffContent, EnvironmentSummary } from "../components/features/inspectors/InspectorDock.js";
+import type { InspectorChangedFile } from "../components/features/inspectors/InspectorDock.js";
 import type {
   ProviderId,
   SearchNavigationTarget,
@@ -168,11 +167,19 @@ export interface FileChangeLike {
 }
 
 /**
- * Build the InspectorDock's persistent Environment summary from REAL repository
- * status + the transcript's own aggregated file changes. Every row is backed: a
- * `null`/absent `gitStatus` (no cwd, or the git read hasn't landed yet) means the
- * branch/changes rows are simply omitted — never a placeholder value.
+ * The InspectorDock's WORKTREE summary, derived from REAL repository status + the
+ * transcript's aggregated file changes. Local shape (branch + changes) — the dock's
+ * `InspectorWorktree` prop is built from this at the call site. Every field is
+ * backed: a `null`/absent `gitStatus` (no cwd, or the git read hasn't landed yet)
+ * means `branch` is omitted; no file changes means `changes` is omitted — never a
+ * placeholder value.
  */
+export interface EnvironmentSummary {
+  branch?: string;
+  changes?: string;
+}
+
+/** Aurora Cockpit §3.3: build the WORKTREE section's branch + change summary. */
 export function buildEnvironmentSummary(
   gitStatus: GitStatus | null,
   fileChanges: readonly FileChangeLike[],
@@ -189,24 +196,13 @@ export function buildEnvironmentSummary(
   return env;
 }
 
-/** Build the Diff destination's content from the transcript's aggregated file changes. */
-export function buildDiffContent(fileChanges: readonly FileChangeLike[]): DiffContent {
-  const totals = fileChanges.reduce(
-    (acc, c) => ({ added: acc.added + c.added, removed: acc.removed + c.removed }),
-    { added: 0, removed: 0 },
-  );
-  return {
-    files: fileChanges.map((c) => c.filePath),
-    summary:
-      fileChanges.length > 0
-        ? `${fileChanges.length} ${fileChanges.length === 1 ? "file" : "files"} · +${totals.added} -${totals.removed}`
-        : undefined,
-  };
-}
-
-/** Build the Files destination's content from the transcript's aggregated file changes. */
-export function buildFilesContent(fileChanges: readonly FileChangeLike[]): FileEntry[] {
-  return fileChanges.map((c) => ({ path: c.filePath }));
+/**
+ * Build the InspectorDock CHANGED-FILES section (§3.3): file path + line deltas only,
+ * NO diff hunks (owner: no diff-forward UI in chat). Derived from the transcript's
+ * aggregated file changes; empty in → empty out (the dock shows `No changes`).
+ */
+export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): InspectorChangedFile[] {
+  return fileChanges.map((c) => ({ path: c.filePath, added: c.added, removed: c.removed }));
 }
 
 /**

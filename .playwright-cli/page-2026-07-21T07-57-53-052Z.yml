@@ -1,0 +1,1061 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - link "Skip to main content" [ref=e5] [cursor=pointer]:
+      - /url: "#dh-main"
+    - navigation "Primary navigation" [ref=e6]:
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - generic "DevHub" [ref=e10]
+          - button "Home" [ref=e11] [cursor=pointer]:
+            - img [ref=e12]
+            - generic: gh
+          - button "Browse" [ref=e15] [cursor=pointer]:
+            - img [ref=e16]
+            - generic: gb
+          - button "Chat" [ref=e18] [cursor=pointer]:
+            - img [ref=e19]
+            - generic: gc
+          - button "New OpenAI Chat" [ref=e21] [cursor=pointer]:
+            - img [ref=e22]
+            - generic: gn
+          - button "Codex" [ref=e176] [cursor=pointer]:
+            - img [ref=e26]
+            - generic: gx
+          - button "Dashboard" [ref=e30] [cursor=pointer]:
+            - img [ref=e31]
+            - generic: gu
+          - button "Live Ops" [ref=e36] [cursor=pointer]:
+            - img [ref=e37]
+            - generic: go
+          - button "Spatial" [ref=e43] [cursor=pointer]:
+            - img [ref=e44]
+            - generic: ge
+          - button "Progress" [ref=e46] [cursor=pointer]:
+            - img [ref=e47]
+            - generic: gp
+          - button "Scheduled Jobs" [ref=e52] [cursor=pointer]:
+            - img [ref=e53]
+            - generic: ga
+          - button "Inbox" [ref=e56] [cursor=pointer]:
+            - img [ref=e57]
+            - generic: gi
+          - generic "Spend 0% of budget" [ref=e177]: "0"
+          - button "Settings" [ref=e60] [cursor=pointer]:
+            - img [ref=e61]
+            - generic: g,
+        - generic [ref=e64]:
+          - generic [ref=e65]:
+            - generic [ref=e66]: Sessions
+            - generic [ref=e67]: 334 open
+            - button "New session" [ref=e68] [cursor=pointer]:
+              - img [ref=e69]
+          - generic [ref=e70]:
+            - img [ref=e71]
+            - textbox "Filter sessions" [ref=e74]
+            - generic [ref=e75]: /
+          - group "Session filters" [ref=e76]:
+            - button "All" [pressed] [ref=e77] [cursor=pointer]
+            - button "Running" [ref=e78] [cursor=pointer]
+            - button "Review" [ref=e79] [cursor=pointer]
+            - button "Claude" [ref=e80] [cursor=pointer]
+            - button "Codex" [ref=e81] [cursor=pointer]
+          - generic [ref=e82]:
+            - generic [ref=e178]:
+              - generic [ref=e179]:
+                - generic [ref=e180]: Running
+                - generic [ref=e181]: "1"
+              - button "Analyze priorities from recent activity CLD 00-6thsense · ⎇ HEAD $2.54 4h" [ref=e182] [cursor=pointer]:
+                - generic [ref=e183]:
+                  - generic [ref=e185]: Analyze priorities from recent activity
+                  - generic "Claude" [ref=e186]: CLD
+                - generic [ref=e187]:
+                  - generic [ref=e188]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e189]: $2.54
+                  - generic [ref=e190]: 4h
+            - generic [ref=e191]:
+              - generic [ref=e192]:
+                - generic [ref=e193]: Needs review
+                - generic [ref=e194]: "4"
+              - button "Test app with Jetson, camera, and gloves for Pearl deployment CLD 00-6thsense · ⎇ HEAD $611.95 26s" [ref=e1263] [cursor=pointer]:
+                - generic [ref=e196]:
+                  - generic [ref=e198]: Test app with Jetson, camera, and gloves for Pearl deployment
+                  - generic "Claude" [ref=e199]: CLD
+                - generic [ref=e200]:
+                  - generic [ref=e201]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e202]: $611.95
+                  - generic [ref=e203]: 26s
+              - button "Resume 6thSense fleet for overnight run CLD 00-6thsense · ⎇ HEAD $964.84 1m" [ref=e1264] [cursor=pointer]:
+                - generic [ref=e205]:
+                  - generic [ref=e207]: Resume 6thSense fleet for overnight run
+                  - generic "Claude" [ref=e208]: CLD
+                - generic [ref=e209]:
+                  - generic [ref=e210]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e211]: $964.84
+                  - generic [ref=e212]: 1m
+              - button "Prepare OrcaHand hardware for 3D printing CLD 00-6thsense · ⎇ HEAD $1.42 1h" [ref=e213] [cursor=pointer]:
+                - generic [ref=e214]:
+                  - generic [ref=e216]: Prepare OrcaHand hardware for 3D printing
+                  - generic "Claude" [ref=e217]: CLD
+                - generic [ref=e218]:
+                  - generic [ref=e219]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e220]: $1.42
+                  - generic [ref=e221]: 1h
+              - button "Resume 6thSense fleet for overnight run CLD 00-6thsense · ⎇ HEAD $1405.98 2d" [ref=e222] [cursor=pointer]:
+                - generic [ref=e223]:
+                  - generic [ref=e225]: Resume 6thSense fleet for overnight run
+                  - generic "Claude" [ref=e226]: CLD
+                - generic [ref=e227]:
+                  - generic [ref=e228]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e229]: $1405.98
+                  - generic [ref=e230]: 2d
+            - generic [ref=e231]:
+              - generic [ref=e232]:
+                - generic [ref=e233]: Idle / Recent
+                - generic [ref=e234]: "49"
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $2.00 46m" [ref=e235] [cursor=pointer]:
+                - generic [ref=e236]:
+                  - generic [ref=e237]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e238]: CLD
+                - generic [ref=e239]:
+                  - generic [ref=e240]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e241]: $2.00
+                  - generic [ref=e242]: 46m
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $2.41 1d" [ref=e243] [cursor=pointer]:
+                - generic [ref=e244]:
+                  - generic [ref=e245]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e246]: CLD
+                - generic [ref=e247]:
+                  - generic [ref=e248]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e249]: $2.41
+                  - generic [ref=e250]: 1d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $2.08 2d" [ref=e251] [cursor=pointer]:
+                - generic [ref=e252]:
+                  - generic [ref=e253]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e254]: CLD
+                - generic [ref=e255]:
+                  - generic [ref=e256]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e257]: $2.08
+                  - generic [ref=e258]: 2d
+              - button "check this again btw i think now they shoul dbe done right? CLD 00-6thsense · ⎇ HEAD $103.25 2d" [ref=e259] [cursor=pointer]:
+                - generic [ref=e260]:
+                  - generic [ref=e261]: check this again btw i think now they shoul dbe done right?
+                  - generic "Claude" [ref=e262]: CLD
+                - generic [ref=e263]:
+                  - generic [ref=e264]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e265]: $103.25
+                  - generic [ref=e266]: 2d
+              - button "Integrate Google Drive with OpenClaw context CLD 00-6thsense · ⎇ HEAD $494.49 2d" [ref=e267] [cursor=pointer]:
+                - generic [ref=e268]:
+                  - generic [ref=e269]: Integrate Google Drive with OpenClaw context
+                  - generic "Claude" [ref=e270]: CLD
+                - generic [ref=e271]:
+                  - generic [ref=e272]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e273]: $494.49
+                  - generic [ref=e274]: 2d
+              - button "Create a system for crafting detailed effective prompts CLD 00-6thsense · ⎇ HEAD $5.62 2d" [ref=e275] [cursor=pointer]:
+                - generic [ref=e276]:
+                  - generic [ref=e277]: Create a system for crafting detailed effective prompts
+                  - generic "Claude" [ref=e278]: CLD
+                - generic [ref=e279]:
+                  - generic [ref=e280]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e281]: $5.62
+                  - generic [ref=e282]: 2d
+              - button "Review capture-companion app architecture and state CLD 00-6thsense · ⎇ HEAD $198.96 2d" [ref=e283] [cursor=pointer]:
+                - generic [ref=e284]:
+                  - generic [ref=e285]: Review capture-companion app architecture and state
+                  - generic "Claude" [ref=e286]: CLD
+                - generic [ref=e287]:
+                  - generic [ref=e288]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e289]: $198.96
+                  - generic [ref=e290]: 2d
+              - button "Prepare for Renaud call at 1am CLD 00-6thsense · ⎇ HEAD $320.59 2d" [ref=e291] [cursor=pointer]:
+                - generic [ref=e292]:
+                  - generic [ref=e293]: Prepare for Renaud call at 1am
+                  - generic "Claude" [ref=e294]: CLD
+                - generic [ref=e295]:
+                  - generic [ref=e296]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e297]: $320.59
+                  - generic [ref=e298]: 2d
+              - button "continue CLD 00-6thsense · ⎇ HEAD $6.19 2d" [ref=e299] [cursor=pointer]:
+                - generic [ref=e300]:
+                  - generic [ref=e301]: continue
+                  - generic "Claude" [ref=e302]: CLD
+                - generic [ref=e303]:
+                  - generic [ref=e304]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e305]: $6.19
+                  - generic [ref=e306]: 2d
+              - button "continue CLD 00-6thsense · ⎇ HEAD 2d" [ref=e307] [cursor=pointer]:
+                - generic [ref=e308]:
+                  - generic [ref=e309]: continue
+                  - generic "Claude" [ref=e310]: CLD
+                - generic [ref=e311]:
+                  - generic [ref=e312]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e313]: 2d
+              - button "Plan camera app and website fixes CLD 00-6thsense · ⎇ HEAD $1462.97 2d" [ref=e314] [cursor=pointer]:
+                - generic [ref=e315]:
+                  - generic [ref=e316]: Plan camera app and website fixes
+                  - generic "Claude" [ref=e317]: CLD
+                - generic [ref=e318]:
+                  - generic [ref=e319]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e320]: $1462.97
+                  - generic [ref=e321]: 2d
+              - button "Review capture-companion app architecture and state CLD 00-6thsense · ⎇ HEAD $585.64 2d" [ref=e322] [cursor=pointer]:
+                - generic [ref=e323]:
+                  - generic [ref=e324]: Review capture-companion app architecture and state
+                  - generic "Claude" [ref=e325]: CLD
+                - generic [ref=e326]:
+                  - generic [ref=e327]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e328]: $585.64
+                  - generic [ref=e329]: 2d
+              - button "Integrate Google Drive with OpenClaw context CLD 00-6thsense · ⎇ HEAD $294.28 2d" [ref=e330] [cursor=pointer]:
+                - generic [ref=e331]:
+                  - generic [ref=e332]: Integrate Google Drive with OpenClaw context
+                  - generic "Claude" [ref=e333]: CLD
+                - generic [ref=e334]:
+                  - generic [ref=e335]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e336]: $294.28
+                  - generic [ref=e337]: 2d
+              - button "Prepare for Autonomous event with detailed strategy CLD 00-6thsense · ⎇ HEAD $335.07 2d" [ref=e338] [cursor=pointer]:
+                - generic [ref=e339]:
+                  - generic [ref=e340]: Prepare for Autonomous event with detailed strategy
+                  - generic "Claude" [ref=e341]: CLD
+                - generic [ref=e342]:
+                  - generic [ref=e343]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e344]: $335.07
+                  - generic [ref=e345]: 2d
+              - button "Assess feasibility of 3D printing SOARM robotic arm CLD 00-6thsense · ⎇ HEAD $37.37 2d" [ref=e346] [cursor=pointer]:
+                - generic [ref=e347]:
+                  - generic [ref=e348]: Assess feasibility of 3D printing SOARM robotic arm
+                  - generic "Claude" [ref=e349]: CLD
+                - generic [ref=e350]:
+                  - generic [ref=e351]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e352]: $37.37
+                  - generic [ref=e353]: 2d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $2.25 3d" [ref=e354] [cursor=pointer]:
+                - generic [ref=e355]:
+                  - generic [ref=e356]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e357]: CLD
+                - generic [ref=e358]:
+                  - generic [ref=e359]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e360]: $2.25
+                  - generic [ref=e361]: 3d
+              - button "Read the file \"Gmail Cleanup — Handoff for Claude Code.md\" in my Downloads folder for full context on a Gmail cleanup pr CLD 00-6thsense · ⎇ HEAD $15.61 3d" [ref=e362] [cursor=pointer]:
+                - generic [ref=e363]:
+                  - generic [ref=e364]: Read the file "Gmail Cleanup — Handoff for Claude Code.md" in my Downloads folder for full context on a Gmail cleanup pr
+                  - generic "Claude" [ref=e365]: CLD
+                - generic [ref=e366]:
+                  - generic [ref=e367]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e368]: $15.61
+                  - generic [ref=e369]: 3d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $1.51 4d" [ref=e370] [cursor=pointer]:
+                - generic [ref=e371]:
+                  - generic [ref=e372]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e373]: CLD
+                - generic [ref=e374]:
+                  - generic [ref=e375]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e376]: $1.51
+                  - generic [ref=e377]: 4d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $1.76 5d" [ref=e378] [cursor=pointer]:
+                - generic [ref=e379]:
+                  - generic [ref=e380]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e381]: CLD
+                - generic [ref=e382]:
+                  - generic [ref=e383]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e384]: $1.76
+                  - generic [ref=e385]: 5d
+              - button "Evaluate Sarcomere Dynamics outreach opportunity CLD 00-6thsense · ⎇ HEAD $8.61 5d" [ref=e386] [cursor=pointer]:
+                - generic [ref=e387]:
+                  - generic [ref=e388]: Evaluate Sarcomere Dynamics outreach opportunity
+                  - generic "Claude" [ref=e389]: CLD
+                - generic [ref=e390]:
+                  - generic [ref=e391]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e392]: $8.61
+                  - generic [ref=e393]: 5d
+              - button "00-6thsense CLD 00-6thsense · ⎇ HEAD 5d" [ref=e394] [cursor=pointer]:
+                - generic [ref=e395]:
+                  - generic [ref=e396]: 00-6thsense
+                  - generic "Claude" [ref=e397]: CLD
+                - generic [ref=e398]:
+                  - generic [ref=e399]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e400]: 5d
+              - button "Estimate dev hours for autonomous life systems CLD 00-6thsense · ⎇ HEAD $873.27 5d" [ref=e401] [cursor=pointer]:
+                - generic [ref=e402]:
+                  - generic [ref=e403]: Estimate dev hours for autonomous life systems
+                  - generic "Claude" [ref=e404]: CLD
+                - generic [ref=e405]:
+                  - generic [ref=e406]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e407]: $873.27
+                  - generic [ref=e408]: 5d
+              - button "I'm gonna give you a huge ass transcript of what I was about to have another chat Claude code session do, but I want you CLD 00-6thsense · ⎇ HEAD $265.28 5d" [ref=e409] [cursor=pointer]:
+                - generic [ref=e410]:
+                  - generic [ref=e411]: I'm gonna give you a huge ass transcript of what I was about to have another chat Claude code session do, but I want you
+                  - generic "Claude" [ref=e412]: CLD
+                - generic [ref=e413]:
+                  - generic [ref=e414]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e415]: $265.28
+                  - generic [ref=e416]: 5d
+              - 'button "Reply with exactly one word: ok CLD 00-6thsense · ⎇ HEAD $0.05 5d" [ref=e417] [cursor=pointer]':
+                - generic [ref=e418]:
+                  - generic [ref=e419]: "Reply with exactly one word: ok"
+                  - generic "Claude" [ref=e420]: CLD
+                - generic [ref=e421]:
+                  - generic [ref=e422]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e423]: $0.05
+                  - generic [ref=e424]: 5d
+              - button "Organize and visualize active skills by system and category CLD 00-6thsense · ⎇ HEAD $151.13 5d" [ref=e425] [cursor=pointer]:
+                - generic [ref=e426]:
+                  - generic [ref=e427]: Organize and visualize active skills by system and category
+                  - generic "Claude" [ref=e428]: CLD
+                - generic [ref=e429]:
+                  - generic [ref=e430]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e431]: $151.13
+                  - generic [ref=e432]: 5d
+              - button "reply with exactly OK CLD 00-6thsense · ⎇ HEAD 5d" [ref=e433] [cursor=pointer]:
+                - generic [ref=e434]:
+                  - generic [ref=e435]: reply with exactly OK
+                  - generic "Claude" [ref=e436]: CLD
+                - generic [ref=e437]:
+                  - generic [ref=e438]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e439]: 5d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $1.63 6d" [ref=e440] [cursor=pointer]:
+                - generic [ref=e441]:
+                  - generic [ref=e442]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e443]: CLD
+                - generic [ref=e444]:
+                  - generic [ref=e445]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e446]: $1.63
+                  - generic [ref=e447]: 6d
+              - button "Estimate dev hours for autonomous life systems CLD 00-6thsense · ⎇ HEAD $1285.95 6d" [ref=e448] [cursor=pointer]:
+                - generic [ref=e449]:
+                  - generic [ref=e450]: Estimate dev hours for autonomous life systems
+                  - generic "Claude" [ref=e451]: CLD
+                - generic [ref=e452]:
+                  - generic [ref=e453]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e454]: $1285.95
+                  - generic [ref=e455]: 6d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $1.47 7d" [ref=e456] [cursor=pointer]:
+                - generic [ref=e457]:
+                  - generic [ref=e458]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e459]: CLD
+                - generic [ref=e460]:
+                  - generic [ref=e461]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e462]: $1.47
+                  - generic [ref=e463]: 7d
+              - button "Create a system for crafting detailed effective prompts CLD 00-6thsense · ⎇ HEAD $1.26 7d" [ref=e464] [cursor=pointer]:
+                - generic [ref=e465]:
+                  - generic [ref=e466]: Create a system for crafting detailed effective prompts
+                  - generic "Claude" [ref=e467]: CLD
+                - generic [ref=e468]:
+                  - generic [ref=e469]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e470]: $1.26
+                  - generic [ref=e471]: 7d
+              - button "00-6thsense CLD 00-6thsense · ⎇ HEAD 7d" [ref=e472] [cursor=pointer]:
+                - generic [ref=e473]:
+                  - generic [ref=e474]: 00-6thsense
+                  - generic "Claude" [ref=e475]: CLD
+                - generic [ref=e476]:
+                  - generic [ref=e477]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e478]: 7d
+              - button "Run the teamupdate skill. CLD 00-6thsense · ⎇ HEAD $0.98 7d" [ref=e479] [cursor=pointer]:
+                - generic [ref=e480]:
+                  - generic [ref=e481]: Run the teamupdate skill.
+                  - generic "Claude" [ref=e482]: CLD
+                - generic [ref=e483]:
+                  - generic [ref=e484]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e485]: $0.98
+                  - generic [ref=e486]: 7d
+              - button "Check gbrain for closed items and market updates CLD 00-6thsense · ⎇ main $9.47 8d" [ref=e487] [cursor=pointer]:
+                - generic [ref=e488]:
+                  - generic [ref=e489]: Check gbrain for closed items and market updates
+                  - generic "Claude" [ref=e490]: CLD
+                - generic [ref=e491]:
+                  - generic [ref=e492]: 00-6thsense · ⎇ main
+                  - generic [ref=e493]: $9.47
+                  - generic [ref=e494]: 8d
+              - button "Prepare for Renaud call at 1am CLD 00-6thsense · ⎇ main $197.03 8d" [ref=e495] [cursor=pointer]:
+                - generic [ref=e496]:
+                  - generic [ref=e497]: Prepare for Renaud call at 1am
+                  - generic "Claude" [ref=e498]: CLD
+                - generic [ref=e499]:
+                  - generic [ref=e500]: 00-6thsense · ⎇ main
+                  - generic [ref=e501]: $197.03
+                  - generic [ref=e502]: 8d
+              - button "Check Decxin camera hardware clock CLD 00-6thsense · ⎇ main $25.13 10d" [ref=e503] [cursor=pointer]:
+                - generic [ref=e504]:
+                  - generic [ref=e505]: Check Decxin camera hardware clock
+                  - generic "Claude" [ref=e506]: CLD
+                - generic [ref=e507]:
+                  - generic [ref=e508]: 00-6thsense · ⎇ main
+                  - generic [ref=e509]: $25.13
+                  - generic [ref=e510]: 10d
+              - button "Research tactile robotics foundation model collaboration CLD 00-6thsense · ⎇ HEAD $2.79 10d" [ref=e511] [cursor=pointer]:
+                - generic [ref=e512]:
+                  - generic [ref=e513]: Research tactile robotics foundation model collaboration
+                  - generic "Claude" [ref=e514]: CLD
+                - generic [ref=e515]:
+                  - generic [ref=e516]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e517]: $2.79
+                  - generic [ref=e518]: 10d
+              - button "Understanding five-layer SDK architecture and packaging CLD 00-6thsense · ⎇ main $64.96 11d" [ref=e519] [cursor=pointer]:
+                - generic [ref=e520]:
+                  - generic [ref=e521]: Understanding five-layer SDK architecture and packaging
+                  - generic "Claude" [ref=e522]: CLD
+                - generic [ref=e523]:
+                  - generic [ref=e524]: 00-6thsense · ⎇ main
+                  - generic [ref=e525]: $64.96
+                  - generic [ref=e526]: 11d
+              - button "Visualize and understand Gbrain structure CLD 00-6thsense · ⎇ main $129.93 11d" [ref=e527] [cursor=pointer]:
+                - generic [ref=e528]:
+                  - generic [ref=e529]: Visualize and understand Gbrain structure
+                  - generic "Claude" [ref=e530]: CLD
+                - generic [ref=e531]:
+                  - generic [ref=e532]: 00-6thsense · ⎇ main
+                  - generic [ref=e533]: $129.93
+                  - generic [ref=e534]: 11d
+              - button "Reorganize SDK folder structure and review nerve-sdk CLD 00-6thsense · ⎇ main $70.59 12d" [ref=e535] [cursor=pointer]:
+                - generic [ref=e536]:
+                  - generic [ref=e537]: Reorganize SDK folder structure and review nerve-sdk
+                  - generic "Claude" [ref=e538]: CLD
+                - generic [ref=e539]:
+                  - generic [ref=e540]: 00-6thsense · ⎇ main
+                  - generic [ref=e541]: $70.59
+                  - generic [ref=e542]: 12d
+              - button "Track API costs across agent workflows CLD 00-6thsense · ⎇ main $12.78 12d" [ref=e543] [cursor=pointer]:
+                - generic [ref=e544]:
+                  - generic [ref=e545]: Track API costs across agent workflows
+                  - generic "Claude" [ref=e546]: CLD
+                - generic [ref=e547]:
+                  - generic [ref=e548]: 00-6thsense · ⎇ main
+                  - generic [ref=e549]: $12.78
+                  - generic [ref=e550]: 12d
+              - button "Filter aunt's LinkedIn connections by ICP CLD 00-6thsense · ⎇ main $234.82 12d" [ref=e551] [cursor=pointer]:
+                - generic [ref=e552]:
+                  - generic [ref=e553]: Filter aunt's LinkedIn connections by ICP
+                  - generic "Claude" [ref=e554]: CLD
+                - generic [ref=e555]:
+                  - generic [ref=e556]: 00-6thsense · ⎇ main
+                  - generic [ref=e557]: $234.82
+                  - generic [ref=e558]: 12d
+              - button "Check calendar for baseball game conflict CLD 00-6thsense · ⎇ main $2.22 14d" [ref=e559] [cursor=pointer]:
+                - generic [ref=e560]:
+                  - generic [ref=e561]: Check calendar for baseball game conflict
+                  - generic "Claude" [ref=e562]: CLD
+                - generic [ref=e563]:
+                  - generic [ref=e564]: 00-6thsense · ⎇ main
+                  - generic [ref=e565]: $2.22
+                  - generic [ref=e566]: 14d
+              - button "Test white camera recording with thermal stress CLD 00-6thsense · ⎇ main $138.56 16d" [ref=e567] [cursor=pointer]:
+                - generic [ref=e568]:
+                  - generic [ref=e569]: Test white camera recording with thermal stress
+                  - generic "Claude" [ref=e570]: CLD
+                - generic [ref=e571]:
+                  - generic [ref=e572]: 00-6thsense · ⎇ main
+                  - generic [ref=e573]: $138.56
+                  - generic [ref=e574]: 16d
+              - button "Reflections on life, purpose, and work-life balance CLD 00-6thsense · ⎇ main $25.08 17d" [ref=e575] [cursor=pointer]:
+                - generic [ref=e576]:
+                  - generic [ref=e577]: Reflections on life, purpose, and work-life balance
+                  - generic "Claude" [ref=e578]: CLD
+                - generic [ref=e579]:
+                  - generic [ref=e580]: 00-6thsense · ⎇ main
+                  - generic [ref=e581]: $25.08
+                  - generic [ref=e582]: 17d
+              - button "Follow up with Shilpi Bua on contacts CLD 00-6thsense · ⎇ main $17.46 17d" [ref=e583] [cursor=pointer]:
+                - generic [ref=e584]:
+                  - generic [ref=e585]: Follow up with Shilpi Bua on contacts
+                  - generic "Claude" [ref=e586]: CLD
+                - generic [ref=e587]:
+                  - generic [ref=e588]: 00-6thsense · ⎇ main
+                  - generic [ref=e589]: $17.46
+                  - generic [ref=e590]: 17d
+              - button "Review full website content and marketing copy CLD 00-6thsense · ⎇ main $4.74 18d" [ref=e591] [cursor=pointer]:
+                - generic [ref=e592]:
+                  - generic [ref=e593]: Review full website content and marketing copy
+                  - generic "Claude" [ref=e594]: CLD
+                - generic [ref=e595]:
+                  - generic [ref=e596]: 00-6thsense · ⎇ main
+                  - generic [ref=e597]: $4.74
+                  - generic [ref=e598]: 18d
+              - button "Fix framerate bug in capture recording system CLD 00-6thsense · ⎇ main $52.79 18d" [ref=e599] [cursor=pointer]:
+                - generic [ref=e600]:
+                  - generic [ref=e601]: Fix framerate bug in capture recording system
+                  - generic "Claude" [ref=e602]: CLD
+                - generic [ref=e603]:
+                  - generic [ref=e604]: 00-6thsense · ⎇ main
+                  - generic [ref=e605]: $52.79
+                  - generic [ref=e606]: 18d
+              - button "Refine 6thSense hardware pitch messaging CLD 00-6thsense · ⎇ main $9.09 18d" [ref=e607] [cursor=pointer]:
+                - generic [ref=e608]:
+                  - generic [ref=e609]: Refine 6thSense hardware pitch messaging
+                  - generic "Claude" [ref=e610]: CLD
+                - generic [ref=e611]:
+                  - generic [ref=e612]: 00-6thsense · ⎇ main
+                  - generic [ref=e613]: $9.09
+                  - generic [ref=e614]: 18d
+              - button "Pressure test 6thSense ideas and review journal notes CLD 00-6thsense · ⎇ HEAD $30.83 25d" [ref=e615] [cursor=pointer]:
+                - generic [ref=e616]:
+                  - generic [ref=e617]: Pressure test 6thSense ideas and review journal notes
+                  - generic "Claude" [ref=e618]: CLD
+                - generic [ref=e619]:
+                  - generic [ref=e620]: 00-6thsense · ⎇ HEAD
+                  - generic [ref=e621]: $30.83
+                  - generic [ref=e622]: 25d
+          - generic [ref=e84]:
+            - group "Default provider" [ref=e85]:
+              - button "Claude" [pressed] [ref=e86] [cursor=pointer]
+              - button "Codex" [ref=e87] [cursor=pointer]
+            - generic [ref=e625]: jul spend $11735
+    - generic [ref=e88]:
+      - banner [ref=e90]:
+        - generic [ref=e91]:
+          - img [ref=e92]
+          - generic [ref=e94]:
+            - generic [ref=e627]: DevHub
+            - generic [ref=e628]: /
+            - generic [ref=e629]: 00-6thsense
+        - button "Search ⌘K" [ref=e95]:
+          - img [ref=e96]
+          - generic [ref=e99]: Search
+          - generic [ref=e100]: ⌘K
+        - button "Command palette (⌘⇧P)" [ref=e101]:
+          - img [ref=e102]
+          - generic [ref=e104]: ⌘⇧P
+        - button "Work mode" [ref=e630]:
+          - img [ref=e631]
+          - text: Work
+        - generic [ref=e105]:
+          - 'button "Motion: auto" [ref=e106]':
+            - img [ref=e107]
+          - 'button "Theme: dark" [ref=e633]':
+            - img [ref=e634]
+          - button "Keyboard shortcuts" [ref=e114]:
+            - img [ref=e115]
+          - generic "00-6thsense · estimated spend across 54 loaded sessions" [ref=e637]:
+            - img [ref=e638]
+            - text: $10476.69
+            - generic [ref=e643]: project
+          - generic [ref=e117]: 334 sessions
+          - generic [ref=e118]: ·
+          - generic [ref=e119]: 46 projects
+          - button "Settings" [ref=e120]:
+            - img [ref=e121]
+      - main [ref=e125]:
+        - generic [ref=e127]:
+          - generic [ref=e128]:
+            - generic [ref=e129]:
+              - heading "Projects" [level=2] [ref=e130]
+              - generic [ref=e131]: "46"
+            - generic [ref=e133]:
+              - img [ref=e134]
+              - textbox "Filter projects" [ref=e137]
+            - listbox "Projects" [ref=e138]:
+              - option "00-6thsense /Users/ronak/Documents/00-6thsense 54 sessions · just now" [ref=e644] [cursor=pointer]:
+                - img [ref=e645]
+                - generic [ref=e647]:
+                  - generic [ref=e649]: 00-6thsense
+                  - generic [ref=e650]: /Users/ronak/Documents/00-6thsense
+                  - generic [ref=e651]:
+                    - generic [ref=e652]: 54 sessions
+                    - generic [ref=e653]: ·
+                    - generic [ref=e654]: just now
+              - option "tmp /private/tmp 5 sessions · 5h ago" [ref=e655] [cursor=pointer]:
+                - img [ref=e656]
+                - generic [ref=e658]:
+                  - generic [ref=e660]: tmp
+                  - generic [ref=e661]: /private/tmp
+                  - generic [ref=e662]:
+                    - generic [ref=e663]: 5 sessions
+                    - generic [ref=e664]: ·
+                    - generic [ref=e665]: 5h ago
+              - option "/ / 14 sessions · 22h ago" [ref=e666] [cursor=pointer]:
+                - img [ref=e667]
+                - generic [ref=e669]:
+                  - generic [ref=e671]: /
+                  - generic [ref=e672]: /
+                  - generic [ref=e673]:
+                    - generic [ref=e674]: 14 sessions
+                    - generic [ref=e675]: ·
+                    - generic [ref=e676]: 22h ago
+              - option "m5-cli /private/tmp/m5-cli 8 sessions · 4d ago" [ref=e677] [cursor=pointer]:
+                - img [ref=e678]
+                - generic [ref=e680]:
+                  - generic [ref=e682]: m5-cli
+                  - generic [ref=e683]: /private/tmp/m5-cli
+                  - generic [ref=e684]:
+                    - generic [ref=e685]: 8 sessions
+                    - generic [ref=e686]: ·
+                    - generic [ref=e687]: 4d ago
+              - option "company-final-integration /Users/ronak/Documents/00-6thsense/.tmp-hermes/worktrees/company-final-integration 3 sessions · 4d ago" [ref=e688] [cursor=pointer]:
+                - img [ref=e689]
+                - generic [ref=e691]:
+                  - generic [ref=e693]: company-final-integration
+                  - generic [ref=e694]: /Users/ronak/Documents/00-6thsense/.tmp-hermes/worktrees/company-final-integration
+                  - generic [ref=e695]:
+                    - generic [ref=e696]: 3 sessions
+                    - generic [ref=e697]: ·
+                    - generic [ref=e698]: 4d ago
+              - option "src /Users/ronak/Documents/00-6thsense/.landing-dev/frontend/src 46 sessions · 4d ago" [ref=e699] [cursor=pointer]:
+                - img [ref=e700]
+                - generic [ref=e702]:
+                  - generic [ref=e704]: src
+                  - generic [ref=e705]: /Users/ronak/Documents/00-6thsense/.landing-dev/frontend/src
+                  - generic [ref=e706]:
+                    - generic [ref=e707]: 46 sessions
+                    - generic [ref=e708]: ·
+                    - generic [ref=e709]: 4d ago
+              - option "m4-spawn-g8GvTG /private/var/folders/33/hxyqvvsx67d19h7wdx08mcgw0000gn/T/m4-spawn-g8GvTG 1 sessions · 5d ago" [ref=e710] [cursor=pointer]:
+                - img [ref=e711]
+                - generic [ref=e713]:
+                  - generic [ref=e715]: m4-spawn-g8GvTG
+                  - generic [ref=e716]: /private/var/folders/33/hxyqvvsx67d19h7wdx08mcgw0000gn/T/m4-spawn-g8GvTG
+                  - generic [ref=e717]:
+                    - generic [ref=e718]: 1 sessions
+                    - generic [ref=e719]: ·
+                    - generic [ref=e720]: 5d ago
+              - option "capture-companion /Users/ronak/Documents/00-6thsense/code/capture-companion 3 sessions · 6d ago" [ref=e721] [cursor=pointer]:
+                - img [ref=e722]
+                - generic [ref=e724]:
+                  - generic [ref=e726]: capture-companion
+                  - generic [ref=e727]: /Users/ronak/Documents/00-6thsense/code/capture-companion
+                  - generic [ref=e728]:
+                    - generic [ref=e729]: 3 sessions
+                    - generic [ref=e730]: ·
+                    - generic [ref=e731]: 6d ago
+              - option "tunis /Users/ronak/conductor/workspaces/nerve-sdk/tunis 2 sessions · 14d ago" [ref=e732] [cursor=pointer]:
+                - img [ref=e733]
+                - generic [ref=e735]:
+                  - generic [ref=e737]: tunis
+                  - generic [ref=e738]: /Users/ronak/conductor/workspaces/nerve-sdk/tunis
+                  - generic [ref=e739]:
+                    - generic [ref=e740]: 2 sessions
+                    - generic [ref=e741]: ·
+                    - generic [ref=e742]: 14d ago
+              - option "bilbao /Users/ronak/conductor/workspaces/capture/bilbao 1 sessions · 14d ago" [ref=e743] [cursor=pointer]:
+                - img [ref=e744]
+                - generic [ref=e746]:
+                  - generic [ref=e748]: bilbao
+                  - generic [ref=e749]: /Users/ronak/conductor/workspaces/capture/bilbao
+                  - generic [ref=e750]:
+                    - generic [ref=e751]: 1 sessions
+                    - generic [ref=e752]: ·
+                    - generic [ref=e753]: 14d ago
+              - option "code /Users/ronak/Documents/00-6thsense/code 1 sessions · 15d ago" [ref=e754] [cursor=pointer]:
+                - img [ref=e755]
+                - generic [ref=e757]:
+                  - generic [ref=e759]: code
+                  - generic [ref=e760]: /Users/ronak/Documents/00-6thsense/code
+                  - generic [ref=e761]:
+                    - generic [ref=e762]: 1 sessions
+                    - generic [ref=e763]: ·
+                    - generic [ref=e764]: 15d ago
+              - option "denpasar /Users/ronak/conductor/workspaces/capture/denpasar 2 sessions · 15d ago" [ref=e765] [cursor=pointer]:
+                - img [ref=e766]
+                - generic [ref=e768]:
+                  - generic [ref=e770]: denpasar
+                  - generic [ref=e771]: /Users/ronak/conductor/workspaces/capture/denpasar
+                  - generic [ref=e772]:
+                    - generic [ref=e773]: 2 sessions
+                    - generic [ref=e774]: ·
+                    - generic [ref=e775]: 15d ago
+              - option "ronak /Users/ronak 16 sessions · 18d ago" [ref=e776] [cursor=pointer]:
+                - img [ref=e777]
+                - generic [ref=e779]:
+                  - generic [ref=e781]: ronak
+                  - generic [ref=e782]: /Users/ronak
+                  - generic [ref=e783]:
+                    - generic [ref=e784]: 16 sessions
+                    - generic [ref=e785]: ·
+                    - generic [ref=e786]: 18d ago
+              - option "sofia /Users/ronak/conductor/workspaces/postprocess/sofia 3 sessions · 21d ago" [ref=e787] [cursor=pointer]:
+                - img [ref=e788]
+                - generic [ref=e790]:
+                  - generic [ref=e792]: sofia
+                  - generic [ref=e793]: /Users/ronak/conductor/workspaces/postprocess/sofia
+                  - generic [ref=e794]:
+                    - generic [ref=e795]: 3 sessions
+                    - generic [ref=e796]: ·
+                    - generic [ref=e797]: 21d ago
+              - option "bucharest /Users/ronak/conductor/workspaces/postprocess/bucharest 1 sessions · 23d ago" [ref=e798] [cursor=pointer]:
+                - img [ref=e799]
+                - generic [ref=e801]:
+                  - generic [ref=e803]: bucharest
+                  - generic [ref=e804]: /Users/ronak/conductor/workspaces/postprocess/bucharest
+                  - generic [ref=e805]:
+                    - generic [ref=e806]: 1 sessions
+                    - generic [ref=e807]: ·
+                    - generic [ref=e808]: 23d ago
+              - option "douala /Users/ronak/conductor/workspaces/postprocess/douala 3 sessions · 23d ago" [ref=e809] [cursor=pointer]:
+                - img [ref=e810]
+                - generic [ref=e812]:
+                  - generic [ref=e814]: douala
+                  - generic [ref=e815]: /Users/ronak/conductor/workspaces/postprocess/douala
+                  - generic [ref=e816]:
+                    - generic [ref=e817]: 3 sessions
+                    - generic [ref=e818]: ·
+                    - generic [ref=e819]: 23d ago
+              - option "bangalore /Users/ronak/conductor/workspaces/capture/bangalore 1 sessions · 23d ago" [ref=e820] [cursor=pointer]:
+                - img [ref=e821]
+                - generic [ref=e823]:
+                  - generic [ref=e825]: bangalore
+                  - generic [ref=e826]: /Users/ronak/conductor/workspaces/capture/bangalore
+                  - generic [ref=e827]:
+                    - generic [ref=e828]: 1 sessions
+                    - generic [ref=e829]: ·
+                    - generic [ref=e830]: 23d ago
+              - option "tacoma /Users/ronak/conductor/workspaces/capture/tacoma 1 sessions · 23d ago" [ref=e831] [cursor=pointer]:
+                - img [ref=e832]
+                - generic [ref=e834]:
+                  - generic [ref=e836]: tacoma
+                  - generic [ref=e837]: /Users/ronak/conductor/workspaces/capture/tacoma
+                  - generic [ref=e838]:
+                    - generic [ref=e839]: 1 sessions
+                    - generic [ref=e840]: ·
+                    - generic [ref=e841]: 23d ago
+              - option "lyon /Users/ronak/conductor/workspaces/postprocess/lyon 1 sessions · 23d ago" [ref=e842] [cursor=pointer]:
+                - img [ref=e843]
+                - generic [ref=e845]:
+                  - generic [ref=e847]: lyon
+                  - generic [ref=e848]: /Users/ronak/conductor/workspaces/postprocess/lyon
+                  - generic [ref=e849]:
+                    - generic [ref=e850]: 1 sessions
+                    - generic [ref=e851]: ·
+                    - generic [ref=e852]: 23d ago
+              - option "amsterdam /Users/ronak/conductor/workspaces/postprocess/amsterdam 1 sessions · 23d ago" [ref=e853] [cursor=pointer]:
+                - img [ref=e854]
+                - generic [ref=e856]:
+                  - generic [ref=e858]: amsterdam
+                  - generic [ref=e859]: /Users/ronak/conductor/workspaces/postprocess/amsterdam
+                  - generic [ref=e860]:
+                    - generic [ref=e861]: 1 sessions
+                    - generic [ref=e862]: ·
+                    - generic [ref=e863]: 23d ago
+              - option "accra /Users/ronak/conductor/workspaces/capture/accra 1 sessions · 23d ago" [ref=e864] [cursor=pointer]:
+                - img [ref=e865]
+                - generic [ref=e867]:
+                  - generic [ref=e869]: accra
+                  - generic [ref=e870]: /Users/ronak/conductor/workspaces/capture/accra
+                  - generic [ref=e871]:
+                    - generic [ref=e872]: 1 sessions
+                    - generic [ref=e873]: ·
+                    - generic [ref=e874]: 23d ago
+              - option "tokyo-v1 /Users/ronak/conductor/workspaces/capture/tokyo-v1 1 sessions · 23d ago" [ref=e875] [cursor=pointer]:
+                - img [ref=e876]
+                - generic [ref=e878]:
+                  - generic [ref=e880]: tokyo-v1
+                  - generic [ref=e881]: /Users/ronak/conductor/workspaces/capture/tokyo-v1
+                  - generic [ref=e882]:
+                    - generic [ref=e883]: 1 sessions
+                    - generic [ref=e884]: ·
+                    - generic [ref=e885]: 23d ago
+              - option "tashkent /Users/ronak/conductor/workspaces/capture/tashkent 1 sessions · 23d ago" [ref=e886] [cursor=pointer]:
+                - img [ref=e887]
+                - generic [ref=e889]:
+                  - generic [ref=e891]: tashkent
+                  - generic [ref=e892]: /Users/ronak/conductor/workspaces/capture/tashkent
+                  - generic [ref=e893]:
+                    - generic [ref=e894]: 1 sessions
+                    - generic [ref=e895]: ·
+                    - generic [ref=e896]: 23d ago
+              - option "memphis /Users/ronak/conductor/workspaces/capture/memphis 1 sessions · 25d ago" [ref=e897] [cursor=pointer]:
+                - img [ref=e898]
+                - generic [ref=e900]:
+                  - generic [ref=e902]: memphis
+                  - generic [ref=e903]: /Users/ronak/conductor/workspaces/capture/memphis
+                  - generic [ref=e904]:
+                    - generic [ref=e905]: 1 sessions
+                    - generic [ref=e906]: ·
+                    - generic [ref=e907]: 25d ago
+              - option "tokyo /Users/ronak/conductor/workspaces/capture/tokyo 1 sessions · 26d ago" [ref=e908] [cursor=pointer]:
+                - img [ref=e909]
+                - generic [ref=e911]:
+                  - generic [ref=e913]: tokyo
+                  - generic [ref=e914]: /Users/ronak/conductor/workspaces/capture/tokyo
+                  - generic [ref=e915]:
+                    - generic [ref=e916]: 1 sessions
+                    - generic [ref=e917]: ·
+                    - generic [ref=e918]: 26d ago
+              - option "claude-ui /Users/ronak/Documents/[00] GitHub/01-active/claude-ui 4 sessions · 26d ago" [ref=e919] [cursor=pointer]:
+                - img [ref=e920]
+                - generic [ref=e922]:
+                  - generic [ref=e924]: claude-ui
+                  - generic [ref=e925]: /Users/ronak/Documents/[00] GitHub/01-active/claude-ui
+                  - generic [ref=e926]:
+                    - generic [ref=e927]: 4 sessions
+                    - generic [ref=e928]: ·
+                    - generic [ref=e929]: 26d ago
+              - option "postprocess /Users/ronak/Documents/[00] GitHub/00-6thsense/postprocess 8 sessions · 26d ago" [ref=e930] [cursor=pointer]:
+                - img [ref=e931]
+                - generic [ref=e933]:
+                  - generic [ref=e935]: postprocess
+                  - generic [ref=e936]: /Users/ronak/Documents/[00] GitHub/00-6thsense/postprocess
+                  - generic [ref=e937]:
+                    - generic [ref=e938]: 8 sessions
+                    - generic [ref=e939]: ·
+                    - generic [ref=e940]: 26d ago
+              - option "capture /Users/ronak/Documents/[00] GitHub/00-6thsense/capture 11 sessions · 26d ago" [ref=e941] [cursor=pointer]:
+                - img [ref=e942]
+                - generic [ref=e944]:
+                  - generic [ref=e946]: capture
+                  - generic [ref=e947]: /Users/ronak/Documents/[00] GitHub/00-6thsense/capture
+                  - generic [ref=e948]:
+                    - generic [ref=e949]: 11 sessions
+                    - generic [ref=e950]: ·
+                    - generic [ref=e951]: 26d ago
+              - option "seoul /Users/ronak/conductor/workspaces/capture/seoul 2 sessions · 26d ago" [ref=e952] [cursor=pointer]:
+                - img [ref=e953]
+                - generic [ref=e955]:
+                  - generic [ref=e957]: seoul
+                  - generic [ref=e958]: /Users/ronak/conductor/workspaces/capture/seoul
+                  - generic [ref=e959]:
+                    - generic [ref=e960]: 2 sessions
+                    - generic [ref=e961]: ·
+                    - generic [ref=e962]: 26d ago
+              - option "cappa /Users/ronak/Documents/[00] GitHub/00-6thsense/cappa 16 sessions · 26d ago" [ref=e963] [cursor=pointer]:
+                - img [ref=e964]
+                - generic [ref=e966]:
+                  - generic [ref=e968]: cappa
+                  - generic [ref=e969]: /Users/ronak/Documents/[00] GitHub/00-6thsense/cappa
+                  - generic [ref=e970]:
+                    - generic [ref=e971]: 16 sessions
+                    - generic [ref=e972]: ·
+                    - generic [ref=e973]: 26d ago
+              - option "stuttgart /Users/ronak/conductor/workspaces/capture/stuttgart 1 sessions · 26d ago" [ref=e974] [cursor=pointer]:
+                - img [ref=e975]
+                - generic [ref=e977]:
+                  - generic [ref=e979]: stuttgart
+                  - generic [ref=e980]: /Users/ronak/conductor/workspaces/capture/stuttgart
+                  - generic [ref=e981]:
+                    - generic [ref=e982]: 1 sessions
+                    - generic [ref=e983]: ·
+                    - generic [ref=e984]: 26d ago
+              - option "01-active /Users/ronak/Documents/[00] GitHub/01-active 4 sessions · 26d ago" [ref=e985] [cursor=pointer]:
+                - img [ref=e986]
+                - generic [ref=e988]:
+                  - generic [ref=e990]: 01-active
+                  - generic [ref=e991]: /Users/ronak/Documents/[00] GitHub/01-active
+                  - generic [ref=e992]:
+                    - generic [ref=e993]: 4 sessions
+                    - generic [ref=e994]: ·
+                    - generic [ref=e995]: 26d ago
+              - option "research-radar /Users/ronak/Documents/[00] GitHub/01-active/research-radar 1 sessions · 26d ago" [ref=e996] [cursor=pointer]:
+                - img [ref=e997]
+                - generic [ref=e999]:
+                  - generic [ref=e1001]: research-radar
+                  - generic [ref=e1002]: /Users/ronak/Documents/[00] GitHub/01-active/research-radar
+                  - generic [ref=e1003]:
+                    - generic [ref=e1004]: 1 sessions
+                    - generic [ref=e1005]: ·
+                    - generic [ref=e1006]: 26d ago
+              - option "[00] GitHub /Users/ronak/Documents/[00] GitHub 1 sessions · 1mo ago" [ref=e1007] [cursor=pointer]:
+                - img [ref=e1008]
+                - generic [ref=e1010]:
+                  - generic [ref=e1012]: "[00] GitHub"
+                  - generic [ref=e1013]: /Users/ronak/Documents/[00] GitHub
+                  - generic [ref=e1014]:
+                    - generic [ref=e1015]: 1 sessions
+                    - generic [ref=e1016]: ·
+                    - generic [ref=e1017]: 1mo ago
+              - option "00-6thsense /Users/ronak/Documents/[00] GitHub/00-6thsense 5 sessions · 1mo ago" [ref=e1018] [cursor=pointer]:
+                - img [ref=e1019]
+                - generic [ref=e1021]:
+                  - generic [ref=e1023]: 00-6thsense
+                  - generic [ref=e1024]: /Users/ronak/Documents/[00] GitHub/00-6thsense
+                  - generic [ref=e1025]:
+                    - generic [ref=e1026]: 5 sessions
+                    - generic [ref=e1027]: ·
+                    - generic [ref=e1028]: 1mo ago
+              - option "cui-stream /private/tmp/cui-stream 41 sessions · 1mo ago" [ref=e1029] [cursor=pointer]:
+                - img [ref=e1030]
+                - generic [ref=e1032]:
+                  - generic [ref=e1034]: cui-stream
+                  - generic [ref=e1035]: /private/tmp/cui-stream
+                  - generic [ref=e1036]:
+                    - generic [ref=e1037]: 41 sessions
+                    - generic [ref=e1038]: ·
+                    - generic [ref=e1039]: 1mo ago
+              - option "6thSense-postprocess /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-postprocess 17 sessions · 1mo ago" [ref=e1040] [cursor=pointer]:
+                - img [ref=e1041]
+                - generic [ref=e1043]:
+                  - generic [ref=e1045]: 6thSense-postprocess
+                  - generic [ref=e1046]: /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-postprocess
+                  - generic [ref=e1047]:
+                    - generic [ref=e1048]: 17 sessions
+                    - generic [ref=e1049]: ·
+                    - generic [ref=e1050]: 1mo ago
+              - option "6thSense-capture /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-capture 33 sessions · 1mo ago" [ref=e1051] [cursor=pointer]:
+                - img [ref=e1052]
+                - generic [ref=e1054]:
+                  - generic [ref=e1056]: 6thSense-capture
+                  - generic [ref=e1057]: /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-capture
+                  - generic [ref=e1058]:
+                    - generic [ref=e1059]: 33 sessions
+                    - generic [ref=e1060]: ·
+                    - generic [ref=e1061]: 1mo ago
+              - option "capper-2 /Users/ronak/Documents/[00] GitHub/00-6thsense/capper-2 2 sessions · 1mo ago" [ref=e1062] [cursor=pointer]:
+                - img [ref=e1063]
+                - generic [ref=e1065]:
+                  - generic [ref=e1067]: capper-2
+                  - generic [ref=e1068]: /Users/ronak/Documents/[00] GitHub/00-6thsense/capper-2
+                  - generic [ref=e1069]:
+                    - generic [ref=e1070]: 2 sessions
+                    - generic [ref=e1071]: ·
+                    - generic [ref=e1072]: 1mo ago
+              - option "capper-1 /Users/ronak/Documents/[00] GitHub/00-6thsense/capper-1 1 sessions · 1mo ago" [ref=e1073] [cursor=pointer]:
+                - img [ref=e1074]
+                - generic [ref=e1076]:
+                  - generic [ref=e1078]: capper-1
+                  - generic [ref=e1079]: /Users/ronak/Documents/[00] GitHub/00-6thsense/capper-1
+                  - generic [ref=e1080]:
+                    - generic [ref=e1081]: 1 sessions
+                    - generic [ref=e1082]: ·
+                    - generic [ref=e1083]: 1mo ago
+              - option "contextual-settings /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-capture/.claude/worktrees/contextual-settings 2 sessions · 1mo ago" [ref=e1084] [cursor=pointer]:
+                - img [ref=e1085]
+                - generic [ref=e1087]:
+                  - generic [ref=e1089]: contextual-settings
+                  - generic [ref=e1090]: /Users/ronak/Documents/[00] GitHub/00-6thsense/6thSense-capture/.claude/worktrees/contextual-settings
+                  - generic [ref=e1091]:
+                    - generic [ref=e1092]: 2 sessions
+                    - generic [ref=e1093]: ·
+                    - generic [ref=e1094]: 1mo ago
+              - option "pp /Users/ronak/Documents/[00] GitHub/00-6thsense/pp 1 sessions · 1mo ago" [ref=e1095] [cursor=pointer]:
+                - img [ref=e1096]
+                - generic [ref=e1098]:
+                  - generic [ref=e1100]: pp
+                  - generic [ref=e1101]: /Users/ronak/Documents/[00] GitHub/00-6thsense/pp
+                  - generic [ref=e1102]:
+                    - generic [ref=e1103]: 1 sessions
+                    - generic [ref=e1104]: ·
+                    - generic [ref=e1105]: 1mo ago
+              - option "[01] Active /Users/ronak/Documents/[00] GitHub/[01] Active 2 sessions · 2mo ago" [ref=e1106] [cursor=pointer]:
+                - img [ref=e1107]
+                - generic [ref=e1109]:
+                  - generic [ref=e1111]: "[01] Active"
+                  - generic [ref=e1112]: /Users/ronak/Documents/[00] GitHub/[01] Active
+                  - generic [ref=e1113]:
+                    - generic [ref=e1114]: 2 sessions
+                    - generic [ref=e1115]: ·
+                    - generic [ref=e1116]: 2mo ago
+              - option "6thSense-postprocess /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense-postprocess 3 sessions · 2mo ago" [ref=e1117] [cursor=pointer]:
+                - img [ref=e1118]
+                - generic [ref=e1120]:
+                  - generic [ref=e1122]: 6thSense-postprocess
+                  - generic [ref=e1123]: /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense-postprocess
+                  - generic [ref=e1124]:
+                    - generic [ref=e1125]: 3 sessions
+                    - generic [ref=e1126]: ·
+                    - generic [ref=e1127]: 2mo ago
+              - option "6thSense-capture /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense-capture 4 sessions · 2mo ago" [ref=e1128] [cursor=pointer]:
+                - img [ref=e1129]
+                - generic [ref=e1131]:
+                  - generic [ref=e1133]: 6thSense-capture
+                  - generic [ref=e1134]: /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense-capture
+                  - generic [ref=e1135]:
+                    - generic [ref=e1136]: 4 sessions
+                    - generic [ref=e1137]: ·
+                    - generic [ref=e1138]: 2mo ago
+              - option "6thSense /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense 2 sessions · 2mo ago" [ref=e1139] [cursor=pointer]:
+                - img [ref=e1140]
+                - generic [ref=e1142]:
+                  - generic [ref=e1144]: 6thSense
+                  - generic [ref=e1145]: /Users/ronak/Documents/[00] GitHub/[01] Active/6thSense
+                  - generic [ref=e1146]:
+                    - generic [ref=e1147]: 2 sessions
+                    - generic [ref=e1148]: ·
+                    - generic [ref=e1149]: 2mo ago
+          - generic [ref=e1150]:
+            - generic [ref=e1151]:
+              - generic [ref=e1152]:
+                - generic [ref=e1153]:
+                  - heading "New task" [level=1] [ref=e1154]
+                  - generic [ref=e1155]: Anthropic · Claude
+                - generic [ref=e1156]:
+                  - button "Create cross-provider fork" [ref=e1157]
+                  - generic [ref=e1158]: Provider is fixed after creation. Fork to another provider to continue there.
+              - button "Worktrees" [ref=e1160]:
+                - img [ref=e1161]
+                - img [ref=e1163]
+                - generic [ref=e1168]: Worktrees
+              - generic [ref=e1169]:
+                - status [ref=e1171]
+                - generic [ref=e1172]:
+                  - generic [ref=e1173]: Message
+                  - textbox "Message" [ref=e1174]:
+                    - /placeholder: Describe the outcome or change…
+                  - generic [ref=e1175]:
+                    - generic [ref=e1176]:
+                      - generic [ref=e1177]: Anthropic · Claude
+                      - generic [ref=e1178]:
+                        - generic [ref=e1179]: Folder
+                        - generic [ref=e1180]: /Users/ronak/Documents/00-6thsense
+                    - button "Send" [disabled] [ref=e1181]
+                  - generic [ref=e1182]: Write a message to send.
+            - generic "Task inspector" [ref=e1183]:
+              - region "Worktree" [ref=e1184]:
+                - heading "Worktree" [level=2] [ref=e1185]
+                - paragraph [ref=e1186]: ⎇ main · no worktree
+              - region "Session" [ref=e1187]:
+                - heading "Session" [level=2] [ref=e1188]
+                - paragraph [ref=e1189]: —
+              - region "Changed files" [ref=e1190]:
+                - heading "Changed files" [level=2] [ref=e1191]
+                - paragraph [ref=e1192]: No changes
+              - generic [ref=e1193]: Anthropic · Claude
+      - generic [ref=e172]:
+        - generic [ref=e1195]: 00-6thsense
+        - status [ref=e1196]: ⚠ 1 need you — oldest 1h
+        - generic [ref=e173]:
+          - generic [ref=e174]: 1 running
+          - generic [ref=e1197]: $11735 MTD
+  - dialog "Welcome to DevHub" [ref=e1199]:
+    - generic [ref=e1200]:
+      - img [ref=e1201]
+      - heading "Welcome to DevHub" [level=2] [ref=e1203]
+    - generic [ref=e1204]:
+      - paragraph [ref=e1205]: Your personal dev hub — browse Claude & Codex sessions, start new chats, track usage across all your AI tools.
+      - generic [ref=e1206]:
+        - generic [ref=e1207]:
+          - img [ref=e1209]
+          - generic [ref=e1212]:
+            - generic [ref=e1213]: Browse past chats
+            - paragraph [ref=e1214]: Read every Claude Code session across all your projects, search by content, and pick up where you left off.
+        - generic [ref=e1215]:
+          - img [ref=e1217]
+          - generic [ref=e1219]:
+            - generic [ref=e1220]: Chat live
+            - paragraph [ref=e1221]: Start a new Claude Code session in any project's working directory — approvals, diffs, and tools, right here.
+        - generic [ref=e1222]:
+          - img [ref=e1224]
+          - generic [ref=e1229]:
+            - generic [ref=e1230]: Dashboard & oversight
+            - paragraph [ref=e1231]: Watch running sessions on the Live Ops board and track tokens, spend, and activity across everything.
+      - generic [ref=e1232]:
+        - generic [ref=e1233]: Handy shortcuts
+        - list [ref=e1234]:
+          - listitem [ref=e1235]:
+            - generic [ref=e1236]:
+              - generic [ref=e1237]: ⌘
+              - generic [ref=e1238]: K
+            - generic [ref=e1239]:
+              - img [ref=e1241]
+              - text: Search sessions
+          - listitem [ref=e1244]:
+            - generic [ref=e1245]:
+              - generic [ref=e1246]: ⌘
+              - generic [ref=e1247]: ⇧
+              - generic [ref=e1248]: P
+            - generic [ref=e1249]:
+              - img [ref=e1251]
+              - text: Command palette
+          - listitem [ref=e1253]:
+            - generic [ref=e1255]: "?"
+            - generic [ref=e1256]:
+              - img [ref=e1258]
+              - text: All keyboard shortcuts
+    - generic [ref=e1260]:
+      - generic [ref=e1261]: You can reopen shortcuts any time with ?
+      - button "Get started" [active] [ref=e1262]
+  - status:
+    - generic:
+      - img
+      - text: Notifications
