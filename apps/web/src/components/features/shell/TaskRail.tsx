@@ -343,7 +343,7 @@ export type TaskRailMode = "devhub" | "legacy";
 export function resolveTaskRailMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): TaskRailMode {
-  return settings?.devHubFeatures?.taskRail === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.taskRail === false ? "legacy" : "devhub";
 }
 
 /** True only when the task-rail slice flag is applied. */

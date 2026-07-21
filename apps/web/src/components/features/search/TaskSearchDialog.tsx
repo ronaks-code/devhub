@@ -210,7 +210,7 @@ export type SearchCommandsMode = "devhub" | "legacy";
 export function resolveSearchCommandsMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): SearchCommandsMode {
-  return settings?.devHubFeatures?.searchCommands === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.searchCommands === false ? "legacy" : "devhub";
 }
 
 /** True only when the search/commands slice flag is applied. */

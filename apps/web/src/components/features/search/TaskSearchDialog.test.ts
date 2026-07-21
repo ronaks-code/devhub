@@ -287,10 +287,10 @@ describe("searchCommands slice-flag gate (Search)", () => {
   it("mounts the dialogs only for a resolved true searchCommands flag", () => {
     expect(resolveSearchCommandsMode({ devHubFeatures: { searchCommands: true } })).toBe("devhub");
     expect(resolveSearchCommandsMode({ devHubFeatures: { searchCommands: false } })).toBe("legacy");
-    expect(resolveSearchCommandsMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveSearchCommandsMode({})).toBe("legacy");
-    expect(resolveSearchCommandsMode(null)).toBe("legacy");
-    expect(resolveSearchCommandsMode(undefined)).toBe("legacy");
+    expect(resolveSearchCommandsMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveSearchCommandsMode({})).toBe("devhub");
+    expect(resolveSearchCommandsMode(null)).toBe("devhub");
+    expect(resolveSearchCommandsMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when searchCommands is explicitly true", () => {

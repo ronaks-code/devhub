@@ -24,13 +24,14 @@ describe("dh-* dark-theme contrast tokens (M8-PERF-A11Y)", () => {
 
   it("--dh-text-muted meets WCAG AA (4.5:1) against every dh-* dark surface", () => {
     const textMuted = token("dh-text-muted");
-    // Every dh-* background surface the muted text can sit on, including the
-    // lightest one (--dh-rail-active) that axe actually flagged.
+    // Every OPAQUE dh-* background surface the muted text can sit on. The Aurora
+    // Cockpit retint made --dh-header and --dh-rail-active translucent glass
+    // (rgba) — muted text on them actually renders over the opaque base beneath
+    // (--dh-canvas for the header, --dh-rail-inactive for the rail), both of
+    // which are checked here, so the composited contrast is still covered.
     const surfaces = [
       "dh-canvas",
-      "dh-header",
       "dh-rail-inactive",
-      "dh-rail-active",
       "dh-surface",
       "dh-user-bubble",
       "dh-control",

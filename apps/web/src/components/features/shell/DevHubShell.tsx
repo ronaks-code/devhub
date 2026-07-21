@@ -215,15 +215,16 @@ export function DevHubShell({
 export type ShellChromeMode = "devhub" | "legacy";
 
 /**
- * Slice-flag gate. Mirrors the M5 `resolve*ShellMode` pattern: DevHubShell mounts
- * only for a server-resolved true `shellChrome`; anything else (false / undefined /
- * missing settings) keeps the legacy `App.tsx`/`ResponsiveShell` chrome — the
- * immediate, non-destructive rollback surface.
+ * Slice-flag gate. `shellChrome` defaults true, so the first paint should be the
+ * new chrome — NOT the legacy chrome flashed while `/api/settings` is still null
+ * (that flash is what read as "two apps"). So missing/undefined settings resolve to
+ * `devhub`; only an EXPLICIT stored `shellChrome: false` selects the legacy chrome,
+ * which stays the immediate, non-destructive rollback surface.
  */
 export function resolveShellChromeMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): ShellChromeMode {
-  return settings?.devHubFeatures?.shellChrome === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.shellChrome === false ? "legacy" : "devhub";
 }
 
 /** True only when the shell-chrome slice flag is applied. */

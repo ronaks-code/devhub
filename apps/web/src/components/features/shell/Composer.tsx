@@ -426,7 +426,7 @@ export type ComposerSurfaceMode = "devhub" | "legacy";
 export function resolveComposerSurfaceMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): ComposerSurfaceMode {
-  return settings?.devHubFeatures?.composerSurface === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.composerSurface === false ? "legacy" : "devhub";
 }
 
 /** True only when the composer-surface slice flag is applied. */

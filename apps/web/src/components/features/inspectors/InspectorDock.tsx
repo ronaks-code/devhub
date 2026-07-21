@@ -594,7 +594,7 @@ export type InspectorDockMode = "devhub" | "legacy";
 export function resolveInspectorDockMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): InspectorDockMode {
-  return settings?.devHubFeatures?.inspectorDock === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.inspectorDock === false ? "legacy" : "devhub";
 }
 
 /** True only when the inspector-dock slice flag is applied. */

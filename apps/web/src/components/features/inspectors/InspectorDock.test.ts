@@ -482,10 +482,10 @@ describe("inspectorDock slice-flag gate", () => {
   it("mounts the dock only for a resolved true inspectorDock flag", () => {
     expect(resolveInspectorDockMode({ devHubFeatures: { inspectorDock: true } })).toBe("devhub");
     expect(resolveInspectorDockMode({ devHubFeatures: { inspectorDock: false } })).toBe("legacy");
-    expect(resolveInspectorDockMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveInspectorDockMode({})).toBe("legacy");
-    expect(resolveInspectorDockMode(null)).toBe("legacy");
-    expect(resolveInspectorDockMode(undefined)).toBe("legacy");
+    expect(resolveInspectorDockMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveInspectorDockMode({})).toBe("devhub");
+    expect(resolveInspectorDockMode(null)).toBe("devhub");
+    expect(resolveInspectorDockMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when inspectorDock is explicitly true", () => {

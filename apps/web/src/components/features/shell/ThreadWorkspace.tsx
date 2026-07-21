@@ -424,7 +424,7 @@ export type ThreadWorkspaceMode = "devhub" | "legacy";
 export function resolveThreadWorkspaceMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): ThreadWorkspaceMode {
-  return settings?.devHubFeatures?.threadWorkspace === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.threadWorkspace === false ? "legacy" : "devhub";
 }
 
 /** True only when the thread-workspace slice flag is applied. */

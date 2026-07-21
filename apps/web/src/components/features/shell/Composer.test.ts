@@ -268,13 +268,14 @@ describe("Composer — registry-backed picker state and inserts", () => {
 });
 
 describe("composerSurface slice-flag gate", () => {
-  it("mounts the Composer only for a resolved true composerSurface flag", () => {
+  it("defaults to the DevHub composer; only an explicit false composerSurface flag selects legacy", () => {
     expect(resolveComposerSurfaceMode({ devHubFeatures: { composerSurface: true } })).toBe("devhub");
     expect(resolveComposerSurfaceMode({ devHubFeatures: { composerSurface: false } })).toBe("legacy");
-    expect(resolveComposerSurfaceMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveComposerSurfaceMode({})).toBe("legacy");
-    expect(resolveComposerSurfaceMode(null)).toBe("legacy");
-    expect(resolveComposerSurfaceMode(undefined)).toBe("legacy");
+    // Missing settings default to the new composer (no legacy first-paint flash).
+    expect(resolveComposerSurfaceMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveComposerSurfaceMode({})).toBe("devhub");
+    expect(resolveComposerSurfaceMode(null)).toBe("devhub");
+    expect(resolveComposerSurfaceMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when composerSurface is explicitly true", () => {

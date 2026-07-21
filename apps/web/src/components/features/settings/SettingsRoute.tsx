@@ -239,7 +239,7 @@ export type SettingsSecondaryMode = "devhub" | "legacy";
 export function resolveSettingsSecondaryMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): SettingsSecondaryMode {
-  return settings?.devHubFeatures?.settingsSecondary === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.settingsSecondary === false ? "legacy" : "devhub";
 }
 
 /** True only when the settings-secondary slice flag is applied. */

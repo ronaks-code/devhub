@@ -284,7 +284,7 @@ export type TaskHeaderSetupMode = "devhub" | "legacy";
 export function resolveTaskHeaderSetupMode(
   settings: { devHubFeatures?: Partial<DevHubFeatureFlags> } | null | undefined,
 ): TaskHeaderSetupMode {
-  return settings?.devHubFeatures?.taskHeaderSetup === true ? "devhub" : "legacy";
+  return settings?.devHubFeatures?.taskHeaderSetup === false ? "legacy" : "devhub";
 }
 
 /** True only when the task-header/setup slice flag is applied. */

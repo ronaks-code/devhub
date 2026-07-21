@@ -189,8 +189,8 @@ describe("searchCommands slice-flag gate (Commands)", () => {
   it("shares the searchCommands gate with Search (single flag, separate contracts)", () => {
     expect(resolveSearchCommandsMode({ devHubFeatures: { searchCommands: true } })).toBe("devhub");
     expect(resolveSearchCommandsMode({ devHubFeatures: { searchCommands: false } })).toBe("legacy");
-    expect(resolveSearchCommandsMode({})).toBe("legacy");
-    expect(resolveSearchCommandsMode(null)).toBe("legacy");
+    expect(resolveSearchCommandsMode({})).toBe("devhub");
+    expect(resolveSearchCommandsMode(null)).toBe("devhub");
     expect(isSearchCommandsApplied({ searchCommands: true })).toBe(true);
     expect(isSearchCommandsApplied({ searchCommands: false })).toBe(false);
     expect(isSearchCommandsApplied(undefined)).toBe(false);

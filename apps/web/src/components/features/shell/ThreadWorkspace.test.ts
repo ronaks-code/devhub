@@ -259,13 +259,14 @@ describe("ThreadWorkspace — streaming and unknown events", () => {
 });
 
 describe("threadWorkspace slice-flag gate", () => {
-  it("mounts ThreadWorkspace only for a resolved true threadWorkspace flag", () => {
+  it("defaults to the DevHub transcript; only an explicit false threadWorkspace flag selects legacy", () => {
     expect(resolveThreadWorkspaceMode({ devHubFeatures: { threadWorkspace: true } })).toBe("devhub");
     expect(resolveThreadWorkspaceMode({ devHubFeatures: { threadWorkspace: false } })).toBe("legacy");
-    expect(resolveThreadWorkspaceMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveThreadWorkspaceMode({})).toBe("legacy");
-    expect(resolveThreadWorkspaceMode(null)).toBe("legacy");
-    expect(resolveThreadWorkspaceMode(undefined)).toBe("legacy");
+    // Missing settings default to the new transcript (no legacy first-paint flash).
+    expect(resolveThreadWorkspaceMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveThreadWorkspaceMode({})).toBe("devhub");
+    expect(resolveThreadWorkspaceMode(null)).toBe("devhub");
+    expect(resolveThreadWorkspaceMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when threadWorkspace is explicitly true", () => {

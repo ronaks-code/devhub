@@ -54,10 +54,10 @@ describe("SettingsRoute — settingsSecondary slice-flag gate", () => {
   it("resolves devhub only for an explicit resolved true, legacy otherwise", () => {
     expect(resolveSettingsSecondaryMode({ devHubFeatures: { settingsSecondary: true } })).toBe("devhub");
     expect(resolveSettingsSecondaryMode({ devHubFeatures: { settingsSecondary: false } })).toBe("legacy");
-    expect(resolveSettingsSecondaryMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveSettingsSecondaryMode({})).toBe("legacy");
-    expect(resolveSettingsSecondaryMode(null)).toBe("legacy");
-    expect(resolveSettingsSecondaryMode(undefined)).toBe("legacy");
+    expect(resolveSettingsSecondaryMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveSettingsSecondaryMode({})).toBe("devhub");
+    expect(resolveSettingsSecondaryMode(null)).toBe("devhub");
+    expect(resolveSettingsSecondaryMode(undefined)).toBe("devhub");
   });
 
   it("isSettingsSecondaryApplied is true only for an explicit true feature flag", () => {

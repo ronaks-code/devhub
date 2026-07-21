@@ -270,13 +270,14 @@ describe("nextRovingIndex keyboard math", () => {
 });
 
 describe("taskRail slice-flag gate", () => {
-  it("mounts TaskRail only for a resolved true taskRail flag", () => {
+  it("defaults to the DevHub rail; only an explicit false taskRail flag selects legacy", () => {
     expect(resolveTaskRailMode({ devHubFeatures: { taskRail: true } })).toBe("devhub");
     expect(resolveTaskRailMode({ devHubFeatures: { taskRail: false } })).toBe("legacy");
-    expect(resolveTaskRailMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveTaskRailMode({})).toBe("legacy");
-    expect(resolveTaskRailMode(null)).toBe("legacy");
-    expect(resolveTaskRailMode(undefined)).toBe("legacy");
+    // Missing settings default to the new rail (no legacy first-paint flash).
+    expect(resolveTaskRailMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveTaskRailMode({})).toBe("devhub");
+    expect(resolveTaskRailMode(null)).toBe("devhub");
+    expect(resolveTaskRailMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when taskRail is explicitly true", () => {

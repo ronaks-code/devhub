@@ -27,32 +27,32 @@
  */
 :root,
 :root[data-theme="dark"] {
-  /* Surfaces */
-  --bg: #09090b; /* zinc-950 — app background */
-  --panel: #18181b; /* zinc-900 — cards/composer */
-  --panel-soft: rgba(24, 24, 27, 0.3); /* zinc-900/30 — subtle fills */
-  --elevated: #27272a; /* zinc-800 — hover surfaces */
+  /* Surfaces — purple-charcoal void (Aurora Cockpit retint §1.1A) */
+  --bg: #131017; /* was #09090b (zinc-950) — deep purple-charcoal void */
+  --panel: #1a1521; /* was #18181b — warm panel */
+  --panel-soft: rgba(26, 21, 33, 0.5); /* warm panel/50 */
+  --elevated: #241d30; /* was #27272a — hover/raised */
 
   /* Borders / dividers */
-  --border: #27272a; /* zinc-800 */
-  --border-soft: rgba(39, 39, 42, 0.8); /* zinc-800/80 */
+  --border: #2a2337; /* was #27272a */
+  --border-soft: rgba(42, 35, 55, 0.8);
 
-  /* Text */
-  --text: #f4f4f5; /* zinc-100 */
-  --text-muted: #a1a1aa; /* zinc-400 */
-  --text-dim: #71717a; /* zinc-500 */
-  --text-faint: #52525b; /* zinc-600 */
+  /* Text — warm ink */
+  --text: #ece7f4; /* was #f4f4f5 */
+  --text-muted: #a99fbb;
+  --text-dim: #6f6583;
+  --text-faint: #554c68;
 
-  /* Accent (clay) */
-  --accent: #d97757; /* clay-500 */
-  --accent-hover: #c25e3f; /* clay-600 */
-  --accent-fg: #ffffff; /* text on accent */
-  --accent-soft: rgba(217, 119, 87, 0.15); /* clay-500/15 tint */
+  /* Accent (violet is now the brand accent; clay retired) */
+  --accent: #a78bfa; /* was clay #d97757 */
+  --accent-hover: #8b6cf0;
+  --accent-fg: #17121f; /* dark text on violet */
+  --accent-soft: rgba(167, 139, 250, 0.14);
 
   /* Status */
-  --danger: #f87171; /* red-400 */
-  --warning: #fbbf24; /* amber-400 */
-  --success: #34d399; /* emerald-400 */
+  --danger: #ff6b5e;
+  --warning: #f0b25e;
+  --success: #4fd6a4;
 
   color-scheme: dark;
 }
@@ -69,49 +69,107 @@
  */
 :root,
 :root[data-theme="dark"] {
-  /* Observed shell surfaces */
-  --dh-canvas: #181818;
-  --dh-header: #181818;
-  --dh-rail-inactive: #202020;
-  --dh-rail-active: #404040;
-  --dh-surface: #2d2d2d;
-  --dh-user-bubble: #242424;
-  --dh-control: #262626;
-  --dh-control-seam: #252525;
-  --dh-selected: #313131;
+  /* Observed shell surfaces — retinted purple-charcoal (Aurora Cockpit §1.1A) */
+  --dh-canvas: #151119; /* was #181818 */
+  --dh-header: rgba(26, 21, 34, 0.6); /* was #181818 — header is now translucent glass */
+  --dh-rail-inactive: #14101a; /* was #202020 — icon rail, darkest chrome */
+  --dh-rail-active: rgba(167, 139, 250, 0.13); /* was #404040 */
+  --dh-surface: #1e1927; /* was #2d2d2d */
+  --dh-user-bubble: #221a2f; /* was #242424 (gradient overlay comes from --dh-chat-*, §1.1B) */
+  --dh-control: #191420; /* was #262626 — inset input/control wells */
+  --dh-control-seam: #251e33; /* was #252525 */
+  --dh-selected: #282239; /* was #313131 */
 
-  /* Locked state fallbacks; static captures did not expose all states */
-  --dh-hover: #2a2a2a;
-  --dh-pressed: #383838;
-  --dh-scrim: rgb(0 0 0 / 0.6);
+  /* State surfaces */
+  --dh-hover: #221c2f; /* was #2a2a2a */
+  --dh-pressed: #2e2540; /* was #383838 */
+  --dh-scrim: rgb(10 6 18 / 0.65);
 
   /* Text */
-  --dh-text-strong: #ffffff;
-  --dh-text: #dedede;
-  --dh-text-muted: #b0b0b0; /* M8-PERF-A11Y: was #969696 (3.5:1, axe color-contrast fail); now >=4.5:1 on every dh-* dark surface */
-  --dh-text-disabled: #676767;
+  --dh-text-strong: #f5f2fa;
+  --dh-text: #ded7ec;
+  --dh-text-muted: #a99fbb; /* keep >= 4.5:1 on all dh surfaces (M8 a11y rule stands) */
+  --dh-text-disabled: #6b6182;
 
   /* Dividers and focus */
-  --dh-border-subtle: #2b2b2b;
-  --dh-border: #3a3a3a;
-  --dh-border-rail: #424242;
-  --dh-focus: #8ab4f8;
-  --dh-link: #86b9f9;
+  --dh-border-subtle: #262031;
+  --dh-border: #342c47;
+  --dh-border-rail: #2c2439;
+  --dh-focus: #a78bfa; /* was #8ab4f8 blue — violet focus ring */
+  --dh-link: #b9a2ff; /* was #86b9f9 */
 
   /* Status; always pair color with text and/or an icon */
-  --dh-success: #4fa66a;
-  --dh-warning: #d4a24c;
-  --dh-danger: #d95c5c;
-  --dh-diff-add: #45a65a;
-  --dh-diff-remove: #db5652;
+  --dh-success: #4fd6a4;
+  --dh-warning: #f0b25e;
+  --dh-danger: #ff6b5e;
+  --dh-diff-add: #4fd6a4;
+  --dh-diff-remove: #f2708c;
 
   /* Product brand; never reuse as neutral selection */
-  --dh-brand: #d97757;
+  --dh-brand: #a78bfa; /* was clay #d97757 */
 
   /* Provider/elevated-access accents, never provider logos */
-  --dh-provider-openai: #6f8f7d;
-  --dh-provider-anthropic: #b87356;
-  --dh-access-elevated: #d97757;
+  --dh-provider-openai: #4fd6a4; /* mint — Codex/OpenAI identity */
+  --dh-provider-anthropic: #ff7f6e; /* coral — Claude identity */
+  --dh-access-elevated: #f0b25e;
+}
+
+/*
+ * Aurora Cockpit glass + accent layer (§1.1B). ADDITIVE glass recipe on top of the
+ * retinted dh-* tokens above. The three grades map to chrome / surface / vibrant.
+ * Components consume the `.glass-*` utility classes (below), never these raw values.
+ */
+:root,
+:root[data-theme="dark"] {
+  /* Aurora backdrop — the ambient wash behind main surfaces */
+  --dh-aurora:
+    radial-gradient(900px 600px at 12% -10%, rgba(139, 108, 240, 0.2), transparent 60%),
+    radial-gradient(700px 500px at 95% 8%, rgba(244, 114, 140, 0.09), transparent 55%),
+    radial-gradient(1000px 800px at 50% 115%, rgba(139, 108, 240, 0.12), transparent 60%),
+    linear-gradient(160deg, #181322 0%, #14101a 45%, #171223 100%);
+  /* Quieter wash for chrome-adjacent routes (dashboard/ops/settings) */
+  --dh-aurora-soft:
+    radial-gradient(1100px 600px at 78% -10%, rgba(139, 92, 246, 0.14), transparent 62%),
+    radial-gradient(900px 540px at -8% 108%, rgba(244, 114, 182, 0.07), transparent 60%),
+    linear-gradient(168deg, #191424 0%, #15111c 52%, #171226 100%);
+
+  /* Glass recipe — chrome grade (sidebar, top bar, status bar, nav) */
+  --dh-glass-chrome-bg: rgba(26, 20, 36, 0.55);
+  --dh-glass-chrome-blur: 20px;
+  /* Glass recipe — surface grade (cards, panels, inspector) */
+  --dh-glass-bg: rgba(38, 30, 52, 0.45);
+  --dh-glass-blur: 20px;
+  /* Glass recipe — vibrant grade (chat panes, composer, hero cards) */
+  --dh-glass-hi-bg: rgba(44, 34, 62, 0.6);
+  --dh-glass-hi-blur: 28px;
+
+  --dh-glass-border: rgba(167, 139, 250, 0.14);
+  --dh-glass-border-hi: rgba(167, 139, 250, 0.28);
+  --dh-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --dh-glass-shadow: 0 16px 48px rgba(10, 6, 18, 0.5);
+  --dh-glass-shadow-float: 0 20px 50px rgba(8, 5, 16, 0.65);
+
+  /* Warm accent pair (Claude-coral + rose) used for gradients & live states */
+  --dh-coral: #ff7f6e;
+  --dh-rose: #f2708c;
+  --dh-violet: #a78bfa;
+  --dh-violet-deep: #8b6cf0;
+  --dh-grad-brand: linear-gradient(135deg, var(--dh-violet-deep), var(--dh-rose));
+  --dh-grad-warm: linear-gradient(135deg, var(--dh-coral), var(--dh-rose));
+
+  /* Chat-surface vibrancy (§3.3) */
+  --dh-chat-user-bubble: linear-gradient(140deg, rgba(139, 108, 240, 0.24), rgba(244, 114, 140, 0.14));
+  --dh-chat-user-border: rgba(167, 139, 250, 0.3);
+  --dh-chat-ai-bubble: rgba(255, 255, 255, 0.028);
+
+  /* Typography scale (§1.1D). font-size / weight — line-height/spacing applied per class. */
+  --dh-font-sans: -apple-system, "SF Pro Text", Inter, system-ui, sans-serif;
+  --dh-font-h1: 680 17px/1.25 var(--dh-font-sans);
+  --dh-font-h2: 650 13px/1.3 var(--dh-font-sans);
+  --dh-font-body: 400 13.5px/1.65 var(--dh-font-sans);
+  --dh-font-ui: 500 12.5px/1.35 var(--dh-font-sans);
+  --dh-font-sub: 500 11px/1.35 var(--dh-font-sans);
+  --dh-font-kpi: 600 31px/1 var(--font-mono);
 }
 
 /* Wide-reference geometry constants (design-system.md §3.1). Logical CSS pixels
@@ -151,6 +209,153 @@
   --dh-radius-goal: 17px;
   --dh-radius-composer: 21px;
   --dh-radius-pill: 999px;
+}
+
+/* ── Aurora Cockpit glass utilities (§1.1B/E) ────────────────────────────────
+ * The canonical glass recipe as classes. Every glass surface ALWAYS carries its
+ * 1px violet-tint border + top highlight — unbordered glass reads as mud. Never
+ * nest glass inside glass more than one level. */
+.glass-chrome {
+  background: var(--dh-glass-chrome-bg);
+  backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  border: 1px solid var(--dh-glass-border);
+  box-shadow: var(--dh-glass-shadow), var(--dh-glass-highlight);
+}
+.glass-card {
+  background: var(--dh-glass-bg);
+  backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  border: 1px solid var(--dh-glass-border);
+  border-radius: var(--dh-radius-inspector); /* 16px */
+  box-shadow: 0 18px 46px -18px rgba(0, 0, 0, 0.55), var(--dh-glass-highlight);
+}
+.glass-hi {
+  background: var(--dh-glass-hi-bg);
+  backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--dh-glass-hi-blur)) saturate(1.4);
+  border: 1px solid var(--dh-glass-border-hi);
+  box-shadow: var(--dh-glass-shadow-float), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+/* Aurora wash — painted ONCE on a shell content container, never per-card. */
+.dh-aurora-bg {
+  background: var(--dh-aurora);
+}
+.dh-aurora-bg--soft {
+  background: var(--dh-aurora-soft);
+}
+
+/*
+ * Performance guard for glass. `backdrop-filter` is GPU-costly, so on reduced/perf
+ * mode we swap it for a solid surface. Wired to the app's real signal
+ * (`data-reduce-motion`, set by useReducedMotion on <html>) AND the spec-named
+ * `[data-perf="reduced"]` forward hook. Solid --dh-surface per §1.1B.
+ */
+:root[data-perf="reduced"] .glass-chrome,
+:root[data-perf="reduced"] .glass-card,
+:root[data-perf="reduced"] .glass-hi,
+html[data-reduce-motion="true"] .glass-chrome,
+html[data-reduce-motion="true"] .glass-card,
+html[data-reduce-motion="true"] .glass-hi {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--dh-surface);
+}
+
+/* Global kbd chip (§1.1E). */
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--dh-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--dh-text-muted);
+}
+
+/* Shared StatusDot (§1.1E) — 6px, color paired with meaning, running pulses. */
+.dh-status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--dh-radius-pill);
+  flex-shrink: 0;
+  background: #493f5e; /* idle default */
+}
+.dh-status-dot--running {
+  background: var(--dh-success);
+  box-shadow: 0 0 6px rgba(79, 214, 164, 0.8);
+  animation: dh-status-pulse 1.7s ease-in-out infinite;
+}
+.dh-status-dot--waiting {
+  background: var(--dh-warning);
+}
+.dh-status-dot--idle {
+  background: #493f5e;
+}
+.dh-status-dot--failed {
+  background: var(--dh-danger);
+  box-shadow: 0 0 6px rgba(255, 107, 94, 0.8);
+}
+@keyframes dh-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dh-status-dot--running {
+    animation: none;
+  }
+}
+
+/* Shared ProviderChip (§1.1E) — mono uppercase pill, color paired with letters. */
+.dh-provider-chip {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1.5px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.dh-provider-chip--anthropic {
+  color: #ffab9d;
+  background: rgba(255, 127, 110, 0.14);
+}
+.dh-provider-chip--openai {
+  color: #8fe6bf;
+  background: rgba(79, 214, 164, 0.12);
+}
+
+/* Typographic role helpers (§1.1D) — roles that need more than the font shorthand. */
+.dh-label {
+  font-family: var(--dh-font-sans);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dh-text-muted);
+}
+.dh-mono-ui {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dh-nums {
+  font-variant-numeric: tabular-nums;
 }
 
 /*
@@ -576,27 +781,28 @@
  * neutral surfaces. Not wired to any UI yet (groundwork only).
  */
 :root[data-theme="light"] {
-  --bg: #fafafa; /* zinc-50 */
+  /* Lavender paper (Aurora Cockpit §1.1C) */
+  --bg: #f4f2f9;
   --panel: #ffffff;
-  --panel-soft: rgba(244, 244, 245, 0.6); /* zinc-100/60 */
-  --elevated: #f4f4f5; /* zinc-100 */
+  --panel-soft: rgba(236, 232, 245, 0.6);
+  --elevated: #ece8f5;
 
-  --border: #e4e4e7; /* zinc-200 */
-  --border-soft: rgba(228, 228, 231, 0.9);
+  --border: #ddd6ec;
+  --border-soft: rgba(221, 214, 236, 0.9);
 
-  --text: #18181b; /* zinc-900 */
-  --text-muted: #52525b; /* zinc-600 */
-  --text-dim: #71717a; /* zinc-500 */
-  --text-faint: #a1a1aa; /* zinc-400 */
+  --text: #241e31;
+  --text-muted: #5f5675;
+  --text-dim: #8b81a3;
+  --text-faint: #a99fbb;
 
-  --accent: #d97757; /* clay-500 — identity stays */
-  --accent-hover: #c25e3f; /* clay-600 */
+  --accent: #7c5cf0; /* violet identity in light */
+  --accent-hover: #6a4ae0;
   --accent-fg: #ffffff;
-  --accent-soft: rgba(217, 119, 87, 0.12);
+  --accent-soft: rgba(124, 92, 240, 0.12);
 
-  --danger: #dc2626; /* red-600 */
-  --warning: #d97706; /* amber-600 */
-  --success: #059669; /* emerald-600 */
+  --danger: #dc3d2f;
+  --warning: #b07617;
+  --success: #0e9f6e;
 
   color-scheme: light;
 }
@@ -631,16 +837,17 @@ body {
  * so layout is untouched. New components SHOULD prefer var(--bg)/--panel/--text.
  */
 :root[data-theme="light"] {
-  --color-zinc-950: #fafafa;
+  /* Lavender-tinted neutrals so bg-zinc-*/text-zinc-* utilities read on lavender paper. */
+  --color-zinc-950: #f4f2f9;
   --color-zinc-900: #ffffff;
-  --color-zinc-800: #e4e4e7;
-  --color-zinc-700: #d4d4d8;
-  --color-zinc-600: #71717a;
-  --color-zinc-500: #52525b;
-  --color-zinc-400: #3f3f46;
-  --color-zinc-300: #27272a;
-  --color-zinc-200: #18181b;
-  --color-zinc-100: #09090b;
+  --color-zinc-800: #ddd6ec;
+  --color-zinc-700: #c9bfe0;
+  --color-zinc-600: #8b81a3;
+  --color-zinc-500: #5f5675;
+  --color-zinc-400: #4a4060;
+  --color-zinc-300: #332b47;
+  --color-zinc-200: #241e31;
+  --color-zinc-100: #17121f;
 
   /*
    * Status/accent LITERALS flipped for light, mirroring the zinc flip above.
@@ -669,46 +876,73 @@ body {
  * Text values keep >=4.5:1 on the light surfaces they pair with.
  */
 :root[data-theme="light"] {
-  /* Shell surfaces */
-  --dh-canvas: #fafafa;
-  --dh-header: #fafafa;
-  --dh-rail-inactive: #f4f4f5;
-  --dh-rail-active: #d9d9de;
+  /* Shell surfaces — lavender paper (Aurora Cockpit §1.1C) */
+  --dh-canvas: #f4f2f9;
+  --dh-header: rgba(255, 255, 255, 0.62);
+  --dh-rail-inactive: #efeaf7;
+  --dh-rail-active: rgba(124, 92, 240, 0.12);
   --dh-surface: #ffffff;
-  --dh-user-bubble: #f4f4f5;
-  --dh-control: #f4f4f5;
-  --dh-control-seam: #e9e9eb;
-  --dh-selected: #e4e4e7;
+  --dh-user-bubble: #efeaf7;
+  --dh-control: #edeaf6;
+  --dh-control-seam: #e4dff1;
+  --dh-selected: #e6e0f4;
 
-  --dh-hover: #ececee;
-  --dh-pressed: #d4d4d8;
-  --dh-scrim: rgb(0 0 0 / 0.4);
+  --dh-hover: #ece7f5;
+  --dh-pressed: #ddd6ec;
+  --dh-scrim: rgb(40 26 70 / 0.35);
 
   /* Text */
-  --dh-text-strong: #09090b;
-  --dh-text: #27272a;
-  --dh-text-muted: #52525b;
-  --dh-text-disabled: #a1a1aa;
+  --dh-text-strong: #17121f;
+  --dh-text: #2c2540;
+  --dh-text-muted: #5f5675;
+  --dh-text-disabled: #a99fbb;
 
   /* Dividers and focus */
-  --dh-border-subtle: #e4e4e7;
-  --dh-border: #d4d4d8;
-  --dh-border-rail: #d4d4d8;
-  --dh-focus: #1a73e8;
-  --dh-link: #1a66d0;
+  --dh-border-subtle: #e6e0f4;
+  --dh-border: #d8d0e8;
+  --dh-border-rail: #ddd6ec;
+  --dh-focus: #7c5cf0;
+  --dh-link: #6a4ae0;
 
-  /* Status */
-  --dh-success: #1a7f37;
-  --dh-warning: #9a6700;
-  --dh-danger: #cf222e;
-  --dh-diff-add: #1a7f37;
-  --dh-diff-remove: #cf222e;
+  /* Status (darkened for contrast on light) */
+  --dh-success: #0e9f6e;
+  --dh-warning: #b07617;
+  --dh-danger: #dc3d2f;
+  --dh-diff-add: #0e9f6e;
+  --dh-diff-remove: #d94f74;
 
-  /* Brand + provider accents (identity unchanged; darkened only where used as text) */
-  --dh-brand: #d97757;
-  --dh-provider-openai: #4f7360;
-  --dh-provider-anthropic: #9c5636;
-  --dh-access-elevated: #c25e3f;
+  /* Brand + provider accents */
+  --dh-brand: #7c5cf0;
+  --dh-provider-openai: #0e9f6e;
+  --dh-provider-anthropic: #e8604d;
+  --dh-access-elevated: #b07617;
+
+  /* Glass + aurora + warm accents (light overrides of the §1.1B layer) */
+  --dh-glass-chrome-bg: rgba(255, 255, 255, 0.62);
+  --dh-glass-bg: rgba(255, 255, 255, 0.55);
+  --dh-glass-hi-bg: rgba(255, 255, 255, 0.72);
+  --dh-glass-border: rgba(124, 92, 240, 0.14);
+  --dh-glass-border-hi: rgba(124, 92, 240, 0.26);
+  --dh-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --dh-glass-shadow: 0 16px 48px rgba(60, 40, 110, 0.1);
+  --dh-glass-shadow-float: 0 20px 50px rgba(60, 40, 110, 0.14);
+
+  --dh-coral: #e8604d;
+  --dh-rose: #d94f74;
+  --dh-violet: #7c5cf0;
+  --dh-violet-deep: #6a4ae0;
+
+  --dh-chat-user-bubble: linear-gradient(140deg, rgba(124, 92, 240, 0.16), rgba(217, 79, 116, 0.1));
+  --dh-chat-user-border: rgba(124, 92, 240, 0.28);
+  --dh-chat-ai-bubble: rgba(40, 26, 70, 0.03);
+
+  --dh-aurora:
+    radial-gradient(900px 600px at 12% -10%, rgba(124, 92, 240, 0.1), transparent 60%),
+    radial-gradient(700px 500px at 95% 8%, rgba(217, 79, 116, 0.05), transparent 55%),
+    linear-gradient(160deg, #f7f5fc 0%, #f2eff8 100%);
+  --dh-aurora-soft:
+    radial-gradient(1100px 600px at 78% -10%, rgba(124, 92, 240, 0.08), transparent 62%),
+    linear-gradient(168deg, #f7f5fc 0%, #f1edf8 100%);
 }
 
 * {

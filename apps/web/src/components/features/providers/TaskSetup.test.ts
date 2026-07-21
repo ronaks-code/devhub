@@ -200,10 +200,10 @@ describe("taskHeaderSetup slice flag gate", () => {
   it("resolves devhub only for an applied true flag; everything else stays legacy", () => {
     expect(resolveTaskHeaderSetupMode({ devHubFeatures: { taskHeaderSetup: true } })).toBe("devhub");
     expect(resolveTaskHeaderSetupMode({ devHubFeatures: { taskHeaderSetup: false } })).toBe("legacy");
-    expect(resolveTaskHeaderSetupMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveTaskHeaderSetupMode({})).toBe("legacy");
-    expect(resolveTaskHeaderSetupMode(null)).toBe("legacy");
-    expect(resolveTaskHeaderSetupMode(undefined)).toBe("legacy");
+    expect(resolveTaskHeaderSetupMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveTaskHeaderSetupMode({})).toBe("devhub");
+    expect(resolveTaskHeaderSetupMode(null)).toBe("devhub");
+    expect(resolveTaskHeaderSetupMode(undefined)).toBe("devhub");
   });
 
   it("isTaskHeaderSetupApplied is true only for an explicit true", () => {

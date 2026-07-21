@@ -204,13 +204,15 @@ describe("DevHubShell renders no hidden duplicate tabbable chrome", () => {
 });
 
 describe("shellChrome slice-flag gate", () => {
-  it("mounts DevHubShell only for a resolved true shellChrome flag", () => {
+  it("defaults to DevHubShell; only an explicit false shellChrome flag selects legacy", () => {
     expect(resolveShellChromeMode({ devHubFeatures: { shellChrome: true } })).toBe("devhub");
     expect(resolveShellChromeMode({ devHubFeatures: { shellChrome: false } })).toBe("legacy");
-    expect(resolveShellChromeMode({ devHubFeatures: {} })).toBe("legacy");
-    expect(resolveShellChromeMode({})).toBe("legacy");
-    expect(resolveShellChromeMode(null)).toBe("legacy");
-    expect(resolveShellChromeMode(undefined)).toBe("legacy");
+    // Missing/undefined settings (pre-`/api/settings`) default to the new chrome so the
+    // legacy first-paint flash dies; only an EXPLICIT stored false rolls back.
+    expect(resolveShellChromeMode({ devHubFeatures: {} })).toBe("devhub");
+    expect(resolveShellChromeMode({})).toBe("devhub");
+    expect(resolveShellChromeMode(null)).toBe("devhub");
+    expect(resolveShellChromeMode(undefined)).toBe("devhub");
   });
 
   it("reports applied only when shellChrome is explicitly true", () => {
