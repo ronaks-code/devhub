@@ -8,9 +8,9 @@ Loop Fable↔Opus until genuinely good. Fable=design spec done ✅.
 ## Phase 1 — Foundation (serial, one Opus writer) — owns index.css / App.tsx / features/shell/*
 - [x] Tokens retint + glass/aurora/typography + light mode + perf fallback (index.css) — commit 81d5652
 - [x] Shell fix: null-settings fallback legacy→devhub (kills flash) — flipped all 8 M6 slice resolvers. NOTE: ActivityTimeline is NOT dead (ThreadWorkspace.tsx:227 renders it) — kept, do NOT delete. commit 81d5652
-- [~] Sidebar: rail chrome now glass (CSS). STRUCTURAL rebuild (52px icon-rail + 272px panel split, kbd sidecar, status groups, worktrees, footer spend-meter) NOT done — see handoff below.
-- [ ] TopBar + ChatTabs (Conductor-style) + StatusBar; tab state in App.tsx; drag regions — NOT started
-- [~] Chat surface glass: composer/inspector/canvas glass + aurora done via CSS (commit 83b0c77). STRUCTURAL (compact tool cards, who-line avatars, InspectorDock→session-state sections, Launchpad) NOT done.
+- [x] Sidebar (§3.1): DONE — new Sidebar.tsx (52px icon-rail + g-chord sidecar + 272px glass panel), real status groups (Running/Needs review/Idle) from the running join, two-line rows (StatusDot + title + ProviderChip / project·branch + reltime + cost-on-hover), filter + chips, footer provider segment + model line + spend meter, ⌘\ collapse. commit fb79bcd. (Worktrees group DEFERRED — no worktree data at App root; would need a git/worktree endpoint join.)
+- [~] TopBar + ChatTabs + StatusBar + drag: StatusBar DONE (§3.7, commit b97f750 — 'N need you' on every route). TopBar now reads glass + drag region (commit 3a0b7c6). ChatTabs (Conductor multi-chat) + breadcrumb + openTabs/activeTabId state + ⌘1..9/⌘⇧W: NOT done — the one risky bit is integrating tabs into the single-row in-App TopBar; needs the TopBar extraction. See handoff.
+- [~] Chat surface glass: composer/inspector/canvas glass + aurora done via CSS (commit 83b0c77). STRUCTURAL (compact tool cards, who-line avatars, InspectorDock→session-state sections, Launchpad §3.3b) NOT done.
 - [x] Shared primitives: StatusDot, ProviderChip (components/ui/), global kbd — commit 81d5652
 - [x] Verify: typecheck clean + 694 tests pass (1 pre-existing unrelated api-auth fail) + build clean + boots w/ zero console errors + screenshot — /Users/ronak/.claude/jobs/977ae4f4/tmp/aurora-foundation/shell-dark.png
 - [ ] Adversarial review x2 (Codex + Fable) → fixes
