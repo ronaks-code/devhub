@@ -780,6 +780,53 @@ html[data-reduce-motion="true"] .dh-panel,
   background: var(--dh-surface);
 }
 
+/* ── StatusBar (§2.1/§3.7): 26px ambient strip under the main surface only ────── */
+.dh-statusbar {
+  height: 26px;
+  flex-shrink: 0;
+  background: var(--dh-glass-chrome-bg);
+  backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  border-top: 1px solid var(--dh-glass-border);
+}
+html[data-reduce-motion="true"] .dh-statusbar,
+:root[data-perf="reduced"] .dh-statusbar {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--dh-surface);
+}
+.dh-statusbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 100%;
+  padding: 0 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dh-text-muted);
+}
+.dh-status-left,
+.dh-status-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.dh-status-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dh-status-branch {
+  color: var(--dh-link);
+}
+.dh-status-attention {
+  color: var(--dh-warning);
+  font-weight: 600;
+}
+
 /*
  * shadcn/ui semantic color tokens (Tailwind v4). Adopted as the app's sanctioned
  * component-library layer. These are ADDITIVE: they generate the `bg-primary`,

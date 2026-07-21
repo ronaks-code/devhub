@@ -103,6 +103,7 @@ import {
   searchHitToResult,
 } from "./lib/m6-compose";
 import { Sidebar, type SidebarGroup, type SidebarRow } from "./components/features/shell/Sidebar";
+import { StatusBar } from "./components/features/shell/StatusBar";
 import { useStatsPolling } from "./hooks/useStatsPolling";
 import { buildFileChanges } from "./components/FileChangeSummary";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
@@ -1614,6 +1615,23 @@ export default function App() {
     return out;
   }, [sessions, liveRunning, project]);
 
+  // StatusBar ambient counts (§3.7) — real running/needsYou from the app-root poll.
+  const statusBarData = useMemo(() => {
+    const rs = liveRunning ?? [];
+    let running = 0;
+    const waitingAts: number[] = [];
+    for (const r of rs) {
+      if (deriveRunStatus(r) === "running") running += 1;
+      if (r.needsYou) waitingAts.push(r.statusUpdatedAt ?? r.startedAt ?? 0);
+    }
+    const real = waitingAts.filter((n) => n > 0);
+    return {
+      runningCount: running,
+      needsYouCount: waitingAts.length,
+      oldestNeedsYouAt: real.length ? Math.min(...real) : null,
+    };
+  }, [liveRunning]);
+
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
   // header otherwise. See `provider-capabilities.ts`.
@@ -1816,6 +1834,16 @@ export default function App() {
         mode={shellChromeMode}
         railLabel="Primary navigation"
         chromeless={taskRailMode === "devhub"}
+        statusBar={
+          <StatusBar
+            runningCount={statusBarData.runningCount}
+            needsYouCount={statusBarData.needsYouCount}
+            oldestNeedsYouAt={statusBarData.oldestNeedsYouAt}
+            monthToDateUsd={liveStats?.budget?.monthToDateUsd}
+            projectName={project?.name}
+            branch={page?.session?.gitBranch ?? null}
+          />
+        }
         header={
           <TopBar
             tab={tab}
