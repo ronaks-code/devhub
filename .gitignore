@@ -12,3 +12,6 @@ coverage/
 .claude-ui-data/
 data/
 .gstack/
+
+# Playwright CLI page-snapshot artifacts
+.playwright-cli/
