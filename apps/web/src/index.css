@@ -656,49 +656,83 @@ kbd {
   color: var(--dh-text-muted);
 }
 
-/* Two-line session row — NEVER collapses to one line (§3.1 legibility contract). */
-.dh-srow {
+/* Inbox tiers (§3.1v2) — row height is EARNED by state: "Needs you" gets the
+   full detailed card, "Running" a lighter live card, settled "Recent" history
+   collapses to a quiet one-line row. */
+.dh-scard {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  padding: 8px 12px;
-  border: 0;
-  border-left: 2px solid transparent;
+  gap: 3px;
+  width: calc(100% - 12px);
+  margin: 2px 6px;
+  padding: 8px 9px;
+  border: 1px solid var(--dh-border-subtle);
+  border-radius: 10px;
   background: transparent;
   text-align: left;
   cursor: pointer;
   color: var(--dh-text);
 }
-.dh-srow:hover {
-  background: var(--dh-hover);
+.dh-scard--attention {
+  border-color: color-mix(in srgb, var(--dh-warning) 36%, transparent);
+  background: color-mix(in srgb, var(--dh-warning) 6%, transparent);
 }
-.dh-srow--selected {
+.dh-scard--running {
+  border-color: color-mix(in srgb, var(--dh-coral) 22%, transparent);
+  background: color-mix(in srgb, var(--dh-coral) 3%, transparent);
+}
+.dh-scard:hover {
+  border-color: var(--dh-glass-border-hi);
+}
+.dh-scard--selected {
+  box-shadow: inset 2px 0 0 var(--dh-coral);
   background: var(--dh-selected);
-  border-left-color: var(--dh-coral);
 }
-.dh-srow:focus-visible {
+.dh-scard:focus-visible {
   outline: 2px solid var(--dh-focus);
   outline-offset: -2px;
 }
-.dh-srow-line1 {
+.dh-scard-line1 {
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
-.dh-srow-title {
+.dh-scard-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12.5px;
-  font-weight: 550;
+  font-weight: 600;
   color: var(--dh-text-strong);
 }
-.dh-srow-line2 {
+.dh-scard-time {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-text-disabled);
+}
+.dh-scard-timer {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-coral);
+  font-variant-numeric: tabular-nums;
+}
+.dh-scard-reason {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--dh-warning);
+}
+.dh-scard-meta {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -707,25 +741,106 @@ kbd {
   font-size: 10px;
   color: var(--dh-text-muted);
 }
-.dh-srow-sub {
+.dh-scard-branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dh-link);
+}
+.dh-scard-model {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dh-scard-cost {
+  flex-shrink: 0;
+  color: var(--dh-success);
+}
+.dh-spill {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.dh-spill[data-status="waiting"] {
+  color: var(--dh-warning);
+  background: color-mix(in srgb, var(--dh-warning) 14%, transparent);
+}
+.dh-spill[data-status="failed"] {
+  color: var(--dh-danger);
+  background: color-mix(in srgb, var(--dh-danger) 14%, transparent);
+}
+.dh-scard-open {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 9px;
+  border: 1px solid var(--dh-border-subtle);
+  border-radius: 6px;
+  background: var(--dh-control);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--dh-text);
+  cursor: pointer;
+}
+.dh-scard-open:hover {
+  border-color: var(--dh-glass-border-hi);
+  color: var(--dh-text-strong);
+}
+.dh-scard-open:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 1px;
+}
+
+/* Tier-3 compact one-line row — quiet settled history. */
+.dh-srowc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--dh-text);
+}
+.dh-srowc:hover {
+  background: var(--dh-hover);
+}
+.dh-srowc--selected {
+  background: var(--dh-selected);
+  border-left-color: var(--dh-coral);
+}
+.dh-srowc:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: -2px;
+}
+.dh-srowc-dotpad {
+  flex-shrink: 0;
+  width: 6px;
+}
+.dh-srowc-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11.5px;
 }
-.dh-srow-time {
+.dh-srowc-right {
   flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
   color: var(--dh-text-disabled);
-}
-.dh-srow-cost {
-  flex-shrink: 0;
-  color: var(--dh-success);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.dh-srow:hover .dh-srow-cost {
-  opacity: 1;
 }
 
 /* Worktrees group — read-only info rows (branch + main/locked). */

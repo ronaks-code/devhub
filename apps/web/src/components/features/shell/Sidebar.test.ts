@@ -15,15 +15,37 @@ function render(overrides: Partial<SidebarProps> = {}): string {
     onSelectDestination: () => {},
     groups: [
       {
+        id: "review",
+        label: "Needs you",
+        tier: "attention",
+        rows: [
+          {
+            id: "s-wait",
+            title: "Approve the deploy",
+            provider: "anthropic",
+            status: "waiting",
+            subtitle: "devhub · ⎇ feat/deploy",
+            branch: "feat/deploy",
+            model: "claude-opus-4-8",
+            reason: 'Asked: "Bash(git push)"',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      },
+      {
         id: "running",
         label: "Running",
+        tier: "active",
         rows: [
           {
             id: "s-run",
             title: "Wire the gateway",
-            provider: "anthropic",
+            provider: "openai",
             status: "running",
             subtitle: "devhub · ⎇ feat/aurora",
+            branch: "feat/aurora",
+            model: "claude-opus-4-8",
+            startedAt: Date.now() - 65_000,
             timestamp: new Date().toISOString(),
             costUsd: 1.5,
           },
@@ -31,11 +53,15 @@ function render(overrides: Partial<SidebarProps> = {}): string {
       },
       {
         id: "idle",
-        label: "Idle / Recent",
-        rows: [{ id: "s-idle", title: "Old session", provider: "openai" }],
+        label: "Recent",
+        tier: "recent",
+        rows: [
+          { id: "s-idle", title: "Old session", provider: "openai", costUsd: 0.42 },
+          { id: "s-idle2", title: "Older session", provider: "openai", timestamp: new Date().toISOString() },
+        ],
       },
     ],
-    sessionCount: 2,
+    sessionCount: 4,
     selectedSessionId: "s-run",
     onSelectSession: () => {},
     onNewTask: () => {},
@@ -70,38 +96,74 @@ describe("Sidebar cockpit (§3.1)", () => {
     expect(html).toContain('class="dh-navicon-chord"');
   });
 
-  it("renders two-line session rows grouped by run status — never one line", () => {
+  it("renders the three attention tiers with density earned by state (§3.1v2 inbox)", () => {
     const html = render();
+    expect(html).toContain(">Needs you<");
     expect(html).toContain(">Running<");
-    expect(html).toContain(">Idle / Recent<");
-    expect(html).toContain(">Wire the gateway<");
-    // Every row has BOTH lines present.
-    expect(html).toContain('class="dh-srow-line1"');
-    expect(html).toContain('class="dh-srow-line2"');
-    // Provider identity as letters (never a logo): CLD for anthropic, CDX for openai.
+    expect(html).toContain(">Recent<");
+    // Tier 1+2 are cards; tier 3 collapses to one-line rows.
+    expect(html).toContain('data-dh-tier="attention"');
+    expect(html).toContain('data-dh-tier="active"');
+    expect(html.split('data-dh-tier="recent"').length - 1).toBe(2);
+    expect(html).toContain("dh-scard--attention");
+    expect(html).toContain("dh-scard--running");
+    expect(html).toContain("dh-srowc");
+    // Provider identity as letters on the cards (never a logo): CLD / CDX. The
+    // compact recent one-liners intentionally carry no chip (quiet history).
     expect(html).toContain(">CLD<");
     expect(html).toContain(">CDX<");
+    expect(html.split("dh-provider-chip").length - 1).toBe(4); // 2 cards × (class + variant class)
+  });
+
+  it("renders the Needs-you card's real reason line, status pill, branch/model, and Open action", () => {
+    const html = render();
+    expect(html).toContain("Asked: &quot;Bash(git push)&quot;");
+    expect(html).toContain('data-status="waiting"'); // status pill
+    expect(html).toContain("⎇ feat/deploy");
+    expect(html).toContain("claude-opus-4-8");
+    expect(html).toContain(">Open<");
+    // The Open action lives ONLY on the attention tier (no invented approve button).
+    expect(html.split(">Open<").length - 1).toBe(1);
+    expect(html).not.toContain(">Approve<");
+  });
+
+  it("renders the Running card's live elapsed timer from the real startedAt", () => {
+    const html = render();
+    expect(html).toMatch(/running 1m \d+s/);
+    // A running row without startedAt would get no timer — verify via a groups override.
+    const noStart = render({
+      groups: [
+        {
+          id: "running",
+          label: "Running",
+          tier: "active",
+          rows: [{ id: "r1", title: "No start", provider: "anthropic", status: "running" }],
+        },
+      ],
+    });
+    expect(noStart).not.toContain("running NaN");
+    expect(noStart).not.toMatch(/running \d/);
   });
 
   it("shows a status dot ONLY for a row with a real running-join status", () => {
     const html = render();
-    // The running row gets the pulsing dot; the idle row (no status) gets none.
+    // The running row gets the pulsing dot; the idle rows (no status) get none.
     expect(html.split("dh-status-dot--running").length - 1).toBe(1);
-    expect(html).not.toContain("dh-status-dot--idle"); // idle row has no status field → no dot
+    expect(html.split("dh-status-dot--waiting").length - 1).toBe(1);
+    expect(html).not.toContain("dh-status-dot--idle"); // idle rows have no status field → no dot
   });
 
-  it("marks the selected row and renders the cost badge only when cost exists", () => {
+  it("marks the selected row and renders cost-or-time on recent one-liners", () => {
     const html = render();
     expect(html.split('data-dh-selected=""').length - 1).toBe(1);
-    expect(html).toContain("$1.50"); // running row has costUsd
-    // The idle row has no costUsd → exactly one cost badge in the whole tree.
-    expect(html.split("dh-srow-cost").length - 1).toBe(1);
+    expect(html).toContain("$1.50"); // running card cost (costUsd > 0)
+    expect(html).toContain("$0.42"); // recent one-liner shows cost when it exists…
+    expect(html.split("dh-srowc-right").length - 1).toBe(2); // …or the relative time
   });
 
-  it("omits the line-2 subtitle text when a session has none (no placeholder lies)", () => {
+  it("renders a reason line only when one exists (no placeholder lies)", () => {
     const html = render();
-    expect(html).toContain("devhub · ⎇ feat/aurora"); // running row subtitle
-    // Idle row has no subtitle — its sub span is empty, not a fabricated value.
+    expect(html.split("dh-scard-reason").length - 1).toBe(1); // only the waiting card
     expect(html).not.toContain("undefined");
   });
 
@@ -120,7 +182,7 @@ describe("Sidebar cockpit (§3.1)", () => {
   it("renders the filter input + chips", () => {
     const html = render();
     expect(html).toContain('placeholder="Filter sessions"');
-    for (const label of ["All", "Running", "Review", "Claude", "Codex"]) {
+    for (const label of ["All", "Needs you", "Running", "Claude", "Codex"]) {
       expect(html).toContain(`>${label}<`);
     }
   });
@@ -162,6 +224,7 @@ describe("Sidebar cockpit (§3.1)", () => {
     expect(SIDEBAR_GEOMETRY.panelWidth).toBe(272);
     expect(SIDEBAR_GEOMETRY.railWidth).toBe(324);
     expect(SIDEBAR_GEOMETRY.rowMinHeight).toBe(44);
+    expect(SIDEBAR_GEOMETRY.compactRowHeight).toBe(26);
     expect(Object.isFrozen(SIDEBAR_GEOMETRY)).toBe(true);
     // Sidebar and shell never drift.
     expect(SIDEBAR_GEOMETRY.railWidth).toBe(SHELL_GEOMETRY.railWidth);

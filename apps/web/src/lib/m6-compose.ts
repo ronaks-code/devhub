@@ -84,6 +84,24 @@ export function deriveRunStatus(r: RunningSession | null | undefined): RailRunSt
   return "idle";
 }
 
+/**
+ * One-line human reason a session sits in the sidebar's "Needs you" tier (§3.1v2
+ * inbox cards). Composed ONLY from real `RunningSession` fields — `waitingFor` is
+ * the permission-prompt/tool string Claude Code itself reported; the fallbacks
+ * describe the real `alive`/`stale` flags. Returns undefined when the run carries
+ * no explainable signal (the card then simply renders no reason line).
+ */
+export function describeRunReason(
+  r: RunningSession,
+  status: RailRunStatus | undefined,
+): string | undefined {
+  if (r.waitingFor) return `Asked: "${r.waitingFor}"`;
+  if (r.needsYou) return "Needs your approval";
+  if (status === "waiting") return "Waiting";
+  if (status === "failed") return r.alive === false ? "Process exited" : "Stalled — no recent progress";
+  return undefined;
+}
+
 /** Index the running list by sessionId for O(1) joins against the session list. */
 export function indexRunningBySession(
   running: readonly RunningSession[] | null | undefined,

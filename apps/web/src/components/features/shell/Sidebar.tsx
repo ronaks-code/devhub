@@ -40,6 +40,8 @@ export const SIDEBAR_GEOMETRY = Object.freeze({
   railWidth: 324,
   collapsedWidth: 52,
   rowMinHeight: 44,
+  /** Tier-3 "recent" one-line rows (§3.1v2) — settled history earns less height. */
+  compactRowHeight: 26,
   railInset: 8,
 } as const);
 
@@ -56,18 +58,39 @@ export interface SidebarRow {
   title: string;
   provider: ChipProvider;
   status?: StatusKind;
-  /** Line 2 lead text — e.g. "project · ⎇ branch". Omitted when absent. */
+  /** Legacy line-2 lead text — kept for filter matching. Omitted when absent. */
   subtitle?: string;
   /** ISO timestamp for the right-aligned relative time. */
   timestamp?: string | null;
-  /** Session cost — shown as a hover badge only. */
+  /** Session cost — rendered only when present (> 0 at the call site). */
   costUsd?: number;
+  /** Real git branch (SessionSummary.gitBranch) for the tier cards. */
+  branch?: string | null;
+  /** Model id when the session reported one (SessionSummary.model / running join). */
+  model?: string | null;
+  /**
+   * Tier-1 reason line, composed by the caller from the running join's REAL
+   * `waitingFor`/`alive`/`stale` fields (see m6-compose `describeRunReason`).
+   */
+  reason?: string;
+  /** Epoch ms the live run started (RunningSession.startedAt) — drives the tier-2 timer. */
+  startedAt?: number | null;
 }
+
+/**
+ * Attention tier → row density (§3.1v2 inbox): row height is EARNED by state.
+ *  - "attention" (needs you): full detailed card — reason line, status pill, Open.
+ *  - "active"    (running):   lighter card with a live elapsed timer.
+ *  - "recent"    (settled):   compact one-line row — quiet history.
+ */
+export type SidebarTier = "attention" | "active" | "recent";
 
 export interface SidebarGroup {
   id: string;
   label: string;
   rows: SidebarRow[];
+  /** Row density for this group; defaults to the quiet "recent" one-liners. */
+  tier?: SidebarTier;
 }
 
 /**
@@ -141,10 +164,20 @@ function relTime(iso: string | null | undefined): string {
   return `${Math.floor(h / 24)}d`;
 }
 
+/** Live elapsed for a tier-2 running card (from the run's real startedAt). */
+function elapsedTime(startedAt: number | null | undefined, nowMs: number): string | null {
+  if (!startedAt || startedAt <= 0) return null;
+  const s = Math.max(0, Math.floor((nowMs - startedAt) / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
 const CHIP_FILTERS = [
   { id: "all", label: "All" },
+  { id: "review", label: "Needs you" },
   { id: "running", label: "Running" },
-  { id: "review", label: "Review" },
   { id: "anthropic", label: "Claude" },
   { id: "openai", label: "Codex" },
 ] as const;
@@ -168,6 +201,18 @@ export function Sidebar({
   const [collapsed, setCollapsed] = useState<boolean>(() => readCompat(COLLAPSE_KEY) === "1");
   const [filter, setFilter] = useState("");
   const [chip, setChip] = useState<ChipFilter>("all");
+
+  // 1s tick for the tier-2 "running {elapsed}" timers — armed only while a
+  // running card actually carries a real startedAt (no rows → no interval).
+  const hasLiveTimer = groups.some(
+    (g) => g.tier === "active" && g.rows.some((r) => r.startedAt && r.startedAt > 0),
+  );
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!hasLiveTimer) return;
+    const t = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [hasLiveTimer]);
 
   const toggleCollapsed = useCallback(() => {
     setCollapsed((c) => {
@@ -224,7 +269,8 @@ export function Sidebar({
       .map((g) => ({
         ...g,
         rows: g.rows.filter((r) => {
-          if (q && !`${r.title} ${r.subtitle ?? ""}`.toLowerCase().includes(q)) return false;
+          const hay = `${r.title} ${r.subtitle ?? ""} ${r.branch ?? ""} ${r.model ?? ""} ${r.reason ?? ""}`;
+          if (q && !hay.toLowerCase().includes(q)) return false;
           if (chip === "running" && r.status !== "running") return false;
           if (chip === "review" && !(r.status === "waiting" || r.status === "failed")) return false;
           if (chip === "anthropic" && r.provider !== "anthropic") return false;
@@ -347,30 +393,102 @@ export function Sidebar({
                   <span className="dh-label">{g.label}</span>
                   <span className="dh-sgroup-count">{g.rows.length}</span>
                 </div>
-                {g.rows.map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className={cn("dh-srow", r.id === selectedSessionId && "dh-srow--selected")}
-                    data-dh-srow=""
-                    data-dh-selected={r.id === selectedSessionId ? "" : undefined}
-                    aria-current={r.id === selectedSessionId ? "page" : undefined}
-                    onClick={() => onSelectSession(r.id)}
-                  >
-                    <span className="dh-srow-line1">
-                      {r.status ? <StatusDot status={r.status} /> : null}
-                      <span className="dh-srow-title">{r.title}</span>
-                      <ProviderChip provider={r.provider} />
-                    </span>
-                    <span className="dh-srow-line2">
-                      {r.subtitle ? <span className="dh-srow-sub">{r.subtitle}</span> : <span className="dh-srow-sub" />}
-                      {typeof r.costUsd === "number" ? (
-                        <span className="dh-srow-cost">${r.costUsd.toFixed(2)}</span>
+                {g.rows.map((r) => {
+                  const selected = r.id === selectedSessionId;
+                  const tier = g.tier ?? "recent";
+                  const open = () => onSelectSession(r.id);
+                  // Tier 3 — settled history collapses to a quiet one-line row.
+                  if (tier === "recent") {
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className={cn("dh-srowc", selected && "dh-srowc--selected")}
+                        data-dh-srow=""
+                        data-dh-tier="recent"
+                        data-dh-selected={selected ? "" : undefined}
+                        aria-current={selected ? "page" : undefined}
+                        onClick={open}
+                      >
+                        {r.status ? <StatusDot status={r.status} /> : <span className="dh-srowc-dotpad" aria-hidden />}
+                        <span className="dh-srowc-title">{r.title}</span>
+                        <span className="dh-srowc-right">
+                          {typeof r.costUsd === "number" ? `$${r.costUsd.toFixed(2)}` : relTime(r.timestamp)}
+                        </span>
+                      </button>
+                    );
+                  }
+                  // Tiers 1+2 — cards. A div (not button) so the tier-1 Open action
+                  // can be a REAL nested button without invalid button-in-button DOM.
+                  const el = tier === "active" ? elapsedTime(r.startedAt, nowMs) : null;
+                  return (
+                    <div
+                      key={r.id}
+                      role="button"
+                      tabIndex={0}
+                      className={cn(
+                        "dh-scard",
+                        tier === "attention" ? "dh-scard--attention" : "dh-scard--running",
+                        selected && "dh-scard--selected",
+                      )}
+                      data-dh-srow=""
+                      data-dh-tier={tier}
+                      data-dh-selected={selected ? "" : undefined}
+                      aria-current={selected ? "page" : undefined}
+                      onClick={open}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          open();
+                        }
+                      }}
+                    >
+                      <span className="dh-scard-line1">
+                        {r.status ? <StatusDot status={r.status} /> : null}
+                        <span className="dh-scard-title">{r.title}</span>
+                        {el ? (
+                          <span className="dh-scard-timer">{`running ${el}`}</span>
+                        ) : r.timestamp ? (
+                          <span className="dh-scard-time">{relTime(r.timestamp)}</span>
+                        ) : null}
+                      </span>
+                      {tier === "attention" ? (
+                        // Reason + the Open action share a row so the meta line
+                        // below keeps room for the real branch/model text.
+                        <span className="dh-scard-line1">
+                          {r.reason ? (
+                            <span className="dh-scard-reason" title={r.reason}>
+                              {r.reason}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="dh-scard-open"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              open();
+                            }}
+                          >
+                            Open
+                          </button>
+                        </span>
                       ) : null}
-                      {r.timestamp ? <span className="dh-srow-time">{relTime(r.timestamp)}</span> : null}
-                    </span>
-                  </button>
-                ))}
+                      <span className="dh-scard-meta">
+                        {tier === "attention" && r.status ? (
+                          <span className="dh-spill" data-status={r.status}>
+                            {r.status === "failed" ? "stalled" : "waiting"}
+                          </span>
+                        ) : null}
+                        {r.branch ? <span className="dh-scard-branch">{`⎇ ${r.branch}`}</span> : null}
+                        {r.model ? <span className="dh-scard-model">{r.model}</span> : null}
+                        <ProviderChip provider={r.provider} />
+                        {tier === "active" && typeof r.costUsd === "number" ? (
+                          <span className="dh-scard-cost">${r.costUsd.toFixed(2)}</span>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             ))
           )}

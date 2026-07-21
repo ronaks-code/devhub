@@ -95,6 +95,7 @@ import {
   buildEnvironmentSummary,
   buildTaskRailSections,
   deriveRunStatus,
+  describeRunReason,
   groupSessionsByRunStatus,
   indexRunningBySession,
   LEGACY_SESSION_PROVIDER,
@@ -1353,22 +1354,31 @@ export default function App() {
     const runById = indexRunningBySession(liveRunning);
     const projName = project?.name;
     const toRow = (s: SessionSummary): SidebarRow => {
+      const run = runById.get(s.sessionId);
+      const status = deriveRunStatus(run);
       const parts = [projName, s.gitBranch ? `⎇ ${s.gitBranch}` : ""].filter(Boolean);
       return {
         id: s.sessionId,
         title: displaySessionTitle(s, projName ?? "Session"),
         provider: LEGACY_SESSION_PROVIDER,
-        status: deriveRunStatus(runById.get(s.sessionId)),
+        status,
         subtitle: parts.length ? parts.join(" · ") : undefined,
         timestamp: s.lastTimestamp,
         costUsd: s.costUsd > 0 ? s.costUsd : undefined,
+        branch: s.gitBranch ?? undefined,
+        model: s.model ?? run?.model ?? undefined,
+        reason: run ? describeRunReason(run, status) : undefined,
+        startedAt: run?.startedAt ?? undefined,
       };
     };
+    // Inbox attention tiers (§3.1v2): Needs you (detailed cards) → Running (live
+    // cards) → Recent (one-line history). Order = urgency, density = state.
     const out: SidebarGroup[] = [];
-    if (grouped.running.length) out.push({ id: "running", label: "Running", rows: grouped.running.map(toRow) });
     if (grouped.needsReview.length)
-      out.push({ id: "review", label: "Needs review", rows: grouped.needsReview.map(toRow) });
-    if (grouped.idle.length) out.push({ id: "idle", label: "Idle / Recent", rows: grouped.idle.map(toRow) });
+      out.push({ id: "review", label: "Needs you", tier: "attention", rows: grouped.needsReview.map(toRow) });
+    if (grouped.running.length)
+      out.push({ id: "running", label: "Running", tier: "active", rows: grouped.running.map(toRow) });
+    if (grouped.idle.length) out.push({ id: "idle", label: "Recent", tier: "recent", rows: grouped.idle.map(toRow) });
     return out;
   }, [sessions, liveRunning, project]);
 

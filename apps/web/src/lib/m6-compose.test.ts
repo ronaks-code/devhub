@@ -4,6 +4,7 @@ import {
   buildEnvironmentSummary,
   buildTaskRailSections,
   deriveRunStatus,
+  describeRunReason,
   groupSessionsByRunStatus,
   indexRunningBySession,
   legacyDestinationForTarget,
@@ -63,6 +64,24 @@ describe("deriveRunStatus (honest run-state join)", () => {
     expect(deriveRunStatus(running({ status: "busy", alive: true }))).toBe("running");
     expect(deriveRunStatus(running({ status: "waiting", alive: true, needsYou: false }))).toBe("running");
     expect(deriveRunStatus(running({ status: "idle", alive: false }))).toBe("failed");
+  });
+});
+
+describe("describeRunReason (§3.1v2 Needs-you reason line)", () => {
+  it("quotes the real waitingFor string when the run reports one", () => {
+    const r = running({ status: "waiting", waitingFor: "Bash(git push)", needsYou: true });
+    expect(describeRunReason(r, "waiting")).toBe('Asked: "Bash(git push)"');
+  });
+  it("falls back to the real needsYou / waiting flags", () => {
+    expect(describeRunReason(running({ needsYou: true }), "waiting")).toBe("Needs your approval");
+    expect(describeRunReason(running({ status: "waiting" }), "waiting")).toBe("Waiting");
+  });
+  it("describes failed runs from the real alive/stale flags", () => {
+    expect(describeRunReason(running({ alive: false, status: "dead" }), "failed")).toBe("Process exited");
+    expect(describeRunReason(running({ stale: true }), "failed")).toBe("Stalled — no recent progress");
+  });
+  it("returns undefined when there is no explainable signal (no fabricated reason)", () => {
+    expect(describeRunReason(running({ status: "busy", alive: true }), "running")).toBeUndefined();
   });
 });
 
