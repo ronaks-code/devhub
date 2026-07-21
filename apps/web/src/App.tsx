@@ -672,6 +672,10 @@ export default function App() {
   // "New task" / programmatic reset). The native Codex pane consumes the same
   // signal so every create intent gets fresh local form/draft state too.
   const [chatNonce, setChatNonce] = useState(0);
+  // Aurora Cockpit §3.3b: the Launchpad hero composer hands its typed prompt to
+  // the ChatHost it opens, so a new task starts with the user's own words already
+  // in the composer. Consumed once per launch (ChatHost seeds it on mount).
+  const [launchDraft, setLaunchDraft] = useState("");
   const [codexCreateRequested, setCodexCreateRequested] = useState(false);
   // Chat model lifted to App so the command palette can switch it; ChatPane
   // still owns permission mode locally. Falls back to settings then a default.
@@ -1557,9 +1561,10 @@ export default function App() {
     setDhSearchError(false);
   }, [searchOpen]);
 
-  const startNewChat = useCallback(() => {
+  const startNewChat = useCallback((draft?: string) => {
     const mechanics = settings?.defaultMechanics ?? "claude";
     setChatSeed(null);
+    setLaunchDraft(draft ?? "");
     setChatNonce((n) => n + 1);
     setCodexCreateRequested(mechanics === "codex");
     setTab(mechanics === "codex" ? "codex-history" : "chat");
@@ -1580,7 +1585,7 @@ export default function App() {
       claudeModel={settings?.defaultModel ?? undefined}
       recents={recents}
       onOpenRecent={openSession}
-      onLaunch={() => startNewChat()}
+      onLaunch={(draft) => startNewChat(draft)}
       onBrowse={() => { setChatSeed(null); setTab("browse"); }}
       onOpenCodexHistory={() => { setChatSeed(null); setTab("codex-history"); }}
       worktrees={worktrees}
@@ -1647,6 +1652,7 @@ export default function App() {
             }
             showInspector={inspectorDockMode === "devhub" && inspectorVisible}
             onFork={openCrossProviderFork}
+            initialDraft={activeSeed ? undefined : launchDraft}
           />
         ) : (
           launchpad
@@ -1733,7 +1739,7 @@ export default function App() {
             activeTabId={sessionId}
             onSelectTab={(id) => { if (projectId) openSession(projectId, id); }}
             onCloseTab={closeTab}
-            onNewTab={startNewChat}
+            onNewTab={() => startNewChat()}
           />
         }
         rail={
@@ -1750,7 +1756,7 @@ export default function App() {
               sessionCount={sessionCount}
               selectedSessionId={sessionId}
               onSelectSession={(id) => { if (projectId) openSession(projectId, id); }}
-              onNewTask={startNewChat}
+              onNewTask={() => startNewChat()}
               mechanics={settings?.defaultMechanics ?? "claude"}
               onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
               modelLabel={settings?.defaultModel ? `model ${settings.defaultModel}` : undefined}
@@ -1867,7 +1873,7 @@ export default function App() {
         {/* ── Main content area (AppShell provides the flex column wrapper) ── */}
         {tab === "home" ? (
           <Suspense fallback={<PaneFallback />}>
-            <HomePane onNewChat={startNewChat} />
+            <HomePane onNewChat={() => startNewChat()} />
           </Suspense>
         ) : tab === "settings" ? (
           // M6 slice 8 (Task 9 data-wire): `SettingsRoute` replaces `SettingsPane` only

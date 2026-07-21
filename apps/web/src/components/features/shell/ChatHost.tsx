@@ -58,6 +58,13 @@ export interface ChatHostProps {
   onFork?: (sessionId: string | null) => void;
   /** Mount `InspectorDock` alongside the transcript (`inspectorDock` flag). */
   showInspector?: boolean;
+  /**
+   * Seed the composer draft on first mount (Aurora Cockpit §3.3b): the Launchpad
+   * hero composer hands its typed job over here so the first thing the new task
+   * shows is the user's own prompt, ready to send. Only seeds a fresh task whose
+   * scoped draft is still empty — never clobbers a persisted in-progress draft.
+   */
+  initialDraft?: string;
 }
 
 export function ChatHost({
@@ -69,6 +76,7 @@ export function ChatHost({
   title,
   onFork,
   showInspector = false,
+  initialDraft,
 }: ChatHostProps) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   const [messages, setMessages] = useState<NormalizedMessage[]>([]);
@@ -81,6 +89,19 @@ export function ChatHost({
 
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
   const connRef = useRef<ChatConn | null>(null);
+
+  // Seed the Launchpad hero draft exactly once, on first mount, and only when this
+  // task's own persisted draft is still empty — a resumed session with an
+  // in-progress draft is never clobbered. A fresh Launch remounts this host (its
+  // App key includes the chat nonce), so each launch seeds cleanly.
+  const seededRef = useRef(false);
+  useEffect(() => {
+    if (seededRef.current) return;
+    seededRef.current = true;
+    if (initialDraft && !draft) setDraft(initialDraft);
+    // Mount-only: the initial draft is a one-shot handoff, not a live binding.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const conn = openChat({
