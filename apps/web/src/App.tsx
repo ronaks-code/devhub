@@ -105,7 +105,16 @@ import {
 } from "./lib/m6-compose";
 import { Sidebar, type SidebarGroup, type SidebarRow } from "./components/features/shell/Sidebar";
 import { StatusBar } from "./components/features/shell/StatusBar";
+import {
+  TopBar,
+  navigationAriaCurrent,
+  TOP_BAR_SECONDARY_CLASS,
+} from "./components/features/shell/TopBar";
+import type { ChatTab } from "./components/features/shell/ChatTabs";
 import { useStatsPolling } from "./hooks/useStatsPolling";
+// Re-exported so existing `from "./App"` import paths (chrome-polish / native-codex
+// tests + callers) stay valid after the TopBar extraction (§3.2).
+export { TopBar, navigationAriaCurrent, TOP_BAR_SECONDARY_CLASS };
 import { buildFileChanges } from "./components/FileChangeSummary";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
@@ -202,7 +211,7 @@ export function PaneFallback() {
 
 const BASE_TAIL = 2 * 1024 * 1024;
 
-type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations" | "progress";
+export type Tab = "home" | "browse" | "chat" | "ops" | "inbox" | "dashboard" | "spatial" | "settings" | "openai-chat" | "codex-history" | "automations" | "progress";
 
 // Lightweight UI-state persistence: remembers the active tab and selected
 // project across reloads. Guarded for SSR (no window) and malformed JSON.
@@ -362,11 +371,6 @@ export function nativeClaudeHomeFromSessionFile(filePath: string | undefined): s
   return match && match.index > 0 ? filePath.slice(0, match.index) : undefined;
 }
 
-/** Navigation destinations use page semantics, not an incomplete tabs pattern. */
-export function navigationAriaCurrent(active: boolean): "page" | undefined {
-  return active ? "page" : undefined;
-}
-
 /** Keep a native chunk failure truthful for the route that requested it. */
 export function nativeLoadFailureMessage(provider: NativePaneProvider): string {
   return provider === "anthropic"
@@ -374,116 +378,9 @@ export function nativeLoadFailureMessage(provider: NativePaneProvider): string {
     : "Native Codex could not load. Showing read-only Codex history instead.";
 }
 
-/** Secondary utilities yield at the minimum desktop width so primary navigation stays bounded. */
-// DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV: zinc-500 (#71717a) on the
-// zinc-900/zinc-950 top-bar surfaces measures ~3.7:1/~4.1:1 — below WCAG AA's
-// 4.5:1 for normal text (see apps/web/src/lib/contrast-tokens.test.ts). Bumped
-// to zinc-400 (#a1a1aa, the palette's next step up, already the app's
-// `--text-muted` token) which clears 4.5:1 on both surfaces with the
-// smallest available visual diff.
-export const TOP_BAR_SECONDARY_CLASS =
-  "ml-auto hidden items-center gap-3 text-[11px] text-zinc-400 lg:flex";
-
-/**
- * A small "Recent" jump-back dropdown in the header: the last sessions the user
- * opened, most-recent-first, reopened on click. Closes on outside-click / Escape.
- * Self-hides its button when there's no history yet, so it never adds dead chrome.
- */
-function RecentMenu({
-  recents,
-  onOpen,
-  onClear,
-  onBeforeOpen,
-}: {
-  recents: RecentSession[];
-  onOpen: (projectId: string, sessionId: string) => void;
-  onClear: () => void;
-  onBeforeOpen: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  // Nothing opened yet — hide the affordance entirely.
-  if (recents.length === 0) return null;
-
-  return (
-    <div className="relative" ref={ref}>
-      <button
-        onClick={() => {
-          if (!open) onBeforeOpen();
-          setOpen((value) => !value);
-        }}
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-2 py-1 text-[12px] ring-1 ring-zinc-800 transition",
-          open ? "text-zinc-200" : "text-zinc-500 hover:text-zinc-300",
-        )}
-        title="Recently opened sessions"
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        <History className="h-3.5 w-3.5" />
-        <span>Recent</span>
-      </button>
-      {open ? (
-        <div
-          className="absolute right-0 top-full z-50 mt-1.5 w-72 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 shadow-2xl shadow-black/50"
-          role="menu"
-        >
-          <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-1.5">
-            <span className="text-[10.5px] font-medium uppercase tracking-wide text-zinc-500">
-              Recently opened
-            </span>
-            <button
-              onClick={() => {
-                onClear();
-                setOpen(false);
-              }}
-              className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[10.5px] text-zinc-600 transition hover:bg-zinc-800 hover:text-zinc-300"
-              title="Clear recent list"
-            >
-              <Trash2 className="h-3 w-3" />
-              Clear
-            </button>
-          </div>
-          <div className="max-h-[60vh] overflow-y-auto py-1">
-            {recents.map((r) => (
-              <button
-                key={r.sessionId}
-                onClick={() => {
-                  onOpen(r.projectId, r.sessionId);
-                  setOpen(false);
-                }}
-                className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left transition hover:bg-zinc-800/60"
-                role="menuitem"
-              >
-                <MessagesSquare className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
-                <span className="min-w-0 flex-1 truncate text-[12.5px] text-zinc-200">
-                  {r.title}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
+/* TopBar, navigationAriaCurrent, TOP_BAR_SECONDARY_CLASS, RecentMenu, and PERF_META
+ * moved to components/features/shell/TopBar.tsx (Aurora Cockpit §3.2). Re-exported
+ * below so existing `from "./App"` import paths (tests + callers) stay valid. */
 
 /**
  * Inline Codex session history list. Fetches from /api/codex/sessions and
@@ -595,187 +492,6 @@ function CodexNativeLoadFailure({
   );
 }
 
-/** Icon + label for each perf-mode preference, for the header toggle. */
-const PERF_META: Record<PerfPreference, { label: string; title: string }> = {
-  auto: { label: "Motion: auto", title: "Reduced motion follows your OS setting — click to toggle it" },
-  on: { label: "Motion: off", title: "Reduced motion forced ON — click to force it off" },
-  off: { label: "Motion: on", title: "Full motion forced ON — click to force reduced motion on" },
-};
-
-export function TopBar({
-  tab,
-  onTab,
-  onOpenSearch,
-  onOpenCommands,
-  onOpenShortcuts,
-  perfPreference,
-  perfReduced,
-  onCyclePerf,
-  themePreference,
-  theme,
-  onCycleTheme,
-  progress,
-  sessionCount,
-  projectCount,
-  recents,
-  onOpenRecent,
-  onClearRecents,
-  onBeforeOpenRecent,
-  projectSessions,
-  projectName,
-  workModeAvailable,
-  workModeOpen,
-  onToggleWorkMode,
-  workModeTriggerRef,
-}: {
-  tab: Tab;
-  onTab: (t: Tab) => void;
-  onOpenSearch: () => void;
-  onOpenCommands: () => void;
-  onOpenShortcuts: () => void;
-  perfPreference: PerfPreference;
-  perfReduced: boolean;
-  onCyclePerf: () => void;
-  themePreference: ThemePreference;
-  theme: "dark" | "light";
-  onCycleTheme: () => void;
-  progress: { done: number; total: number } | null;
-  sessionCount: number;
-  projectCount: number;
-  recents: RecentSession[];
-  onOpenRecent: (projectId: string, sessionId: string) => void;
-  onClearRecents: () => void;
-  onBeforeOpenRecent: () => void;
-  projectSessions: SessionSummary[];
-  projectName?: string | null;
-  workModeAvailable: boolean;
-  workModeOpen: boolean;
-  onToggleWorkMode: () => void;
-  workModeTriggerRef: RefObject<HTMLButtonElement | null>;
-}) {
-  return (
-    <header
-      data-tauri-drag-region
-      className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
-    >
-      <div className="flex items-center gap-2" data-tauri-drag-region>
-        <Hexagon className="h-4 w-4 fill-[var(--dh-brand)]/20 text-[var(--dh-brand)]" />
-        <span className="text-sm font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
-      </div>
-
-      <button
-        onClick={onOpenSearch}
-        className="ml-3 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-        title="Search sessions (⌘K)"
-      >
-        <Search className="h-3.5 w-3.5" />
-        <span>Search</span>
-        <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘K</kbd>
-      </button>
-
-      <button
-        onClick={onOpenCommands}
-        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-        title="Command palette (⌘⇧P)"
-        aria-label="Command palette (⌘⇧P)"
-      >
-        <CommandIcon className="h-3.5 w-3.5" />
-        <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
-      </button>
-
-      {workModeAvailable ? (
-        <button
-          ref={workModeTriggerRef}
-          type="button"
-          onClick={onToggleWorkMode}
-          aria-label="Work mode"
-          aria-expanded={workModeOpen}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            workModeOpen
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-        >
-          <Folder className="h-3.5 w-3.5" />
-          Work
-        </button>
-      ) : null}
-
-      <div className={TOP_BAR_SECONDARY_CLASS}>
-        {/* Perf / reduced-motion toggle. Auto follows the OS until the first
-            click, then each click flips the effective state; tinted clay
-            while motion is being suppressed so the active state reads at a glance. */}
-        <button
-          onClick={onCyclePerf}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            perfReduced
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-          title={PERF_META[perfPreference].title}
-          aria-label={PERF_META[perfPreference].label}
-          aria-pressed={perfReduced}
-        >
-          {perfReduced ? <Zap className="h-4 w-4" /> : <Gauge className="h-4 w-4" />}
-        </button>
-        {/* Theme toggle: cycles dark → light → system (system follows the OS),
-            persisted in localStorage and applied via data-theme on <html>. */}
-        <ThemeSwitcher
-          preference={themePreference}
-          theme={theme}
-          onCycle={onCycleTheme}
-        />
-        {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
-        <button
-          onClick={onOpenShortcuts}
-          className="rounded-md p-1 text-zinc-400 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-          title="Keyboard shortcuts (?)"
-          aria-label="Keyboard shortcuts"
-        >
-          <Keyboard className="h-4 w-4" />
-        </button>
-        <RecentMenu
-          recents={recents}
-          onOpen={onOpenRecent}
-          onClear={onClearRecents}
-          onBeforeOpen={onBeforeOpenRecent}
-        />
-        {/* Running total of the active project's loaded-session spend (est.). */}
-        <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
-        {progress ? (
-          <span className="flex items-center gap-1.5 text-clay-300">
-            <Spinner className="h-3 w-3" />
-            indexing {progress.done}/{progress.total}
-          </span>
-        ) : (
-          <span>{sessionCount.toLocaleString()} sessions</span>
-        )}
-        <span>·</span>
-        <span>{projectCount} projects</span>
-        {/* Clear the saved remote-access token. Self-hides when none is stored
-            (the local default), so it never appears in an un-gated session. */}
-        <LogoutButton />
-        <button
-          type="button"
-          onClick={() => onTab("settings")}
-          aria-current={navigationAriaCurrent(tab === "settings")}
-          className={cn(
-            "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            tab === "settings"
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-          title="Settings"
-          aria-label="Settings"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
-      </div>
-    </header>
-  );
-}
 
 /** Close the transient Work overlay and return keyboard focus to its trigger. */
 export function dismissWorkModeOverlay(
@@ -1659,6 +1375,89 @@ export default function App() {
     };
   }, [activeCwd]);
 
+  // ── Conductor-style chat tabs (§3.2) ──────────────────────────────────────
+  // openTabs is a list of open session ids per project, persisted in localStorage;
+  // activeTabId mirrors the existing `sessionId` route state (no parallel router).
+  const [tabsByProject, setTabsByProject] = useState<Record<string, string[]>>(() => {
+    try {
+      const raw = readCompat("devhub:tabs");
+      return raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const openTabs = projectId ? tabsByProject[projectId] ?? [] : [];
+  const setOpenTabs = useCallback(
+    (updater: (prev: string[]) => string[]) => {
+      if (!projectId) return;
+      setTabsByProject((prev) => {
+        const next = { ...prev, [projectId]: updater(prev[projectId] ?? []) };
+        try {
+          writeCompat("devhub:tabs", JSON.stringify(next));
+        } catch {
+          /* SSR / storage-denied — in-memory only */
+        }
+        return next;
+      });
+    },
+    [projectId],
+  );
+  // Opening a session (from anywhere) focuses an existing tab or appends one.
+  useEffect(() => {
+    if (projectId && sessionId) {
+      setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+    }
+  }, [projectId, sessionId, setOpenTabs]);
+
+  const closeTab = useCallback(
+    (id: string) => {
+      const idx = openTabs.indexOf(id);
+      setOpenTabs((prev) => prev.filter((x) => x !== id));
+      if (id === sessionId) {
+        // Focus the neighbor; closing the last tab drops to the empty chat route.
+        const next = openTabs[idx + 1] ?? openTabs[idx - 1] ?? null;
+        setSessionId(next);
+      }
+    },
+    [openTabs, sessionId, setOpenTabs],
+  );
+
+  const chatTabs = useMemo<ChatTab[]>(() => {
+    const runById = indexRunningBySession(liveRunning);
+    return openTabs.map((id) => {
+      const s = sessions.find((x) => x.sessionId === id) ?? (page?.session.sessionId === id ? page.session : null);
+      return {
+        sessionId: id,
+        title: s ? displaySessionTitle(s, project?.name ?? "Session") : `Session ${id.slice(0, 8)}`,
+        provider: LEGACY_SESSION_PROVIDER,
+        status: deriveRunStatus(runById.get(id)),
+      };
+    });
+  }, [openTabs, sessions, page, project, liveRunning]);
+
+  // ⌘1..9 select tab N; ⌘⇧W close active (⌘W is reserved by browsers, so ⌘⇧W on web).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.shiftKey && (e.key === "w" || e.key === "W")) {
+        if (sessionId) {
+          e.preventDefault();
+          closeTab(sessionId);
+        }
+        return;
+      }
+      if (!e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const target = openTabs[Number(e.key) - 1];
+        if (target && projectId) {
+          e.preventDefault();
+          openSession(projectId, target);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [openTabs, sessionId, projectId, closeTab, openSession]);
+
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
   // header otherwise. See `provider-capabilities.ts`.
@@ -1925,6 +1724,11 @@ export default function App() {
               },
             )}
             workModeTriggerRef={workModeTriggerRef}
+            chatTabs={chatTabs}
+            activeTabId={sessionId}
+            onSelectTab={(id) => { if (projectId) openSession(projectId, id); }}
+            onCloseTab={closeTab}
+            onNewTab={startNewChat}
           />
         }
         rail={
