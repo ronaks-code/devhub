@@ -2283,9 +2283,13 @@ html[data-reduce-motion="true"] {
 .dh-who-avatar--assistant {
   background: var(--dh-grad-warm);
 }
+/* M8: was a flat `--dh-user-bubble` fill (near-identical to the surrounding dark
+ * chrome) + a faint border — it read as a hollow "stray empty box" next to the "You"
+ * label rather than a deliberate avatar. `--dh-grad-brand` is the same bold, opaque
+ * treatment the assistant tile already uses (`--dh-grad-warm`, no border) — this just
+ * gives "You" the equally legible counterpart. */
 .dh-who-avatar--user {
-  background: var(--dh-user-bubble);
-  border: 1px solid var(--dh-chat-user-border);
+  background: var(--dh-grad-brand);
 }
 .dh-who-name {
   font-family: var(--font-mono);
@@ -2385,6 +2389,31 @@ html[data-reduce-motion="true"] {
   overflow-wrap: anywhere;
   max-height: 240px;
   overflow: auto;
+}
+
+/* Internal plumbing (hook/queue/attachment/system/thinking, M8): closed by default so
+ * it reads as a slim, skippable row rather than inline chat content. The <summary> is
+ * one line, muted + smaller than real prose; expanding it reveals the same bounded
+ * `.dh-thread-raw` block above, unchanged — nothing real is hidden, only de-emphasized. */
+.dh-thread-raw-collapsed {
+  margin: 4px 0;
+}
+.dh-thread-raw-summary {
+  color: var(--dh-text-faint, var(--dh-text-muted));
+  font-size: 11px;
+  line-height: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  list-style: none;
+}
+.dh-thread-raw-summary::-webkit-details-marker {
+  display: none;
+}
+.dh-thread-raw-collapsed .dh-thread-raw {
+  margin-top: 4px;
 }
 
 /* ActivityTimeline: inline compact activity + expandable plan (never a dashboard). */

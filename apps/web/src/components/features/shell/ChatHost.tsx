@@ -92,6 +92,13 @@ export function ChatHost({
   // live connecting indicator instead of the dead-end "Reconnect to send" (F3).
   const [connection, setConnection] = useState<ComposerConnection>("reconnecting");
   const [gitBranch, setGitBranch] = useState<string | null>(null);
+  // The RESUMED session's own recorded model (from the indexed store), distinct
+  // from `defaultModel` (the app's current default-model setting). Browse's
+  // InspectorDock shows the session's real model; a resumed chat must too (QF3
+  // — the dock fell back to the generic default and read "—" for a session that
+  // shows a real model in Browse). Null until the hydrate below lands, or for a
+  // brand-new task (nothing to hydrate).
+  const [resumedModel, setResumedModel] = useState<string | null>(null);
 
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
   const connRef = useRef<ChatConn | null>(null);
@@ -150,7 +157,12 @@ export function ChatHost({
     api
       .messages(initialSessionId, HYDRATE_TAIL_BYTES)
       .then((p) => {
-        if (cancelled || p.messages.length === 0) return;
+        if (cancelled) return;
+        // The indexed page's `session.model` is the real model this session ran
+        // on — set it even when the message tail comes back empty, so the dock
+        // still reads the honest historical model rather than falling back.
+        if (p.session.model) setResumedModel(p.session.model);
+        if (p.messages.length === 0) return;
         setMessages((prev) => (prev.length > 0 ? [...p.messages, ...prev] : p.messages));
       })
       .catch(() => {
@@ -258,7 +270,10 @@ export function ChatHost({
             changesSummary: buildEnvironmentSummary(null, fileChanges).changes,
           }}
           session={{
-            model: defaultModel ?? undefined,
+            // The resumed session's own recorded model wins once hydrated; a
+            // fresh new task (nothing to resume) falls back to the app's
+            // current default — there's no session history to be honest about yet.
+            model: resumedModel ?? defaultModel ?? undefined,
             permissionMode: defaultPermissionMode,
           }}
           changedFiles={buildChangedFiles(fileChanges)}

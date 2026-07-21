@@ -227,13 +227,19 @@ export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): Inspe
  * Map real transcript messages onto `ThreadWorkspace`'s `ThreadItem` union. Plain
  * text renders as `user`/`assistant` prose; a `tool_use` block (with its paired
  * `tool_result` attached — see `pairToolResults`) renders as ONE compact tool card
- * (Aurora Cockpit §3.3); every OTHER block (image, thinking, unknown, or an orphan
- * tool_result whose tool_use scrolled out of the window) still becomes a bounded
- * `raw` diagnostic rather than a fabricated card — the honest fallback the model
- * reserves for real data we don't render richly (`design-lock.md` §4's "unknown
- * native event → bounded raw diagnostic, never a fabricated tool"). Never drops a
- * message silently: an empty-text message with no other blocks contributes nothing,
- * which is honest (there was nothing to show), not a bug.
+ * (Aurora Cockpit §3.3); every OTHER block (image, unknown, or an orphan tool_result
+ * whose tool_use scrolled out of the window) still becomes a bounded `raw`
+ * diagnostic rather than a fabricated card — the honest fallback the model reserves
+ * for real data we don't render richly (`design-lock.md` §4's "unknown native event
+ * → bounded raw diagnostic, never a fabricated tool"). Never drops a message
+ * silently: an empty-text message with no other blocks contributes nothing, which is
+ * honest (there was nothing to show), not a bug.
+ *
+ * Internal plumbing — a non-user/assistant role's text (system/hook/queue/
+ * attachment/meta) and `thinking` blocks — is real data too, so it still becomes a
+ * `raw` item, but `collapsed: true` (M8: these used to render as always-open JSON
+ * dumps that read as chat content, e.g. `[queue] [queued: enqueue] {...}`). The full
+ * bounded text stays one click away; only the default visual weight changes.
  */
 export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[]): ThreadItem[] {
   const items: ThreadItem[] = [];
@@ -251,9 +257,15 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
     if (text) {
       if (m.role === "user") items.push({ kind: "user", id: `${key}-text`, content: text });
       else if (m.role === "assistant") items.push({ kind: "assistant", id: `${key}-text`, content: text });
-      // Other roles (system/hook/queue/attachment/meta) fall through to the raw
-      // diagnostic below along with any non-text block, so nothing real is lost.
-      else items.push({ kind: "raw", id: `${key}-text`, raw: boundRawDiagnostic(`[${m.role}] ${text}`) });
+      // Internal plumbing (system/hook/queue/attachment/meta): collapsed, not dropped.
+      else {
+        items.push({
+          kind: "raw",
+          id: `${key}-text`,
+          raw: boundRawDiagnostic(`[${m.role}] ${text}`),
+          collapsed: true,
+        });
+      }
     }
     let i = 0;
     for (const b of m.blocks) {
@@ -262,6 +274,19 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
         // A real tool call → one compact card. `pairToolResults` may have attached
         // a `.result`; ToolCard renders the collapsed one-line result from it.
         items.push({ kind: "tool", id: `${key}-${i}`, block: b as PairedToolUse });
+        i++;
+        continue;
+      }
+      if (b.type === "thinking") {
+        // Reasoning text, collapsed — not a fabricated JSON blob. This used to be
+        // `JSON.stringify(b)` verbatim (`[assistant:thinking] {"type":"thinking",…}`),
+        // the same M8 noise pattern as the internal-plumbing roles above.
+        items.push({
+          kind: "raw",
+          id: `${key}-${i}`,
+          raw: boundRawDiagnostic(`[${m.role}:thinking] ${(b as { text?: string }).text ?? ""}`),
+          collapsed: true,
+        });
         i++;
         continue;
       }

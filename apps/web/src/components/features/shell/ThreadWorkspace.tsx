@@ -61,8 +61,15 @@ export type ThreadItem =
   | { kind: "request"; id: string; prompt: string; actions?: RequestAction[]; state?: RequestState }
   /** The anchored in-progress region streaming native deltas — UNFRAMED. */
   | { kind: "streaming"; id: string; content?: ReactNode; elapsedLabel?: string }
-  /** Unknown native event rendered as a bounded raw diagnostic — UNFRAMED, never a fabricated tool. */
-  | { kind: "raw"; id: string; raw: string }
+  /**
+   * Unknown native event rendered as a bounded raw diagnostic — UNFRAMED, never a
+   * fabricated tool. `collapsed` renders it as a slim, closed `<details>` (a one-line
+   * summary, full bounded text one click away) instead of an always-open `<pre>` —
+   * used for internal plumbing (hook/queue/attachment/system/thinking) so it reads as
+   * a skippable row rather than inline chat content (M8: these used to render as raw
+   * JSON dumps indistinguishable from real conversation).
+   */
+  | { kind: "raw"; id: string; raw: string; collapsed?: boolean }
   /**
    * A REAL tool call (tool_use + its paired tool_result) rendered as ONE compact,
    * collapsed-by-default card (Aurora Cockpit §3.3). This replaces the old raw-JSON
@@ -246,11 +253,35 @@ function StreamingBlock({ content }: { content?: ReactNode }) {
   );
 }
 
-function RawDiagnostic({ raw }: { raw: string }) {
+/** The `<summary>` for a collapsed raw diagnostic: its first line, short enough to
+ *  read as a slim row rather than a wall of text. The full bounded content is one
+ *  click away — nothing real is dropped, only de-emphasized (M8). */
+function rawSummaryLine(bounded: string): string {
+  const firstLine = bounded.split("\n", 1)[0] ?? bounded;
+  return firstLine.length > 96 ? `${firstLine.slice(0, 96)}…` : firstLine;
+}
+
+function RawDiagnostic({ raw, collapsed }: { raw: string; collapsed?: boolean }) {
   // Unknown native event: bounded raw diagnostic, never a fabricated tool/reasoning.
+  const bounded = boundRawDiagnostic(raw);
+  if (collapsed) {
+    // Internal plumbing (hook/queue/attachment/system/thinking): closed by default so
+    // it reads as a skippable row, not inline chat content — never a raw JSON dump in
+    // the conversation.
+    return (
+      <details className="dh-thread-raw-collapsed" data-dh-raw-collapsed="" data-dh-unframed="">
+        <summary className="dh-thread-raw-summary" data-dh-raw-summary="">
+          {rawSummaryLine(bounded)}
+        </summary>
+        <pre className="dh-thread-raw" data-dh-raw="">
+          {bounded}
+        </pre>
+      </details>
+    );
+  }
   return (
     <pre className="dh-thread-raw" data-dh-raw="" data-dh-unframed="">
-      {boundRawDiagnostic(raw)}
+      {bounded}
     </pre>
   );
 }
@@ -268,7 +299,7 @@ function ThreadItemView({ item }: { item: ThreadItem }): ReactNode {
     case "streaming":
       return <StreamingBlock content={item.content} />;
     case "raw":
-      return <RawDiagnostic raw={item.raw} />;
+      return <RawDiagnostic raw={item.raw} collapsed={item.collapsed} />;
     case "tool":
       return <ToolBlock block={item.block} />;
     default:

@@ -300,18 +300,27 @@ describe("mapMessagesToThreadItems", () => {
     }
   });
 
-  it("routes an image/thinking/unknown block through the honest raw diagnostic", () => {
+  it("routes an image/unknown block through the honest raw diagnostic", () => {
     const items = mapMessagesToThreadItems([
-      message("assistant", [{ type: "thinking", thinking: "hmm" } as unknown as ContentBlock], 0),
+      message("assistant", [{ type: "image" } as unknown as ContentBlock], 0),
     ]);
     expect(items).toHaveLength(1);
     expect(items[0]!.kind).toBe("raw");
-    if (items[0]!.kind === "raw") expect(items[0]!.raw).toContain("assistant:thinking");
+    if (items[0]!.kind === "raw") expect(items[0]!.raw).toContain("assistant:image");
   });
 
-  it("routes a non-user/assistant role's text through the raw diagnostic, never as prose", () => {
+  it("routes a thinking block through a COLLAPSED raw diagnostic with its real text, never a JSON dump (M8)", () => {
+    const items = mapMessagesToThreadItems([
+      message("assistant", [{ type: "thinking", text: "hmm" } as unknown as ContentBlock], 0),
+    ]);
+    expect(items).toEqual([
+      { kind: "raw", id: "u0-0", raw: "[assistant:thinking] hmm", collapsed: true },
+    ]);
+  });
+
+  it("routes a non-user/assistant role's text through a COLLAPSED raw diagnostic, never as prose or an open JSON dump (M8)", () => {
     const items = mapMessagesToThreadItems([message("system", [{ type: "text", text: "hook fired" }], 0)]);
-    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: "[system] hook fired" }]);
+    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: "[system] hook fired", collapsed: true }]);
   });
 
   it("keeps both the prose and a tool card when a message mixes text with a tool block", () => {
