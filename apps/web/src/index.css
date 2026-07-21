@@ -2092,12 +2092,24 @@ html[data-reduce-motion="true"] {
 
 .dh-thread-user {
   max-width: var(--dh-user-bubble-max);
-  background: var(--dh-user-bubble); /* #242424 measured user fill */
-  color: var(--dh-text);
-  border-radius: var(--dh-radius-bubble);
+  /* Aurora Cockpit §3.3: the vibrant violet→rose user bubble on the aurora surface. */
+  background: var(--dh-chat-user-bubble);
+  border: 1px solid var(--dh-chat-user-border);
+  color: var(--dh-text-strong);
+  border-radius: 15px 15px 5px 15px;
   padding: 8px 12px;
   font-size: 14px;
   line-height: 22px;
+}
+
+/* Aurora Cockpit §3.3: inline code gets the violet tint in chat prose. */
+.dh-thread-assistant :not(pre) > code,
+.dh-thread-user :not(pre) > code {
+  background: rgba(167, 139, 250, 0.13);
+  color: #cbb8ff;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.92em;
 }
 
 /* Inline request: a surfaced control at transcript width. NOT a modal. */
