@@ -653,10 +653,13 @@ export function TopBar({
   workModeTriggerRef: RefObject<HTMLButtonElement | null>;
 }) {
   return (
-    <header className="flex h-11 shrink-0 items-center gap-3 border-b border-zinc-800/80 bg-zinc-950 px-4">
-      <div className="flex items-center gap-2">
-        <Hexagon className="h-4 w-4 fill-clay-500/20 text-clay-500" />
-        <span className="text-sm font-semibold tracking-tight text-zinc-100">DevHub</span>
+    <header
+      data-tauri-drag-region
+      className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
+    >
+      <div className="flex items-center gap-2" data-tauri-drag-region>
+        <Hexagon className="h-4 w-4 fill-[var(--dh-brand)]/20 text-[var(--dh-brand)]" />
+        <span className="text-sm font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
       </div>
 
       <button
