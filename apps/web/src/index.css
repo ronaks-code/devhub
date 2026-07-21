@@ -58,6 +58,32 @@
 }
 
 /*
+ * Aurora Cockpit §3.8 global sweep — dark mode. Legacy panes (Browse, Inbox,
+ * Automations, Progress, native Codex/OpenAI panes, dialogs, CodexHistoryPane)
+ * paint directly with Tailwind's zinc scale. In dark mode those were still literal
+ * near-black/gray (the retint only flipped zinc for LIGHT mode), leaving those
+ * surfaces off-palette. This remaps the dark zinc scale to the purple-charcoal
+ * surfaces + warm ink — the same one-block technique the light theme already uses —
+ * so every bg-zinc-*/text-zinc-*/border-zinc-* utility reads on-brand with zero
+ * per-file edits. Solid brand/status literals (clay-500, red-500, the -600s) are
+ * untouched. New components still SHOULD prefer var(--bg)/--panel/--text.
+ */
+:root,
+:root[data-theme="dark"] {
+  --color-zinc-950: #131017; /* --bg (deep purple-charcoal void) */
+  --color-zinc-900: #1a1521; /* --panel */
+  --color-zinc-800: #2a2337; /* --border */
+  --color-zinc-700: #342c47; /* raised border/divider */
+  --color-zinc-600: #6f6583; /* --text-dim */
+  --color-zinc-500: #857a9c; /* mid muted */
+  --color-zinc-400: #a99fbb; /* --text-muted */
+  --color-zinc-300: #c9bfe0;
+  --color-zinc-200: #ded7ec;
+  --color-zinc-100: #ece7f4; /* --text (warm ink) */
+  --color-zinc-50: #f5f2fa;
+}
+
+/*
  * DevHub reference-first design tokens (M6). Transcribed verbatim from
  * `.planning/devhub-codex-parity/design-system.md` §2.1 (dark semantic palette)
  * and §3.1 (wide-reference geometry). These are ADDITIVE and do not mutate the
