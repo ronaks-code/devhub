@@ -13,13 +13,13 @@ const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 /** Hour-column labels along the top (every 3 hours keeps it readable). */
 const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21] as const;
 
-/** Five activity buckets (index 0 = none). Tailwind clay tints, like CalendarHeatmap. */
+/** Five activity buckets (index 0 = none). Tailwind violet tints, like CalendarHeatmap. */
 const BUCKET_CLASSES = [
   "bg-zinc-900 ring-1 ring-inset ring-zinc-800/80", // 0 — no activity
-  "bg-clay-500/25",
-  "bg-clay-500/45",
-  "bg-clay-500/70",
-  "bg-clay-400",
+  "bg-violet-500/25",
+  "bg-violet-500/45",
+  "bg-violet-500/70",
+  "bg-violet-400",
 ] as const;
 
 /** JS getDay() is Sunday=0..Saturday=6; remap to Monday-first row index 0..6. */
@@ -156,7 +156,7 @@ export function HourHeatmap() {
                       key={hour}
                       title={tip}
                       className={cn(
-                        "h-[11px] w-[11px] rounded-[2px] transition hover:ring-1 hover:ring-clay-300/60",
+                        "h-[11px] w-[11px] rounded-[2px] transition hover:ring-1 hover:ring-violet-300/60",
                         BUCKET_CLASSES[bucketize(count, max)],
                       )}
                     />

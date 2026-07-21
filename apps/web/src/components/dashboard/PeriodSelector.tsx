@@ -51,7 +51,7 @@ export function resolvePresetRange(id: Exclude<PeriodId, "custom">): PeriodRange
 const btnCls =
   "rounded-md px-2.5 py-1 text-[12px] font-medium transition focus:outline-none";
 const dateInputCls =
-  "rounded-md bg-zinc-900 px-2 py-1 text-[12px] text-zinc-200 ring-1 ring-zinc-800 [color-scheme:dark] focus:outline-none focus:ring-clay-500/40";
+  "rounded-md bg-zinc-900 px-2 py-1 text-[12px] text-zinc-200 ring-1 ring-zinc-800 [color-scheme:dark] focus:outline-none focus:ring-violet-500/40";
 
 /**
  * Period selector for the Dashboard. Emits a resolved {@link PeriodRange} via
@@ -96,7 +96,7 @@ export function PeriodSelector({
             className={cn(
               btnCls,
               value === p.id
-                ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                ? "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/30"
                 : "text-zinc-500 hover:text-zinc-300",
             )}
             aria-pressed={value === p.id}
@@ -109,7 +109,7 @@ export function PeriodSelector({
           className={cn(
             btnCls,
             value === "custom"
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+              ? "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/30"
               : "text-zinc-500 hover:text-zinc-300",
           )}
           aria-pressed={value === "custom"}

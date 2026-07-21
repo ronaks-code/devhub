@@ -130,7 +130,7 @@ export function ToolAnalytics() {
           <div key={r.tool} className="flex flex-col gap-1">
             <div className="flex items-baseline justify-between gap-3 text-[12px]">
               <span className="flex min-w-0 items-center gap-1.5">
-                <Wrench className="h-3 w-3 shrink-0 text-clay-400" />
+                <Wrench className="h-3 w-3 shrink-0 text-violet-400" />
                 <span className="truncate font-medium text-zinc-200" title={r.tool}>
                   {r.tool}
                 </span>
@@ -185,7 +185,7 @@ export function ToolAnalytics() {
                 error rate is high so the bar itself reads the warning. */}
             <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">
               <div
-                className={cn("h-full rounded-full", high ? "bg-red-500/80" : "bg-clay-500")}
+                className={cn("h-full rounded-full", high ? "bg-red-500/80" : "bg-violet-500")}
                 style={{ width: `${(r.count / maxCount) * 100}%` }}
               />
             </div>

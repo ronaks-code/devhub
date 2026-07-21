@@ -164,7 +164,7 @@ export function DirtyRepos({
             className="group flex items-center gap-3 px-3.5 py-2.5 text-left transition hover:bg-zinc-800/40 disabled:cursor-default"
             title={project.cwd}
           >
-            <GitBranch className="h-3.5 w-3.5 shrink-0 text-clay-400/80" />
+            <GitBranch className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium text-zinc-200 group-hover:text-zinc-100">
                 {project.name}

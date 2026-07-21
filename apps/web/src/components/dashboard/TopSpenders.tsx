@@ -96,11 +96,11 @@ export function TopSpenders({
           >
             {/* Cost bar behind the row, relative to the priciest session. */}
             <span
-              className="pointer-events-none absolute inset-y-0 left-0 bg-clay-500/5"
+              className="pointer-events-none absolute inset-y-0 left-0 bg-violet-500/5"
               style={{ width: `${(cost / maxCost) * 100}%` }}
               aria-hidden
             />
-            <Coins className="relative h-3.5 w-3.5 shrink-0 text-clay-400/80" />
+            <Coins className="relative h-3.5 w-3.5 shrink-0 text-violet-400/80" />
             <div className="relative min-w-0 flex-1">
               <div className="truncate text-[13px] font-medium text-zinc-200 group-hover:text-zinc-100">
                 {displaySessionTitle(s)}
@@ -117,7 +117,7 @@ export function TopSpenders({
                 <span className="tabular-nums">{compactNumber(totalUsageTokens(s))} tok</span>
               </div>
             </div>
-            <div className="relative shrink-0 text-[13px] font-semibold tabular-nums text-clay-300">
+            <div className="relative shrink-0 text-[13px] font-semibold tabular-nums text-violet-300">
               {formatUsd(cost)}
             </div>
           </button>

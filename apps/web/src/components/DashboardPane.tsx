@@ -1,12 +1,22 @@
-import { useEffect, useMemo, useState } from "react";
-import { Activity, CalendarDays, Clock, Coins, Cpu, FolderGit2, LayoutDashboard, MessagesSquare, Radio, TrendingUp, Wrench } from "lucide-react";
-import type { DailyUsage, RunningSession, Stats } from "../lib/types";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  Activity,
+  CalendarDays,
+  Clock,
+  Coins,
+  Cpu,
+  FolderGit2,
+  MessagesSquare,
+  Radio,
+  TrendingUp,
+  Wrench,
+} from "lucide-react";
+import type { BudgetStatus, DailyUsage, RunningSession, Stats } from "../lib/types";
 import { api } from "../lib/api";
 import { compactNumber, formatUsd, relativeTime, totalTokens } from "../lib/format";
 import { costUsd } from "../lib/pricing";
 import { cn } from "../lib/utils";
 import { useStatsPolling } from "../hooks/useStatsPolling";
-import { ModelBreakdown } from "./dashboard/ModelBreakdown";
 import { PeriodSelector, resolvePresetRange, type PeriodRange } from "./dashboard/PeriodSelector";
 import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap";
 import { ActivityChart } from "./dashboard/ActivityChart";
@@ -62,6 +72,11 @@ export function periodScopeLabel(id: PeriodRange["id"]): string {
 /** How often to re-poll running/stats/rollups (paused while the tab is hidden). */
 const DASH_POLL_MS = 5000;
 
+/** This month's short label (e.g. "JUL"), used in the MTD scope tags. */
+function monthLabel(): string {
+  return new Date().toLocaleString(undefined, { month: "short" }).toUpperCase();
+}
+
 /** Last path segment of a working directory (the "project" name). */
 function lastSegment(cwd: string | null): string {
   if (!cwd) return "unknown";
@@ -69,26 +84,67 @@ function lastSegment(cwd: string | null): string {
   return parts[parts.length - 1] || cwd;
 }
 
-/** Map a running-session status to a dot/badge color, matching the M1/M2 palette. */
+/**
+ * Provider identity from a model id — coral for Claude, mint for Codex/OpenAI.
+ * Pure name inspection; anything unrecognized stays neutral violet (never guessed
+ * from behavior). Paired ALWAYS with the model text, so color is never the only signal.
+ */
+function providerOfModel(model: string): "anthropic" | "openai" | "unknown" {
+  const m = model.toLowerCase();
+  if (/claude|opus|sonnet|haiku|fable/.test(m)) return "anthropic";
+  if (/gpt|codex|openai|^o1|^o3|^o4/.test(m)) return "openai";
+  return "unknown";
+}
+
+/** Categorical palette for the cost-by-model donut (§3.6): violet → pink → coral → mint → muted violets. */
+const DONUT_PALETTE = ["#a78bfa", "#f0abfc", "#fb7185", "#5eead4", "#8b6cf0", "#c4b5fd", "#7c5cf0", "#e879f9"];
+
+/** Map a running-session status to a dot/text color (violet-family, clay retired). */
 function statusColor(status: string): { dot: string; text: string } {
   const s = status.toLowerCase();
-  if (s === "busy") return { dot: "bg-clay-500", text: "text-clay-300" };
+  if (s === "busy") return { dot: "bg-violet-500", text: "text-violet-300" };
   if (s === "waiting") return { dot: "bg-amber-400", text: "text-amber-300" };
   if (s === "idle") return { dot: "bg-zinc-500", text: "text-zinc-400" };
-  // Anything else (e.g. "running"/"thinking") leans on the waiting/sky tone.
   return { dot: "bg-sky-400", text: "text-sky-300" };
+}
+
+// ── Shared Prism-Glass primitives ──────────────────────────────────────────────
+
+/** A glass card — the dashboard's one surface grade (§3.6). Dense inside, 14px grid gaps. */
+function Card({ className, children }: { className?: string; children: ReactNode }) {
+  return <div className={cn("glass-card flex min-w-0 flex-col gap-3 p-4", className)}>{children}</div>;
+}
+
+/** The Prism-Glass scope-tag pill — every card carries one so numbers can't be misread. */
+function ScopeTag({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full border border-[var(--dh-glass-border)] bg-[var(--dh-accent-soft)] px-2 py-[3px] text-[9px] font-bold uppercase leading-none tracking-[0.12em] text-[var(--dh-text-muted)]">
+      {children}
+    </span>
+  );
+}
+
+/** One h2 + optional scope tag, the standard card header row. */
+function CardHead({ icon, title, scope }: { icon?: ReactNode; title: string; scope?: string }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <h2 className="dh-label flex items-center gap-1.5">
+        {icon ? <span className="text-violet-400">{icon}</span> : null}
+        {title}
+      </h2>
+      {scope ? <ScopeTag>{scope}</ScopeTag> : null}
+    </div>
+  );
 }
 
 function RunningCard({ s }: { s: RunningSession }) {
   const { dot, text } = statusColor(s.status);
   const project = s.name || lastSegment(s.cwd);
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+    <div className="glass-card flex flex-col gap-2 p-3">
       <div className="flex items-center gap-2">
         <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100">
-          {project}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100">{project}</span>
         <span className={cn("text-[11px] font-medium capitalize", text)}>{s.status}</span>
       </div>
       {s.cwd ? (
@@ -99,41 +155,107 @@ function RunningCard({ s }: { s: RunningSession }) {
       <div className="flex flex-wrap items-center gap-1.5">
         {s.model ? <Badge title="Model">{s.model}</Badge> : null}
         {s.startedAt ? (
-          <span className="text-[11px] text-zinc-500">
-            started {relativeTime(new Date(s.startedAt).toISOString())}
-          </span>
+          <span className="text-[11px] text-zinc-500">started {relativeTime(new Date(s.startedAt).toISOString())}</span>
         ) : null}
       </div>
     </div>
   );
 }
 
-function StatCard({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex flex-1 flex-col gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-        <span className="text-clay-400">{icon}</span>
-        {label}
+/** Month-to-date budget burn bar (§3.6 hero). Renders a track only when a cap is set. */
+function BudgetBar({ budget }: { budget: BudgetStatus }) {
+  const cap = budget.monthlyBudgetUsd;
+  const pct = Math.max(0, Math.min(1, budget.pct || 0));
+  if (!cap || cap <= 0) {
+    return (
+      <div className="text-[11px] text-[color:var(--dh-text-muted)]">
+        <span className="dh-nums font-semibold text-[color:var(--dh-text)]">{formatUsd(budget.monthToDateUsd)}</span> this
+        month · no cap set
       </div>
-      <div className="text-2xl font-semibold tabular-nums text-zinc-100">{value}</div>
+    );
+  }
+  const fillBg =
+    budget.alert === "over"
+      ? "var(--dh-danger)"
+      : budget.alert === "warn"
+        ? "var(--dh-warning)"
+        : "linear-gradient(90deg, var(--dh-violet), var(--dh-coral))";
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="h-1.5 overflow-hidden rounded-full bg-[var(--dh-control)]">
+        <div className="h-full rounded-full" style={{ width: `${Math.min(100, pct * 100)}%`, background: fillBg }} />
+      </div>
+      <div className="flex items-baseline justify-between text-[11px] text-[color:var(--dh-text-muted)]">
+        <span>
+          <span className="dh-nums font-semibold text-[color:var(--dh-text)]">{formatUsd(budget.monthToDateUsd)}</span> of{" "}
+          <span className="dh-nums">{formatUsd(cap)}</span>
+        </span>
+        <span className="dh-nums">{Math.round(pct * 100)}%</span>
+      </div>
     </div>
   );
 }
 
-function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+/** Cost-by-model conic donut (§3.6) over `stats.byModel`, cost-descending, with a legend. */
+function CostDonut({ models }: { models: Stats["byModel"] }) {
+  const withCost = [...models].filter((m) => m.costUsd > 0).sort((a, b) => b.costUsd - a.costUsd);
+  const total = withCost.reduce((n, m) => n + m.costUsd, 0);
+
+  if (withCost.length === 0 || total <= 0) {
+    return <div className="text-[12px] text-[color:var(--dh-text-dim)]">No model spend in range yet.</div>;
+  }
+
+  let acc = 0;
+  const stops = withCost.map((m, i) => {
+    const start = (acc / total) * 100;
+    acc += m.costUsd;
+    const end = (acc / total) * 100;
+    return `${DONUT_PALETTE[i % DONUT_PALETTE.length]} ${start}% ${end}%`;
+  });
+  const gradient = `conic-gradient(${stops.join(", ")})`;
+
   return (
-    <h2 className="mb-3 flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wide text-zinc-400">
-      <span className="text-clay-400">{icon}</span>
-      {children}
-    </h2>
+    <div className="flex items-center gap-4">
+      <div className="relative h-[116px] w-[116px] shrink-0">
+        <div className="h-full w-full rounded-full" style={{ background: gradient }} />
+        <div
+          className="absolute inset-[19px] flex flex-col items-center justify-center rounded-full"
+          style={{ background: "var(--dh-surface)" }}
+        >
+          <span className="dh-nums text-[15px] font-semibold text-[color:var(--dh-text-strong)]">{formatUsd(total)}</span>
+          <span className="dh-label" style={{ fontSize: "8px", letterSpacing: "0.14em" }}>
+            total
+          </span>
+        </div>
+      </div>
+      <ul className="flex min-w-0 flex-1 flex-col gap-1.5">
+        {withCost.map((m, i) => {
+          const provider = providerOfModel(m.model);
+          const providerDot =
+            provider === "anthropic"
+              ? "var(--dh-provider-anthropic)"
+              : provider === "openai"
+                ? "var(--dh-provider-openai)"
+                : "var(--dh-text-dim)";
+          return (
+            <li key={m.model} className="flex items-center gap-2 text-[11px]">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-[3px]"
+                style={{ background: DONUT_PALETTE[i % DONUT_PALETTE.length] }}
+              />
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: providerDot }} title={provider} />
+              <span className="min-w-0 flex-1 truncate text-[color:var(--dh-text)]" title={m.model}>
+                {m.model}
+              </span>
+              <span className="dh-nums shrink-0 text-[color:var(--dh-text-muted)]">{formatUsd(m.costUsd)}</span>
+              <span className="dh-nums w-9 shrink-0 text-right text-[color:var(--dh-text-dim)]">
+                {Math.round((m.costUsd / total) * 100)}%
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
@@ -146,26 +268,17 @@ export function DashboardPane({
   /** Open a project in the Browse view by id. From the App. */
   onOpenProject?: (projectId: string) => void;
 } = {}) {
-  // Usage-over-time: the chosen period + the rollup days it resolves to. Defaults
-  // to a RESOLVED 30-day window (dates included). A bare `{ id: "30d" }` queried
-  // the whole history until the user's first selector click, so the panel showed
-  // all-time totals under a "30d" label — the source of the contradictory costs.
   const [period, setPeriod] = useState<PeriodRange>(() => resolvePresetRange("30d"));
-  // What the contribution heatmap colors by (sessions reads cleanest by default).
   const [heatmapMetric, setHeatmapMetric] = useState<HeatmapMetric>("sessions");
 
-  // Auto-refreshing stats / running / period-rollups. The hook polls on an
-  // interval, pauses while the tab is hidden, and refreshes on return — so
-  // "running now" and the totals stay fresh without a manual reload.
   const { stats, statsError, running, rollups, rollupsError, refresh } = useStatsPolling({
     intervalMs: DASH_POLL_MS,
     since: period.since,
     until: period.until,
   });
 
-  // The heatmap always wants ~1 year of daily activity, independent of the
-  // period selector above. Fetched once (and on tab return) rather than polled
-  // tightly, since a day's activity barely shifts in seconds.
+  // The heatmap always wants ~1 year of daily activity, independent of the period
+  // selector above. Fetched once (and on tab return) rather than polled tightly.
   const [yearRollups, setYearRollups] = useState<DailyUsage[] | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -197,7 +310,7 @@ export function DashboardPane({
 
   if (!stats) {
     return (
-      <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
+      <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
         {statsError ? (
           <div className="mx-auto max-w-3xl px-6 py-6">
             <LoadErrorState message="Couldn't load dashboard." onRetry={refresh} />
@@ -211,15 +324,12 @@ export function DashboardPane({
 
   const tokens = totalTokens(stats.totalUsage);
   const estTotalCost = totalCostUsd(stats);
-  // Per-project cost estimate. Stats gives only a token count per project (no
-  // model/usage split), so we apportion the total estimated cost by each
-  // project's share of total tokens — enough for a relative "where the spend
-  // goes" read alongside the token bars.
+  // Per-project cost estimate. Stats gives only a token count per project, so we
+  // apportion the total estimated cost by each project's share of total tokens.
   const totalProjectTokens = stats.topProjects.reduce((n, p) => n + p.tokens, 0);
   const projectCost = (projTokens: number): number =>
     totalProjectTokens > 0 ? estTotalCost * (projTokens / totalProjectTokens) : 0;
   const maxProjectTokens = Math.max(1, ...stats.topProjects.map((p) => p.tokens));
-  const maxDaySessions = Math.max(1, ...stats.activity.map((d) => d.sessions));
   const liveSessions = running ?? [];
 
   return (
@@ -229,7 +339,6 @@ export function DashboardPane({
       estTotalCost={estTotalCost}
       projectCost={projectCost}
       maxProjectTokens={maxProjectTokens}
-      maxDaySessions={maxDaySessions}
       liveSessions={liveSessions}
       period={period}
       onPeriod={setPeriod}
@@ -245,7 +354,9 @@ export function DashboardPane({
 }
 
 /**
- * The dashboard layout, split out so the data-loading wrapper above stays small.
+ * The Prism-Glass dashboard layout (§3.6): spend front and center, dense glass cards
+ * in a scannable grid, a scope-tag on every card, single-violet daily series (rollups
+ * aren't provider-split, so no fake two-provider chart), and a real cost-by-model donut.
  * Pure presentation over the props it's given.
  */
 function DashboardBody({
@@ -254,7 +365,6 @@ function DashboardBody({
   estTotalCost,
   projectCost,
   maxProjectTokens,
-  maxDaySessions,
   liveSessions,
   period,
   onPeriod,
@@ -271,19 +381,15 @@ function DashboardBody({
   estTotalCost: number;
   projectCost: (projTokens: number) => number;
   maxProjectTokens: number;
-  maxDaySessions: number;
   liveSessions: RunningSession[];
   period: PeriodRange;
   onPeriod: (range: PeriodRange) => void;
   rollups: DailyUsage[] | null;
   rollupsError: boolean;
-  /** ~1 year of daily usage for the contribution heatmap (null while loading). */
   yearRollups: DailyUsage[] | null;
   heatmapMetric: HeatmapMetric;
   onHeatmapMetric: (m: HeatmapMetric) => void;
-  /** Open a session in the Browse view: (projectId, sessionId). */
   onOpenSession?: (projectId: string, sessionId: string) => void;
-  /** Open a project in the Browse view by id. */
   onOpenProject?: (projectId: string) => void;
 }) {
   // Period totals: sum the in-range days client-side. Oldest→newest for the chart.
@@ -303,12 +409,228 @@ function DashboardBody({
     return { days, tokens: tk, cost, sessions, maxTokens: Math.max(1, maxTk) };
   }, [rollups]);
 
+  const windowLabel = periodScopeLabel(period.id).toUpperCase();
+  // Window spend comes from the per-model-priced rollups. When rollups aren't
+  // available on this server we fall back to the all-time estimate rather than
+  // showing a misleading $0 — flagged honestly by the scope tag.
+  const heroSpend = rollupsError ? estTotalCost : usage.cost;
+  const heroScope = rollupsError ? "ALL-TIME · ALL PROJECTS" : `${windowLabel} · ALL PROJECTS`;
+  const heroSessions = rollupsError ? stats.totalSessions : usage.sessions;
+  const mtdScope = `${monthLabel()} MTD · ALL PROJECTS`;
+  // `projectedUsd` is a web-side BudgetStatus extra (the engine Stats.budget type
+  // omits it); read it defensively so pacing shows only when the server sends it.
+  const projectedUsd = (stats.budget as BudgetStatus).projectedUsd;
+
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
-      <div className="mx-auto flex max-w-5xl flex-col gap-8 px-6 py-6">
-        {/* Running now */}
-        <section>
-          <SectionTitle icon={<Radio className="h-3.5 w-3.5" />}>Running now</SectionTitle>
+    <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex max-w-[1180px] flex-col gap-3.5 px-6 py-6">
+        {/* Page head — spend title + period scope controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-[17px] font-[680] tracking-[-0.01em] text-[color:var(--dh-text-strong)]">
+            Usage &amp; Cost
+          </h1>
+          <PeriodSelector value={period.id} onChange={onPeriod} />
+        </div>
+
+        {/* KPI row — spend front and center */}
+        <div className="grid grid-cols-1 gap-3.5 md:[grid-template-columns:1.25fr_1fr_1fr]">
+          {/* HERO: window spend + budget burn */}
+          <Card>
+            <CardHead icon={<Coins className="h-3.5 w-3.5" />} title="Window spend" scope={heroScope} />
+            <div
+              className="dh-nums leading-none"
+              style={{
+                fontSize: "38px",
+                fontWeight: 600,
+                letterSpacing: "-1px",
+                background: "var(--dh-grad-brand)",
+                WebkitBackgroundClip: "text",
+                backgroundClip: "text",
+                color: "transparent",
+              }}
+            >
+              {formatUsd(heroSpend)}
+            </div>
+            <div className="text-[11px] text-[color:var(--dh-text-muted)]">
+              <span className="dh-nums">{heroSessions.toLocaleString()}</span> sessions
+            </div>
+            <BudgetBar budget={stats.budget} />
+          </Card>
+
+          {/* Month-to-date + pacing */}
+          <Card>
+            <CardHead icon={<TrendingUp className="h-3.5 w-3.5" />} title="Month to date" scope={mtdScope} />
+            <div className="dh-nums text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
+              {formatUsd(stats.budget.monthToDateUsd)}
+            </div>
+            {typeof projectedUsd === "number" ? (
+              <div className="text-[11px] text-[color:var(--dh-text-muted)]">
+                pacing <span className="dh-nums text-[color:var(--dh-text)]">{formatUsd(projectedUsd)}</span> by month end
+              </div>
+            ) : null}
+          </Card>
+
+          {/* All-time */}
+          <Card>
+            <CardHead icon={<Activity className="h-3.5 w-3.5" />} title="All time" scope="ALL-TIME · ALL PROJECTS" />
+            <div className="dh-nums text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
+              {formatUsd(estTotalCost)}
+            </div>
+            <dl className="mt-0.5 flex flex-col gap-1 text-[11px] text-[color:var(--dh-text-muted)]">
+              <div className="flex items-baseline justify-between gap-2">
+                <dt>Total sessions</dt>
+                <dd className="dh-nums text-[color:var(--dh-text)]">{stats.totalSessions.toLocaleString()}</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <dt>Projects</dt>
+                <dd className="dh-nums text-[color:var(--dh-text)]">{stats.totalProjects.toLocaleString()}</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-2">
+                <dt>Tokens</dt>
+                <dd className="dh-nums text-[color:var(--dh-text)]">{compactNumber(tokens)}</dd>
+              </div>
+            </dl>
+          </Card>
+        </div>
+
+        {/* Mid grid — daily spend area + cost-by-model donut */}
+        <div className="grid grid-cols-1 gap-3.5 lg:[grid-template-columns:1fr_330px]">
+          <Card>
+            <CardHead
+              icon={<TrendingUp className="h-3.5 w-3.5" />}
+              title="Daily spend"
+              scope={rollupsError ? "UNAVAILABLE" : windowLabel}
+            />
+            {rollupsError ? (
+              <div className="py-6 text-center text-[12px] text-[color:var(--dh-text-dim)]">
+                Usage rollups aren't available on this server yet.
+              </div>
+            ) : rollups === null ? (
+              <div className="flex h-28 items-center justify-center">
+                <Spinner className="h-5 w-5" />
+              </div>
+            ) : usage.days.length > 0 ? (
+              <ActivityChart days={usage.days} maxTokens={usage.maxTokens} onOpenSession={onOpenSession} />
+            ) : (
+              <div className="py-6 text-center text-[12px] text-[color:var(--dh-text-dim)]">No usage in this period.</div>
+            )}
+          </Card>
+
+          <Card>
+            <CardHead icon={<Cpu className="h-3.5 w-3.5" />} title="Cost by model" scope="ALL-TIME" />
+            <CostDonut models={stats.byModel} />
+          </Card>
+        </div>
+
+        {/* Row 3 — project leaderboard + top spenders */}
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+          <Card>
+            <CardHead icon={<FolderGit2 className="h-3.5 w-3.5" />} title="Project leaderboard" scope="ALL-TIME" />
+            {stats.topProjects.length > 0 ? (
+              <div className="flex flex-col gap-2.5">
+                {stats.topProjects.map((p) => (
+                  <div key={p.projectId} className="flex flex-col gap-1">
+                    <div className="flex items-baseline justify-between gap-3 text-[12px]">
+                      <span className="min-w-0 truncate font-medium text-[color:var(--dh-text)]">{p.name}</span>
+                      <span className="dh-nums flex shrink-0 items-baseline gap-2 text-[color:var(--dh-text-muted)]">
+                        <span className="text-violet-300" title="estimated cost">
+                          {formatUsd(projectCost(p.tokens))}
+                        </span>
+                        <span>{compactNumber(p.tokens)}</span>
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-[var(--dh-control)]">
+                      <div
+                        className="h-full rounded-full"
+                        style={{
+                          width: `${(p.tokens / maxProjectTokens) * 100}%`,
+                          background: "linear-gradient(90deg, var(--dh-violet-deep), var(--dh-violet))",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[12px] text-[color:var(--dh-text-dim)]">No project usage yet.</div>
+            )}
+          </Card>
+
+          <Card>
+            <CardHead icon={<Coins className="h-3.5 w-3.5" />} title="Top spenders" />
+            <TopSpenders onOpenSession={onOpenSession} />
+          </Card>
+        </div>
+
+        {/* Row 4 — activity heatmap + when-you-work */}
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+          <Card>
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="dh-label flex items-center gap-1.5">
+                <span className="text-violet-400">
+                  <CalendarDays className="h-3.5 w-3.5" />
+                </span>
+                Activity heatmap
+              </h2>
+              <div className="inline-flex items-center rounded-lg bg-[var(--dh-control)] p-0.5 ring-1 ring-[var(--dh-border)]">
+                {(["sessions", "tokens"] as const).map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => onHeatmapMetric(m)}
+                    className={cn(
+                      "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition",
+                      heatmapMetric === m
+                        ? "bg-violet-500/15 text-violet-300 ring-1 ring-violet-500/30"
+                        : "text-[color:var(--dh-text-muted)] hover:text-[color:var(--dh-text)]",
+                    )}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {yearRollups === null ? (
+              <div className="flex h-32 items-center justify-center">
+                <Spinner className="h-5 w-5" />
+              </div>
+            ) : (
+              <CalendarHeatmap days={yearRollups} metric={heatmapMetric} />
+            )}
+          </Card>
+
+          <Card>
+            <CardHead icon={<Clock className="h-3.5 w-3.5" />} title="When you work" />
+            <HourHeatmap />
+          </Card>
+        </div>
+
+        {/* Row 5 — tool analytics + dirty repos */}
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+          <Card>
+            <CardHead icon={<Wrench className="h-3.5 w-3.5" />} title="By tool" />
+            <ToolAnalytics />
+          </Card>
+          <Card>
+            <CardHead icon={<FolderGit2 className="h-3.5 w-3.5" />} title="Uncommitted changes" />
+            <DirtyRepos onOpenProject={onOpenProject} />
+          </Card>
+        </div>
+
+        {/* Row 6 — cost forecast + project detail table */}
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+          <Card>
+            <CardHead icon={<TrendingUp className="h-3.5 w-3.5" />} title="Cost forecast" />
+            <CostForecast onOpenSession={onOpenSession} />
+          </Card>
+          <Card>
+            <CardHead icon={<FolderGit2 className="h-3.5 w-3.5" />} title="Project detail" />
+            <ProjectLeaderboard onOpenProject={onOpenProject} />
+          </Card>
+        </div>
+
+        {/* Running now — live sessions (Live Ops owns the full board; this is the glance) */}
+        <Card>
+          <CardHead icon={<Radio className="h-3.5 w-3.5" />} title="Running now" />
           {liveSessions.length > 0 ? (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {liveSessions.map((s) => (
@@ -316,7 +638,7 @@ function DashboardBody({
               ))}
             </div>
           ) : (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 py-10">
+            <div className="py-8">
               <EmptyState
                 icon={<MessagesSquare className="h-10 w-10" />}
                 title="No sessions running right now"
@@ -324,217 +646,7 @@ function DashboardBody({
               />
             </div>
           )}
-        </section>
-
-        {/* Stat cards */}
-        <section className="flex flex-col gap-3 sm:flex-row">
-          <StatCard
-            icon={<LayoutDashboard className="h-3.5 w-3.5" />}
-            label="Total sessions"
-            value={stats.totalSessions.toLocaleString()}
-          />
-          <StatCard
-            icon={<FolderGit2 className="h-3.5 w-3.5" />}
-            label="Projects"
-            value={stats.totalProjects.toLocaleString()}
-          />
-          <StatCard
-            icon={<Activity className="h-3.5 w-3.5" />}
-            label="Total tokens"
-            value={compactNumber(tokens)}
-          />
-          <StatCard
-            icon={<Coins className="h-3.5 w-3.5" />}
-            label="Est. cost (all-time)"
-            value={formatUsd(estTotalCost)}
-          />
-        </section>
-
-        {/* Usage over time — period selector drives the rollups query + totals */}
-        <section>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <SectionTitle icon={<TrendingUp className="h-3.5 w-3.5" />}>Usage over time</SectionTitle>
-            <PeriodSelector value={period.id} onChange={onPeriod} />
-          </div>
-
-          {/* Period totals (summed client-side from the in-range days). */}
-          <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-[12px]">
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-zinc-500">Tokens</span>
-              <span className="font-semibold tabular-nums text-zinc-100">
-                {compactNumber(usage.tokens)}
-              </span>
-            </span>
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-zinc-500">Est. cost ({periodScopeLabel(period.id)})</span>
-              <span className="font-semibold tabular-nums text-clay-300">
-                {formatUsd(usage.cost)}
-              </span>
-            </span>
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-zinc-500">Sessions</span>
-              <span className="font-semibold tabular-nums text-zinc-100">
-                {usage.sessions.toLocaleString()}
-              </span>
-            </span>
-          </div>
-
-          {rollupsError ? (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
-              Usage rollups aren't available on this server yet.
-            </div>
-          ) : rollups === null ? (
-            <div className="flex h-28 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30">
-              <Spinner className="h-5 w-5" />
-            </div>
-          ) : usage.days.length > 0 ? (
-            <ActivityChart
-              days={usage.days}
-              maxTokens={usage.maxTokens}
-              onOpenSession={onOpenSession}
-            />
-          ) : (
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 px-4 py-6 text-center text-[12px] text-zinc-600">
-              No usage in this period.
-            </div>
-          )}
-        </section>
-
-        {/* Contribution heatmap — 12 months of daily activity, GitHub-style. */}
-        <section>
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <SectionTitle icon={<CalendarDays className="h-3.5 w-3.5" />}>Activity heatmap</SectionTitle>
-            <div className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800">
-              {(["sessions", "tokens"] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => onHeatmapMetric(m)}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition",
-                    heatmapMetric === m
-                      ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-                      : "text-zinc-500 hover:text-zinc-300",
-                  )}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          </div>
-          {yearRollups === null ? (
-            <div className="flex h-32 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-900/30">
-              <Spinner className="h-5 w-5" />
-            </div>
-          ) : (
-            <CalendarHeatmap days={yearRollups} metric={heatmapMetric} />
-          )}
-        </section>
-
-        {/* When you work — time-of-day × day-of-week session heatmap. Self-loads
-            its own recent-session sample (rollups only know calendar days, not
-            the hour), bucketed in the browser's local timezone. */}
-        <section>
-          <SectionTitle icon={<Clock className="h-3.5 w-3.5" />}>When you work</SectionTitle>
-          <HourHeatmap />
-        </section>
-
-        {/* Per-model breakdown */}
-        <section>
-          <SectionTitle icon={<Cpu className="h-3.5 w-3.5" />}>By model</SectionTitle>
-          <ModelBreakdown models={stats.byModel} />
-        </section>
-
-        {/* Per-tool usage — invocation count, error rate (loud when high), and
-            avg duration per tool. Self-loads from /api/stats/tools and degrades
-            gracefully when the route isn't available on this server. */}
-        <section>
-          <SectionTitle icon={<Wrench className="h-3.5 w-3.5" />}>By tool</SectionTitle>
-          <ToolAnalytics />
-        </section>
-
-        {/* Top projects */}
-        <section>
-          <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Top projects</SectionTitle>
-          {stats.topProjects.length > 0 ? (
-            <div className="flex flex-col gap-2.5">
-              {stats.topProjects.map((p) => (
-                <div key={p.projectId} className="flex flex-col gap-1">
-                  <div className="flex items-baseline justify-between gap-3 text-[12px]">
-                    <span className="min-w-0 truncate font-medium text-zinc-200">{p.name}</span>
-                    <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-zinc-500">
-                      <span className="text-clay-300/90" title="estimated cost">
-                        {formatUsd(projectCost(p.tokens))}
-                      </span>
-                      <span>{compactNumber(p.tokens)}</span>
-                    </span>
-                  </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">
-                    <div
-                      className="h-full rounded-full bg-clay-500"
-                      style={{ width: `${(p.tokens / maxProjectTokens) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[12px] text-zinc-600">No project usage yet.</div>
-          )}
-        </section>
-
-        {/* Project leaderboard — sortable table (cost / tokens / sessions /
-            last active) across every project; click a row to open it. */}
-        <section>
-          <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Project leaderboard</SectionTitle>
-          <ProjectLeaderboard onOpenProject={onOpenProject} />
-        </section>
-
-        {/* Dirty repos — projects with uncommitted git changes, most-changed
-            first; click a row to open it. Queries each project's git status with
-            capped concurrency and skips non-repos. */}
-        <section>
-          <SectionTitle icon={<FolderGit2 className="h-3.5 w-3.5" />}>Uncommitted changes</SectionTitle>
-          <DirtyRepos onOpenProject={onOpenProject} />
-        </section>
-
-        {/* Cost forecast — month-to-date + projected spend, cap line, and an
-            anomaly callout for unusually expensive sessions. Self-loads its
-            budget status and degrades gracefully on a server without /api/budget. */}
-        <section>
-          <SectionTitle icon={<TrendingUp className="h-3.5 w-3.5" />}>Cost forecast</SectionTitle>
-          <CostForecast onOpenSession={onOpenSession} />
-        </section>
-
-        {/* Top spenders — most expensive sessions (est. cost, click to open) */}
-        <section>
-          <SectionTitle icon={<Coins className="h-3.5 w-3.5" />}>Top spenders</SectionTitle>
-          <TopSpenders onOpenSession={onOpenSession} />
-        </section>
-
-        {/* Activity (30 days) */}
-        <section>
-          <SectionTitle icon={<Activity className="h-3.5 w-3.5" />}>Activity (30 days)</SectionTitle>
-          {stats.activity.length > 0 ? (
-            <div className="flex h-28 items-end gap-1 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-              {stats.activity.map((d) => (
-                <div
-                  key={d.date}
-                  className="group flex h-full min-w-0 flex-1 items-end"
-                  title={`${d.date}: ${d.sessions} session${d.sessions === 1 ? "" : "s"}`}
-                >
-                  <div
-                    className="w-full rounded-sm bg-clay-500/70 transition group-hover:bg-clay-400"
-                    style={{
-                      height: `${Math.max(d.sessions > 0 ? 6 : 2, (d.sessions / maxDaySessions) * 100)}%`,
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[12px] text-zinc-600">No recent activity.</div>
-          )}
-        </section>
+        </Card>
       </div>
     </div>
   );

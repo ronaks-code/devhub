@@ -217,11 +217,11 @@ export function ProjectLeaderboard({
               >
                 <td className="max-w-0 px-3 py-2">
                   <div className="flex items-center gap-2">
-                    <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-clay-400/80" />
+                    <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
                     <span className="truncate font-medium text-zinc-200">{r.name}</span>
                   </div>
                 </td>
-                <td className="px-3 py-2 text-right font-medium tabular-nums text-clay-300">
+                <td className="px-3 py-2 text-right font-medium tabular-nums text-violet-300">
                   {r.cost > 0 ? formatUsd(r.cost) : <span className="text-zinc-600">—</span>}
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-zinc-300">

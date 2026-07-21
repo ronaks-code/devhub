@@ -21,13 +21,13 @@ function ymd(d: Date): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Five GitHub-style buckets (index 0 = none). Tailwind clay tints. */
+/** Five GitHub-style buckets (index 0 = none). Tailwind violet tints. */
 const BUCKET_CLASSES = [
   "bg-zinc-900 ring-1 ring-inset ring-zinc-800/80", // 0 — no activity
-  "bg-clay-500/25",
-  "bg-clay-500/45",
-  "bg-clay-500/70",
-  "bg-clay-400",
+  "bg-violet-500/25",
+  "bg-violet-500/45",
+  "bg-violet-500/70",
+  "bg-violet-400",
 ] as const;
 
 const WEEKDAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""] as const;
@@ -187,7 +187,7 @@ export function CalendarHeatmap({
                         key={ri}
                         title={tip}
                         className={cn(
-                          "h-[10px] w-[10px] rounded-[2px] transition hover:ring-1 hover:ring-clay-300/60",
+                          "h-[10px] w-[10px] rounded-[2px] transition hover:ring-1 hover:ring-violet-300/60",
                           BUCKET_CLASSES[cell.bucket],
                         )}
                       />

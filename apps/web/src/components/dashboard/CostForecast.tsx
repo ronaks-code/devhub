@@ -163,7 +163,7 @@ export function CostForecast({
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <div className="flex flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3.5">
             <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              <Coins className="h-3 w-3 text-clay-400" />
+              <Coins className="h-3 w-3 text-violet-400" />
               Month to date
             </span>
             <span className="text-lg font-semibold tabular-nums text-zinc-100">
@@ -172,13 +172,13 @@ export function CostForecast({
           </div>
           <div className="flex flex-col gap-1 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3.5">
             <span className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-              <TrendingUp className="h-3 w-3 text-clay-400" />
+              <TrendingUp className="h-3 w-3 text-violet-400" />
               Projected
             </span>
             <span
               className={cn(
                 "text-lg font-semibold tabular-nums",
-                overProjected ? "text-red-300" : "text-clay-300",
+                overProjected ? "text-red-300" : "text-violet-300",
               )}
             >
               {formatUsd(projected ?? 0)}

@@ -66,12 +66,12 @@ export function ActivityChart({
               key={d.date}
               type="button"
               onClick={() => setDrill(d)}
-              className="group flex h-full min-w-0 flex-1 items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              className="group flex h-full min-w-0 flex-1 items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
               title={tip}
               aria-label={tip}
             >
               <div
-                className="w-full rounded-sm bg-clay-500/70 transition group-hover:bg-clay-400 group-focus-visible:bg-clay-400"
+                className="w-full rounded-sm bg-violet-500/70 transition group-hover:bg-violet-400 group-focus-visible:bg-violet-400"
                 style={{ height: `${Math.max(t > 0 ? 6 : 2, (t / maxTokens) * 100)}%` }}
               />
             </button>
@@ -158,7 +158,7 @@ function DayDrilldown({
       >
         {/* Header: the day + its rolled-up totals. */}
         <div className="flex items-center gap-2 border-b border-zinc-800 px-4 py-3">
-          <Calendar className="h-4 w-4 text-clay-400" />
+          <Calendar className="h-4 w-4 text-violet-400" />
           <span className="text-[13px] font-semibold text-zinc-100">{day.date}</span>
           <span className="text-[11px] tabular-nums text-zinc-600">
             {compactNumber(tokens)} tok · {formatUsd(day.costUsd)} · {day.sessions} session
@@ -166,7 +166,7 @@ function DayDrilldown({
           </span>
           <button
             onClick={onClose}
-            className="ml-auto inline-flex items-center justify-center rounded-md p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+            className="ml-auto inline-flex items-center justify-center rounded-md p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
             aria-label="Close"
           >
             <X className="h-4 w-4" />
@@ -203,7 +203,7 @@ function DayDrilldown({
                     disabled={!onOpenSession}
                     className={cn(
                       "group flex items-center gap-3 px-4 py-2.5 text-left transition hover:bg-zinc-800/40 disabled:cursor-default",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-clay-500/50",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-500/50",
                     )}
                     title={s.cwd ?? undefined}
                   >

@@ -32,7 +32,7 @@ export function ModelBreakdown({ models }: { models: ModelStat[] }) {
           <div key={m.model} className="flex flex-col gap-1">
             <div className="flex items-baseline justify-between gap-3 text-[12px]">
               <span className="flex min-w-0 items-center gap-1.5">
-                <Cpu className="h-3 w-3 shrink-0 text-clay-400" />
+                <Cpu className="h-3 w-3 shrink-0 text-violet-400" />
                 <span className="truncate font-medium text-zinc-200" title={m.model}>
                   {m.model}
                 </span>
@@ -42,7 +42,7 @@ export function ModelBreakdown({ models }: { models: ModelStat[] }) {
               </span>
               <span className="flex shrink-0 items-baseline gap-2 tabular-nums text-zinc-500">
                 <span
-                  className="text-clay-300/90"
+                  className="text-violet-300/90"
                   title={`estimated cost · ${share.toFixed(0)}% of spend`}
                 >
                   {formatUsd(m.costUsd)}
@@ -52,7 +52,7 @@ export function ModelBreakdown({ models }: { models: ModelStat[] }) {
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">
               <div
-                className={cn("h-full rounded-full bg-clay-500")}
+                className={cn("h-full rounded-full bg-violet-500")}
                 style={{ width: `${(m.tokens / maxTokens) * 100}%` }}
               />
             </div>
