@@ -129,11 +129,11 @@ function MobileBreadcrumb({
   const back = idx > 0 ? order[idx - 1] : null;
 
   return (
-    <div className="flex items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950 px-3 py-1.5 lg:hidden">
+    <div className="glass-chrome flex items-center gap-1.5 border-x-0 border-t-0 px-3 py-1.5 lg:hidden">
       {back ? (
         <button
           onClick={() => onNavigate(back)}
-          className="mr-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] font-medium text-zinc-400 transition hover:bg-zinc-800 hover:text-zinc-100"
+          className="mr-0.5 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[12px] font-medium text-[var(--dh-text-muted)] transition hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text-strong)]"
           aria-label="Back"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
@@ -142,17 +142,17 @@ function MobileBreadcrumb({
       <nav className="flex min-w-0 items-center gap-1 text-[12px]" aria-label="Breadcrumb">
         {crumbs.map((c, i) => (
           <span key={c.stage} className="flex min-w-0 items-center gap-1">
-            {i > 0 ? <ChevronRight className="h-3 w-3 shrink-0 text-zinc-700" /> : null}
+            {i > 0 ? <ChevronRight className="h-3 w-3 shrink-0 text-[var(--dh-text-dim)]" /> : null}
             <button
               onClick={() => c.enabled && onNavigate(c.stage)}
               disabled={!c.enabled}
               className={cn(
                 "inline-flex min-w-0 items-center gap-1 rounded-md px-1.5 py-1 transition",
                 c.stage === stage
-                  ? "bg-clay-500/15 font-medium text-clay-300"
+                  ? "bg-[var(--dh-rail-active)] font-medium text-[var(--dh-brand)]"
                   : c.enabled
-                    ? "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
-                    : "cursor-default text-zinc-700",
+                    ? "text-[var(--dh-text-muted)] hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text)]"
+                    : "cursor-default text-[var(--dh-text-dim)]",
               )}
               aria-current={c.stage === stage ? "page" : undefined}
             >
@@ -197,7 +197,7 @@ export function ResponsiveShell({
   sessionLabel?: string | null;
 }) {
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="dh-aurora-bg--soft flex min-h-0 flex-1 flex-col">
       <MobileBreadcrumb
         stage={stage}
         onNavigate={onNavigate}
@@ -219,6 +219,8 @@ export function ResponsiveShell({
         <div
           className={cn(
             "min-h-0 [&>*]:w-full lg:flex lg:w-72 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
+            // Glass panel with a violet seam on wide (§3.8) — reads as its own pane.
+            "lg:border-r lg:border-[var(--dh-glass-border)] lg:bg-[var(--dh-glass-bg)]",
             stage === "projects" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
@@ -227,6 +229,7 @@ export function ResponsiveShell({
         <div
           className={cn(
             "min-h-0 [&>*]:w-full lg:flex lg:w-80 lg:flex-none lg:flex-col lg:[&>*]:min-h-0 lg:[&>*]:flex-1",
+            "lg:border-r lg:border-[var(--dh-glass-border)] lg:bg-[var(--dh-glass-bg)]",
             stage === "sessions" ? "flex flex-1 flex-col" : "hidden",
           )}
         >
