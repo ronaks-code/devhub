@@ -282,7 +282,9 @@ export function Sidebar({
           const hay = `${r.title} ${r.subtitle ?? ""} ${r.branch ?? ""} ${r.model ?? ""} ${r.reason ?? ""}`;
           if (q && !hay.toLowerCase().includes(q)) return false;
           if (chip === "running" && r.status !== "running") return false;
-          if (chip === "review" && !(r.status === "waiting" || r.status === "failed")) return false;
+          // "Needs you" means genuinely waiting on you (W3-COUNTS) — stale/failed
+          // sessions live in their own "Stale" group, not this filter.
+          if (chip === "review" && r.status !== "waiting") return false;
           if (chip === "anthropic" && r.provider !== "anthropic") return false;
           if (chip === "openai" && r.provider !== "openai") return false;
           return true;

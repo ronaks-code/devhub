@@ -55,28 +55,43 @@ export function ActivityChart({
   // The day a bar drilled into (its DailyUsage), or null when no modal is open.
   const [drill, setDrill] = useState<DailyUsage | null>(null);
 
+  // A couple of gridline labels for the "Daily spend" axis (W3-COUNTS minor):
+  // the card is titled "spend", but had no $ scale at all — just bars. Computed
+  // from the real per-day cost, independent of the token-scaled bar heights.
+  const maxCost = useMemo(() => Math.max(0, ...days.map((d) => d.costUsd)), [days]);
+
   return (
     <>
-      <div className="flex h-28 items-end gap-0.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
-        {days.map((d) => {
-          const t = dayTokens(d);
-          const tip = `${d.date}: ${compactNumber(t)} tokens · ${formatUsd(d.costUsd)} · ${d.sessions} session${d.sessions === 1 ? "" : "s"} — click to view`;
-          return (
-            <button
-              key={d.date}
-              type="button"
-              onClick={() => setDrill(d)}
-              className="group flex h-full min-w-0 flex-1 items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
-              title={tip}
-              aria-label={tip}
-            >
-              <div
-                className="w-full rounded-sm bg-violet-500/70 transition group-hover:bg-violet-400 group-focus-visible:bg-violet-400"
-                style={{ height: `${Math.max(t > 0 ? 6 : 2, (t / maxTokens) * 100)}%` }}
-              />
-            </button>
-          );
-        })}
+      <div className="flex h-28 gap-1.5">
+        <div
+          className="flex h-full flex-col justify-between py-3 text-right text-[10px] leading-none tabular-nums text-zinc-600"
+          aria-hidden
+        >
+          <span>{formatUsd(maxCost)}</span>
+          <span>{formatUsd(maxCost / 2)}</span>
+          <span>$0</span>
+        </div>
+        <div className="flex h-full min-w-0 flex-1 items-end gap-0.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">
+          {days.map((d) => {
+            const t = dayTokens(d);
+            const tip = `${d.date}: ${compactNumber(t)} tokens · ${formatUsd(d.costUsd)} · ${d.sessions} session${d.sessions === 1 ? "" : "s"} — click to view`;
+            return (
+              <button
+                key={d.date}
+                type="button"
+                onClick={() => setDrill(d)}
+                className="group flex h-full min-w-0 flex-1 items-end rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50"
+                title={tip}
+                aria-label={tip}
+              >
+                <div
+                  className="w-full rounded-sm bg-violet-500/70 transition group-hover:bg-violet-400 group-focus-visible:bg-violet-400"
+                  style={{ height: `${Math.max(t > 0 ? 6 : 2, (t / maxTokens) * 100)}%` }}
+                />
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {drill ? (

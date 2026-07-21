@@ -1411,11 +1411,15 @@ export default function App() {
         startedAt: run?.startedAt ?? undefined,
       };
     };
-    // Inbox attention tiers (§3.1v2): Needs you (detailed cards) → Running (live
-    // cards) → Recent (one-line history). Order = urgency, density = state.
+    // Inbox attention tiers (§3.1v2): Needs you (detailed cards) → Stale → Running
+    // (live cards) → Recent (one-line history). Order = urgency, density = state.
+    // Needs you vs. stale are DISTINCT groups (W3-COUNTS) — a session either waits
+    // on you or it's busy-but-silent, never both, so it's never double-bucketed.
     const out: SidebarGroup[] = [];
     if (grouped.needsReview.length)
       out.push({ id: "review", label: "Needs you", tier: "attention", rows: grouped.needsReview.map(toRow) });
+    if (grouped.stale.length)
+      out.push({ id: "stale", label: "Stale", tier: "attention", rows: grouped.stale.map(toRow) });
     if (grouped.running.length)
       out.push({ id: "running", label: "Running", tier: "active", rows: grouped.running.map(toRow) });
     if (grouped.idle.length) out.push({ id: "idle", label: "Recent", tier: "recent", rows: grouped.idle.map(toRow) });
@@ -1423,11 +1427,12 @@ export default function App() {
   }, [sessions, liveRunning, project]);
 
   // StatusBar ambient counts (§3.7) — real running/needsYou from the app-root poll.
-  // D3/M7: `needsYouCount` used to count only the raw `r.needsYou` flag, a NARROWER
-  // signal than the sidebar's "Needs you" tier (`groupSessionsByRunStatus`'s
-  // `needsReview`, which is "waiting" OR "failed" via the SAME `deriveRunStatus`).
-  // That let the status bar under-report relative to the sidebar from the same
-  // poll snapshot. Using `deriveRunStatus` here too makes the two agree.
+  // W3-COUNTS: `needsYouCount` counts ONLY `deriveRunStatus === "waiting"` — the
+  // same "genuinely waiting on you" definition the sidebar's "Needs you" tier and
+  // the Ops Grid/Board's `needsYou` bucket use (opsHelpers.attentionBucket).
+  // Stale/silent sessions are their own bucket and are NOT counted here; folding
+  // them in (the previous behavior) is exactly how the status bar, sidebar, and
+  // Ops surfaces ended up disagreeing on the same poll snapshot.
   const statusBarData = useMemo(() => {
     const rs = liveRunning ?? [];
     let running = 0;
@@ -1435,7 +1440,7 @@ export default function App() {
     for (const r of rs) {
       const status = deriveRunStatus(r);
       if (status === "running") running += 1;
-      else if (status === "waiting" || status === "failed") waitingAts.push(r.statusUpdatedAt ?? r.startedAt ?? 0);
+      else if (status === "waiting") waitingAts.push(r.statusUpdatedAt ?? r.startedAt ?? 0);
     }
     const real = waitingAts.filter((n) => n > 0);
     return {

@@ -98,6 +98,16 @@ describe("groupSessionsByRunStatus", () => {
     expect(groups.needsReview.map((s) => s.sessionId)).toEqual(["b"]);
     expect(groups.idle.map((s) => s.sessionId)).toEqual(["c"]); // no running entry
   });
+  it("buckets stale/failed sessions separately from needsReview (W3-COUNTS)", () => {
+    const waiting = session({ sessionId: "w" });
+    const stale = session({ sessionId: "s" });
+    const groups = groupSessionsByRunStatus(
+      [waiting, stale],
+      [running({ sessionId: "w", needsYou: true }), running({ sessionId: "s", stale: true })],
+    );
+    expect(groups.needsReview.map((s) => s.sessionId)).toEqual(["w"]);
+    expect(groups.stale.map((s) => s.sessionId)).toEqual(["s"]);
+  });
   it("sorts most-recent-first within a group and never fabricates status", () => {
     const older = session({ sessionId: "o", lastTimestamp: "2026-07-01T00:00:00Z" });
     const newer = session({ sessionId: "n", lastTimestamp: "2026-07-09T00:00:00Z" });

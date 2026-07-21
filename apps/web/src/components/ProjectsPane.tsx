@@ -114,7 +114,7 @@ export function ProjectsPane({
                   {p.cwd}
                 </div>
                 <div className="mt-0.5 flex items-center gap-2 text-[10.5px] text-zinc-600">
-                  <span>{p.sessionCount} sessions</span>
+                  <span>{p.sessionCount} session{p.sessionCount === 1 ? "" : "s"}</span>
                   <span>·</span>
                   <span>{relativeTime(p.lastActivity)}</span>
                 </div>

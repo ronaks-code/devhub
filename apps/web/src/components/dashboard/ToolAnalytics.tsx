@@ -9,6 +9,13 @@ import { Spinner } from "../ui";
 /** Error rate at/above this is "high" and gets the loud amber/red treatment. */
 const HIGH_ERROR_RATE = 0.1;
 
+/** Cap how many tools the card lists — a real project's tail can run 30+ deep
+ * (playwright/MCP tools especially), and rendering all of them made this card
+ * dwarf its dashboard-row neighbor, leaving a large dead void beside it
+ * (W3-COUNTS). The workhorses (sorted by count, desc) lead, so the cap never
+ * hides the tools that actually matter. */
+const MAX_TOOLS = 12;
+
 /** Title-case a `snake_case`/space-separated tool-name fragment, e.g. "browser_click" -> "Browser Click". */
 function titleCase(s: string): string {
   return s
@@ -27,6 +34,15 @@ function humanizeServerId(id: string): string {
   return collapsed.replace(/[_-]+/g, " ").trim();
 }
 
+/** A raw MCP server id that's actually a random UUID (a dynamically-registered
+ * server devhub has no friendly name for) rather than a real name, e.g.
+ * "0a2192db-b2f4-4c1a-9f2e-abc123456789". Spacing that out (`humanizeServerId`)
+ * just turns one kind of noise into another ("0a2192db b2f4 4c1a …"), so it's
+ * detected up front and swapped for a generic "(mcp)" tag instead. */
+function looksLikeUuid(id: string): boolean {
+  return /^[0-9a-f]{8}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{4}[-_][0-9a-f]{12}$/i.test(id);
+}
+
 /**
  * Friendly label for a tool id (QA P2). MCP tool ids come through as the raw
  * `mcp__<server>__<tool>` wire format (e.g. `mcp__plugin_playwright_playwright__
@@ -40,6 +56,7 @@ function friendlyToolName(tool: string): string {
   if (parts.length < 2) return tool;
   const server = parts[1]!;
   const toolTitle = titleCase(parts.slice(2).join(" ") || server);
+  if (looksLikeUuid(server)) return `${toolTitle} (mcp)`;
   const serverLabel = humanizeServerId(server);
   return serverLabel ? `${toolTitle} (${serverLabel})` : toolTitle;
 }
@@ -156,10 +173,12 @@ export function ToolAnalytics() {
   }
 
   const maxCount = Math.max(1, ...rows.map((r) => r.count));
+  const shown = rows.slice(0, MAX_TOOLS);
+  const hiddenCount = rows.length - shown.length;
 
   return (
     <div className="flex flex-col gap-2.5">
-      {rows.map((r) => {
+      {shown.map((r) => {
         const high = r.errorRate != null && r.errorRate >= HIGH_ERROR_RATE;
         return (
           <div key={r.tool} className="flex flex-col gap-1">
@@ -227,6 +246,9 @@ export function ToolAnalytics() {
           </div>
         );
       })}
+      {hiddenCount > 0 ? (
+        <div className="pt-0.5 text-[11px] text-zinc-600">{`+${hiddenCount} more tool${hiddenCount === 1 ? "" : "s"}`}</div>
+      ) : null}
     </div>
   );
 }

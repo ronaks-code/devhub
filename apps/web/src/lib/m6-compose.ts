@@ -111,20 +111,26 @@ export function indexRunningBySession(
   return map;
 }
 
-/** The three sidebar session groups (§3.1), derived from the running join. */
+/** The four sidebar session groups (§3.1), derived from the running join. */
 export interface SessionGroups {
   /** Actively working now. */
   running: SessionSummary[];
-  /** Waiting on you, or stale/failed — needs your eyes. */
+  /** Waiting on you — needsYou / `deriveRunStatus === "waiting"` ONLY. This is the
+   * one honest "needs you" definition, shared with the StatusBar count and the
+   * Ops Grid/Board's `needsYou` bucket (see `opsHelpers.attentionBucket`) — a
+   * session either waits on you or it doesn't, and that can't disagree with
+   * itself depending which surface you're looking at (W3-COUNTS). */
   needsReview: SessionSummary[];
+  /** Busy-but-silent / exited — its OWN bucket, never folded into `needsReview`. */
+  stale: SessionSummary[];
   /** No live run entry — recent/idle history. */
   idle: SessionSummary[];
 }
 
 /**
- * Group real sessions into Running / Needs review / Idle by joining `api.running()`
- * on `sessionId`. Never fabricates status: a session absent from `running` is idle.
- * Sessions stay sorted most-recent-first within each group.
+ * Group real sessions into Running / Needs review / Stale / Idle by joining
+ * `api.running()` on `sessionId`. Never fabricates status: a session absent from
+ * `running` is idle. Sessions stay sorted most-recent-first within each group.
  */
 export function groupSessionsByRunStatus(
   sessions: readonly SessionSummary[],
@@ -134,11 +140,12 @@ export function groupSessionsByRunStatus(
   const sorted = [...sessions].sort((a, b) =>
     (b.lastTimestamp ?? "").localeCompare(a.lastTimestamp ?? ""),
   );
-  const groups: SessionGroups = { running: [], needsReview: [], idle: [] };
+  const groups: SessionGroups = { running: [], needsReview: [], stale: [], idle: [] };
   for (const s of sorted) {
     const status = deriveRunStatus(byId.get(s.sessionId));
     if (status === "running") groups.running.push(s);
-    else if (status === "waiting" || status === "failed") groups.needsReview.push(s);
+    else if (status === "waiting") groups.needsReview.push(s);
+    else if (status === "failed") groups.stale.push(s);
     else groups.idle.push(s);
   }
   return groups;
