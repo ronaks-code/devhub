@@ -29,8 +29,14 @@ describe("MockFeed", () => {
   });
 
   it("is deterministic given a seed", () => {
-    const a = new MockFeed({ seed: 42 });
-    const b = new MockFeed({ seed: 42 });
+    // Pin an identical deterministic clock on both so wall-clock fields (world.ts,
+    // agent startedAt) can't diverge — the simulation itself is seed-deterministic.
+    const clock = () => {
+      let t = 1_000_000;
+      return () => (t += 1500);
+    };
+    const a = new MockFeed({ seed: 42, now: clock() });
+    const b = new MockFeed({ seed: 42, now: clock() });
     for (let i = 0; i < 20; i++) {
       a.tick();
       b.tick();

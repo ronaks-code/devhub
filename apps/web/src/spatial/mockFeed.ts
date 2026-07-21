@@ -82,10 +82,49 @@ const HOME_TASKS = [
   "triaging the inbox",
 ];
 
+/** Deterministic model roster (§3.5 callouts). Provider is FROM the model, never guessed. */
+const MODELS: ReadonlyArray<{ model: string; provider: "anthropic" | "openai" }> = [
+  { model: "claude-opus-4-8", provider: "anthropic" },
+  { model: "claude-sonnet-5", provider: "anthropic" },
+  { model: "gpt-5.6", provider: "openai" },
+  { model: "claude-haiku-4-5", provider: "anthropic" },
+];
+
+/** kebab a project name for a worktree branch (e.g. "Q3 GTM push" → "q3-gtm-push"). */
+function slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** A stable model assignment per agent id (deterministic, so tests/screens repeat). */
+function modelFor(id: string): { model: string; provider: "anthropic" | "openai" } {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return MODELS[Math.abs(h) % MODELS.length]!;
+}
+
+/** Observable "last action" lines for the working-desk caret line. */
+const LAST_ACTIONS = [
+  "pytest test_reconnect — 12s",
+  "edit src/App.tsx +18 −4",
+  "grep -r usb enumerate",
+  "reading capture logs",
+  "typecheck — 0 errors",
+  "git commit -m wip",
+  "curl /api/running",
+  "drafting the summary",
+];
+
 export interface MockFeedOptions {
   seed?: number;
   /** ms between simulation ticks. */
   tickMs?: number;
+  /**
+   * Clock source for frame timestamps (`world.ts`, agent `startedAt`). Defaults to
+   * `Date.now`. Injectable so tests can pin a deterministic clock — otherwise two
+   * independently-constructed feeds diverge on wall-clock fields even at the same
+   * seed (the simulation itself is fully seed-deterministic).
+   */
+  now?: () => number;
 }
 
 const MAX_PROJECTS = 4;
@@ -98,6 +137,7 @@ const MAX_PROJECTS = 4;
 export class MockFeed {
   private rand: () => number;
   private tickMs: number;
+  private now: () => number;
   private world: WorldState;
   private timer: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(m: ServerMessage) => void>();
@@ -106,6 +146,7 @@ export class MockFeed {
   constructor(opts: MockFeedOptions = {}) {
     this.rand = rng(opts.seed ?? 0x5e51);
     this.tickMs = opts.tickMs ?? 1200;
+    this.now = opts.now ?? (() => Date.now());
     this.world = this.seedWorld();
   }
 
@@ -172,6 +213,7 @@ export class MockFeed {
         assignment: "",
         reports_to: null,
         project: "",
+        ...modelFor(leadId),
       };
       agents.push(lead);
       leadByDept.set(spec.dept, leadId);
@@ -187,6 +229,7 @@ export class MockFeed {
           assignment: "",
           reports_to: leadId,
           project: "",
+          ...modelFor(id),
         });
         memberIds.push(id);
       }
@@ -216,7 +259,38 @@ export class MockFeed {
       }
     }
 
-    return { rev: 1, ts: Date.now(), agents, edges, rooms };
+    const now = this.now();
+    for (const a of agents) this.enrich(a, now);
+    return { rev: 1, ts: now, agents, edges, rooms };
+  }
+
+  /**
+   * Populate the OPTIONAL §3.5 callout fields from an agent's current state.
+   * Working agents accrue tokens/cost + a live action line + (engineers) a diff;
+   * an agent that went home drops those assignment-linked fields (honest — that
+   * work ended), keeping only its identity (model/provider). The renderer draws a
+   * callout line ONLY for a field that exists, so this never invents a placeholder.
+   */
+  private enrich(a: Agent, now: number): void {
+    const working = a.status === "working" || (a.project !== "" && a.status !== "idle");
+    if (working) {
+      if (!a.startedAt) a.startedAt = now - Math.floor(this.rand() * 600_000);
+      a.tokens = (a.tokens ?? 0) + 800 + Math.floor(this.rand() * 4000);
+      a.costUsd = Math.round((a.tokens / 1_000_000) * 12 * 100) / 100;
+      a.lastAction = this.pick(LAST_ACTIONS);
+      a.worktree = a.project ? `wt/${slug(a.project)}` : a.role === "engineer" ? "main" : undefined;
+      if (a.role === "engineer") {
+        const d = a.diff ?? { add: 0, del: 0 };
+        a.diff = { add: d.add + Math.floor(this.rand() * 12), del: d.del + Math.floor(this.rand() * 5) };
+      }
+    } else {
+      a.startedAt = undefined;
+      a.tokens = undefined;
+      a.costUsd = undefined;
+      a.lastAction = undefined;
+      a.diff = undefined;
+      a.worktree = a.role === "engineer" ? "main" : undefined;
+    }
   }
 
   private agentSet(agents: Agent[], id: string, patch: Partial<Agent>): void {
@@ -309,8 +383,12 @@ export class MockFeed {
       }
     }
 
+    const now = this.now();
+    // Refresh the §3.5 callout fields for every agent that changed this tick.
+    for (const a of changedAgents.values()) this.enrich(a, now);
+
     this.world.rev += 1;
-    this.world.ts = Date.now();
+    this.world.ts = now;
 
     this.emit({
       type: "delta",

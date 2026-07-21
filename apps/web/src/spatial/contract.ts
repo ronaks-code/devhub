@@ -58,6 +58,28 @@ export interface Agent {
   reports_to: string | null;
   /** Current project name, or "" when the agent is home in its department room. */
   project: string;
+
+  // ── Optional enrichment (Aurora Cockpit §3.5 Blueprint callouts) ──────────
+  // ADDITIVE and OPTIONAL: the mock feed populates all of these; the real M1
+  // adapter fills only what it truly has. The renderer draws a callout line ONLY
+  // when the field exists — an absent field is never a placeholder. Snapshot /
+  // delta compatibility is preserved (unknown-to-old-clients fields are ignored).
+  /** Model id this agent is running on, e.g. "claude-opus-4-8" / "gpt-5.6". */
+  model?: string;
+  /** Provider identity (never guessed from behavior; from the model/runtime). */
+  provider?: "anthropic" | "openai";
+  /** Approximate spend on this assignment so far (USD). */
+  costUsd?: number;
+  /** Tokens consumed on this assignment so far. */
+  tokens?: number;
+  /** Epoch ms this assignment started (drives the runtime clock). */
+  startedAt?: number;
+  /** Last observable action line, e.g. "pytest test_reconnect — 12s". */
+  lastAction?: string;
+  /** Worktree / branch the agent is operating in, when it has one. */
+  worktree?: string;
+  /** Line delta on the agent's worktree, when known. */
+  diff?: { add: number; del: number };
 }
 
 /** Directionality of a message/dispatch edge in the graph. */
