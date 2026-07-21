@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import type { RunningSession, SessionSummary } from "../../../lib/types.js";
 import { LiveOpsBoard } from "../../LiveOpsBoard.js";
 import { SecondaryNav } from "../shell/SecondaryNav.js";
 import { isSettingsSecondaryApplied, resolveSettingsSecondaryMode } from "../settings/SettingsRoute.js";
@@ -15,13 +16,19 @@ import { isSettingsSecondaryApplied, resolveSettingsSecondaryMode } from "../set
  * behavior stays exactly as shipped. Only its navigation placement changes.
  */
 export function OpsRoute({
+  running,
+  sessions,
   onOpenSession,
+  onRefresh,
 }: {
+  running?: RunningSession[] | null;
+  sessions?: readonly SessionSummary[];
   onOpenSession?: (cwd: string | null, sessionId: string) => void;
+  onRefresh?: () => void;
 }): ReactNode {
   return (
     <SecondaryNav active="ops">
-      <LiveOpsBoard onOpenSession={onOpenSession} />
+      <LiveOpsBoard running={running} sessions={sessions} onOpenSession={onOpenSession} onRefresh={onRefresh} />
     </SecondaryNav>
   );
 }

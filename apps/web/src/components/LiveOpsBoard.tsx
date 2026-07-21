@@ -1,291 +1,228 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  AlertCircle,
-  ArrowUpRight,
-  Cpu,
-  RadioTower,
-  RefreshCw,
-} from "lucide-react";
-import type { RunningSession } from "../lib/types";
-import { api } from "../lib/api";
+import { useEffect, useMemo, useState } from "react";
+import { AlertCircle, ArrowUpRight, Coins, RadioTower, RefreshCw, XCircle } from "lucide-react";
+import type { RunningSession, SessionSummary } from "../lib/types";
+import { formatUsd } from "../lib/format";
 import { cn } from "../lib/utils";
-import { Badge, EmptyState, Spinner } from "./ui";
+import { EmptyState, Spinner } from "./ui";
+import { StatusDot } from "./ui/StatusDot";
+import { ProviderChip } from "./ui/ProviderChip";
+import {
+  agoMs,
+  buildOpsEntries,
+  bucketStatusKind,
+  indexSessions,
+  lastSegment,
+  type OpsBucket,
+  type OpsEntry,
+} from "./features/ops/opsHelpers";
 
-/** How often to re-poll /api/running (paused while the tab is hidden). */
-const POLL_MS = 4000;
+/** The four Attention-Board columns, left→right (the "what needs my eyes" order). */
+const COLUMNS: ReadonlyArray<{ bucket: OpsBucket; label: string; tint: string; dot: string }> = [
+  { bucket: "needsYou", label: "Needs you", tint: "bg-amber-500/[0.05]", dot: "bg-amber-400" },
+  { bucket: "running", label: "Running", tint: "", dot: "bg-[var(--dh-brand)]" },
+  { bucket: "stale", label: "Stale · Failed", tint: "bg-rose-500/[0.05]", dot: "bg-rose-400" },
+  { bucket: "finished", label: "Recently finished", tint: "", dot: "bg-[var(--dh-text-dim)]" },
+];
 
-/** Last path segment of a working directory (the "project" name). */
-function lastSegment(cwd: string | null): string {
-  if (!cwd) return "unknown";
-  const parts = cwd.replace(/[/\\]+$/, "").split(/[/\\]/);
-  return parts[parts.length - 1] || cwd;
-}
-
-/**
- * Map a running-session status to a dot/badge/border color. `needsYou` (a stuck
- * waiting session) gets the loudest treatment so it floats to the eye.
- */
-function statusStyle(s: RunningSession): {
-  dot: string;
-  text: string;
-  ring: string;
-  label: string;
-} {
-  if (s.needsYou) {
-    return {
-      dot: "bg-amber-400 animate-pulse",
-      text: "text-amber-300",
-      ring: "ring-amber-500/40",
-      label: "needs you",
-    };
-  }
-  const status = s.status.toLowerCase();
-  if (status === "busy") {
-    return { dot: "bg-clay-500 animate-pulse", text: "text-clay-300", ring: "ring-zinc-800", label: "busy" };
-  }
-  if (status === "waiting") {
-    return { dot: "bg-amber-400", text: "text-amber-300", ring: "ring-amber-500/20", label: "waiting" };
-  }
-  if (status === "idle") {
-    return { dot: "bg-zinc-500", text: "text-zinc-400", ring: "ring-zinc-800", label: "idle" };
-  }
-  return { dot: "bg-sky-400", text: "text-sky-300", ring: "ring-zinc-800", label: status || "running" };
-}
-
-/** Human "elapsed since" for an epoch-ms timestamp (compact: 5s / 3m / 2h). */
-function elapsed(sinceMs: number | null | undefined, nowMs: number): string {
-  if (!sinceMs) return "—";
-  const sec = Math.max(0, Math.round((nowMs - sinceMs) / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m`;
-  const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h`;
-  return `${Math.round(hr / 24)}d`;
-}
-
-/** A single running-session card. */
-function OpsCard({
-  s,
+/** A compact Attention-Board card — the dense form of the Glass-Grid card. */
+function BoardCard({
+  entry,
   nowMs,
   onOpen,
 }: {
-  s: RunningSession;
+  entry: OpsEntry;
   nowMs: number;
   onOpen?: (cwd: string | null, sessionId: string) => void;
 }) {
-  const style = statusStyle(s);
-  const project = s.name || lastSegment(s.cwd);
+  const { running: s, bucket } = entry;
+  const project = lastSegment(s.cwd);
   const canOpen = !!onOpen && !!s.sessionId;
+  const sub = entry.branch ? `⎇ ${entry.branch}` : project;
 
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-2.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3.5 ring-1 transition",
-        style.ring,
-        s.needsYou && "bg-amber-500/[0.04]",
-      )}
-    >
+    <div className="glass-card flex flex-col gap-1.5 p-2.5">
       <div className="flex items-center gap-2">
-        <span className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100" title={project}>
-          {project}
+        <StatusDot status={bucketStatusKind(bucket)} />
+        <span className="min-w-0 flex-1 truncate text-[12.5px] font-semibold text-[var(--dh-text-strong)]" title={entry.title}>
+          {entry.title}
         </span>
-        <span className={cn("shrink-0 text-[11px] font-medium capitalize", style.text)}>
-          {style.label}
-        </span>
+        {entry.provider ? <ProviderChip provider={entry.provider} /> : null}
       </div>
 
-      {s.cwd ? (
-        <div className="truncate text-[11px] text-zinc-600" title={s.cwd} dir="rtl">
-          {s.cwd}
-        </div>
-      ) : null}
+      <div className="dh-mono-ui flex items-center gap-2 text-[var(--dh-text-muted)]">
+        <span className="min-w-0 flex-1 truncate" title={s.cwd ?? undefined}>
+          {sub}
+        </span>
+        {entry.costUsd != null ? (
+          <span className="inline-flex shrink-0 items-center gap-1" title="Session cost (estimate)">
+            <Coins className="h-3 w-3" />
+            {formatUsd(entry.costUsd)}
+          </span>
+        ) : null}
+      </div>
 
-      {/* What a waiting session is blocked on, when reported. */}
-      {s.waitingFor ? (
-        <div className="flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+      {/* One status line. */}
+      {bucket === "needsYou" ? (
+        <div className="flex items-center gap-1 text-[11px] text-amber-300">
           <AlertCircle className="h-3 w-3 shrink-0" />
-          <span className="min-w-0 truncate" title={s.waitingFor}>
-            {s.waitingFor}
+          <span className="min-w-0 truncate" title={s.waitingFor ?? undefined}>
+            {s.waitingFor ?? "waiting on you"}
           </span>
         </div>
-      ) : null}
+      ) : bucket === "stale" ? (
+        <div className="flex items-center gap-1 text-[11px] text-rose-300">
+          <XCircle className="h-3 w-3 shrink-0" />
+          <span className="min-w-0 truncate">silent {agoMs(s.statusUpdatedAt ?? s.updatedAt, nowMs)}</span>
+        </div>
+      ) : bucket === "finished" ? (
+        <div className="text-[11px] text-[var(--dh-text-dim)]">awaiting review</div>
+      ) : (
+        <div className="dh-mono-ui truncate text-[var(--dh-text-muted)]">running {agoMs(s.startedAt, nowMs)}</div>
+      )}
 
-      <div className="flex flex-wrap items-center gap-1.5">
-        {s.model ? (
-          <Badge title="Model">
-            <Cpu className="h-3 w-3" />
-            {s.model}
-          </Badge>
-        ) : null}
-        <span className="text-[11px] text-zinc-500" title="Elapsed since start">
-          {elapsed(s.startedAt, nowMs)} elapsed
+      {canOpen ? (
+        <button
+          type="button"
+          onClick={() => onOpen!(s.cwd, s.sessionId)}
+          className="mt-0.5 inline-flex items-center gap-1 self-start rounded-[7px] bg-[var(--dh-hover)] px-2 py-0.5 text-[11px] font-medium text-[var(--dh-text)] ring-1 ring-[var(--dh-glass-border)] transition hover:ring-[var(--dh-glass-border-hi)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]"
+        >
+          <ArrowUpRight className="h-3 w-3" />
+          Open
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** One board column: header (dot + label + count) over a stack of compact cards. */
+function BoardColumn({
+  column,
+  entries,
+  nowMs,
+  onOpen,
+}: {
+  column: (typeof COLUMNS)[number];
+  entries: OpsEntry[];
+  nowMs: number;
+  onOpen?: (cwd: string | null, sessionId: string) => void;
+}) {
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-2.5 rounded-[16px] p-2.5", column.tint)}>
+      <div className="flex items-center gap-2 px-1">
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", column.dot)} aria-hidden />
+        <span className="dh-label flex-1">{column.label}</span>
+        <span className="dh-nums rounded-full bg-[var(--dh-control)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--dh-text-muted)]">
+          {entries.length}
         </span>
       </div>
-
-      <div className="mt-0.5 flex items-center gap-2">
-        <button
-          onClick={() => canOpen && onOpen!(s.cwd, s.sessionId)}
-          disabled={!canOpen}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-zinc-800 px-2.5 py-1 text-[11.5px] font-medium text-zinc-200 ring-1 ring-zinc-700 transition hover:bg-zinc-700 hover:text-white disabled:opacity-40"
-          title="Open this session in Browse"
-        >
-          <ArrowUpRight className="h-3.5 w-3.5" />
-          Open session
-        </button>
-        <span className="ml-auto font-mono text-[10px] text-zinc-700" title="Process id">
-          pid {s.pid}
-        </span>
+      <div className="flex flex-col gap-2.5">
+        {entries.length === 0 ? (
+          <div className="rounded-[12px] border border-dashed border-[var(--dh-border-subtle)] px-3 py-4 text-center text-[11px] text-[var(--dh-text-dim)]">
+            None
+          </div>
+        ) : (
+          entries.map((entry) => (
+            <BoardCard
+              key={`${entry.running.pid}:${entry.running.sessionId}`}
+              entry={entry}
+              nowMs={nowMs}
+              onOpen={onOpen}
+            />
+          ))
+        )}
       </div>
     </div>
   );
 }
 
 /**
- * A dedicated "ops" board: a live grid of currently-running Claude Code sessions
- * (polled from /api/running). Each card shows the project, a color-coded status
- * (busy / idle / waiting / needs-you), the model, elapsed time, and a quick
- * "open session" action. Auto-refreshes on an interval (paused when the tab is
- * hidden) and shows a friendly empty state when nothing is running.
- *
- * "needs you" sessions (stuck waiting on the user) are surfaced loudly and sorted
- * to the front so you notice the ones that won't make progress without you.
+ * Live Ops — the Attention Board (Aurora Cockpit §3.7): the "what needs my eyes"
+ * signal, split into four columns — Needs you / Running / Stale·Failed / Recently
+ * finished. Each card is the compact form of the Glass-Grid card. Reads the SAME
+ * app-root running poll the shell already runs (no competing poll), joined to the
+ * indexed sessions for cost/title/branch. Clicking Open routes to the session.
  */
 export function LiveOpsBoard({
+  running,
+  sessions,
   onOpenSession,
+  onRefresh,
 }: {
-  /**
-   * Open a running session in Browse, given its working dir + session id. The
-   * host (App) resolves the cwd to a known project before navigating.
-   */
+  /** Live running sessions from the app-root poll (`useStatsPolling`). Null = still loading. */
+  running?: RunningSession[] | null;
+  /** Indexed sessions, joined by sessionId for cost/title/branch. */
+  sessions?: readonly SessionSummary[];
+  /** Open a running session in Browse, given its cwd + session id. */
   onOpenSession?: (cwd: string | null, sessionId: string) => void;
-}) {
-  const [running, setRunning] = useState<RunningSession[] | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-  // A ticking "now" so elapsed labels advance smoothly between polls.
+  /** Force an immediate refresh of the app-root poll. */
+  onRefresh?: () => void;
+} = {}) {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const aliveRef = useRef(true);
-
-  const load = useCallback(() => {
-    setRefreshing(true);
-    api
-      .running()
-      .then((r) => {
-        if (aliveRef.current) setRunning(r);
-      })
-      .catch(() => {
-        if (aliveRef.current && running == null) setRunning([]);
-      })
-      .finally(() => {
-        if (aliveRef.current) setRefreshing(false);
-      });
-  }, [running]);
-
-  // Poll on an interval, pausing while hidden and refreshing on return.
-  useEffect(() => {
-    aliveRef.current = true;
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const tick = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      load();
-    };
-    const start = () => {
-      if (timer != null) return;
-      tick();
-      timer = setInterval(tick, POLL_MS);
-    };
-    const stop = () => {
-      if (timer != null) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
-    const onVisibility = () => {
-      if (typeof document !== "undefined" && document.hidden) stop();
-      else start();
-    };
-
-    if (typeof document === "undefined" || !document.hidden) start();
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", onVisibility);
-    }
-    return () => {
-      aliveRef.current = false;
-      stop();
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", onVisibility);
-      }
-    };
-    // load is stable enough for our purposes; re-running on every `running`
-    // change would reset the interval, so we intentionally key on mount only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Advance the "elapsed" clock once a second (cheap; only re-renders this pane).
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Sort: needs-you first, then busy, then waiting, then the rest; newest start
-  // breaks ties so the freshest sessions lead each group.
-  const sorted = (running ?? []).slice().sort((a, b) => {
-    const rank = (s: RunningSession) =>
-      s.needsYou ? 0 : s.status.toLowerCase() === "busy" ? 1 : s.status.toLowerCase() === "waiting" ? 2 : 3;
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra !== rb) return ra - rb;
-    return (b.startedAt ?? 0) - (a.startedAt ?? 0);
-  });
+  const sessionsById = useMemo(() => indexSessions(sessions), [sessions]);
+  const entries = useMemo(() => buildOpsEntries(running, sessionsById), [running, sessionsById]);
 
-  const needsYouCount = sorted.filter((s) => s.needsYou).length;
+  const byBucket = useMemo(() => {
+    const map: Record<OpsBucket, OpsEntry[]> = { needsYou: [], running: [], stale: [], finished: [] };
+    for (const e of entries) map[e.bucket].push(e);
+    return map;
+  }, [entries]);
+
+  const runningCount = byBucket.running.length;
+  const needsYouCount = byBucket.needsYou.length;
+  const staleCount = byBucket.stale.length;
 
   return (
-    <div className="min-w-0 flex-1 overflow-y-auto bg-zinc-950">
-      <div className="mx-auto flex max-w-5xl flex-col gap-5 px-6 py-6">
+    <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-6">
         <div className="flex flex-wrap items-center gap-3">
-          <h1 className="flex items-center gap-2 text-[15px] font-semibold text-zinc-100">
-            <RadioTower className="h-4 w-4 text-clay-400" />
-            Live ops
+          <h1 className="flex items-center gap-2 text-[17px] font-[680] tracking-[-0.01em] text-[var(--dh-text-strong)]">
+            <RadioTower className="h-4 w-4 text-[var(--dh-brand)]" />
+            Live Ops
           </h1>
-          {sorted.length > 0 ? (
-            <span className="text-[12px] text-zinc-500">
-              {sorted.length} running
-              {needsYouCount > 0 ? (
-                <span className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
-                  {needsYouCount} need you
-                </span>
-              ) : null}
+          {entries.length > 0 ? (
+            <span className="dh-mono-ui text-[var(--dh-text-muted)]">
+              {entries.length} sessions · {runningCount} running · {needsYouCount} waiting on you · {staleCount} stale
             </span>
           ) : null}
-          <button
-            onClick={load}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:bg-zinc-800 hover:text-zinc-200"
-            title="Refresh now"
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", refreshing && "animate-spin")} />
-            Refresh
-          </button>
+          {onRefresh ? (
+            <button
+              onClick={onRefresh}
+              className="glass-card ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 text-[12px] text-[var(--dh-text-muted)] transition hover:text-[var(--dh-text)]"
+              title="Refresh now"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </button>
+          ) : null}
         </div>
 
         {running == null ? (
           <div className="flex h-40 items-center justify-center">
             <Spinner className="h-6 w-6" />
           </div>
-        ) : sorted.length === 0 ? (
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 py-14">
+        ) : entries.length === 0 ? (
+          <div className="glass-card py-14">
             <EmptyState
               icon={<RadioTower className="h-10 w-10" />}
               title="No sessions running right now"
-              hint="Live Claude Code sessions show up here the moment they start — busy, waiting, or needing your input."
+              hint="Live Claude Code and Codex sessions show up here the moment they start — busy, waiting, or needing your input."
             />
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {sorted.map((s) => (
-              <OpsCard key={`${s.pid}:${s.sessionId}`} s={s} nowMs={nowMs} onOpen={onOpenSession} />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {COLUMNS.map((column) => (
+              <BoardColumn
+                key={column.bucket}
+                column={column}
+                entries={byBucket[column.bucket]}
+                nowMs={nowMs}
+                onOpen={onOpenSession}
+              />
             ))}
           </div>
         )}

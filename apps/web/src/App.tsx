@@ -567,10 +567,10 @@ export default function App() {
   const dismissWorkMode = useCallback(() => {
     dismissWorkModeOverlay(setWorkModeOpen, workModeTriggerRef);
   }, []);
-  // Ops tab view: the at-a-glance running-sessions "board", or the "grid" of
-  // compact live panels that watch/drive several sessions at once. Local to the
-  // tab; the board stays the default so the existing view is untouched.
-  const [opsMode, setOpsMode] = useState<"board" | "grid">("board");
+  // Ops tab view (Aurora Cockpit §3.7): the "grid" = Glass Grid (dense monitoring
+  // cards, the default) or "board" = Attention Board (four columns of what needs
+  // your eyes). Local to the tab.
+  const [opsMode, setOpsMode] = useState<"board" | "grid">("grid");
   const [commandOpen, setCommandOpen] = useState(false);
   // M6 slice 7 (Task 9 data-wire): the devhub `TaskSearchDialog`'s own query/scope/
   // date-facet/results state. Only read/updated while `searchCommandsMode==="devhub"`
@@ -1276,7 +1276,7 @@ export default function App() {
   // The ONE app-root live-data poll (Aurora Cockpit §3.1/§3.2). Feeds the Sidebar's
   // run-status groups + spend meter today, and the TopBar pills / StatusBar next.
   // Joined to sessions by sessionId; SessionSummary itself has no status/provider.
-  const { stats: liveStats, running: liveRunning } = useStatsPolling();
+  const { stats: liveStats, running: liveRunning, refresh: refreshLive } = useStatsPolling();
 
   const taskRailMode = resolveTaskRailMode(settings);
   const taskRailModel = useMemo<TaskRailModel>(() => {
@@ -1905,51 +1905,67 @@ export default function App() {
           </Suspense>
         ) : tab === "ops" ? (
           <div className="flex min-w-0 flex-1 flex-col">
-            {/* Ops view toggle: the running-sessions board vs. the multi-session
-                grid (watch/drive several live sessions at once). A slim bar above
-                both views, so neither view needs to know about the other and the
-                existing board is untouched. */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-zinc-800/80 bg-zinc-950 px-6 py-2">
+            {/* Ops view toggle (§3.7): Glass Grid (dense monitoring cards) vs.
+                Attention Board (four columns of what needs your eyes). A slim
+                glass bar above both views; each view consumes the SAME app-root
+                running poll, so neither re-polls. */}
+            <div className="dh-aurora-bg--soft flex shrink-0 items-center gap-2 border-b border-[var(--dh-border-subtle)] px-6 py-2">
               <div
                 role="tablist"
                 aria-label="Ops view"
-                className="inline-flex items-center rounded-lg bg-zinc-900 p-0.5 ring-1 ring-zinc-800"
+                className="glass-card inline-flex items-center p-0.5"
               >
-                {(["board", "grid"] as const).map((m) => (
+                {([
+                  ["grid", "Grid"],
+                  ["board", "Board"],
+                ] as const).map(([m, label]) => (
                   <button
                     key={m}
                     role="tab"
                     aria-selected={opsMode === m}
                     onClick={() => setOpsMode(m)}
                     className={cn(
-                      "rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+                      "rounded-[8px] px-2.5 py-1 text-[11.5px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]",
                       opsMode === m
-                        ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-                        // DEVHUB-A11Y-CONTRAST-DARK-SECONDARYNAV: zinc-500 measured
-                        // 3.67:1 against this tab-strip's zinc-900 pill — below AA.
-                        : "text-zinc-400 hover:text-zinc-300",
+                        ? "bg-[var(--dh-rail-active)] text-[var(--dh-text-strong)] ring-1 ring-[var(--dh-glass-border-hi)]"
+                        : "text-[var(--dh-text-muted)] hover:text-[var(--dh-text)]",
                     )}
                     title={
                       m === "grid"
-                        ? "Watch and drive several live sessions at once"
-                        : "At-a-glance board of running sessions"
+                        ? "Glass grid — dense cards of every running session"
+                        : "Attention board — grouped by what needs your eyes"
                     }
                   >
-                    {m}
+                    {label}
                   </button>
                 ))}
               </div>
             </div>
             {opsMode === "grid" ? (
               <Suspense fallback={<PaneFallback />}>
-                <MultiSessionGrid />
+                <MultiSessionGrid
+                  running={liveRunning}
+                  sessions={sessions ?? undefined}
+                  onOpenSession={openSessionByCwd}
+                  onRefresh={refreshLive}
+                />
               </Suspense>
             ) : settingsSecondaryMode === "devhub" ? (
               // M6 slice 8 (Task 9 data-wire): `OpsRoute` routes the SAME `LiveOpsBoard`
               // under `SecondaryNav` only for `settingsSecondary===true`.
-              <OpsRoute onOpenSession={openSessionByCwd} />
+              <OpsRoute
+                running={liveRunning}
+                sessions={sessions ?? undefined}
+                onOpenSession={openSessionByCwd}
+                onRefresh={refreshLive}
+              />
             ) : (
-              <LiveOpsBoard onOpenSession={openSessionByCwd} />
+              <LiveOpsBoard
+                running={liveRunning}
+                sessions={sessions ?? undefined}
+                onOpenSession={openSessionByCwd}
+                onRefresh={refreshLive}
+              />
             )}
           </div>
         ) : tab === "progress" ? (
