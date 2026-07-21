@@ -4,63 +4,60 @@ import { createElement } from "react";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { OfficeVisualizer } from "./OfficeVisualizer.js";
-import { fleetSnapshotFixture } from "./fleetSnapshot.js";
+import { MockFeed } from "./mockFeed.js";
+import type { WorldState } from "./contract.js";
+
+/**
+ * The Nameplates renderer draws the SAME live WorldState the Blueprint plan does
+ * (the mock feed today). These guard that it renders the whole shared roster and
+ * derives lifecycle from the live agent status — never a private fixture.
+ */
+
+function isWorking(status: string): boolean {
+  return status !== "idle" && status !== "done";
+}
 
 describe("OfficeVisualizer", () => {
-  it("mounts all eight fixture rooms with lifecycle styling and every agent nameplate", () => {
-    const { container } = render(
-      createElement(OfficeVisualizer, { snapshot: fleetSnapshotFixture }),
-    );
+  it("renders every room and agent from the shared world with lifecycle from live status", () => {
+    // Advance the feed a few ticks so some agents are working (mixed lifecycle).
+    const feed = new MockFeed({ seed: 42 });
+    for (let i = 0; i < 12; i++) feed.tick();
+    const world: WorldState = feed.getWorld();
+
+    const { container } = render(createElement(OfficeVisualizer, { world }));
 
     expect(screen.getByTestId("office-visualizer").tagName).toBe("SECTION");
     expect(container.querySelectorAll("main")).toHaveLength(0);
 
-    const rooms = screen.getAllByTestId("office-room");
-    expect(rooms).toHaveLength(8);
-    expect(container.querySelectorAll('[data-lifecycle="active"]')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-lifecycle="reserved"]')).toHaveLength(7);
+    // One card per room in the world.
+    expect(screen.getAllByTestId("office-room")).toHaveLength(world.rooms.length);
 
-    const hermes = screen.getByRole("region", {
-      name: "Hermes department — active",
-    });
-    expect(hermes).toHaveAttribute("data-lifecycle", "active");
-    expect(hermes).toHaveClass("border-emerald-400/60", "bg-emerald-400/[0.07]");
-
-    const athena = screen.getByRole("region", {
-      name: "Athena department — reserved",
-    });
-    expect(athena).toHaveAttribute("data-lifecycle", "reserved");
-    expect(athena).toHaveClass(
-      "border-zinc-800/80",
-      "bg-zinc-900/50",
-      "grayscale-[0.25]",
+    // Lifecycle is derived from real membership + status, not hard-coded.
+    const activeRooms = world.rooms.filter((r) =>
+      r.members.some((id) => isWorking(world.agents.find((a) => a.id === id)?.status ?? "idle")),
+    ).length;
+    expect(container.querySelectorAll('[data-lifecycle="active"]')).toHaveLength(activeRooms);
+    expect(container.querySelectorAll('[data-lifecycle="reserved"]')).toHaveLength(
+      world.rooms.length - activeRooms,
     );
-    expect(athena).not.toHaveClass("opacity-55");
 
-    expect(fleetSnapshotFixture.agents).toHaveLength(10);
-    expect(screen.getAllByTestId("office-agent")).toHaveLength(10);
-    for (const agent of fleetSnapshotFixture.agents) {
-      const nameplate = container.querySelector<HTMLElement>(
-        `[data-agent-id="${agent.employeeId}"]`,
-      );
+    // Every agent that belongs to a room has a nameplate showing its name.
+    const placed = new Set(world.rooms.flatMap((r) => r.members));
+    expect(screen.getAllByTestId("office-agent")).toHaveLength(placed.size);
+    for (const agent of world.agents) {
+      if (!placed.has(agent.id)) continue;
+      const nameplate = container.querySelector<HTMLElement>(`[data-agent-id="${agent.id}"]`);
       expect(nameplate).not.toBeNull();
-      expect(within(nameplate!).getByText(agent.displayName)).toBeVisible();
-      expect(nameplate).toHaveTextContent(agent.role);
-      expect(nameplate).toHaveTextContent(agent.status);
-      expect(nameplate).toHaveTextContent(agent.task?.label ?? "Awaiting activation");
+      expect(within(nameplate!).getByText(agent.name)).toBeVisible();
     }
   });
 
-  it("renders the supplied snapshot timestamp instead of fixture-specific copy", () => {
-    render(
-      createElement(OfficeVisualizer, {
-        snapshot: {
-          ...fleetSnapshotFixture,
-          ts: Date.UTC(2030, 0, 2, 3, 4, 0),
-        },
-      }),
-    );
+  it("labels the feed source honestly (mock by default, live when told)", () => {
+    const world = new MockFeed({ seed: 5 }).getWorld();
+    const { rerender } = render(createElement(OfficeVisualizer, { world }));
+    expect(screen.getByText("MOCK FEED")).toBeVisible();
 
-    expect(screen.getByText("2030-01-02 · 03:04 UTC")).toBeVisible();
+    rerender(createElement(OfficeVisualizer, { world, source: "live" }));
+    expect(screen.getByText("LIVE FEED")).toBeVisible();
   });
 });

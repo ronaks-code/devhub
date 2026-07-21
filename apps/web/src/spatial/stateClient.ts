@@ -70,7 +70,10 @@ function fromMessages(
 export function createMockClient(): WorldClient {
   let feed: MockFeed | null = null;
   return fromMessages("mock", (onMessage) => {
-    feed = new MockFeed({ tickMs: 1500 });
+    // A calm cadence: fast enough to feel live, slow enough that the plan reads as
+    // stable (rooms don't visibly churn/vacate every second). The churn is a
+    // property of THIS mock; the real M1 feed will emit real, steadier transitions.
+    feed = new MockFeed({ tickMs: 4000 });
     const unsub = feed.subscribe(onMessage);
     feed.start();
     return {

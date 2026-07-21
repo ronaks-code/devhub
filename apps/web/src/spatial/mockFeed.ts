@@ -368,7 +368,8 @@ export class MockFeed {
     }
 
     // 6) Occasionally a project finishes and drains (everyone walks home).
-    if (activeProjectNames.size > 0 && this.rand() < 0.08) {
+    //    Kept low so project rooms persist long enough to read, not flicker away.
+    if (activeProjectNames.size > 0 && this.rand() < 0.05) {
       this.drainProject(changedAgents, changedRooms, removedRooms, removedEdges);
     }
 

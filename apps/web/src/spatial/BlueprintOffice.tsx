@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Maximize, X, ZoomIn, ZoomOut } from "lucide-react";
 import type { Agent, AgentStatus, Room, WorldState } from "./contract";
 import { departmentLabel } from "./contract";
 import { ProviderChip } from "../components/ui/ProviderChip";
@@ -31,7 +31,7 @@ const COLS = 3; // rooms per building row
 const ROOM_W = 380;
 const PAD = 16; // room inner padding
 const HEADER_H = 50; // room label block
-const LINE_H = 12; // annotation line height
+const LINE_H = 13; // annotation line height
 const IDLE_COLS = 4; // idle desks per row inside a room
 const IDLE_BAY_W = (ROOM_W - PAD * 2) / IDLE_COLS;
 const IDLE_BAY_H = 60;
@@ -100,25 +100,25 @@ interface PlanLine {
 function calloutLines(a: Agent, nowMs: number): PlanLine[] {
   const meta = statusMeta(a.status);
   const lines: PlanLine[] = [
-    { text: clip(a.name.toUpperCase(), 30), fill: "var(--dh-text-strong)", size: 10.5, weight: 700 },
+    { text: clip(a.name.toUpperCase(), 30), fill: "var(--dh-text-strong)", size: 11, weight: 700 },
   ];
   const provider = a.provider === "anthropic" ? "CLD" : a.provider === "openai" ? "CDX" : null;
   const idLine = [provider, a.model].filter(Boolean).join(" · ");
-  if (idLine) lines.push({ text: clip(idLine, 44), fill: "var(--dh-text-dim)", size: 8.5 });
+  if (idLine) lines.push({ text: clip(idLine, 44), fill: "var(--dh-text-muted)", size: 9.5 });
   const rt = runtime(a.startedAt, nowMs);
   const stat = [`${meta.glyph} ${meta.label}`];
   if (rt) stat.push(rt);
   if (a.costUsd != null) stat.push(`$${a.costUsd.toFixed(2)}`);
   if (a.tokens != null) stat.push(`${a.tokens.toLocaleString()} tk`);
-  lines.push({ text: clip(stat.join(" · "), 44), fill: meta.color, size: 8.5 });
-  if (a.assignment) lines.push({ text: clip(a.assignment, 44), fill: "var(--dh-text)", size: 9.5 });
+  lines.push({ text: clip(stat.join(" · "), 44), fill: meta.color, size: 9.5, weight: 600 });
+  if (a.assignment) lines.push({ text: clip(a.assignment, 44), fill: "var(--dh-text)", size: 10 });
   if (a.worktree)
     lines.push({
       text: clip(`⎇ ${a.worktree}${a.diff ? ` · +${a.diff.add} −${a.diff.del}` : ""}`, 44),
       fill: "var(--dh-link)",
-      size: 8.5,
+      size: 9.5,
     });
-  if (a.lastAction) lines.push({ text: clip(a.lastAction, 44), fill: "var(--dh-text-dim)", size: 8.5 });
+  if (a.lastAction) lines.push({ text: clip(a.lastAction, 44), fill: "var(--dh-text-muted)", size: 9.5 });
   return lines;
 }
 
@@ -364,7 +364,7 @@ function RoomPlan({
       <text x={PAD} y={24} fontSize={12} fontWeight={700} letterSpacing={3} style={{ fill: active ? "#ffb3a4" : "var(--dh-text)" }}>
         {clip(label, 30)}
       </text>
-      <text x={PAD} y={38} fontSize={8} letterSpacing={1.5} style={{ fill: "var(--dh-text-dim)" }}>
+      <text x={PAD} y={38} fontSize={8.5} letterSpacing={1.5} style={{ fill: "var(--dh-text-muted)" }}>
         {clip(sub, 52)}
       </text>
 
@@ -436,7 +436,7 @@ function RoomPlan({
                 style={{ fill: "none", stroke: DRAFT_DIM, strokeWidth: 1 }}
               />
               <circle cx={IDLE_BAY_W / 2} cy={18} r={3.5} style={{ fill: meta.color }} />
-              <text x={IDLE_BAY_W / 2} y={52} fontSize={8} textAnchor="middle" style={{ fill: "var(--dh-text-dim)" }}>
+              <text x={IDLE_BAY_W / 2} y={52} fontSize={9} textAnchor="middle" style={{ fill: "var(--dh-text-muted)" }}>
                 {clip(bay.agent.name, 13)}
               </text>
             </DeskGlyph>
@@ -463,6 +463,15 @@ function RoomPlan({
   );
 }
 
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+const clampN = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+const MAX_ZOOM = 4;
+
 export function BlueprintOffice({
   world,
   source,
@@ -473,6 +482,16 @@ export function BlueprintOffice({
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Pan/zoom viewport. `zoom === 1` + `center === null` means "fit the whole
+  // plan" — the default. It auto-follows plan-size changes so the ENTIRE floor
+  // plan (every room, the legend, the title block) is always visible at any pane
+  // size; zoom + drag then let you read the fine drafting callouts.
+  const [zoom, setZoom] = useState(1);
+  const [center, setCenter] = useState<{ cx: number; cy: number } | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<{ startX: number; startY: number; cx: number; cy: number; scale: number } | null>(null);
+
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
@@ -489,6 +508,95 @@ export function BlueprintOffice({
 
   const plan = useMemo(() => layoutPlan(rooms, byId, nowMs), [rooms, byId, nowMs]);
 
+  // The visible viewBox, derived from zoom + center and clamped to the plan.
+  const view: Rect = useMemo(() => {
+    const w = plan.width / zoom;
+    const h = plan.height / zoom;
+    const cx = center?.cx ?? plan.width / 2;
+    const cy = center?.cy ?? plan.height / 2;
+    const x = clampN(cx - w / 2, 0, Math.max(0, plan.width - w));
+    const y = clampN(cy - h / 2, 0, Math.max(0, plan.height - h));
+    return { x, y, w, h };
+  }, [plan.width, plan.height, zoom, center]);
+
+  const resetView = useCallback(() => {
+    setZoom(1);
+    setCenter(null);
+  }, []);
+
+  /** Zoom to `nextZoom`, keeping the plan-space `anchor` fixed on screen. */
+  const zoomTo = useCallback(
+    (nextZoom: number, anchor?: { x: number; y: number }) => {
+      const z = clampN(nextZoom, 1, MAX_ZOOM);
+      if (z === 1) {
+        setZoom(1);
+        setCenter(null);
+        return;
+      }
+      const w = plan.width / z;
+      const h = plan.height / z;
+      const ax = anchor?.x ?? view.x + view.w / 2;
+      const ay = anchor?.y ?? view.y + view.h / 2;
+      // Keep the anchor at the same fractional position in the view rect. Because
+      // the view rect always carries the plan aspect and preserveAspectRatio is
+      // constant, equal fraction ⇒ equal screen position, so the point stays put.
+      const fx = view.w > 0 ? (ax - view.x) / view.w : 0.5;
+      const fy = view.h > 0 ? (ay - view.y) / view.h : 0.5;
+      setZoom(z);
+      setCenter({ cx: ax - fx * w + w / 2, cy: ay - fy * h + h / 2 });
+    },
+    [plan.width, plan.height, view],
+  );
+
+  /** Map client (screen) coords to plan (viewBox) coords via the live SVG CTM. */
+  const clientToPlan = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
+    const svg = svgRef.current;
+    if (!svg || typeof svg.getScreenCTM !== "function") return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm || typeof DOMPoint === "undefined") return null;
+    const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
+    return { x: pt.x, y: pt.y };
+  }, []);
+
+  // Wheel-zoom toward the cursor. A native non-passive listener lets us swallow
+  // the scroll (so the page doesn't move) while zooming the plan instead.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const anchor = clientToPlan(e.clientX, e.clientY) ?? undefined;
+      zoomTo(zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18), anchor);
+    };
+    stage.addEventListener("wheel", onWheel, { passive: false });
+    return () => stage.removeEventListener("wheel", onWheel);
+  }, [clientToPlan, zoomTo, zoom]);
+
+  // Drag-to-pan on the plan BACKGROUND (a click on a desk still selects it).
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (zoom === 1) return; // whole plan is visible — nothing to pan
+    if ((e.target as Element).closest?.('[data-testid="office-desk"]')) return;
+    const svg = svgRef.current;
+    const scale = svg && typeof svg.getScreenCTM === "function" ? svg.getScreenCTM()?.a ?? 0 : 0;
+    if (!scale) return;
+    drag.current = { startX: e.clientX, startY: e.clientY, cx: view.x + view.w / 2, cy: view.y + view.h / 2, scale };
+    svg?.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    setCenter({ cx: d.cx - (e.clientX - d.startX) / d.scale, cy: d.cy - (e.clientY - d.startY) / d.scale });
+  };
+  const endDrag = (e: React.PointerEvent) => {
+    if (!drag.current) return;
+    drag.current = null;
+    try {
+      svgRef.current?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      /* pointer may already be released */
+    }
+  };
+
   const selected = selectedId ? byId.get(selectedId) ?? null : null;
   useEffect(() => {
     if (!selected) return;
@@ -504,29 +612,38 @@ export function BlueprintOffice({
   const colLetters = "ABCDEFGH";
 
   return (
-    <div className="dh-aurora-bg--soft relative min-w-0 flex-1 overflow-y-auto" data-testid="blueprint-office">
-      <div className="relative mx-auto flex max-w-[1360px] flex-col gap-3 px-6 py-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-[17px] font-[680] tracking-[-0.01em] text-[var(--dh-text-strong)]">Office</h1>
-          <span className="dh-mono-ui text-[var(--dh-text-muted)]">
-            {rooms.length} rooms · {world.agents.length} agents · {activeAgents} active
-          </span>
-          <span
-            className="dh-mono-ui ml-auto rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[var(--dh-text-dim)]"
-            title="Feed source"
-          >
-            {(source ?? "mock").toUpperCase()} FEED
-          </span>
-        </div>
+    <div className="dh-aurora-bg--soft relative flex min-w-0 flex-1 flex-col overflow-hidden" data-testid="blueprint-office">
+      {/* Header row (always visible). */}
+      <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pb-2 pt-4">
+        <h1 className="text-[17px] font-[680] tracking-[-0.01em] text-[var(--dh-text-strong)]">Office</h1>
+        <span className="dh-mono-ui text-[var(--dh-text-muted)]">
+          {rooms.length} rooms · {world.agents.length} agents · {activeAgents} active
+        </span>
+        <span
+          className="dh-mono-ui ml-auto rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[var(--dh-text-dim)]"
+          title="Feed source"
+        >
+          {(source ?? "mock").toUpperCase()} FEED
+        </span>
+      </div>
 
-        {/* The drafting sheet. */}
-        <div className="relative">
-          <svg
-            viewBox={`0 0 ${plan.width} ${plan.height}`}
-            className="dh-blueprint block w-full"
-            role="img"
-            aria-label="Office floor plan — rooms are departments, desks are agents"
-          >
+      {/* The drafting sheet — a fit-to-container, scroll-free viewport. The whole
+          plan always fits; zoom controls / wheel / drag reveal the fine detail. */}
+      <div ref={stageRef} className="relative min-h-0 flex-1 overflow-hidden px-4 pb-4">
+        <svg
+          ref={svgRef}
+          viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+          preserveAspectRatio="xMidYMid meet"
+          className={cn("dh-blueprint block h-full w-full select-none", zoom > 1 ? "cursor-grab" : undefined)}
+          style={{ touchAction: "none" }}
+          role="img"
+          aria-label="Office floor plan — rooms are departments, desks are agents"
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onPointerLeave={endDrag}
+        >
             <defs>
               <pattern id="dh-bp-grid" width={34} height={34} patternUnits="userSpaceOnUse">
                 <path d="M34 0H0V34" fill="none" stroke={DRAFT} strokeOpacity={0.13} strokeWidth={1} />
@@ -609,43 +726,65 @@ export function BlueprintOffice({
                 onSelect={setSelectedId}
               />
             ))}
-          </svg>
+        </svg>
 
-          {/* Corner title block (drafting stamp) — real counts only. */}
-          <div
-            className="dh-mono-ui absolute bottom-2 right-2 z-10 w-[212px] border text-[9px]"
-            style={{ borderColor: DRAFT_DIM, background: "rgba(24, 19, 32, 0.82)", color: "var(--dh-text-dim)" }}
-          >
-            <div className="flex justify-between px-2.5 py-1.5 text-[10px] tracking-[0.14em] text-[var(--dh-text-strong)]">
-              OFFICE — PLAN 02
-            </div>
-            <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
-              <span>AGENTS</span>
-              <span className="text-[var(--dh-text)]">{world.agents.length} · {activeAgents} ACTIVE</span>
-            </div>
-            <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
-              <span>ROOMS</span>
-              <span className="text-[var(--dh-text)]">{rooms.length} · {activeRooms} ONLINE</span>
-            </div>
-            <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
-              <span>FEED</span>
-              <span className="text-[var(--dh-text)]">{(source ?? "mock").toUpperCase()} · REV {world.rev}</span>
-            </div>
-          </div>
+        {/* Zoom / fit controls (always visible). */}
+        <div className="glass-card absolute right-3 top-3 z-10 flex flex-col overflow-hidden p-1" role="group" aria-label="Plan zoom">
+          {(
+            [
+              { icon: ZoomIn, label: "Zoom in", onClick: () => zoomTo(zoom * 1.4), disabled: zoom >= MAX_ZOOM },
+              { icon: ZoomOut, label: "Zoom out", onClick: () => zoomTo(zoom / 1.4), disabled: zoom <= 1 },
+              { icon: Maximize, label: "Fit whole plan", onClick: resetView, disabled: zoom === 1 && center === null },
+            ] as const
+          ).map(({ icon: Icon, label, onClick, disabled }) => (
+            <button
+              key={label}
+              type="button"
+              onClick={onClick}
+              disabled={disabled}
+              aria-label={label}
+              title={label}
+              className="rounded-[7px] p-1.5 text-[var(--dh-text-muted)] transition hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)] disabled:pointer-events-none disabled:opacity-35"
+            >
+              <Icon className="h-4 w-4" />
+            </button>
+          ))}
+        </div>
 
-          {/* Legend. */}
-          <div className="dh-mono-ui absolute bottom-2 left-2 z-10 flex items-center gap-4 text-[9px] text-[var(--dh-text-dim)]">
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-coral)]" /> ACTIVE
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-warning)]" /> BLOCKED
-            </span>
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-[2px]" style={{ background: DRAFT_DIM }} /> RESERVED
-            </span>
-            <span>1 DESK = 1 AGENT</span>
+        {/* Corner title block (drafting stamp) — real counts only. */}
+        <div
+          className="dh-mono-ui absolute bottom-3 right-3 z-10 w-[212px] border text-[9px]"
+          style={{ borderColor: DRAFT_DIM, background: "rgba(24, 19, 32, 0.82)", color: "var(--dh-text-dim)" }}
+        >
+          <div className="flex justify-between px-2.5 py-1.5 text-[10px] tracking-[0.14em] text-[var(--dh-text-strong)]">
+            OFFICE — PLAN 02
           </div>
+          <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
+            <span>AGENTS</span>
+            <span className="text-[var(--dh-text)]">{world.agents.length} · {activeAgents} ACTIVE</span>
+          </div>
+          <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
+            <span>ROOMS</span>
+            <span className="text-[var(--dh-text)]">{rooms.length} · {activeRooms} ONLINE</span>
+          </div>
+          <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
+            <span>FEED</span>
+            <span className="text-[var(--dh-text)]">{(source ?? "mock").toUpperCase()} · REV {world.rev}</span>
+          </div>
+        </div>
+
+        {/* Legend. */}
+        <div className="dh-mono-ui absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-[var(--dh-text-dim)]">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-coral)]" /> ACTIVE
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-warning)]" /> BLOCKED
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-[2px]" style={{ background: DRAFT_DIM }} /> RESERVED
+          </span>
+          <span>1 DESK = 1 AGENT</span>
         </div>
       </div>
 

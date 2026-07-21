@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { OfficeVisualizer } from "./OfficeVisualizer";
 import { BlueprintOffice } from "./BlueprintOffice";
-import { fleetSnapshotFixture } from "./fleetSnapshot";
 import { useWorldState } from "./stateClient";
 import { cn } from "../lib/utils";
 
@@ -19,9 +18,11 @@ function readRenderer(): Renderer {
 }
 
 /**
- * Spatial route (Aurora Cockpit §3.5). The Blueprint renderer (default) draws the
- * live `WorldState` from the mock feed; the original nameplate renderer is kept as
- * a one-click rollback. The renderer choice persists in localStorage.
+ * Spatial route (Aurora Cockpit §3.5). Both renderers draw the SAME live
+ * `WorldState` (mock feed today, the M1 adapter later): Blueprint (default) is the
+ * architectural floor plan; Nameplates is a card-grid view of the identical world,
+ * kept as a one-click rollback. Neither invents its own roster or palette. The
+ * renderer choice persists in localStorage.
  */
 export function SpatialHub(): React.JSX.Element {
   const [renderer, setRenderer] = useState<Renderer>(readRenderer);
@@ -36,7 +37,7 @@ export function SpatialHub(): React.JSX.Element {
   }, [renderer]);
 
   return (
-    <div className="relative flex min-w-0 flex-1 flex-col">
+    <div className="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div className="dh-aurora-bg--soft flex shrink-0 items-center gap-2 border-b border-[var(--dh-border-subtle)] px-6 py-2">
         <div role="tablist" aria-label="Office renderer" className="glass-card inline-flex items-center p-0.5">
           {([
@@ -64,7 +65,7 @@ export function SpatialHub(): React.JSX.Element {
       {renderer === "blueprint" ? (
         <BlueprintOffice world={world} source={source} />
       ) : (
-        <OfficeVisualizer snapshot={fleetSnapshotFixture} />
+        <OfficeVisualizer world={world} source={source} />
       )}
     </div>
   );
