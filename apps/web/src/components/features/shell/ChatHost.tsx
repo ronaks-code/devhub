@@ -64,6 +64,8 @@ export interface ChatHostProps {
    * scoped draft is still empty — never clobbers a persisted in-progress draft.
    */
   initialDraft?: string;
+  /** Report the live session id up to the shell so a new session becomes a chat tab (Aurora §3.2). */
+  onSessionChange?: (sessionId: string) => void;
 }
 
 export function ChatHost({
@@ -76,6 +78,7 @@ export function ChatHost({
   onFork,
   showInspector = false,
   initialDraft,
+  onSessionChange,
 }: ChatHostProps) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   const [messages, setMessages] = useState<NormalizedMessage[]>([]);
@@ -117,6 +120,12 @@ export function ChatHost({
     // down on unmount). cwd changes remount this component via the caller's key.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cwd]);
+
+  // Report the live session id up to the shell (Aurora §3.2) so a newly created
+  // session surfaces as a chat tab and the tab strip can track/switch it.
+  useEffect(() => {
+    if (sessionId) onSessionChange?.(sessionId);
+  }, [sessionId, onSessionChange]);
 
   useEffect(() => {
     let cancelled = false;

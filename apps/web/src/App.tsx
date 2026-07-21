@@ -655,9 +655,15 @@ export default function App() {
       }
     }
   }, [acceptSettingsResponse, beginSettingsRequest]);
-  // Seeds ChatPane to resume an existing session (--resume) after a handoff
-  // from the Browse transcript. Cleared once consumed.
-  const [chatSeed, setChatSeed] = useState<{ sessionId: string; projectId: string } | null>(null);
+  // The chat pane's current subject (Aurora §3.2/§3.3b): a resumed session
+  // ({sessionId}), a fresh new chat ({kind:"new"}), or null → Launchpad. Every
+  // navigation reset (setChatSeed(null)) therefore lands on the Launchpad on the
+  // chat route, and the Launchpad is no longer dead code for returning users.
+  const [chatSeed, setChatSeed] =
+    useState<{ sessionId: string; projectId: string } | { kind: "new"; projectId: string } | null>(null);
+  // The live session id the mounted ChatHost reports for a NEW chat — used only to
+  // surface it as a tab / active-tab highlight. A resumed chat uses its seed's id.
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
   // Legacy Browse/Chat headers know the native Claude session id but not its
   // provider home. Route the intent into CodexNativePane, whose existing
   // discovery path resolves the real NativeTaskKey before opening the fork UI.
@@ -1191,6 +1197,28 @@ export default function App() {
     setTab("chat");
   };
 
+  // Aurora §3.2 chat-tab wiring.
+  // Selecting a tab resumes that session in the LIVE Chat pane (never the read-only
+  // Browse transcript) — mirrors handleContinue.
+  const selectChatTab = useCallback(
+    (id: string) => {
+      if (!projectId) return;
+      setChatSeed({ sessionId: id, projectId });
+      setChatSessionId(null);
+      setTab("chat");
+    },
+    [projectId],
+  );
+  // The tab-strip "+" opens the Launchpad (the explicit new-session surface):
+  // clearing the seed shows it via the chat-pane gate.
+  const openLaunchpad = useCallback(() => {
+    setChatSeed(null);
+    setChatSessionId(null);
+    setTab("chat");
+  }, []);
+  // ChatHost reports its live session id here so a new chat becomes a tab.
+  const handleChatSession = useCallback((sid: string) => setChatSessionId(sid), []);
+
   // Switching projects is a fresh intent — drop any pending resume seed.
   const selectProject = (id: string) => {
     setChatSeed(null);
@@ -1228,6 +1256,14 @@ export default function App() {
 
   // Only honor the seed while its project is the active one.
   const activeSeed = chatSeed && chatSeed.projectId === projectId ? chatSeed : null;
+  // Resume seed = a specific session to reopen; new-chat seed = a fresh composer.
+  const resumeSeed = activeSeed && "sessionId" in activeSeed ? activeSeed : null;
+  const isNewChat = !!activeSeed && "kind" in activeSeed;
+  // The session currently shown in the Chat pane, for the active-tab highlight and
+  // the "opened session → tab" rule: a resumed id, or a new chat's reported id.
+  const activeChatId = resumeSeed?.sessionId ?? (isNewChat ? chatSessionId : null);
+  // On the chat route the active tab is the live chat; elsewhere it's the Browse pick.
+  const activeTabId = tab === "chat" ? activeChatId : sessionId;
   const openCrossProviderFork = useCallback((nativeTaskId: string | null) => {
     if (settings?.devHubFeatures?.crossProviderFork !== true) {
       pushToast({
@@ -1403,24 +1439,38 @@ export default function App() {
     },
     [projectId],
   );
-  // Opening a session (from anywhere) focuses an existing tab or appends one.
+  // Opening a session (from anywhere — Browse pick or a live chat) focuses an
+  // existing tab or appends one. activeTabId is the on-screen session per route.
   useEffect(() => {
-    if (projectId && sessionId) {
-      setOpenTabs((prev) => (prev.includes(sessionId) ? prev : [...prev, sessionId]));
+    if (projectId && activeTabId) {
+      setOpenTabs((prev) => (prev.includes(activeTabId) ? prev : [...prev, activeTabId]));
     }
-  }, [projectId, sessionId, setOpenTabs]);
+  }, [projectId, activeTabId, setOpenTabs]);
 
   const closeTab = useCallback(
     (id: string) => {
       const idx = openTabs.indexOf(id);
       setOpenTabs((prev) => prev.filter((x) => x !== id));
-      if (id === sessionId) {
-        // Focus the neighbor; closing the last tab drops to the empty chat route.
-        const next = openTabs[idx + 1] ?? openTabs[idx - 1] ?? null;
-        setSessionId(next);
+      // Only re-focus if the tab that closed was the one on screen.
+      if (id !== activeTabId) return;
+      const next = openTabs[idx + 1] ?? openTabs[idx - 1] ?? null;
+      if (next && projectId) {
+        // Focus the neighbor in whichever surface we're in.
+        if (tab === "chat") {
+          setChatSeed({ sessionId: next, projectId });
+          setChatSessionId(null);
+        } else {
+          setSessionId(next);
+        }
+      } else {
+        // Last tab closed → clear chat + Browse selection so the chat route shows
+        // the Launchpad (§3.2), not a blank composer.
+        setChatSeed(null);
+        setChatSessionId(null);
+        setSessionId(null);
       }
     },
-    [openTabs, sessionId, setOpenTabs],
+    [openTabs, activeTabId, tab, projectId, setOpenTabs],
   );
 
   const chatTabs = useMemo<ChatTab[]>(() => {
@@ -1451,13 +1501,13 @@ export default function App() {
         const target = openTabs[Number(e.key) - 1];
         if (target && projectId) {
           e.preventDefault();
-          openSession(projectId, target);
+          selectChatTab(target);
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openTabs, sessionId, projectId, closeTab, openSession]);
+  }, [openTabs, sessionId, projectId, closeTab, selectChatTab]);
 
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
@@ -1559,12 +1609,15 @@ export default function App() {
 
   const startNewChat = useCallback((draft?: string) => {
     const mechanics = settings?.defaultMechanics ?? "claude";
-    setChatSeed(null);
+    // Seed the pane as a fresh "new" chat so the gate shows a live ChatHost (not the
+    // Launchpad) and clear any stale reported new-session id from a prior new chat.
+    setChatSeed(projectId ? { kind: "new", projectId } : null);
+    setChatSessionId(null);
     setLaunchDraft(draft ?? "");
     setChatNonce((n) => n + 1);
     setCodexCreateRequested(mechanics === "codex");
     setTab(mechanics === "codex" ? "codex-history" : "chat");
-  }, [settings?.defaultMechanics]);
+  }, [settings?.defaultMechanics, projectId]);
 
   // A single resolved mode drives both nav chrome and route content so the
   // shell cannot label the legacy parser as native (or vice versa).
@@ -1593,14 +1646,14 @@ export default function App() {
       {project ? (
         <ChatPane
           key={
-            activeSeed
-              ? `${project.id}:${activeSeed.sessionId}`
+            resumeSeed
+              ? `${project.id}:${resumeSeed.sessionId}`
               : `${project.id}:${chatNonce}`
           }
           cwd={project.cwd}
           projectId={project.id}
           projectName={project.name}
-          initialSessionId={activeSeed?.sessionId}
+          initialSessionId={resumeSeed?.sessionId}
           defaultModel={settings?.defaultModel}
           defaultPermissionMode={
             settings?.defaultPermissionMode as PermissionMode | undefined
@@ -1630,25 +1683,26 @@ export default function App() {
     chatHostMode === "devhub" ? (
       <div className="flex min-h-0 flex-1">
         <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
-        {project ? (
+        {project && activeSeed ? (
           <ChatHost
-            key={activeSeed ? `${project.id}:${activeSeed.sessionId}` : `${project.id}:${chatNonce}`}
+            key={resumeSeed ? `${project.id}:${resumeSeed.sessionId}` : `${project.id}:${chatNonce}`}
             cwd={project.cwd}
             projectId={project.id}
-            initialSessionId={activeSeed?.sessionId}
+            initialSessionId={resumeSeed?.sessionId}
             defaultModel={settings?.defaultModel}
             defaultPermissionMode={settings?.defaultPermissionMode as PermissionMode | undefined}
             title={
-              activeSeed
+              resumeSeed
                 ? (() => {
-                    const session = sessions.find((s) => s.sessionId === activeSeed.sessionId);
+                    const session = sessions.find((s) => s.sessionId === resumeSeed.sessionId);
                     return session ? displaySessionTitle(session, project.name) : "Resumed session";
                   })()
                 : "New task"
             }
             showInspector={inspectorDockMode === "devhub" && inspectorVisible}
             onFork={openCrossProviderFork}
-            initialDraft={activeSeed ? undefined : launchDraft}
+            initialDraft={resumeSeed ? undefined : launchDraft}
+            onSessionChange={handleChatSession}
           />
         ) : (
           launchpad
@@ -1732,10 +1786,10 @@ export default function App() {
             )}
             workModeTriggerRef={workModeTriggerRef}
             chatTabs={chatTabs}
-            activeTabId={sessionId}
-            onSelectTab={(id) => { if (projectId) openSession(projectId, id); }}
+            activeTabId={activeTabId}
+            onSelectTab={selectChatTab}
             onCloseTab={closeTab}
-            onNewTab={() => startNewChat()}
+            onNewTab={openLaunchpad}
           />
         }
         rail={
@@ -2139,7 +2193,7 @@ export default function App() {
               provider="anthropic"
               features={settings?.devHubFeatures}
               preferredHome={crossProviderForkHome}
-              preferredTaskId={crossProviderForkTaskId ?? nativeClaudePreferredTaskId(activeSeed)}
+              preferredTaskId={crossProviderForkTaskId ?? nativeClaudePreferredTaskId(resumeSeed)}
               autoOpenCrossProviderFork={crossProviderForkTaskId !== null}
               onCrossProviderForkAutoOpen={() => setCrossProviderForkTaskId(null)}
               onCrossProviderForkClosed={() => {
