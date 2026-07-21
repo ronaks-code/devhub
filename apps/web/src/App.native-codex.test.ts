@@ -184,7 +184,9 @@ describe("App New Task dispatch", () => {
     expect(await screen.findByTestId("fresh-claude-chat")).toHaveAttribute("data-instance", "1");
     expect(screen.getByTestId("fresh-claude-chat")).toHaveAttribute("data-session-id", "");
 
-    await user.click(screen.getByRole("button", { name: "New task" }));
+    // Aurora Cockpit Sidebar renamed the rail's new-session control ("New task" →
+    // "New session", icon button) — same startNewChat re-key behavior.
+    await user.click(screen.getByRole("button", { name: "New session" }));
     await waitFor(() => expect(screen.getByTestId("fresh-claude-chat"))
       .toHaveAttribute("data-instance", "2"));
   });

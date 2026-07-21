@@ -36,6 +36,10 @@ export interface AppShellProps {
   railLabel?: string;
   /** Rail content (the open list of destinations), without its own nav wrapper. */
   rail: ReactNode;
+  /** When true, the rail slot owns its chrome (Sidebar cockpit); forwarded to DevHubShell. */
+  chromeless?: boolean;
+  /** Ambient status bar under the main surface (devhub only). */
+  statusBar?: ReactNode;
   /** Main content panes (the tab-routed body). */
   children: ReactNode;
 }
@@ -46,11 +50,20 @@ export function AppShell({
   header,
   railLabel = "Primary navigation",
   rail,
+  chromeless,
+  statusBar,
   children,
 }: AppShellProps) {
   if (mode === "devhub") {
     return (
-      <DevHubShell status={status} header={header} railLabel={railLabel} rail={rail}>
+      <DevHubShell
+        status={status}
+        header={header}
+        railLabel={railLabel}
+        rail={rail}
+        chromeless={chromeless}
+        statusBar={statusBar}
+      >
         {children}
       </DevHubShell>
     );

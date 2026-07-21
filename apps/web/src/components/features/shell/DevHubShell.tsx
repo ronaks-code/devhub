@@ -111,6 +111,15 @@ export interface DevHubShellProps {
   canvasFallback?: ReactNode;
   /** Fallback shown if the inspector region throws. */
   inspectorFallback?: ReactNode;
+  /**
+   * When true the rail slot owns its own chrome (brand mark, width, glass, border):
+   * the shell drops its default `DevHub` wordmark row and rail padding so a composed
+   * Sidebar (icon-rail + panel) fills the rail edge-to-edge. Defaults false, so the
+   * generic shell keeps its wordmark + 273 rail.
+   */
+  chromeless?: boolean;
+  /** Ambient status bar under the main surface only (§2.1). Omit to render none. */
+  statusBar?: ReactNode;
 }
 
 export function DevHubShell({
@@ -126,6 +135,8 @@ export function DevHubShell({
   inspectorLabel = "Task inspector",
   canvasFallback,
   inspectorFallback,
+  chromeless = false,
+  statusBar,
 }: DevHubShellProps) {
   const busy = status === "loading" || status === "streaming";
   return (
@@ -135,14 +146,16 @@ export function DevHubShell({
       </a>
 
       <nav
-        className="dh-rail"
+        className={chromeless ? "dh-rail dh-rail--chromeless" : "dh-rail"}
         aria-label={railLabel}
         data-dh-rail=""
         data-dh-width={SHELL_GEOMETRY.railWidth}
       >
-        <div className="dh-brand" data-dh-brand="">
-          {brand}
-        </div>
+        {chromeless ? null : (
+          <div className="dh-brand" data-dh-brand="">
+            {brand}
+          </div>
+        )}
         <div className="dh-rail-content">{rail}</div>
       </nav>
 
@@ -207,6 +220,12 @@ export function DevHubShell({
             </aside>
           ) : null}
         </div>
+
+        {statusBar !== undefined ? (
+          <div className="dh-statusbar" data-dh-statusbar="">
+            {statusBar}
+          </div>
+        ) : null}
       </div>
     </div>
   );

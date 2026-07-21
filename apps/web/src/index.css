@@ -368,6 +368,418 @@ kbd {
   font-variant-numeric: tabular-nums;
 }
 
+/* ── Sidebar cockpit (§3.1): 52px icon-rail + 272px glass panel ──────────────── */
+/* When the DevHubShell rail is "chromeless", it stops owning brand/padding/glass —
+ * the Sidebar owns the full cockpit chrome instead. */
+.dh-rail--chromeless {
+  width: auto;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  border-right: none;
+}
+.dh-rail--chromeless .dh-brand {
+  display: none;
+}
+.dh-rail--chromeless .dh-rail-content {
+  padding: 0;
+  overflow: visible;
+}
+
+.dh-sidebar {
+  display: flex;
+  flex-direction: row;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Icon rail — darkest chrome, 52px. */
+.dh-iconrail {
+  width: 52px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--dh-rail-inactive);
+  border-right: 1px solid var(--dh-border-rail);
+}
+.dh-logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--dh-grad-brand);
+  flex-shrink: 0;
+  margin-bottom: 6px;
+  box-shadow: 0 2px 10px rgba(139, 108, 240, 0.4);
+}
+.dh-navicon {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--dh-text-muted);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.dh-navicon:hover {
+  background: var(--dh-hover);
+  color: var(--dh-text);
+}
+.dh-navicon[aria-current="page"] {
+  color: var(--dh-coral);
+  background: rgba(255, 127, 110, 0.1);
+}
+.dh-navicon[aria-current="page"]::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
+  border-radius: 2px;
+  background: var(--dh-grad-warm);
+}
+.dh-navicon:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 2px;
+}
+.dh-navicon-chord {
+  position: absolute;
+  bottom: -1px;
+  right: 2px;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1;
+  color: var(--dh-text-disabled);
+  pointer-events: none;
+}
+.dh-navicon-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--dh-rose);
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+  box-shadow: 0 0 0 2px var(--dh-rail-inactive);
+}
+.dh-iconrail-spacer {
+  flex: 1 1 auto;
+}
+
+/* Spend ring in the icon rail bottom cluster. */
+.dh-spend-ring {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--dh-text-muted);
+}
+
+/* Panel — 272px glass. */
+.dh-panel {
+  width: 272px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--dh-glass-chrome-bg);
+  backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
+  border-right: 1px solid var(--dh-glass-border);
+}
+.dh-sidebar--collapsed .dh-panel {
+  display: none;
+}
+
+.dh-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  flex-shrink: 0;
+  padding: 0 12px;
+}
+.dh-panel-header-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dh-text-muted);
+  margin-left: auto;
+}
+.dh-panel-newbtn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: var(--dh-control);
+  color: var(--dh-text);
+  cursor: pointer;
+}
+.dh-panel-newbtn:hover {
+  background: var(--dh-hover);
+}
+.dh-panel-newbtn:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 1px;
+}
+
+.dh-panel-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  margin: 0 12px 8px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--dh-control);
+  border: 1px solid var(--dh-border-subtle);
+}
+.dh-panel-filter:focus-within {
+  border-color: var(--dh-focus);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+}
+.dh-panel-filter input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--dh-text);
+  font-size: 12px;
+}
+.dh-panel-filter input::placeholder {
+  color: var(--dh-text-disabled);
+}
+
+.dh-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 8px;
+}
+.dh-chip {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--dh-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.dh-chip:hover {
+  color: var(--dh-text);
+}
+.dh-chip[aria-pressed="true"] {
+  color: var(--dh-coral);
+  background: rgba(255, 124, 104, 0.08);
+  border-color: rgba(255, 127, 110, 0.35);
+}
+.dh-chip:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 1px;
+}
+
+/* Scrollable session groups. */
+.dh-sessions {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+.dh-sgroup {
+  margin-bottom: 6px;
+}
+.dh-sgroup-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 3px;
+}
+.dh-sgroup-count {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--dh-text-disabled);
+}
+.dh-sempty {
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--dh-text-muted);
+}
+
+/* Two-line session row — NEVER collapses to one line (§3.1 legibility contract). */
+.dh-srow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--dh-text);
+}
+.dh-srow:hover {
+  background: var(--dh-hover);
+}
+.dh-srow--selected {
+  background: var(--dh-selected);
+  border-left-color: var(--dh-coral);
+}
+.dh-srow:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: -2px;
+}
+.dh-srow-line1 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.dh-srow-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--dh-text-strong);
+}
+.dh-srow-line2 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-text-muted);
+}
+.dh-srow-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dh-srow-time {
+  flex-shrink: 0;
+  color: var(--dh-text-disabled);
+}
+.dh-srow-cost {
+  flex-shrink: 0;
+  color: var(--dh-success);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.dh-srow:hover .dh-srow-cost {
+  opacity: 1;
+}
+
+/* Panel footer — provider segment + model line + spend meter. */
+.dh-panel-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--dh-glass-border);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dh-provider-seg {
+  display: flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 7px;
+  background: var(--dh-control);
+}
+.dh-seg-btn {
+  flex: 1 1 0;
+  border: 0;
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dh-text-muted);
+  background: transparent;
+  cursor: pointer;
+}
+.dh-seg-btn[aria-pressed="true"] {
+  color: var(--dh-text-strong);
+  background: var(--dh-selected);
+}
+.dh-seg-btn:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: -2px;
+}
+.dh-footer-model {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dh-spend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dh-spend-label {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-text-muted);
+}
+.dh-spend-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--dh-control);
+  overflow: hidden;
+}
+.dh-spend-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--dh-violet), var(--dh-rose));
+}
+.dh-spend-fill[data-alert="warn"] {
+  background: linear-gradient(90deg, var(--dh-violet), var(--dh-warning));
+}
+.dh-spend-fill[data-alert="over"] {
+  background: linear-gradient(90deg, var(--dh-warning), var(--dh-danger));
+}
+
+html[data-reduce-motion="true"] .dh-panel,
+:root[data-perf="reduced"] .dh-panel {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: var(--dh-surface);
+}
+
 /*
  * shadcn/ui semantic color tokens (Tailwind v4). Adopted as the app's sanctioned
  * component-library layer. These are ADDITIVE: they generate the `bg-primary`,

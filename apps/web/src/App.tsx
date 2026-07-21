@@ -64,7 +64,6 @@ import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShel
 import { AppShell } from "./components/features/shell/AppShell";
 import { resolveShellChromeMode } from "./components/features/shell/DevHubShell";
 import {
-  TaskRail,
   resolveTaskRailMode,
   type TaskRailModel,
 } from "./components/features/shell/TaskRail";
@@ -95,10 +94,16 @@ import {
   buildEnvironmentSummary,
   buildFilesContent,
   buildTaskRailSections,
+  deriveRunStatus,
+  groupSessionsByRunStatus,
+  indexRunningBySession,
+  LEGACY_SESSION_PROVIDER,
   legacyDestinationForTarget,
   mapMessagesToThreadItems,
   searchHitToResult,
 } from "./lib/m6-compose";
+import { Sidebar, type SidebarGroup, type SidebarRow } from "./components/features/shell/Sidebar";
+import { useStatsPolling } from "./hooks/useStatsPolling";
 import { buildFileChanges } from "./components/FileChangeSummary";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
@@ -1546,6 +1551,11 @@ export default function App() {
   // now the active project's real (legacy Claude) sessions, most-recent-first — a
   // native task row (a different provider's real task) is a separate, still-gated
   // data-wire (native Codex/Claude live in `CodexNativePane`, not this legacy list).
+  // The ONE app-root live-data poll (Aurora Cockpit §3.1/§3.2). Feeds the Sidebar's
+  // run-status groups + spend meter today, and the TopBar pills / StatusBar next.
+  // Joined to sessions by sessionId; SessionSummary itself has no status/provider.
+  const { stats: liveStats, running: liveRunning } = useStatsPolling();
+
   const taskRailMode = resolveTaskRailMode(settings);
   const taskRailModel = useMemo<TaskRailModel>(() => {
     // The native OpenAI/Codex panes must stay rail-reachable (the legacy rail's
@@ -1575,6 +1585,34 @@ export default function App() {
       ],
     };
   }, [tab, sessions, project, settings]);
+
+  // Aurora Cockpit sidebar model (§3.1): real sessions grouped by live run-status
+  // (running join), each row enriched only with fields that actually exist —
+  // provider is the legacy-Claude constant, status is absent when there's no
+  // running entry, branch/cost omitted when absent (no placeholder lies).
+  const sidebarGroups = useMemo<SidebarGroup[]>(() => {
+    const grouped = groupSessionsByRunStatus(sessions, liveRunning);
+    const runById = indexRunningBySession(liveRunning);
+    const projName = project?.name;
+    const toRow = (s: SessionSummary): SidebarRow => {
+      const parts = [projName, s.gitBranch ? `⎇ ${s.gitBranch}` : ""].filter(Boolean);
+      return {
+        id: s.sessionId,
+        title: displaySessionTitle(s, projName ?? "Session"),
+        provider: LEGACY_SESSION_PROVIDER,
+        status: deriveRunStatus(runById.get(s.sessionId)),
+        subtitle: parts.length ? parts.join(" · ") : undefined,
+        timestamp: s.lastTimestamp,
+        costUsd: s.costUsd > 0 ? s.costUsd : undefined,
+      };
+    };
+    const out: SidebarGroup[] = [];
+    if (grouped.running.length) out.push({ id: "running", label: "Running", rows: grouped.running.map(toRow) });
+    if (grouped.needsReview.length)
+      out.push({ id: "review", label: "Needs review", rows: grouped.needsReview.map(toRow) });
+    if (grouped.idle.length) out.push({ id: "idle", label: "Idle / Recent", rows: grouped.idle.map(toRow) });
+    return out;
+  }, [sessions, liveRunning, project]);
 
   // M6 slice 3 (Task 9 data-wire): TaskHeader/TaskSetup mount only for a
   // server-resolved true `taskHeaderSetup`; legacy `ProjectDetailHeader`/`ChatPane`
@@ -1777,6 +1815,7 @@ export default function App() {
       <AppShell
         mode={shellChromeMode}
         railLabel="Primary navigation"
+        chromeless={taskRailMode === "devhub"}
         header={
           <TopBar
             tab={tab}
@@ -1835,11 +1874,32 @@ export default function App() {
         }
         rail={
           taskRailMode === "devhub" ? (
-            <TaskRail
-              model={taskRailModel}
-              onNewTask={startNewChat}
-              onSelectTask={(id) => { if (projectId) openSession(projectId, id); }}
+            <Sidebar
+              destinations={taskRailModel.destinations.map((d) => ({
+                id: d.id,
+                label: d.label,
+                current: d.current,
+              }))}
               onSelectDestination={(id) => { setChatSeed(null); setTab(id as Tab); }}
+              groups={sidebarGroups}
+              sessionCount={sessionCount}
+              selectedSessionId={sessionId}
+              onSelectSession={(id) => { if (projectId) openSession(projectId, id); }}
+              onNewTask={startNewChat}
+              mechanics={settings?.defaultMechanics ?? "claude"}
+              onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
+              modelLabel={settings?.defaultModel ? `model ${settings.defaultModel}` : undefined}
+              spend={
+                liveStats?.budget
+                  ? {
+                      monthToDateUsd: liveStats.budget.monthToDateUsd,
+                      monthlyBudgetUsd: liveStats.budget.monthlyBudgetUsd,
+                      pct: liveStats.budget.pct,
+                      alert: liveStats.budget.alert,
+                      month: new Date().toLocaleString("en-US", { month: "short" }).toLowerCase(),
+                    }
+                  : undefined
+              }
             />
           ) : (
           <>
