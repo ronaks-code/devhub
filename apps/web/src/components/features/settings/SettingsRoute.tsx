@@ -412,6 +412,22 @@ export function SettingsRoute({
             />
           </Field>
 
+          <div className="dh-settings-switch-row" data-dh-settings-switch="defaultMechanics">
+            <Switch
+              id="dh-settings-default-mechanics"
+              label="Default agent mechanics: Claude Code / Codex"
+              describedBy="dh-settings-default-mechanics-hint"
+              checked={(settings.defaultMechanics ?? "claude") === "codex"}
+              onChange={(enabled) => patch("defaultMechanics", enabled ? "codex" : "claude")}
+            />
+            <span className="dh-settings-switch-copy">
+              <span className="dh-settings-switch-label">Default agent mechanics: Claude Code / Codex</span>
+              <span id="dh-settings-default-mechanics-hint" className="dh-settings-field-hint">
+                Selects the runtime for new tasks. Explicit task-level provider choices still take precedence.
+              </span>
+            </span>
+          </div>
+
           <div className="dh-settings-switch-row" data-dh-settings-switch="nativeCodex">
             <Switch
               id="dh-settings-native-codex"
@@ -637,4 +653,3 @@ export function SettingsRoute({
     </SecondaryNav>
   );
 }
-

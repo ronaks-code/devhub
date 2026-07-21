@@ -203,7 +203,7 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
               Quick Start
             </h2>
             <button
-              onClick={onNewChat}
+              onClick={() => onNewChat()}
               className="inline-flex items-center gap-2 rounded-lg bg-clay-500/15 px-4 py-2.5 text-[13px] font-medium text-clay-300 ring-1 ring-clay-500/30 transition hover:bg-clay-500/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
             >
               <MessageSquarePlus className="h-4 w-4" />

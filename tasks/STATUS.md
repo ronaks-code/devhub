@@ -3,6 +3,18 @@ STATE: ACTIVE — RESUMED BY RONAK 2026-07-15 (full software implementation auth
 <!-- SOURCE OF TRUTH. Any fresh Claude/Codex chat reads this FIRST, before touching code. -->
 <!-- Update rule: edit this file in the SAME commit as the work it describes. Never let it drift. -->
 
+Last updated: 2026-07-20 by DEFAULT-MECHANICS-REPAIR (uncommitted, directed bug
+fix). Generic New Task dispatch now reads the live `defaultMechanics`; Codex
+routes into the native create form and consumes the shared fresh-session nonce,
+including with `unifiedTaskIndex` enabled, while Claude still remounts a fresh
+chat. HomePane no longer forwards its React click event. The rollback
+`SettingsPane` exposes the mechanics switch. Focused App/Home/Settings tests are
+28/28 and web typecheck is clean. The required full `pnpm -r typecheck && pnpm
+-r test` gate remains unverified because the mandatory heavy-queue wrapper
+exited 70 before enqueue (`could not identify queue process`; sandboxed load
+probe leaves admission blocked). The queue was not bypassed; changes remain
+uncommitted as directed.
+
 Last updated: 2026-07-18 by PROGRESS-UI (ADDED AFTER FREEZE — not part of the
 frozen 9-milestone denominator). Completed the "Progress / Shipped Work" board UI
 on `feat/progress-dashboard` by adding the one missing task requirement:

@@ -729,3 +729,19 @@ Every item below is backed by real, on-disk evidence — no fabricated results.
 - Fresh typecheck: engine PASS, server PASS, web PASS after restoring the lockfile-matched dependency tree from the exact spatial-tip sibling worktree (npm DNS is blocked in this sandbox).
 - Fresh lint: engine/server/web PASS. Focused gates: engine provider-index 639/639; web provider-index/router/route-preservation 39/39; web spatial 25/25; server spatial 12/12. Server provider-index is 28/29 with the sole SSE case blocked before assertions by sandbox `listen EPERM`; an independent minimal Node listener reproduces the same restriction.
 - Full suites/builds remain unrun because the mandatory shared heavy queue cannot identify its process (`ps` is sandbox-denied), so bypassing it is prohibited. `git add`, fetch, and the final commit are also blocked because `.git` is read-only (`index.lock`/`FETCH_HEAD` permission denied).
+
+---
+
+## Default agent mechanics dispatch repair (2026-07-20)
+
+- [x] Replace the pure `resolveNewTaskTab` assertion with a rendered New Task dispatch regression for Codex create mode and a fresh Claude chat.
+- [x] Prove `HomePane` invokes `onNewChat` with zero arguments.
+- [x] Route Codex New Task into the native create form and remount it for each new-session signal.
+- [x] Add the default-mechanics control to the rollback `SettingsPane` and fix the stale feature-flag default comment.
+- [ ] Run `pnpm -r typecheck && pnpm -r test` through the shared heavy-job queue and record the result.
+
+### Review / results
+
+- RED was behavior-specific: the real App mount could not find `New native Codex task setup`, the legacy settings mount could not find the default-mechanics switch, and `HomePane` forwarded a `SyntheticBaseEvent` instead of zero arguments.
+- Focused GREEN: App/HomePane/SettingsPane regressions pass `28/28`; web `tsc --noEmit` passes.
+- The full gate was submitted only through the required queue wrapper, which exited `70` before enqueueing with `could not identify queue process`. Queue status reports `admission=blocked` because sandboxed `sysctl` cannot supply load. The full gate remains honestly unverified; it was not bypassed.

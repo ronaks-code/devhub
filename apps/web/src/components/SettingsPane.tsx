@@ -116,6 +116,7 @@ export function withPersistentClaudePreference(
 export function settingsUpdatePayload(settings: AppSettings): Partial<AppSettings> {
   return {
     defaultModel: settings.defaultModel,
+    defaultMechanics: settings.defaultMechanics,
     defaultPermissionMode: settings.defaultPermissionMode,
     theme: settings.theme,
     density: settings.density,
@@ -128,6 +129,7 @@ export function settingsUpdatePayload(settings: AppSettings): Partial<AppSetting
 
 const EDITABLE_SETTING_KEYS = [
   "defaultModel",
+  "defaultMechanics",
   "defaultPermissionMode",
   "theme",
   "density",
@@ -474,6 +476,28 @@ export function SettingsPane({
                 }}
               />
             </Field>
+          </div>
+
+          <div className="border-t border-zinc-800/80 pt-4">
+            <label className="flex cursor-pointer items-start justify-between gap-4">
+              <span className="min-w-0">
+                <span className="block text-[12px] font-medium text-zinc-300">
+                  Default agent mechanics: Claude Code / Codex
+                </span>
+                <span id="default-mechanics-hint" className="mt-1 block text-[11px] text-zinc-600">
+                  Selects the runtime for new tasks. Explicit task-level provider choices still take precedence.
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label="Default agent mechanics: Claude Code / Codex"
+                aria-describedby="default-mechanics-hint"
+                checked={(settings.defaultMechanics ?? "claude") === "codex"}
+                onChange={(event) => patch("defaultMechanics", event.target.checked ? "codex" : "claude")}
+                className="mt-0.5 h-4 w-4 shrink-0 accent-clay-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+              />
+            </label>
           </div>
 
           <div className="border-t border-zinc-800/80 pt-4">

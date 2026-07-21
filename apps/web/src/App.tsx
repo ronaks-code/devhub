@@ -942,8 +942,10 @@ export default function App() {
   const [crossProviderForkHome, setCrossProviderForkHome] = useState<string | undefined>(undefined);
   const [crossProviderForkNativeRoute, setCrossProviderForkNativeRoute] = useState(false);
   // Bumping this remounts ChatPane to start a fresh conversation (command palette
-  // "New chat" / programmatic reset), since ChatPane keys off it.
+  // "New task" / programmatic reset). The native Codex pane consumes the same
+  // signal so every create intent gets fresh local form/draft state too.
   const [chatNonce, setChatNonce] = useState(0);
+  const [codexCreateRequested, setCodexCreateRequested] = useState(false);
   // Chat model lifted to App so the command palette can switch it; ChatPane
   // still owns permission mode locally. Falls back to settings then a default.
   const [chatModel, setChatModel] = useState<string | null>(null);
@@ -1663,10 +1665,12 @@ export default function App() {
   }, [searchOpen]);
 
   const startNewChat = useCallback(() => {
+    const mechanics = settings?.defaultMechanics ?? "claude";
     setChatSeed(null);
     setChatNonce((n) => n + 1);
-    setTab("chat");
-  }, []);
+    setCodexCreateRequested(mechanics === "codex");
+    setTab(mechanics === "codex" ? "codex-history" : "chat");
+  }, [settings?.defaultMechanics]);
 
   // A single resolved mode drives both nav chrome and route content so the
   // shell cannot label the legacy parser as native (or vice versa).
@@ -2166,8 +2170,10 @@ export default function App() {
           codexShellMode === "native" ? (
             <Suspense fallback={<PaneFallback />}>
               <CodexNativePane
-                key={nativePaneRouteKey("openai")}
+                key={`${nativePaneRouteKey("openai")}:${chatNonce}`}
                 features={settings?.devHubFeatures}
+                initialShowCreate={codexCreateRequested}
+                onInitialShowCreateConsumed={() => setCodexCreateRequested(false)}
                 fallback={<CodexHistoryPane />}
               />
             </Suspense>

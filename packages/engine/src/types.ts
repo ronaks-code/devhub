@@ -354,6 +354,8 @@ export type EngineEvent =
 export interface AppSettings {
   /** Preferred model id for new sessions (e.g. "claude-opus-4-8"). */
   defaultModel?: string;
+  /** Preferred agent runtime for newly-created tasks. */
+  defaultMechanics?: "claude" | "codex";
   /** Preferred permission mode for new sessions (e.g. "default", "acceptEdits"). */
   defaultPermissionMode?: string;
   /** UI theme. */
@@ -392,6 +394,7 @@ export interface AppSettings {
 
 /** Baseline settings applied under any value the user hasn't explicitly set. */
 export const DEFAULT_SETTINGS: AppSettings = {
+  defaultMechanics: "claude",
   theme: "system",
   density: "comfortable",
   lastProjectId: null,
