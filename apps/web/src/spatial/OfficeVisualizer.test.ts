@@ -55,9 +55,9 @@ describe("OfficeVisualizer", () => {
   it("labels the feed source honestly (mock by default, live when told)", () => {
     const world = new MockFeed({ seed: 5 }).getWorld();
     const { rerender } = render(createElement(OfficeVisualizer, { world }));
-    expect(screen.getByText("MOCK FEED")).toBeVisible();
+    expect(screen.getByText("Demo data")).toBeVisible();
 
     rerender(createElement(OfficeVisualizer, { world, source: "live" }));
-    expect(screen.getByText("LIVE FEED")).toBeVisible();
+    expect(screen.getByText("Live")).toBeVisible();
   });
 });

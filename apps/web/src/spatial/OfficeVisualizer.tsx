@@ -7,14 +7,14 @@ import { ProviderChip } from "../components/ui/ProviderChip";
  * OfficeVisualizer — the "Nameplates" renderer. A card-grid view of the SAME live
  * `WorldState` the Blueprint floor plan draws (mock feed today, the M1 adapter
  * later), kept as a one-click rollback from the plan. It shares the app's glass /
- * violet / coral theme and the identical agent roster + status semantics, so
+ * Nebula indigo theme and the identical agent roster + status semantics, so
  * toggling renderers only changes the *shape* of the view, never the data or the
  * palette.
  */
 
 export interface OfficeVisualizerProps {
   world: WorldState;
-  /** Feed source, surfaced honestly in the header badge (MOCK vs LIVE). */
+  /** Feed source, surfaced honestly in the header badge ("Demo data" vs "Live"). */
   source?: "mock" | "live";
 }
 
@@ -27,9 +27,9 @@ function isWorking(status: AgentStatus): boolean {
 function statusMeta(status: AgentStatus): { label: string; color: string } {
   switch (status) {
     case "working":
-      return { label: "active", color: "var(--dh-coral)" };
+      return { label: "active", color: "var(--dh-brand)" };
     case "talking":
-      return { label: "talking", color: "var(--dh-coral)" };
+      return { label: "talking", color: "var(--dh-brand)" };
     case "moving":
       return { label: "moving", color: "var(--dh-warning)" };
     case "blocked":
@@ -55,25 +55,24 @@ function AgentNameplate({ agent }: { agent: Agent }): React.JSX.Element {
       data-agent-id={agent.id}
       className="rounded-[10px] border border-[var(--dh-border-subtle)] bg-[var(--dh-control)] px-3 py-2.5"
     >
-      <div className="flex min-w-0 items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-[13px] font-semibold tracking-tight text-[var(--dh-text-strong)]">
-            {agent.name}
-          </div>
-          <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--dh-text-muted)]">
-            {agent.role}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {agent.provider ? <ProviderChip provider={agent.provider} /> : null}
-          <span
-            className="dh-mono-ui inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
-            style={{ color: meta.color, background: "color-mix(in srgb, currentColor 12%, transparent)" }}
-          >
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
-            {meta.label}
-          </span>
-        </div>
+      {/* Badges on their own row so the name below always owns the full card
+          width and shows in full (wrapping if genuinely long) — never squeezed
+          to a sliver by the status/provider chips. */}
+      <div className="flex flex-wrap items-center justify-between gap-1.5">
+        <span
+          className="dh-mono-ui inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]"
+          style={{ color: meta.color, background: "color-mix(in srgb, currentColor 12%, transparent)" }}
+        >
+          <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.color }} />
+          {meta.label}
+        </span>
+        {agent.provider ? <ProviderChip provider={agent.provider} /> : null}
+      </div>
+      <div className="mt-1.5 break-words text-[13px] font-semibold leading-tight tracking-tight text-[var(--dh-text-strong)]">
+        {agent.name}
+      </div>
+      <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-[var(--dh-text-muted)]">
+        {agent.role}
       </div>
       <p className="mt-2 min-w-0 truncate border-t border-[var(--dh-border-subtle)] pt-2 text-[11px] leading-4 text-[var(--dh-text-muted)]">
         {detail}
@@ -135,10 +134,14 @@ export function OfficeVisualizer({ world, source }: OfficeVisualizerProps): Reac
               <strong className="font-semibold text-[var(--dh-text)]">{activeAgentCount}</strong> active
             </span>
             <span
-              className="dh-mono-ui rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[var(--dh-text-dim)]"
-              title="Feed source"
+              className="inline-flex items-center gap-1.5 rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[var(--dh-text-muted)]"
+              title={source === "live" ? "Live fleet feed" : "Sample data for preview"}
             >
-              {(source ?? "mock").toUpperCase()} FEED
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: source === "live" ? "var(--dh-success)" : "var(--dh-text-dim)" }}
+              />
+              {source === "live" ? "Live" : "Demo data"}
             </span>
           </div>
         </header>
@@ -152,7 +155,7 @@ export function OfficeVisualizer({ world, source }: OfficeVisualizerProps): Reac
             aria-label="Room lifecycle legend"
           >
             <span className="inline-flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-[var(--dh-coral)] motion-safe:animate-pulse" />
+              <span className="h-2 w-2 rounded-full bg-[var(--dh-brand)] motion-safe:animate-pulse" />
               Active
             </span>
             <span className="inline-flex items-center gap-1.5">
@@ -177,7 +180,7 @@ export function OfficeVisualizer({ world, source }: OfficeVisualizerProps): Reac
                 className="glass-card relative flex flex-col gap-3 p-4 transition-opacity"
                 style={
                   active
-                    ? { borderColor: "var(--dh-glass-border-hi)", boxShadow: "inset 2px 0 0 var(--dh-coral)" }
+                    ? { borderColor: "var(--dh-glass-border-hi)", boxShadow: "inset 2px 0 0 var(--dh-brand)" }
                     : { opacity: 0.66 }
                 }
               >
@@ -188,7 +191,7 @@ export function OfficeVisualizer({ world, source }: OfficeVisualizerProps): Reac
                       className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[12px] font-black uppercase ring-1 ring-inset"
                       style={
                         active
-                          ? { background: "color-mix(in srgb, var(--dh-coral) 15%, transparent)", color: "var(--dh-coral)", borderColor: "transparent" }
+                          ? { background: "color-mix(in srgb, var(--dh-brand) 15%, transparent)", color: "var(--dh-brand)", borderColor: "transparent" }
                           : { background: "var(--dh-control)", color: "var(--dh-text-muted)" }
                       }
                     >
@@ -206,13 +209,13 @@ export function OfficeVisualizer({ world, source }: OfficeVisualizerProps): Reac
                   <span
                     className="dh-mono-ui inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-bold uppercase tracking-[0.1em]"
                     style={{
-                      color: active ? "var(--dh-coral)" : "var(--dh-text-dim)",
+                      color: active ? "var(--dh-brand)" : "var(--dh-text-dim)",
                       background: "var(--dh-control)",
                     }}
                   >
                     <span
                       className={"h-1.5 w-1.5 rounded-full " + (active ? "motion-safe:animate-pulse" : "")}
-                      style={{ background: active ? "var(--dh-coral)" : "var(--dh-text-dim)" }}
+                      style={{ background: active ? "var(--dh-brand)" : "var(--dh-text-dim)" }}
                     />
                     {occupied}/{agents.length}
                   </span>

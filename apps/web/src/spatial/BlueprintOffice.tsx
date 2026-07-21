@@ -15,7 +15,7 @@ import { cn } from "../lib/utils";
  * `WorldState` (mock feed today, the M1 adapter later); every annotation line is
  * drawn ONLY when its field exists, so nothing is a placeholder.
  *
- * Working desks glow coral (pulse ring) and carry the full drafting callout
+ * Working desks glow indigo (pulse ring) and carry the full drafting callout
  * (agent · provider/model, status · runtime · cost · tokens, assignment,
  * worktree · diff, last action) as annotation text beside the desk with a dashed
  * leader line. Idle/reserved desks are small labeled rects. Clicking any desk
@@ -25,6 +25,12 @@ import { cn } from "../lib/utils";
 const DRAFT = "#8d7fc0";
 const DRAFT_DIM = "rgba(141, 127, 192, 0.34)";
 const DRAFT_FAINT = "rgba(141, 127, 192, 0.12)";
+// Active treatment = the Nebula indigo brand accent (#818cf8 → rgb 129 140 248),
+// matching --dh-brand / statusMeta. Coral is reserved for the Claude provider mark.
+const ACTIVE_FILL = "rgba(129, 140, 248, 0.06)";
+const ACTIVE_FILL_STRONG = "rgba(129, 140, 248, 0.22)";
+const ACTIVE_STROKE = "rgba(129, 140, 248, 0.6)";
+const ACTIVE_STROKE_STRONG = "rgba(129, 140, 248, 0.78)";
 
 // ── Plan geometry (viewBox units) ───────────────────────────────────────────
 const COLS = 3; // rooms per building row
@@ -69,9 +75,9 @@ function runtime(startedAt: number | undefined, nowMs: number): string | null {
 function statusMeta(status: AgentStatus): { glyph: string; color: string; label: string } {
   switch (status) {
     case "working":
-      return { glyph: "●", color: "var(--dh-coral)", label: "ACTIVE" };
+      return { glyph: "●", color: "var(--dh-brand)", label: "ACTIVE" };
     case "talking":
-      return { glyph: "◇", color: "var(--dh-coral)", label: "TALKING" };
+      return { glyph: "◇", color: "var(--dh-brand)", label: "TALKING" };
     case "moving":
       return { glyph: "→", color: "var(--dh-warning)", label: "MOVING" };
     case "blocked":
@@ -355,13 +361,13 @@ function RoomPlan({
         width={w}
         height={h}
         style={{
-          fill: active ? "rgba(255, 124, 104, 0.045)" : DRAFT_FAINT,
-          stroke: active ? "rgba(255, 124, 104, 0.65)" : DRAFT_DIM,
+          fill: active ? ACTIVE_FILL : DRAFT_FAINT,
+          stroke: active ? ACTIVE_STROKE : DRAFT_DIM,
           strokeWidth: active ? 1.4 : 1,
         }}
       />
       {/* Label block. */}
-      <text x={PAD} y={24} fontSize={12} fontWeight={700} letterSpacing={3} style={{ fill: active ? "#ffb3a4" : "var(--dh-text)" }}>
+      <text x={PAD} y={24} fontSize={12} fontWeight={700} letterSpacing={3} style={{ fill: active ? "var(--dh-brand)" : "var(--dh-text)" }}>
         {clip(label, 30)}
       </text>
       <text x={PAD} y={38} fontSize={8.5} letterSpacing={1.5} style={{ fill: "var(--dh-text-muted)" }}>
@@ -388,7 +394,7 @@ function RoomPlan({
               y={deskY}
               width={44}
               height={24}
-              style={{ fill: "rgba(255, 124, 104, 0.20)", stroke: "rgba(255, 124, 104, 0.75)", strokeWidth: 1 }}
+              style={{ fill: ACTIVE_FILL_STRONG, stroke: ACTIVE_STROKE_STRONG, strokeWidth: 1 }}
             />
             <path
               d={`M ${PAD + 11} ${deskY + 30} a 11 8 0 0 0 22 0`}
@@ -477,7 +483,7 @@ export function BlueprintOffice({
   source,
 }: {
   world: WorldState;
-  /** Feed source, surfaced honestly in the corner stamp (MOCK vs LIVE). */
+  /** Feed source, surfaced honestly in the corner stamp ("Demo data" vs "Live"). */
   source?: "mock" | "live";
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -620,10 +626,14 @@ export function BlueprintOffice({
           {rooms.length} rooms · {world.agents.length} agents · {activeAgents} active
         </span>
         <span
-          className="dh-mono-ui ml-auto rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[var(--dh-text-dim)]"
-          title="Feed source"
+          className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-[var(--dh-control)] px-2 py-0.5 text-[12px] text-[var(--dh-text-muted)]"
+          title={source === "live" ? "Live fleet feed" : "Sample data for preview"}
         >
-          {(source ?? "mock").toUpperCase()} FEED
+          <span
+            className="h-1.5 w-1.5 rounded-full"
+            style={{ background: source === "live" ? "var(--dh-success)" : "var(--dh-text-dim)" }}
+          />
+          {source === "live" ? "Live" : "Demo data"}
         </span>
       </div>
 
@@ -754,7 +764,13 @@ export function BlueprintOffice({
         {/* Corner title block (drafting stamp) — real counts only. */}
         <div
           className="dh-mono-ui absolute bottom-3 right-3 z-10 w-[212px] border text-[9px]"
-          style={{ borderColor: DRAFT_DIM, background: "rgba(24, 19, 32, 0.82)", color: "var(--dh-text-dim)" }}
+          style={{
+            borderColor: "var(--dh-glass-border)",
+            background: "var(--dh-glass-chrome-bg)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+            color: "var(--dh-text-muted)",
+          }}
         >
           <div className="flex justify-between px-2.5 py-1.5 text-[10px] tracking-[0.14em] text-[var(--dh-text-strong)]">
             OFFICE — PLAN 02
@@ -768,15 +784,15 @@ export function BlueprintOffice({
             <span className="text-[var(--dh-text)]">{rooms.length} · {activeRooms} ONLINE</span>
           </div>
           <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
-            <span>FEED</span>
-            <span className="text-[var(--dh-text)]">{(source ?? "mock").toUpperCase()} · REV {world.rev}</span>
+            <span>SOURCE</span>
+            <span className="text-[var(--dh-text)]">{source === "live" ? "LIVE" : "DEMO DATA"}</span>
           </div>
         </div>
 
         {/* Legend. */}
         <div className="dh-mono-ui absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-[var(--dh-text-dim)]">
           <span className="inline-flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-coral)]" /> ACTIVE
+            <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-brand)]" /> ACTIVE
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-warning)]" /> BLOCKED

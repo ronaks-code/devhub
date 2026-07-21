@@ -275,7 +275,7 @@ export function deptColor(dept: string): number {
     athena: 0xfcd34d, // gold — company desk / orchestrator
     vulcan: 0xff6b3d, // clay/orange — engineering
     apollo: 0xf472b6, // pink — marketing
-    thoth: 0xa78bfa, // violet — research
+    thoth: 0x818cf8, // indigo — research (Nebula, matches --dh-brand)
     talos: 0x34d399, // green — lab ops
     vesta: 0x38bdf8, // sky — ops & finance
     argus: 0xf87171, // red — fleet health
