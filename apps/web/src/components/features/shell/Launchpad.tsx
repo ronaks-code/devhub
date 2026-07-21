@@ -88,7 +88,7 @@ export function Launchpad({
             className="dh-launch-input"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder="Describe the outcome or change…"
+            placeholder="Ask a question or describe what you need…"
             rows={3}
             aria-label="Task description"
             onKeyDown={(e) => {
@@ -101,7 +101,7 @@ export function Launchpad({
           <div className="dh-launch-composer-bar">
             <span className="dh-launch-hint">⌘↵ to launch</span>
             <button type="button" className="dh-launch-send" onClick={launch}>
-              Launch session
+              Start chat
               <ArrowUp size={13} strokeWidth={2.5} aria-hidden />
             </button>
           </div>

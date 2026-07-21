@@ -286,12 +286,23 @@ export function SettingsRoute({
   onSettingsReconcile,
   authoritativeSettings,
   projectCwd,
+  themePreference,
+  onThemeChange,
 }: {
   onSettingsSaved?: (s: AppSettings, requestVersion?: number) => boolean | void;
   onSettingsRequestStart?: () => number;
   onSettingsReconcile?: () => void | Promise<void>;
   authoritativeSettings?: AppSettings | null;
   projectCwd?: string;
+  /**
+   * The client `useTheme` preference — the ONE source of truth for the rendered
+   * palette (W3-SHELL). When provided, the Theme select shows THIS value (not the
+   * possibly-stale server `settings.theme`) and changes route through
+   * `onThemeChange`, which applies instantly and mirrors to the server — so the
+   * select, the header toggle, and the rendered app can never disagree.
+   */
+  themePreference?: "dark" | "light" | "system";
+  onThemeChange?: (t: "dark" | "light" | "system") => void;
 }): ReactNode {
   const [section, setSection] = useState<SettingsSection>("preferences");
   // §3.4 Query-Deck: a live filter over the settings sections (label + keywords).
@@ -465,10 +476,17 @@ export function SettingsRoute({
           <Field id="dh-settings-theme" label="Theme" hint="Dark, light, or follow your OS. Applies immediately.">
             <Select
               id="dh-settings-theme"
-              value={settings.theme ?? "system"}
+              value={themePreference ?? settings.theme ?? "system"}
               describedBy="dh-settings-theme-hint"
               options={THEMES.map((t) => ({ value: t, label: t }))}
-              onChange={(v) => patch("theme", v as AppSettings["theme"])}
+              onChange={(v) => {
+                const next = v as "dark" | "light" | "system";
+                // Route through the client theme owner when wired (instant apply +
+                // server mirror in one step); the edits-overlay path stays only as
+                // a standalone-mount fallback.
+                if (onThemeChange) onThemeChange(next);
+                else patch("theme", next);
+              }}
             />
           </Field>
           <Field id="dh-settings-density" label="Density">

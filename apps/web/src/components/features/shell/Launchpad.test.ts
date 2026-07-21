@@ -30,7 +30,7 @@ describe("Launchpad (§3.3b)", () => {
     expect(html).toContain(">Codex<");
     expect(html).toContain("opus-4.8");
     expect(html).toContain('data-dh-launch-composer=""');
-    expect(html).toContain("Launch session");
+    expect(html).toContain("Start chat");
   });
 
   it("shows the running count only when > 0 (real data)", () => {

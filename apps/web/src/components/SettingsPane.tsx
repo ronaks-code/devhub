@@ -301,6 +301,8 @@ export function SettingsPane({
   onSettingsReconcile,
   authoritativeSettings,
   projectCwd,
+  themePreference,
+  onThemeChange,
 }: {
   onSettingsSaved?: (s: AppSettings, requestVersion?: number) => boolean | void;
   /** Share request ordering with the shell so stale responses cannot re-enable a clamped runtime. */
@@ -311,6 +313,14 @@ export function SettingsPane({
   authoritativeSettings?: AppSettings | null;
   /** Active project's working dir; enables project-scoped MCP server edits. */
   projectCwd?: string;
+  /**
+   * The client `useTheme` preference — the ONE source of truth for the rendered
+   * palette (W3-SHELL). When provided, the Theme select shows THIS value and
+   * changes route through `onThemeChange` (instant apply + server mirror), never
+   * the possibly-stale server `settings.theme`.
+   */
+  themePreference?: "dark" | "light" | "system";
+  onThemeChange?: (t: "dark" | "light" | "system") => void;
 }) {
   const [section, setSection] = useState<SettingsSection>("preferences");
   // Latest authoritative server snapshot. Unsaved user edits live in the separate
@@ -501,11 +511,18 @@ export function SettingsPane({
               </select>
             </Field>
 
-            <Field label="Theme" hint="Stored for now; full theming lands later.">
+            <Field label="Theme" hint="Dark, light, or follow your OS. Applies immediately.">
               <select
                 className={selectCls}
-                value={settings.theme ?? "system"}
-                onChange={(e) => patch("theme", e.target.value as AppSettings["theme"])}
+                value={themePreference ?? settings.theme ?? "system"}
+                onChange={(e) => {
+                  const next = e.target.value as "dark" | "light" | "system";
+                  // Route through the client theme owner when wired (instant apply
+                  // + server mirror); the edits-overlay path stays as a
+                  // standalone-mount fallback.
+                  if (onThemeChange) onThemeChange(next);
+                  else patch("theme", next);
+                }}
               >
                 {THEMES.map((t) => (
                   <option key={t} value={t} className="capitalize">

@@ -34,8 +34,11 @@ export const OPENAI_CHAT_WARNING =
   "Chat-only experiment. This is not Codex. Local tools are disabled.";
 export const OPENAI_CHAT_EMPTY_HINT =
   "Pick a model and type a message. Enter to send, Shift+Enter for a new line.";
+// User-facing copy only (W3-SHELL): the env-var/Bearer setup instructions this used
+// to surface belong in server docs, not in-product. Says WHAT the state means for
+// the user, not HOW an operator flips it.
 export const OPENAI_CHAT_DISABLED_EXPLANATION =
-  "Development-only: the server stays disabled until it starts with DEVHUB_ENABLE_OPENAI_CHAT=1 and a DevHub access token is configured for Bearer authentication.";
+  "This experimental chat is turned off by default. If messages fail to send, whoever runs your DevHub server hasn't enabled it.";
 
 // ---------------------------------------------------------------------------
 // Message types

@@ -102,10 +102,10 @@ describe("Composer — accessible label and placeholder", () => {
     expect(html).toContain('data-dh-composer-input=""');
   });
 
-  it("uses the outcome-oriented placeholder on a new task", () => {
+  it("uses the chat-framed placeholder on a new task", () => {
     const html = render({ isNewTask: true });
     expect(html).toContain(COMPOSER_COPY.newTaskPlaceholder);
-    expect(COMPOSER_COPY.newTaskPlaceholder).toBe("Describe the outcome or change…");
+    expect(COMPOSER_COPY.newTaskPlaceholder).toBe("Ask a question or describe what you need…");
   });
 
   it("preserves a passed draft as the textarea value", () => {

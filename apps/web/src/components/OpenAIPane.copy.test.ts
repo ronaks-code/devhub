@@ -24,12 +24,12 @@ describe("OpenAI Chat quarantine copy", () => {
     expect(copy.OPENAI_CHAT_EMPTY_HINT).not.toMatch(/\bbash\b|read_file|write_file/i);
   });
 
-  it("explains the development-only opt-in and bearer-auth requirements", () => {
+  it("explains the disabled default in user terms, with no operator setup copy", () => {
     expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).toBeTypeOf("string");
-    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).toMatch(/development.?only/i);
-    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).toMatch(
-      /DEVHUB_ENABLE_OPENAI_CHAT=1/,
-    );
-    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).toMatch(/access token|bearer/i);
+    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).toMatch(/off by default|turned off|disabled/i);
+    // W3-SHELL: env vars / auth mechanics are server-docs material, never
+    // surfaced in-product to the end user.
+    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).not.toMatch(/DEVHUB_ENABLE_OPENAI_CHAT/);
+    expect(copy.OPENAI_CHAT_DISABLED_EXPLANATION).not.toMatch(/bearer|env(ironment)? var/i);
   });
 });

@@ -72,7 +72,9 @@ const DISABLED_REASON = Object.freeze({
 /** Copy for the composer. One source for the `T-composer`/`L-chat` visible-copy diff. */
 export const COMPOSER_COPY = Object.freeze({
   textareaLabel: "Message",
-  newTaskPlaceholder: "Describe the outcome or change…",
+  // Chat framing (W3-SHELL): onboarding sets up "start a chat", so the composer
+  // invites a conversation — questions welcome, not only task/PR-shaped work.
+  newTaskPlaceholder: "Ask a question or describe what you need…",
   sendLabel: "Send",
   stopLabel: "Stop current turn",
   reconnectNote: DISABLED_REASON.disconnectedStale,

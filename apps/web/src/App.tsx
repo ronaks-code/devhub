@@ -1054,6 +1054,18 @@ export default function App() {
     saveSettings({ theme: next });
   }, [theme, saveSettings]);
 
+  // Explicit theme pick (the Settings "Theme" select). Same one-source contract
+  // as cycleTheme: the client hook applies + persists instantly, the server value
+  // is only a mirror — so the select, the header toggle, and the rendered palette
+  // can never disagree (W3-SHELL theme desync).
+  const setTheme = useCallback(
+    (next: ThemePreference) => {
+      theme.setPreference(next);
+      saveSettings({ theme: next });
+    },
+    [theme, saveSettings],
+  );
+
   const onSelectSession = (id: string) => {
     setTailBytes(undefined);
     setSessionId(id);
@@ -2028,6 +2040,8 @@ export default function App() {
                 onSettingsSaved={acceptSettingsResponse}
                 onSettingsReconcile={refreshSettings}
                 projectCwd={project?.cwd}
+                themePreference={theme.preference}
+                onThemeChange={setTheme}
               />
             ) : (
               <SettingsPane
@@ -2036,6 +2050,8 @@ export default function App() {
                 onSettingsSaved={acceptSettingsResponse}
                 onSettingsReconcile={refreshSettings}
                 projectCwd={project?.cwd}
+                themePreference={theme.preference}
+                onThemeChange={setTheme}
               />
             )}
           </Suspense>
@@ -2199,6 +2215,19 @@ export default function App() {
                     onUnavailable={markOverviewUnavailable}
                   />
                 </Suspense>
+              ) : threadWorkspaceMode === "devhub" && !sessionId ? (
+                // W3-SHELL: with NO session selected, the devhub workspace used to
+                // render a live-looking (disabled) composer, a TaskHeader with a
+                // cross-provider fork button, and inspector placeholder chrome —
+                // fake defaults for a selection that doesn't exist. One honest
+                // empty state instead; picking a session mounts the real thing.
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <EmptyState
+                    icon={<MessagesSquare className="h-12 w-12" />}
+                    title="Select a session"
+                    hint="Pick a project, then a chat to read its full transcript."
+                  />
+                </div>
               ) : (
                 <div className="flex min-w-0 flex-1">
                   <div className="flex min-w-0 flex-1 flex-col">

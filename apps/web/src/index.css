@@ -405,8 +405,13 @@ kbd {
 
 /* ── Sidebar cockpit (§3.1): 52px icon-rail + 272px glass panel ──────────────── */
 /* When the DevHubShell rail is "chromeless", it stops owning brand/padding/glass —
- * the Sidebar owns the full cockpit chrome instead. */
-.dh-rail--chromeless {
+ * the Sidebar owns the full cockpit chrome instead. Double-class selector on
+ * purpose (W3-SHELL): the base `.dh-rail { width: var(--dh-rail-width) }` rule is
+ * declared LATER in this file, so a same-specificity `.dh-rail--chromeless` lost
+ * the cascade and the rail stayed 324px — ⌘\ collapsing the sidebar's panel left
+ * a ~270px dead band because `width: auto` (which lets the rail shrink to the
+ * icon rail) never applied. */
+.dh-rail.dh-rail--chromeless {
   width: auto;
   background: transparent;
   backdrop-filter: none;
@@ -1748,10 +1753,10 @@ html[data-reduce-motion="true"] .dh-statusbar,
    * this, the 272px sessions panel overflowed the narrowed rail (its content is
    * overflow:visible) and painted OVER the route content — the 768–1023
    * "superimposed panels" breakage (QA R2/R3/R4). */
-  .dh-rail--chromeless {
+  .dh-rail.dh-rail--chromeless {
     width: auto;
   }
-  .dh-rail--chromeless .dh-panel {
+  .dh-rail.dh-rail--chromeless .dh-panel {
     display: none;
   }
 }
@@ -1764,7 +1769,7 @@ html[data-reduce-motion="true"] .dh-statusbar,
   .dh-rail {
     display: none;
   }
-  .dh-rail--chromeless {
+  .dh-rail.dh-rail--chromeless {
     display: flex;
     width: auto;
   }
