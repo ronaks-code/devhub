@@ -732,16 +732,19 @@ Every item below is backed by real, on-disk evidence — no fabricated results.
 
 ---
 
-## Default agent mechanics dispatch repair (2026-07-20)
+## Fixture-fed FleetSnapshot office visualizer (2026-07-20)
 
-- [x] Replace the pure `resolveNewTaskTab` assertion with a rendered New Task dispatch regression for Codex create mode and a fresh Claude chat.
-- [x] Prove `HomePane` invokes `onNewChat` with zero arguments.
-- [x] Route Codex New Task into the native create form and remount it for each new-session signal.
-- [x] Add the default-mechanics control to the rollback `SettingsPane` and fix the stale feature-flag default comment.
-- [ ] Run `pnpm -r typecheck && pnpm -r test` through the shared heavy-job queue and record the result.
+- [x] Mirror the canonical `FleetSnapshot` / `AgentState` / `RoomState` / `FleetEdge` shapes in the web app without importing across repositories.
+- [x] Create one deterministic fixture with eight department rooms: Hermes active; Athena, Vulcan, Apollo, Thoth, Talos, Vesta, and Argus reserved.
+- [x] Render the fixture as a legible responsive office on the existing `spatial` route, with active/reserved room treatment and agent nameplates for role, status, and task.
+- [x] Add a mounted Vitest proving 8 rooms, 1 active / 7 reserved styling, and the exact fixture agent count.
+- [ ] Run `pnpm -r typecheck && pnpm --filter @devhub/web test` through the shared heavy-job queue and leave all changes uncommitted.
 
 ### Review / results
 
-- RED was behavior-specific: the real App mount could not find `New native Codex task setup`, the legacy settings mount could not find the default-mechanics switch, and `HomePane` forwarded a `SyntheticBaseEvent` instead of zero arguments.
-- Focused GREEN: App/HomePane/SettingsPane regressions pass `28/28`; web `tsc --noEmit` passes.
-- The full gate was submitted only through the required queue wrapper, which exited `70` before enqueueing with `could not identify queue process`. Queue status reports `admission=blocked` because sandboxed `sysctl` cannot supply load. The full gate remains honestly unverified; it was not bypassed.
+- Canonical contract audit: GO; the four mirrored declarations match the source exactly, and every fixture room/member/owner/edge reference resolves consistently.
+- RED-first component test failed on the missing renderer, then on zero rooms; final focused result is 2/2 green, including the quality-review regressions for landmark safety and timestamp derivation.
+- Focused post-repair spatial/router preservation run: 59/59 green. Web `tsc --noEmit` and `oxlint src` are clean.
+- Independent SPEC review: GO. Independent QUALITY re-review: GO after removing the nested main landmark and whole-card reserved opacity, widening responsive nameplates, and deriving the timestamp from the supplied snapshot.
+- Full requested gate is blocked before command execution: mandatory queue wrapper exits `could not identify queue process`; queue status reports `admission=blocked`, no owner, and an empty queue. It was not bypassed.
+- Rendered browser QA is blocked by host browser policy rejecting `http://127.0.0.1:5173`; the policy also forbids alternate-browser fallback. No screenshot claim is made.

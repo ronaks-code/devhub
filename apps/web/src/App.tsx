@@ -126,8 +126,8 @@ const DashboardPane = lazy(() =>
 const ProgressBoard = lazy(() =>
   import("./components/ProgressBoard").then((m) => ({ default: m.ProgressBoard })),
 );
-// Spatial "office game" view — the PixiJS/WebGL swarm visualizer. Heavy (Pixi +
-// canvas), so it's code-split and only pulls its chunk when the tab is opened.
+// Read-only FleetSnapshot office view. It stays code-split so the fixture and
+// visualizer only load when the existing Spatial route is opened.
 const SpatialHub = lazy(() =>
   import("./spatial/SpatialHub").then((m) => ({ default: m.SpatialHub })),
 );
