@@ -384,11 +384,15 @@ describe("SettingsRoute — narrow (768) + 1024 viewport: no horizontal overflow
     expect(realCss).not.toContain(".dh-canvas-frame");
   });
 
-  it("the real route's own max-width (720px) sits under both breakpoints", () => {
+  it("the IDE-rail route caps its width and collapses to one column on narrow viewports", () => {
+    // §3.4 widened the route to a two-column IDE-rail grid; it must still not
+    // overflow — the width is capped and a ≤720px media query drops to one column.
     const match = realCss.match(/\.dh-settings-route\s*\{[^}]*max-width:\s*(\d+)px/);
     expect(match).not.toBeNull();
     const maxWidth = Number(match![1]);
-    expect(maxWidth).toBeLessThan(768);
+    expect(maxWidth).toBeLessThanOrEqual(1000);
+    // A collapse rule exists so the rail stacks under the narrow breakpoint.
+    expect(realCss).toMatch(/@media\s*\(max-width:\s*720px\)/);
   });
 
   for (const viewport of [768, 1024] as const) {

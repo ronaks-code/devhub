@@ -90,6 +90,38 @@ export const SETTINGS_TABS: ReadonlyArray<SettingsTabItem<SettingsSection>> = Ob
   { id: "plugins", label: "Plugins" },
 ]);
 
+/**
+ * Searchable keywords per section (Aurora Cockpit §3.4 Query-Deck search). The
+ * settings surface is tab-mounted (one section rendered at a time), so the live
+ * search filters at the SECTION grain — matching a section's label + the setting
+ * names/descriptions it contains — rather than pretending to filter rows inside
+ * unmounted panels. Pure data, unit-testable via `matchSettingsSections`.
+ */
+const SECTION_KEYWORDS: Record<SettingsSection, string> = {
+  preferences: "appearance theme dark light model density provider claude codex mechanics connection api host bearer token",
+  budget: "budget spend cap cost money monthly usd forecast pacing",
+  memory: "memory claude.md context instructions project global",
+  mcp: "mcp servers model context protocol tools",
+  hooks: "hooks automation events lifecycle",
+  webhooks: "webhooks notifications http endpoint slack",
+  permissions: "permissions allow ask deny approve edits commands mode",
+  agents: "agents subagents library roles",
+  skills: "skills slash commands",
+  plugins: "plugins extensions marketplace",
+};
+
+/** Sections whose label or keywords match the query (empty query → all). */
+export function matchSettingsSections(
+  tabs: ReadonlyArray<SettingsTabItem<SettingsSection>>,
+  query: string,
+): ReadonlyArray<SettingsTabItem<SettingsSection>> {
+  const q = query.trim().toLowerCase();
+  if (!q) return tabs;
+  return tabs.filter(
+    (t) => t.label.toLowerCase().includes(q) || SECTION_KEYWORDS[t.id].includes(q),
+  );
+}
+
 const MODELS = [
   "claude-opus-4-8",
   "claude-sonnet-4-6",
@@ -263,6 +295,16 @@ export function SettingsRoute({
   projectCwd?: string;
 }): ReactNode {
   const [section, setSection] = useState<SettingsSection>("preferences");
+  // §3.4 Query-Deck: a live filter over the settings sections (label + keywords).
+  const [settingsQuery, setSettingsQuery] = useState("");
+  const visibleTabs = matchSettingsSections(SETTINGS_TABS, settingsQuery);
+  // When a query narrows the list and the active section drops out, jump to the
+  // first match so the panel always shows something the search actually found.
+  useEffect(() => {
+    if (settingsQuery.trim() && visibleTabs.length > 0 && !visibleTabs.some((t) => t.id === section)) {
+      setSection(visibleTabs[0]!.id);
+    }
+  }, [settingsQuery, visibleTabs, section]);
   // Latest authoritative server snapshot. Unsaved user edits live in the separate
   // `edits` overlay, so a background refetch (App shell reconciliation, another
   // surface's save) can replace this base at any time without dropping an edit —
@@ -672,9 +714,23 @@ export function SettingsRoute({
       <div className="dh-settings-route" data-dh-settings-route="">
         <header className="dh-settings-header">
           <h1 className="dh-settings-title">Settings</h1>
+          <input
+            type="search"
+            className="dh-settings-search"
+            placeholder="Search settings…"
+            aria-label="Search settings"
+            value={settingsQuery}
+            onChange={(e) => setSettingsQuery(e.target.value)}
+          />
         </header>
 
-        <Tabs id={SETTINGS_TABLIST_ID} label="Settings sections" tabs={SETTINGS_TABS} active={section} onSelect={setSection} />
+        {visibleTabs.length > 0 ? (
+          <Tabs id={SETTINGS_TABLIST_ID} label="Settings sections" tabs={visibleTabs} active={section} onSelect={setSection} />
+        ) : (
+          <div className="dh-settings-tablist" role="presentation">
+            <p className="dh-settings-nav-empty">No settings match “{settingsQuery.trim()}”.</p>
+          </div>
+        )}
 
         {section === "preferences" ? (
           <TabPanel id={SETTINGS_TABLIST_ID} tabId="preferences">

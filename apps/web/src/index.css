@@ -2980,41 +2980,123 @@ html[data-reduce-motion="true"] {
 /* ── Settings route (audited hand-rolled Tabs/FieldGroup/Field/FieldSet/Select/
    Input/Switch/Button/Alert/Progress/Table/Dialog primitives) ─────────────── */
 
+/* Aurora Cockpit §3.4: Query-Deck header + IDE-Rail nav grid. */
 .dh-settings-route {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr);
+  grid-template-areas: "header header" "nav panel";
+  gap: 18px 22px;
+  max-width: 1000px;
+}
+
+.dh-settings-header {
+  grid-area: header;
   display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 720px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
 }
 
 .dh-settings-title {
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 17px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
   color: var(--dh-text-strong);
 }
 
-.dh-settings-tablist {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 2px;
-  border-radius: var(--dh-radius-row);
+/* The Query-Deck search box: filters settings sections live. */
+.dh-settings-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+  max-width: 420px;
+  border-radius: var(--dh-radius-control);
   background: var(--dh-control);
+  border: 1px solid var(--dh-glass-border);
+  color: var(--dh-text);
+  padding: 7px 11px;
+  font-size: 12.5px;
+}
+.dh-settings-search:focus {
+  outline: none;
+  border-color: var(--dh-focus);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
+}
+.dh-settings-search::placeholder {
+  color: var(--dh-text-dim);
+}
+
+/* IDE Rail: a vertical, grouped-feel nav down the left column. */
+.dh-settings-tablist {
+  grid-area: nav;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  align-self: start;
+  position: sticky;
+  top: 8px;
+  border-radius: var(--dh-radius-inspector);
+  background: var(--dh-glass-bg);
+  backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  border: 1px solid var(--dh-glass-border);
 }
 
 .dh-settings-tab {
+  position: relative;
   border: 0;
   border-radius: var(--dh-radius-control);
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: 7px 11px;
+  font-size: 12.5px;
   font-weight: 500;
+  text-align: left;
   color: var(--dh-text-muted);
   background: transparent;
+  transition: color 120ms ease, background 120ms ease;
+}
+.dh-settings-tab:hover {
+  color: var(--dh-text);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .dh-settings-tab[aria-selected="true"] {
   color: var(--dh-text-strong);
-  background: var(--dh-selected);
+  background: var(--dh-rail-active);
+}
+/* Inset violet active bar. */
+.dh-settings-tab[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 60%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--dh-brand);
+}
+
+.dh-settings-panel {
+  grid-area: panel;
+}
+
+/* An empty-search hint in the rail (no section matched the query). */
+.dh-settings-nav-empty {
+  padding: 8px 11px;
+  font-size: 11.5px;
+  color: var(--dh-text-dim);
+}
+
+@media (max-width: 720px) {
+  .dh-settings-route {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "header" "nav" "panel";
+  }
+  .dh-settings-tablist {
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+  }
 }
 
 .dh-settings-panel {
@@ -3023,16 +3105,23 @@ html[data-reduce-motion="true"] {
   gap: 20px;
 }
 
-/* A named accessible group of fields — deliberately no border/shadow "card" chrome. */
+/* A named accessible group of fields — now a glass card (§3.4 re-skin). */
 .dh-settings-fieldgroup {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding: 16px;
+  border-radius: var(--dh-radius-inspector);
+  background: var(--dh-glass-bg);
+  backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  -webkit-backdrop-filter: blur(var(--dh-glass-blur)) saturate(1.25);
+  border: 1px solid var(--dh-glass-border);
+  box-shadow: var(--dh-glass-highlight);
 }
 
 .dh-settings-fieldgroup-heading {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 650;
   color: var(--dh-text-strong);
 }
 
@@ -3093,6 +3182,13 @@ html[data-reduce-motion="true"] {
   color: var(--dh-text);
   padding: 6px 10px;
   font-size: 13px;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+.dh-settings-select:focus,
+.dh-settings-input:focus {
+  outline: none;
+  border-color: var(--dh-focus);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12);
 }
 
 .dh-settings-switch-row {
