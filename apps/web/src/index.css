@@ -973,6 +973,190 @@ html[data-reduce-motion="true"] .dh-statusbar,
   font-weight: 600;
 }
 
+/* ── Launchpad (§3.3b): new-session empty state ───────────────────────────────── */
+.dh-launchpad {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8vh 24px 24px;
+}
+.dh-launchpad-col {
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.dh-launch-head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+.dh-launch-orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--dh-grad-brand);
+  box-shadow: 0 8px 28px rgba(139, 108, 240, 0.45);
+}
+.dh-launch-title {
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--dh-text-strong);
+}
+.dh-launch-sub {
+  font-size: 13px;
+  color: var(--dh-text-muted);
+}
+.dh-launch-providers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.dh-launch-provider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--dh-glass-border);
+  background: var(--dh-glass-bg);
+  cursor: pointer;
+  text-align: left;
+}
+.dh-launch-provider--active {
+  border-color: var(--dh-glass-border-hi);
+  box-shadow: 0 0 0 1px var(--dh-glass-border-hi), var(--dh-glass-highlight);
+}
+.dh-launch-provider:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 2px;
+}
+.dh-launch-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.dh-launch-mark--claude {
+  background: var(--dh-grad-warm);
+}
+.dh-launch-mark--codex {
+  background: linear-gradient(135deg, var(--dh-success), #3aa0ff);
+}
+.dh-launch-provider-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--dh-text-strong);
+}
+.dh-launch-provider-model {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--dh-text-muted);
+}
+.dh-launch-composer {
+  border-radius: 16px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dh-launch-composer:focus-within {
+  border-color: var(--dh-glass-border-hi);
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.12), var(--dh-glass-shadow-float);
+}
+.dh-launch-input {
+  width: 100%;
+  resize: none;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--dh-text);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.dh-launch-input::placeholder {
+  color: var(--dh-text-disabled);
+}
+.dh-launch-composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dh-launch-hint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dh-text-disabled);
+}
+.dh-launch-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--dh-grad-brand);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dh-launch-send:focus-visible {
+  outline: 2px solid var(--dh-focus);
+  outline-offset: 2px;
+}
+.dh-launch-worktrees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dh-launch-wt {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--dh-link);
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--dh-control);
+}
+.dh-launch-starters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.dh-launch-starter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--dh-border-subtle);
+  background: transparent;
+  color: var(--dh-text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+.dh-launch-starter:hover {
+  background: var(--dh-hover);
+  color: var(--dh-text);
+}
+.dh-launch-starter:focus-visible {
+  outline: 2px solid var(--dh-focus);
+}
+.dh-launch-starter-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
 /*
  * shadcn/ui semantic color tokens (Tailwind v4). Adopted as the app's sanctioned
  * component-library layer. These are ADDITIVE: they generate the `bg-primary`,

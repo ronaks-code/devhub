@@ -111,6 +111,7 @@ import {
   TOP_BAR_SECONDARY_CLASS,
 } from "./components/features/shell/TopBar";
 import type { ChatTab } from "./components/features/shell/ChatTabs";
+import { Launchpad } from "./components/features/shell/Launchpad";
 import { useStatsPolling } from "./hooks/useStatsPolling";
 // Re-exported so existing `from "./App"` import paths (chrome-polish / native-codex
 // tests + callers) stay valid after the TopBar extraction (§3.2).
@@ -1569,6 +1570,22 @@ export default function App() {
   const codexShellMode = resolveCodexShellMode(settings);
   const claudeShellMode = resolveClaudeShellMode(settings);
   const codexNav = codexNavPresentation(codexShellMode);
+  // Launchpad empty state (§3.3b): shown on the chat route when no project/session
+  // is active. Real data only — recents/worktrees render only when present.
+  const launchpad = (
+    <Launchpad
+      runningCount={statusBarData.runningCount}
+      mechanics={settings?.defaultMechanics ?? "claude"}
+      onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
+      claudeModel={settings?.defaultModel ?? undefined}
+      recents={recents}
+      onOpenRecent={openSession}
+      onLaunch={() => startNewChat()}
+      onBrowse={() => { setChatSeed(null); setTab("browse"); }}
+      onOpenCodexHistory={() => { setChatSeed(null); setTab("codex-history"); }}
+      worktrees={worktrees}
+    />
+  );
   const legacyClaudePane = (
     <div className="flex min-h-0 flex-1">
       <ProjectsPane projects={projects} selectedId={projectId} onSelect={selectProject} />
@@ -1596,13 +1613,7 @@ export default function App() {
           onModelChange={setChatModel}
         />
       ) : (
-        <div className="flex-1 bg-zinc-950">
-          <EmptyState
-            icon={<MessagesSquare className="h-12 w-12" />}
-            title="Pick a project to chat"
-            hint="Select a project on the left to start a live Claude Code session in its working directory."
-          />
-        </div>
+        launchpad
       )}
     </div>
   );
@@ -1638,13 +1649,7 @@ export default function App() {
             onFork={openCrossProviderFork}
           />
         ) : (
-          <div className="flex-1 bg-zinc-950">
-            <EmptyState
-              icon={<MessagesSquare className="h-12 w-12" />}
-              title="Pick a project to chat"
-              hint="Select a project on the left to start a live Claude Code session in its working directory."
-            />
-          </div>
+          launchpad
         )}
       </div>
     ) : null;
