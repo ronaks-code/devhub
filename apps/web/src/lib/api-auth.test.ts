@@ -1,6 +1,31 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api, setToken } from "./api.js";
+
+/**
+ * A minimal in-memory `Storage`. The `jsdom` env here does not expose a usable
+ * `window.localStorage` (accessing it throws on the opaque `about:blank`
+ * origin), so — exactly like compat-storage.test.ts — we stub a working one.
+ * Without this, `setToken` is a silent no-op and this assertion fails for an
+ * environment reason rather than a real one (the header logic is correct).
+ */
+function makeStorage(): Storage {
+  const map = new Map<string, string>();
+  return {
+    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
+    setItem: (k: string, v: string) => void map.set(k, String(v)),
+    removeItem: (k: string) => void map.delete(k),
+    clear: () => map.clear(),
+    key: () => null,
+    get length() {
+      return map.size;
+    },
+  } as Storage;
+}
+
+beforeEach(() => {
+  vi.stubGlobal("window", { localStorage: makeStorage() });
+});
 
 afterEach(() => {
   setToken(null);
