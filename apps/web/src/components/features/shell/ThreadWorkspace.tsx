@@ -71,7 +71,7 @@ export type ThreadItem =
    * a skippable row rather than inline chat content (M8: these used to render as raw
    * JSON dumps indistinguishable from real conversation).
    */
-  | { kind: "raw"; id: string; raw: string; collapsed?: boolean }
+  | { kind: "raw"; id: string; raw: string; collapsed?: boolean; summary?: string }
   /**
    * A REAL tool call (tool_use + its paired tool_result) rendered as ONE compact,
    * collapsed-by-default card (Aurora Cockpit §3.3). This replaces the old raw-JSON
@@ -271,17 +271,28 @@ function rawSummaryLine(bounded: string): string {
   return firstLine.length > 96 ? `${firstLine.slice(0, 96)}…` : firstLine;
 }
 
-function RawDiagnostic({ raw, collapsed }: { raw: string; collapsed?: boolean }) {
+function RawDiagnostic({
+  raw,
+  collapsed,
+  summary,
+}: {
+  raw: string;
+  collapsed?: boolean;
+  summary?: string;
+}) {
   // Unknown native event: bounded raw diagnostic, never a fabricated tool/reasoning.
   const bounded = boundRawDiagnostic(raw);
   if (collapsed) {
-    // Internal plumbing (hook/queue/attachment/system/thinking): closed by default so
-    // it reads as a skippable row, not inline chat content — never a raw JSON dump in
-    // the conversation.
+    // Internal plumbing (hook/queue/attachment/system/thinking/image): closed by
+    // default so it reads as a skippable row, not inline chat content. `summary`
+    // is a human label ("Reasoning", "Image", "System event") set by the composer;
+    // it replaces the raw first line so internal protocol tokens
+    // (`[assistant:thinking]`, `[system: …]`, `[Image: original …]`) never surface
+    // as if they were conversation text (QA MAJOR).
     return (
       <details className="dh-thread-raw-collapsed" data-dh-raw-collapsed="" data-dh-unframed="">
         <summary className="dh-thread-raw-summary" data-dh-raw-summary="">
-          {rawSummaryLine(bounded)}
+          {summary ?? rawSummaryLine(bounded)}
         </summary>
         <pre className="dh-thread-raw" data-dh-raw="">
           {bounded}
@@ -309,7 +320,7 @@ function ThreadItemView({ item }: { item: ThreadItem }): ReactNode {
     case "streaming":
       return <StreamingBlock content={item.content} />;
     case "raw":
-      return <RawDiagnostic raw={item.raw} collapsed={item.collapsed} />;
+      return <RawDiagnostic raw={item.raw} collapsed={item.collapsed} summary={item.summary} />;
     case "tool":
       return <ToolBlock block={item.block} />;
     default:

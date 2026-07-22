@@ -324,13 +324,15 @@ describe("mapMessagesToThreadItems", () => {
       message("assistant", [{ type: "thinking", text: "hmm" } as unknown as ContentBlock], 0),
     ]);
     expect(items).toEqual([
-      { kind: "raw", id: "u0-0", raw: "[assistant:thinking] hmm", collapsed: true },
+      { kind: "raw", id: "u0-0", raw: "[assistant:thinking] hmm", collapsed: true, summary: "Reasoning" },
     ]);
   });
 
   it("routes a non-user/assistant role's text through a COLLAPSED raw diagnostic, never as prose or an open JSON dump (M8)", () => {
     const items = mapMessagesToThreadItems([message("system", [{ type: "text", text: "hook fired" }], 0)]);
-    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: "[system] hook fired", collapsed: true }]);
+    expect(items).toEqual([
+      { kind: "raw", id: "u0-text", raw: "[system] hook fired", collapsed: true, summary: "System event" },
+    ]);
   });
 
   it("keeps both the prose and a tool card when a message mixes text with a tool block", () => {
@@ -359,13 +361,17 @@ describe("mapMessagesToThreadItems", () => {
     const notification =
       '<task-notification>\n<task-id>wckj209zt</task-id>\n<status>completed</status>\n</task-notification>';
     const items = mapMessagesToThreadItems([message("user", [{ type: "text", text: notification }], 0)]);
-    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: `[user] ${notification}`, collapsed: true }]);
+    expect(items).toEqual([
+      { kind: "raw", id: "u0-text", raw: `[user] ${notification}`, collapsed: true, summary: "Task update" },
+    ]);
   });
 
   it("collapses an [Image: original …] scaling note on a user-role message instead of a fabricated You bubble", () => {
     const note = "[Image: original 1237x2200, displayed at 1125x2000. Multiply coordinates by 1.10 to map to original image.]";
     const items = mapMessagesToThreadItems([message("user", [{ type: "text", text: note }], 0)]);
-    expect(items).toEqual([{ kind: "raw", id: "u0-text", raw: `[user] ${note}`, collapsed: true }]);
+    expect(items).toEqual([
+      { kind: "raw", id: "u0-text", raw: `[user] ${note}`, collapsed: true, summary: "Image (scaled for display)" },
+    ]);
   });
 
   it("still renders ordinary user prose as a real bubble, even mentioning 'Image' or 'task' in passing", () => {
@@ -373,5 +379,30 @@ describe("mapMessagesToThreadItems", () => {
       message("user", [{ type: "text", text: "can you resize this Image for the task?" }], 0),
     ]);
     expect(items).toEqual([{ kind: "user", id: "u0-text", content: "can you resize this Image for the task?" }]);
+  });
+
+  // W3 QA MAJOR: bare `[image]`/`[attachment]` placeholders (parser emits these for
+  // non-text content) used to slip through as fabricated user bubbles, and real
+  // `image` blocks dumped `[role:image] {json}` inline. Both now collapse to a
+  // clean, human-labelled row.
+  it("collapses a bare [image]/[attachment] placeholder on a user message with a human label", () => {
+    const img = mapMessagesToThreadItems([message("user", [{ type: "text", text: "[image]" }], 0)]);
+    expect(img).toEqual([{ kind: "raw", id: "u0-text", raw: "[user] [image]", collapsed: true, summary: "Image" }]);
+    const att = mapMessagesToThreadItems([message("user", [{ type: "text", text: "[attachment]" }], 0)]);
+    expect(att).toEqual([
+      { kind: "raw", id: "u0-text", raw: "[user] [attachment]", collapsed: true, summary: "Attachment" },
+    ]);
+  });
+
+  it("collapses a real image content block to an Image row, not an inline JSON dump", () => {
+    const items = mapMessagesToThreadItems([
+      message("user", [{ type: "image", mediaType: "image/png" } as unknown as ContentBlock], 0),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.kind).toBe("raw");
+    if (items[0]!.kind === "raw") {
+      expect(items[0]!.collapsed).toBe(true);
+      expect(items[0]!.summary).toBe("Image");
+    }
   });
 });

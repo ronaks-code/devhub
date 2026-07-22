@@ -241,7 +241,43 @@ export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): Inspe
  * below, instead of rendering as a fabricated "You" bubble (W3-TX, M8 remainder).
  */
 function isHarnessInternalUserText(text: string): boolean {
-  return text.startsWith("<task-notification") || text.startsWith("[Image: original ");
+  return harnessInternalUserLabel(text) !== null;
+}
+
+/**
+ * A human label for harness-internal text that arrives on a `user`-role message,
+ * or null when it's genuine typed conversation. These are markers Claude Code
+ * appends itself (never the human): a subagent `<task-notification>` block, the
+ * `[Image: original … Multiply coordinates …]` downscale note, and the bare
+ * `[image]`/`[attachment]` placeholders the parser emits for non-text content.
+ * Matched by observed prefixes so a real message is never misrouted. Used both to
+ * ROUTE these to a collapsed raw row (not a fabricated "You" bubble) and to LABEL
+ * that row so the raw token never surfaces as conversation text (QA MAJOR).
+ */
+function harnessInternalUserLabel(text: string): string | null {
+  const t = text.trimStart();
+  if (t.startsWith("<task-notification")) return "Task update";
+  if (t.startsWith("[Image: original ")) return "Image (scaled for display)";
+  if (/^\[image\]$/i.test(t)) return "Image";
+  if (/^\[attachment\]/i.test(t)) return "Attachment";
+  if (/^\[system[:\]]/i.test(t)) return "System event";
+  return null;
+}
+
+/** Human label for a non-user/assistant plumbing role (system/hook/queue/…). */
+function roleLabel(role: string): string {
+  switch (role) {
+    case "hook":
+      return "Hook";
+    case "queue":
+      return "Queued message";
+    case "attachment":
+      return "Attachment";
+    case "system":
+      return "System event";
+    default:
+      return "System event";
+  }
 }
 
 /**
@@ -278,18 +314,22 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
       .join("\n\n")
       .trim();
     if (text) {
-      if (m.role === "user" && !isHarnessInternalUserText(text)) {
+      const internalUserLabel = m.role === "user" ? harnessInternalUserLabel(text) : null;
+      if (m.role === "user" && !internalUserLabel) {
         items.push({ kind: "user", id: `${key}-text`, content: text });
       } else if (m.role === "assistant") {
         items.push({ kind: "assistant", id: `${key}-text`, content: text });
       } else {
         // Internal plumbing (system/hook/queue/attachment/meta), OR a `user`-role
-        // message that's actually harness-internal: collapsed, not dropped.
+        // message that's actually harness-internal: collapsed + labelled with a
+        // human summary so the raw marker never reads as conversation text, not
+        // dropped (QA MAJOR: `[assistant:thinking]`, `[system: …]`, `[Image: …]`).
         items.push({
           kind: "raw",
           id: `${key}-text`,
           raw: boundRawDiagnostic(`[${m.role}] ${text}`),
           collapsed: true,
+          summary: internalUserLabel ?? roleLabel(m.role),
         });
       }
     }
@@ -304,14 +344,28 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
         continue;
       }
       if (b.type === "thinking") {
-        // Reasoning text, collapsed — not a fabricated JSON blob. This used to be
-        // `JSON.stringify(b)` verbatim (`[assistant:thinking] {"type":"thinking",…}`),
-        // the same M8 noise pattern as the internal-plumbing roles above.
+        // Reasoning text, collapsed under a human "Reasoning" label — not a
+        // fabricated JSON blob and not the raw `[assistant:thinking]` token, which
+        // used to surface as conversation text (QA MAJOR).
         items.push({
           kind: "raw",
           id: `${key}-${i}`,
           raw: boundRawDiagnostic(`[${m.role}:thinking] ${(b as { text?: string }).text ?? ""}`),
           collapsed: true,
+          summary: "Reasoning",
+        });
+        i++;
+        continue;
+      }
+      if (b.type === "image") {
+        // A real image block: collapse to a clean "Image" row instead of dumping
+        // `[role:image] {json}` inline (QA MAJOR — raw protocol token as chat text).
+        items.push({
+          kind: "raw",
+          id: `${key}-${i}`,
+          raw: boundRawDiagnostic(`[${m.role}:image] ${JSON.stringify(b)}`),
+          collapsed: true,
+          summary: "Image",
         });
         i++;
         continue;
