@@ -295,7 +295,13 @@ export function Sidebar({
 
   const iconDests = destinations.filter((d) => d.id !== "settings" && NAV_ICONS[d.id]);
   const settingsDest = destinations.find((d) => d.id === "settings");
-  const spendPct = spend ? Math.round(Math.min(100, Math.max(0, spend.pct))) : null;
+  // Only a real budget CAP makes a "% of budget" meaningful — with no cap set,
+  // `pct` is 0 and the ring read "Spend 0% of budget" while thousands were spent
+  // (QA: misleading). No cap → no ring (the absolute spend still shows below).
+  const spendPct =
+    spend && spend.monthlyBudgetUsd != null
+      ? Math.round(Math.min(100, Math.max(0, spend.pct)))
+      : null;
 
   return (
     <div className={cn("dh-sidebar", collapsed && "dh-sidebar--collapsed")} data-dh-sidebar="">

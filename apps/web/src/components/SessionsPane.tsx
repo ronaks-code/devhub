@@ -498,12 +498,16 @@ export function SessionsPane({
                           {formatUsd(costUsd(s.model, s.usage)).replace(/^\$/, "")}
                         </span>
                       )}
-                      {/* min-w-0 lets this item shrink within the row; truncate lives
-                          on the inner text span only, so the branch name gets a real
-                          ellipsis instead of a hard clip (a flex container can't apply
-                          text-overflow to its own children — it needs a block child). */}
+                      {/* shrink-0 + bounded max-w: the ref never collapses to 0 (was
+                          min-w-0, which let the 4 shrink-0 siblings starve it down to
+                          "H"/"HE" on high-cost rows — QA). Short refs like "HEAD"/"main"
+                          show in full; only a long branch truncates (ellipsis on the
+                          inner block, full name in the title tooltip). */}
                       {s.gitBranch ? (
-                        <span className="flex min-w-0 items-center gap-0.5" title={s.gitBranch}>
+                        <span
+                          className="flex max-w-[7rem] shrink-0 items-center gap-0.5"
+                          title={s.gitBranch}
+                        >
                           <GitBranch className="h-3 w-3 shrink-0" />
                           <span className="truncate">{s.gitBranch}</span>
                         </span>

@@ -134,7 +134,14 @@ export function FileChangeSummary({
                     className="flex min-w-0 flex-1 flex-col gap-1 text-left"
                     title={c.filePath}
                   >
-                    <span className="truncate font-mono text-[12px] text-zinc-300" dir="rtl">
+                    {/* `dir="rtl"` left-truncates so the filename stays visible;
+                        `[unicode-bidi:plaintext]` lays the path out LTR so the `/`
+                        separators aren't bidi-reordered into a spurious trailing
+                        slash (QA: same artifact as the InspectorDock path). */}
+                    <span
+                      className="truncate font-mono text-[12px] text-zinc-300 [unicode-bidi:plaintext]"
+                      dir="rtl"
+                    >
                       {shortPath(c.filePath)}
                     </span>
                     <span className="flex items-center gap-2 text-[10.5px] font-medium">

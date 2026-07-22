@@ -142,12 +142,43 @@ function parseFrontmatter(text: string): Record<string, string> {
   const end = text.indexOf("\n---", 3);
   if (end < 0) return out;
   const body = text.slice(text.indexOf("\n") + 1, end);
-  for (const line of body.split("\n")) {
+  const lines = body.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     // Only flat "key: value" pairs (skip list items "- x" and indented children).
     const m = /^([A-Za-z0-9_-]+):[ \t]*(.*)$/.exec(line);
     if (!m) continue;
     const key = m[1]!;
     let value = (m[2] ?? "").trim();
+    // YAML block scalar: the value is `>`/`>-`/`>+` (folded) or `|`/`|-`/`|+`
+    // (literal) followed by INDENTED lines — not the indicator itself. Without
+    // this the indicator (`>-`) leaked through as the description (QA). Collect
+    // the indented block: folded joins with spaces, literal keeps newlines.
+    const block = /^([|>])[+-]?$/.exec(value);
+    if (block) {
+      const folded = block[1] === ">";
+      const collected: string[] = [];
+      let baseIndent: number | null = null;
+      while (i + 1 < lines.length) {
+        const next = lines[i + 1]!;
+        if (next.trim() === "") {
+          collected.push("");
+          i++;
+          continue;
+        }
+        const indent = next.length - next.trimStart().length;
+        if (indent === 0) break; // dedent to a new top-level key ends the block
+        if (baseIndent === null) baseIndent = indent;
+        collected.push(next.slice(baseIndent));
+        i++;
+      }
+      while (collected.length && collected[collected.length - 1] === "") collected.pop();
+      value = folded
+        ? collected.join(" ").replace(/\s+/g, " ").trim()
+        : collected.join("\n").trim();
+      if (value) out[key] = value;
+      continue;
+    }
     if (!value) continue; // a key with a block value (list/map) — skip the scalar
     if (
       (value.startsWith('"') && value.endsWith('"')) ||

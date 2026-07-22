@@ -2984,7 +2984,13 @@ html[data-reduce-motion="true"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Left-truncate so the filename (path END) stays visible: `direction: rtl`
+     puts the ellipsis on the left. `unicode-bidi: plaintext` lays the path out
+     LTR from its own first strong char, so the neutral `/` separators are NOT
+     bidi-reordered — without it, rtl rendered a spurious trailing slash
+     ("DeviceCard.tsx/") even though the path has none (QA: verified in isolation). */
   direction: rtl;
+  unicode-bidi: plaintext;
   text-align: left;
 }
 .dh-inspector-delta {

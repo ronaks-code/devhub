@@ -400,6 +400,14 @@ export function MultiSessionDrive({
   // Auto-fill the grid once, on the first non-empty running list.
   const autoFilledRef = useRef(false);
 
+  // Preload the lazy markdown chunk the moment the Drive opens. Panel previews
+  // render finalized answers through <Markdown> (code-split); without this, a user
+  // who lands on Drive before ever opening a transcript sees the raw-text Suspense
+  // fallback (literal **/##) until the chunk fetches (QA: "drive shows raw markdown").
+  useEffect(() => {
+    void import("./MarkdownImpl");
+  }, []);
+
   const load = useCallback(() => {
     setRefreshing(true);
     api

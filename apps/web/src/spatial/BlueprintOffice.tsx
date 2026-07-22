@@ -115,7 +115,10 @@ function calloutLines(a: Agent, nowMs: number): PlanLine[] {
   ];
   const provider = a.provider === "anthropic" ? "CLD" : a.provider === "openai" ? "CDX" : null;
   const idLine = [provider, a.model].filter(Boolean).join(" · ");
-  if (idLine) lines.push({ text: clip(idLine, 38), fill: "var(--dh-text-muted)", size: 11 });
+  // --dh-text (not -muted) for these micro annotation lines: at the fit-to-plan
+  // zoom they shrink to ~6-7px, where muted-on-pale-room reads as faint/illegible
+  // in light theme (QA). Legibility beats hierarchy at this size.
+  if (idLine) lines.push({ text: clip(idLine, 38), fill: "var(--dh-text)", size: 11 });
   const rt = runtime(a.startedAt, nowMs);
   const stat = [`${meta.glyph} ${meta.label}`];
   if (rt) stat.push(rt);
@@ -129,7 +132,7 @@ function calloutLines(a: Agent, nowMs: number): PlanLine[] {
       fill: "var(--dh-link)",
       size: 11,
     });
-  if (a.lastAction) lines.push({ text: clip(a.lastAction, 38), fill: "var(--dh-text-muted)", size: 11 });
+  if (a.lastAction) lines.push({ text: clip(a.lastAction, 38), fill: "var(--dh-text)", size: 11 });
   return lines;
 }
 
