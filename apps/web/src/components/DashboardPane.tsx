@@ -598,8 +598,13 @@ function DashboardBody({
                     <div className="flex items-baseline justify-between gap-3 text-[12px]">
                       <span className="min-w-0 truncate font-medium text-[color:var(--dh-text)]">{p.name}</span>
                       <span className="dh-nums flex shrink-0 items-baseline gap-2 text-[color:var(--dh-text-muted)]">
+                        {/* REAL per-project costUsd (same source the Project-detail
+                            table + the rest of the app use), NOT a projectCost(tokens)
+                            re-estimate — the estimate diverged from the real figure, so
+                            the two dashboard widgets showed different $ for the same
+                            project (QA MAJOR: spend surface must reconcile). */}
                         <span className="text-violet-300" title="estimated cost">
-                          {formatUsd(projectCost(p.tokens))}
+                          {p.costUsd > 0 ? formatUsd(p.costUsd) : "—"}
                         </span>
                         <span>{compactNumber(p.tokens)}</span>
                       </span>

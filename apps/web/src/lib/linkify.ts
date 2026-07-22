@@ -33,7 +33,12 @@ const TOKEN_RE = new RegExp(
     "(https?:\\/\\/[^\\s<>()]+[\\w\\/])",
     "(www\\.[^\\s<>()]+[\\w\\/])",
     // Absolute / home / explicitly-relative paths (need a following segment).
-    "((?:~|\\.{1,2})?\\/[\\w.\\-]+(?:\\/[\\w.\\-]+)*\\/?)",
+    // The `(?<![\w@])` boundary is load-bearing: without it a bare "/word" mid-text
+    // matched, so ordinary English with an intra-word slash ("and/or", "his/her",
+    // "tactile/vision", "$5/mo") had its "/word" turned into a path chip (QA MAJOR).
+    // Requiring the leading ~/./ / not to follow a word char keeps real paths
+    // (start-of-run, or after whitespace/punctuation) while leaving prose alone.
+    "((?<![\\w@])(?:~|\\.{1,2})?\\/[\\w.\\-]+(?:\\/[\\w.\\-]+)*\\/?)",
     // Relative dotted path with an extension, e.g. src/lib/api.ts.
     "([\\w.\\-]+(?:\\/[\\w.\\-]+)+\\.[A-Za-z0-9]{1,6})",
   ].join("|"),

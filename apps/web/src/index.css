@@ -2511,6 +2511,23 @@ html[data-reduce-motion="true"] {
 .dh-thread-raw-summary::-webkit-details-marker {
   display: none;
 }
+/* A real disclosure affordance so a collapsed internal-event row reads as an
+   EXPANDABLE control, not stray dev-debug text (QA: "System event" looked like
+   unstyled gray leakage). The chevron rotates open, and a hover lift confirms it
+   is interactive. */
+.dh-thread-raw-summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 9px;
+  transition: transform 120ms ease;
+}
+.dh-thread-raw-collapsed[open] > .dh-thread-raw-summary::before {
+  transform: rotate(90deg);
+}
+.dh-thread-raw-summary:hover {
+  color: var(--dh-text-muted);
+}
 .dh-thread-raw-collapsed .dh-thread-raw {
   margin-top: 4px;
 }
