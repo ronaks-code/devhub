@@ -48,7 +48,7 @@ describe("DevHubShell locked geometry (design-lock §4)", () => {
     expect(SHELL_GEOMETRY.inspectorTopGutter).toBe(12);
     expect(SHELL_GEOMETRY.inspectorRightGutter).toBe(16);
     expect(SHELL_GEOMETRY.inspectorRadius).toBe(16);
-    expect(SHELL_GEOMETRY.composerRadius).toBe(21);
+    expect(SHELL_GEOMETRY.composerRadius).toBe(16);
     expect(SHELL_GEOMETRY.shellGutter).toBe(16);
     expect(SHELL_GEOMETRY.selectedRowWidth).toBe(248);
     expect(SHELL_GEOMETRY.selectedRowHeight).toBe(44);

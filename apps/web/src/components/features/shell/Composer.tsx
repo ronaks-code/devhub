@@ -51,7 +51,7 @@ export const COMPOSER_GEOMETRY = Object.freeze({
   width: 736,
   height: 98,
   bottomGutter: 16,
-  radius: 21,
+  radius: 16,
 } as const);
 
 /**

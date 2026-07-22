@@ -117,9 +117,14 @@ function HostSection({ group, nowMs }: { group: AutomationsGroup; nowMs: number 
         {group.reachable ? (
           <span className="text-[11px] text-zinc-500">{sorted.length} jobs</span>
         ) : (
-          <span className="flex items-center gap-1 text-[11px] text-amber-300">
+          <span
+            className="flex items-center gap-1 text-[11px] text-amber-300"
+            // Humanize: the raw probe failure (e.g. a `zsh: … bad interpreter`
+            // shell error) is kept in the tooltip, never dumped verbatim inline.
+            title={group.error ? `Automation host unavailable: ${group.error}` : "Automation host unavailable"}
+          >
             <AlertTriangle className="h-3 w-3" />
-            unreachable{group.error ? ` — ${group.error}` : ""}
+            unreachable
           </span>
         )}
       </div>

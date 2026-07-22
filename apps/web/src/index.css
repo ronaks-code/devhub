@@ -208,6 +208,12 @@
   --dh-font-ui: 500 12.5px/1.35 var(--dh-font-sans);
   --dh-font-sub: 500 11px/1.35 var(--dh-font-sans);
   --dh-font-kpi: 600 31px/1 var(--font-mono);
+  /* Shorthand mirrors of the `.dh-label`/`.dh-mono-ui` role helpers below, so
+     `var(--dh-font-label)`/`var(--dh-font-mono-ui)` resolve for callers that set
+     the `font` shorthand. Letter-spacing/text-transform/tabular-nums those classes
+     add can't ride in a font shorthand and stay on the class. */
+  --dh-font-label: 700 10px/1.35 var(--dh-font-sans);
+  --dh-font-mono-ui: 400 10.5px/1.35 var(--font-mono);
 }
 
 /* Wide-reference geometry constants (design-system.md §3.1). Logical CSS pixels
@@ -247,7 +253,7 @@
   --dh-radius-dialog: 12px;
   --dh-radius-inspector: 16px;
   --dh-radius-goal: 17px;
-  --dh-radius-composer: 21px;
+  --dh-radius-composer: 16px;
   --dh-radius-pill: 999px;
 }
 
@@ -835,7 +841,9 @@ button.dh-sgroup-head:focus-visible {
   border-color: var(--dh-glass-border-hi);
 }
 .dh-scard--selected {
-  box-shadow: inset 2px 0 0 var(--accent);
+  /* Active-state accent = coral, matching the already-coral nav active treatment
+     (`.dh-navicon[aria-current]`) so selected + nav read as one active language. */
+  box-shadow: inset 2px 0 0 var(--dh-coral);
   background: var(--dh-selected);
 }
 .dh-scard:focus-visible {
@@ -908,6 +916,15 @@ button.dh-sgroup-head:focus-visible {
 .dh-scard-cost {
   flex-shrink: 0;
   color: var(--dh-success);
+  /* Cost badge only on hover (spec): revealed on row hover/focus like the other
+     hover-only affordances (chord hint, tab close), quiet until you look at the row. */
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.dh-scard:hover .dh-scard-cost,
+.dh-scard:focus-within .dh-scard-cost,
+.dh-scard--selected .dh-scard-cost {
+  opacity: 1;
 }
 .dh-spill {
   flex-shrink: 0;
@@ -967,7 +984,7 @@ button.dh-sgroup-head:focus-visible {
 }
 .dh-srowc--selected {
   background: var(--dh-selected);
-  border-left-color: var(--accent);
+  border-left-color: var(--dh-coral);
 }
 .dh-srowc:focus-visible {
   outline: 2px solid var(--dh-focus);
@@ -1126,6 +1143,9 @@ html[data-reduce-motion="true"] .dh-panel,
   height: 34px;
   max-width: 230px;
   min-width: 120px;
+  /* Never shrink a tab below its ~120px min — the `.dh-chattabs-scroll` strip
+     scrolls the overflow instead of squeezing every tab to an unreadable sliver. */
+  flex-shrink: 0;
   padding-right: 4px;
   border-radius: 9px 9px 0 0;
   background: transparent;
@@ -2541,6 +2561,14 @@ html[data-reduce-motion="true"] {
   color: var(--dh-text);
   font-size: 14px;
   line-height: 22px;
+  /* Subtle glass bubble (§3.3) — the quiet counterpart to the vibrant user bubble:
+     a near-transparent chat-AI fill + the glass border, mirrored radius (open at
+     the top-left where the who-line sits). Kept deliberately faint so prose still
+     reads as the narrative, not a heavy card. */
+  background: var(--dh-chat-ai-bubble);
+  border: 1px solid var(--dh-glass-border);
+  border-radius: 5px 15px 15px 15px;
+  padding: 8px 12px;
 }
 
 /* User content: the one surfaced right-aligned bubble, capped at the measured max.

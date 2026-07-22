@@ -47,7 +47,7 @@ export const SHELL_GEOMETRY = Object.freeze({
   inspectorTopGutter: 12,
   inspectorRightGutter: 16,
   inspectorRadius: 16,
-  composerRadius: 21,
+  composerRadius: 16,
   shellGutter: 16,
   // Two-line session row (§3.1): 248 wide inside the 272 panel, 44 tall (was 256x30).
   selectedRowWidth: 248,

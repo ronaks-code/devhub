@@ -653,13 +653,19 @@ export function Sidebar({
                 <span>{`${spend.month ?? ""} spend $${spend.monthToDateUsd.toFixed(0)}`.trim()}</span>
                 {spend.monthlyBudgetUsd ? <span>{`/ $${spend.monthlyBudgetUsd.toFixed(0)}`}</span> : null}
               </div>
-              <div className="dh-spend-bar">
-                <span
-                  className="dh-spend-fill"
-                  data-alert={spend.alert ?? "none"}
-                  style={{ width: `${spendPct ?? 0}%` }}
-                />
-              </div>
+              {/* Only a real budget CAP makes a fill % meaningful. With no cap,
+                  `spendPct` is null and a 0%-fill bar read as broken (QA) — same
+                  principle as the spend-ring: no cap → no bar, the absolute spend
+                  label above still carries the number. */}
+              {spendPct !== null ? (
+                <div className="dh-spend-bar">
+                  <span
+                    className="dh-spend-fill"
+                    data-alert={spend.alert ?? "none"}
+                    style={{ width: `${spendPct}%` }}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

@@ -312,6 +312,15 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
                 </span>
               </div>
               <div className="dh-nums flex items-center gap-1.5 pl-[18px] text-[color:var(--dh-text-dim)]">
+                {/* Provider label per spec (swatch · model · provider · $amt · pct),
+                    derived from the model id. Skipped for the unknown/"Other" bucket
+                    so a real provider is never guessed. */}
+                {provider !== "unknown" ? (
+                  <>
+                    <span className="tracking-[0.06em] text-[color:var(--dh-text-muted)]">{provider}</span>
+                    <span aria-hidden>·</span>
+                  </>
+                ) : null}
                 <span className="text-[color:var(--dh-text-muted)]">{formatModelCost(m.costUsd)}</span>
                 <span aria-hidden>·</span>
                 <span>{Math.round((m.costUsd / total) * 100)}%</span>
@@ -596,7 +605,10 @@ function DashboardBody({
             <CardHead icon={<FolderGit2 className="h-3.5 w-3.5" />} title="Project leaderboard" scope="ALL-TIME" />
             {stats.topProjects.length > 0 ? (
               <div className="flex flex-col gap-2.5">
-                {stats.topProjects.map((p) => (
+                {/* Rank by SPEND (the prominent violet cost figure), not tokens —
+                    the row reads as a cost leaderboard, so it sorts by cost desc.
+                    Bar width still scales on tokens; costUsd===0 ("—") sinks last. */}
+                {[...stats.topProjects].sort((a, b) => b.costUsd - a.costUsd).map((p) => (
                   <div key={p.projectId} className="flex flex-col gap-1">
                     <div className="flex items-baseline justify-between gap-3 text-[12px]">
                       <span className="min-w-0 truncate font-medium text-[color:var(--dh-text)]">{p.name}</span>

@@ -115,7 +115,7 @@ export const THREAD_GEOMETRY = Object.freeze({
   composerWidth: 736,
   composerHeight: 98,
   composerBottomGutter: 16,
-  composerRadius: 21,
+  composerRadius: 16,
   userBubbleMax: 566,
 } as const);
 

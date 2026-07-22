@@ -265,6 +265,10 @@ function isHarnessInternalUserText(text: string): boolean {
 function harnessInternalUserLabel(text: string): string | null {
   const t = text.trimStart();
   if (t.startsWith("<task-notification")) return "Task update";
+  // A `<teammate-message teammate_id=…>{…}</teammate-message>` wrapper is another
+  // harness-appended envelope on a user-role message (agent-to-agent traffic), not
+  // something the human typed — collapse it to a labelled raw row, not a "You" bubble.
+  if (t.startsWith("<teammate-message")) return "Agent message";
   if (t.startsWith("[Image: original ")) return "Image (scaled for display)";
   if (/^\[image\]$/i.test(t)) return "Image";
   if (/^\[attachment\]/i.test(t)) return "Attachment";

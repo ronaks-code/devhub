@@ -683,9 +683,14 @@ export function BlueprintOffice({
   // Keyboard nav (§3.5): h/l cycle rooms, j/k cycle desks in the focused room,
   // ⏎ opens the inspector, z zooms to the focused room. The focus is VISIBLE:
   // the focused room gets a dashed outline, the focused desk the selection dash.
-  const [kb, setKb] = useState<{ room: number; desk: number | null } | null>(null);
-  const kbRoom = kb && kb.room < plan.rooms.length ? plan.rooms[kb.room] ?? null : null;
-  const kbAgent = kbRoom && kb?.desk != null ? kbRoom.agents[kb.desk] ?? null : null;
+  // Focus is keyed to stable room/agent IDS, not array indices: the demo world
+  // reshuffles every few seconds, so an index-keyed focus would silently jump to
+  // whatever room/agent later lands in that slot (focus changing identity behind
+  // the user's back). Tracking ids keeps focus on the SAME room/desk across
+  // reshuffles, and cleanly clears if the focused target disappears.
+  const [kb, setKb] = useState<{ roomId: string; agentId: string | null } | null>(null);
+  const kbRoom = kb ? plan.rooms.find((r) => r.room.id === kb.roomId) ?? null : null;
+  const kbAgent = kbRoom && kb?.agentId ? kbRoom.agents.find((a) => a.id === kb.agentId) ?? null : null;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -697,18 +702,22 @@ export function BlueprintOffice({
       if (e.key === "h" || e.key === "l") {
         e.preventDefault();
         const dir = e.key === "l" ? 1 : -1;
-        setKb((f) =>
-          f ? { room: (f.room + dir + nRooms) % nRooms, desk: null } : { room: dir === 1 ? 0 : nRooms - 1, desk: null },
-        );
+        setKb((f) => {
+          const cur = f ? plan.rooms.findIndex((r) => r.room.id === f.roomId) : -1;
+          const nextIdx = cur < 0 ? (dir === 1 ? 0 : nRooms - 1) : (cur + dir + nRooms) % nRooms;
+          return { roomId: plan.rooms[nextIdx]!.room.id, agentId: null };
+        });
       } else if (e.key === "j" || e.key === "k") {
         e.preventDefault();
         const dir = e.key === "j" ? 1 : -1;
         setKb((f) => {
-          const room = Math.min(f?.room ?? 0, nRooms - 1);
-          const n = plan.rooms[room]?.agents.length ?? 0;
-          if (!n) return { room, desk: null };
-          const desk = f?.desk == null ? (dir === 1 ? 0 : n - 1) : (f.desk + dir + n) % n;
-          return { room, desk };
+          const roomIdx = f ? Math.max(plan.rooms.findIndex((r) => r.room.id === f.roomId), 0) : 0;
+          const room = plan.rooms[roomIdx]!;
+          const agents = room.agents;
+          if (!agents.length) return { roomId: room.room.id, agentId: null };
+          const cur = f?.agentId ? agents.findIndex((a) => a.id === f.agentId) : -1;
+          const nextIdx = cur < 0 ? (dir === 1 ? 0 : agents.length - 1) : (cur + dir + agents.length) % agents.length;
+          return { roomId: room.room.id, agentId: agents[nextIdx]!.id };
         });
       } else if (e.key === "Enter") {
         // A DOM-focused desk glyph already handles its own Enter.
@@ -720,7 +729,7 @@ export function BlueprintOffice({
         e.preventDefault();
         const room = kbRoom ?? plan.rooms[0];
         if (!room) return;
-        if (!kbRoom) setKb({ room: 0, desk: null });
+        if (!kbRoom) setKb({ roomId: room.room.id, agentId: null });
         const m = 28; // plan-unit margin around the zoomed room
         const zEff = Math.min(plan.width / (room.w + m * 2), plan.height / (room.h + m * 2));
         setZoom(clampN(zEff / baseZoom, 1, MAX_ZOOM));
@@ -934,8 +943,20 @@ export function BlueprintOffice({
           </div>
         </div>
 
-        {/* Legend. */}
-        <div className="dh-mono-ui absolute bottom-3 left-3 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[9px] text-[var(--dh-text-dim)]">
+        {/* Legend. Sits over the drafting sheet, so it carries the same
+            translucent glass backing as the corner stamp — otherwise, when the
+            legibility floor crops the sheet, its bare text collides illegibly
+            with the desk callouts underneath. The max-width keeps it from
+            running under the bottom-right stamp on a narrow pane. */}
+        <div
+          className="dh-mono-ui absolute bottom-3 left-3 z-10 flex max-w-[calc(100%-15.5rem)] flex-wrap items-center gap-x-4 gap-y-1 rounded-[6px] border px-2.5 py-1.5 text-[9px] text-[var(--dh-text-dim)]"
+          style={{
+            borderColor: "var(--dh-glass-border)",
+            background: "var(--dh-glass-chrome-bg)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
+          }}
+        >
           <span className="inline-flex items-center gap-1.5">
             <span className="h-2 w-2 rounded-[2px] bg-[var(--dh-brand)]" /> ACTIVE
           </span>

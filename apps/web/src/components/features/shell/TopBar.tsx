@@ -311,7 +311,7 @@ export function TopBar({
        * TOP_BAR_SECONDARY_CLASS; Settings is always present (also on the rail, but
        * the header instance must never vanish).
        */}
-      <div className="flex shrink-0 items-center gap-3">
+      <div data-tauri-drag-region className="flex shrink-0 items-center gap-3">
         <button
           onClick={onOpenSearch}
           className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
@@ -358,6 +358,7 @@ export function TopBar({
             with no tabs it shows at ≥1360 as before. Spend/counts also live in the
             StatusBar and theme in Settings, so nothing is lost when it condenses. */}
         <div
+          data-tauri-drag-region
           className={
             (chatTabs?.length ?? 0) > 0
               ? TOP_BAR_SECONDARY_CLASS.replace("min-[1360px]:flex", "min-[1560px]:flex")

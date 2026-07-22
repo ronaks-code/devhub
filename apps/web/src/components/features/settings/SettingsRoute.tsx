@@ -756,7 +756,7 @@ export function SettingsRoute({
   // The SecondaryNav text strip that used to wrap this route is GONE (Aurora
   // shell QA F2/M9): it duplicated icon-rail destinations with unwired links.
   return (
-      <div className="dh-settings-route" data-dh-settings-route="">
+      <div className="dh-aurora-bg--soft dh-settings-route" data-dh-settings-route="">
         <header className="dh-settings-header">
           <h1 className="dh-settings-title">Settings</h1>
           <input
