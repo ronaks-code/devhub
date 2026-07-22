@@ -6,6 +6,7 @@ import type { RunningSession, SessionSummary } from "../lib/types";
 import { api, tailSession } from "../lib/api";
 import { openChat, type ChatConn } from "../lib/ws";
 import { LiveBubble, LiveStream } from "./LiveBubble";
+import { Markdown } from "./Markdown";
 import { cn } from "../lib/utils";
 import { EmptyState, IconButton, Spinner } from "./ui";
 import { indexSessions, lastSegment, resolveOpsTitle } from "./features/ops/opsHelpers";
@@ -266,8 +267,23 @@ function SessionPanel({
         {liveActive ? (
           <LiveBubble stream={liveStreamRef.current} />
         ) : lastText ? (
-          <div className="whitespace-pre-wrap break-words px-3 py-2.5 text-zinc-300">
-            {lastText.length > 1200 ? `${lastText.slice(0, 1200)}…` : lastText}
+          // Render the finalized answer as markdown (was raw text, so `**bold**`,
+          // `## heads`, backticks and `|---|` tables leaked as literal syntax — QA
+          // MAJOR). Cap the preview and, when truncated, fade the bottom via a mask
+          // (theme-agnostic, unlike a color gradient) to signal "more" instead of a
+          // hard mid-sentence "…".
+          <div
+            className="break-words px-3 py-2.5 text-zinc-300"
+            style={
+              lastText.length > 1500
+                ? {
+                    maskImage: "linear-gradient(to bottom, #000 78%, transparent)",
+                    WebkitMaskImage: "linear-gradient(to bottom, #000 78%, transparent)",
+                  }
+                : undefined
+            }
+          >
+            <Markdown text={lastText.length > 1500 ? lastText.slice(0, 1500) : lastText} />
           </div>
         ) : (
           <div className="flex h-full items-center justify-center px-4 text-center text-[11px] text-zinc-600">

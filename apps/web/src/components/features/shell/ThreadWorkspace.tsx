@@ -362,6 +362,13 @@ export interface ThreadWorkspaceProps {
   onLoadOlder?: () => void;
   /** True while a load-older fetch is in flight — disables the banner button. */
   loadingOlder?: boolean;
+  /**
+   * Optional content shown, centered, when the transcript is empty. A caller passes
+   * this ONLY for a brand-new chat (an inviting "describe what you want" prompt) so
+   * the core action feels intentional (QA MAJOR: new-chat was a full blank void). A
+   * resumed-but-empty task omits it and keeps the deliberate blank canvas.
+   */
+  emptyState?: ReactNode;
 }
 
 /**
@@ -432,6 +439,7 @@ export function ThreadWorkspace({
   truncatedFromStart = false,
   onLoadOlder,
   loadingOlder = false,
+  emptyState,
 }: ThreadWorkspaceProps) {
   const isEmpty = items.length === 0;
   // The native-scroll transcript container (`overflow-y: auto`, never a shadcn
@@ -510,9 +518,20 @@ export function ThreadWorkspace({
         data-dh-transcript=""
         data-dh-transcript-width={THREAD_GEOMETRY.transcriptWidth}
       >
-        {/* Empty existing task: a blank canvas with ZERO children/SVG/hero. The region
-            element exists (so layout holds) but renders no content. */}
-        {isEmpty ? null : (
+        {/* Empty task: a resumed-but-empty session keeps a blank canvas (ZERO
+            children/SVG/hero) — the region element exists so layout holds. A NEW
+            chat instead centers the caller's inviting `emptyState` so the core
+            action isn't a blank void (QA MAJOR). */}
+        {isEmpty ? (
+          emptyState ? (
+            <div
+              className="flex h-full items-center justify-center px-6"
+              data-dh-thread-empty=""
+            >
+              {emptyState}
+            </div>
+          ) : null
+        ) : (
           <ol
             role="list"
             className="dh-thread-items"

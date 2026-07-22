@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
 import type { PermissionMode } from "@devhub/engine/driver";
 import type { NormalizedMessage } from "../../../lib/types.js";
 import { openChat, type ChatConn } from "../../../lib/ws.js";
@@ -266,6 +267,28 @@ export function ChatHost({
           truncatedFromStart={historyTruncated}
           onLoadOlder={loadOlderHistory}
           loadingOlder={loadingOlder}
+          emptyState={
+            // Only for a brand-new chat (no resumed session, nothing sent yet):
+            // an inviting prompt instead of a blank void (QA MAJOR). A resumed
+            // session that happens to be empty keeps the deliberate blank canvas.
+            !initialSessionId && messages.length === 0 ? (
+              <div className="max-w-md text-center">
+                <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-[var(--dh-brand)]/12 ring-1 ring-[var(--dh-glass-border)]">
+                  <Sparkles className="h-5 w-5 text-[var(--dh-text-muted)]" />
+                </div>
+                <h2 className="text-[15px] font-semibold text-[var(--dh-text-strong)]">
+                  Start a new chat
+                </h2>
+                <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--dh-text-muted)]">
+                  Describe the outcome or change you want. Claude runs in{" "}
+                  <span className="font-mono text-[var(--dh-text)]">{cwd}</span>.
+                </p>
+                <p className="mt-3 text-[11px] text-[var(--dh-text-disabled)]">
+                  Type below to begin, or press ⌘K to search past sessions.
+                </p>
+              </div>
+            ) : undefined
+          }
           composerSlot={
             <Composer
               provider="anthropic"

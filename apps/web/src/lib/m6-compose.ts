@@ -227,7 +227,15 @@ export function buildEnvironmentSummary(
  * aggregated file changes; empty in → empty out (the dock shows `No changes`).
  */
 export function buildChangedFiles(fileChanges: readonly FileChangeLike[]): InspectorChangedFile[] {
-  return fileChanges.map((c) => ({ path: c.filePath, added: c.added, removed: c.removed }));
+  // Defensive trailing-slash strip: files are never directories, and a spurious
+  // trailing `/` from some tool inputs read as an error in the dock ("FleetScreen
+  // .tsx/") — guaranteed clean here regardless of the source's own normalization
+  // (QA minor).
+  return fileChanges.map((c) => ({
+    path: c.filePath.replace(/\/+$/, ""),
+    added: c.added,
+    removed: c.removed,
+  }));
 }
 
 /**
