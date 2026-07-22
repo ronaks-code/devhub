@@ -1649,6 +1649,10 @@ html[data-reduce-motion="true"] .dh-statusbar,
 .dh-header {
   height: var(--dh-header-height);
   flex-shrink: 0;
+  /* Constrain to the frame's width so the header's own flex-1 middle absorbs
+     horizontal squeeze instead of the row growing to its content width and
+     pushing the right-hand controls off-canvas (QA BLOCKER: header overflow). */
+  min-width: 0;
   display: flex;
   align-items: center;
   padding: 0 var(--dh-shell-gutter);

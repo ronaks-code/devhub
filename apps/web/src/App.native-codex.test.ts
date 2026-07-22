@@ -271,8 +271,11 @@ describe("App native Codex shell gate", () => {
   });
 
   it("keeps secondary header utilities out of the minimum-width layout", () => {
+    // Revealed at ≥1360px, not `lg`/`xl`: the spend/count cluster only fits once
+    // the 324px rail leaves enough frame width, else it overflowed the Settings
+    // gear off-canvas (QA BLOCKER — see TopBar.tsx TOP_BAR_SECONDARY_CLASS).
     expect(TOP_BAR_SECONDARY_CLASS.split(/\s+/)).toContain("hidden");
-    expect(TOP_BAR_SECONDARY_CLASS.split(/\s+/)).toContain("lg:flex");
+    expect(TOP_BAR_SECONDARY_CLASS.split(/\s+/)).toContain("min-[1360px]:flex");
     expect(TOP_BAR_SECONDARY_CLASS.split(/\s+/)).not.toContain("flex");
   });
 

@@ -44,8 +44,16 @@ export function navigationAriaCurrent(active: boolean): "page" | undefined {
 // to zinc-400 (#a1a1aa, the palette's next step up, already the app's
 // `--text-muted` token) which clears 4.5:1 on both surfaces with the
 // smallest available visual diff.
+// No `ml-auto` here: the cluster now sits inside the shrink-0 right group, which
+// the flex-1 middle spacer already pushes to the row's right edge (see TopBar).
+// Revealed at ≥1360px, NOT `lg`/`xl`: with the cluster shown the right group is
+// ~728px, so left(180) + right(728) + padding ≈ 964px of un-shrinkable content
+// only fits once the 324px rail leaves that much frame — measured to need a
+// ~1360px viewport (≈40px margin). At lower breakpoints the gear overflowed the
+// viewport with no scrollbar (QA BLOCKER). Below 1360 the cluster condenses away;
+// the spend/counts also live in the StatusBar, so nothing is lost.
 export const TOP_BAR_SECONDARY_CLASS =
-  "ml-auto hidden items-center gap-3 text-[11px] text-zinc-400 lg:flex";
+  "hidden items-center gap-3 text-[11px] text-zinc-400 min-[1360px]:flex";
 
 /**
  * A small "Recent" jump-back dropdown in the header: the last sessions the user
@@ -222,9 +230,9 @@ export function TopBar({
   return (
     <header
       data-tauri-drag-region
-      className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
+      className="flex h-11 w-full min-w-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
     >
-      <div className="flex items-center gap-2" data-tauri-drag-region>
+      <div className="flex shrink-0 items-center gap-2" data-tauri-drag-region>
         <DeckMark size={18} className="shrink-0" />
         {projectName ? (
           <span className="flex items-center gap-1.5 text-sm" data-tauri-drag-region>
@@ -237,136 +245,150 @@ export function TopBar({
         )}
       </div>
 
-      {chatTabs && chatTabs.length > 0 && onSelectTab && onCloseTab && onNewTab ? (
-        <ChatTabs
-          tabs={chatTabs}
-          activeTabId={activeTabId}
-          onSelect={onSelectTab}
-          onClose={onCloseTab}
-          onNew={onNewTab}
-        />
-      ) : null}
-
-      <button
-        onClick={onOpenSearch}
-        className="ml-3 inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-        title="Search sessions (⌘K)"
-      >
-        <Search className="h-3.5 w-3.5" />
-        <span>Search</span>
-        <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘K</kbd>
-      </button>
-
-      <button
-        onClick={onOpenCommands}
-        className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-        title="Command palette (⌘⇧P)"
-        aria-label="Command palette (⌘⇧P)"
-      >
-        <CommandIcon className="h-3.5 w-3.5" />
-        <kbd className="rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400">⌘⇧P</kbd>
-      </button>
-
-      {workModeAvailable ? (
-        <button
-          ref={workModeTriggerRef}
-          type="button"
-          onClick={onToggleWorkMode}
-          aria-label="Work mode"
-          aria-expanded={workModeOpen}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            workModeOpen
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-        >
-          <Folder className="h-3.5 w-3.5" />
-          Work
-        </button>
-      ) : null}
-
-      <div className={TOP_BAR_SECONDARY_CLASS}>
-        {/* Perf / reduced-motion toggle. Auto follows the OS until the first
-            click, then each click flips the effective state; tinted clay
-            while motion is being suppressed so the active state reads at a glance. */}
-        <button
-          onClick={onCyclePerf}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-            perfReduced
-              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-              : "text-zinc-400 hover:text-zinc-300",
-          )}
-          title={PERF_META[perfPreference].title}
-          aria-label={PERF_META[perfPreference].label}
-          aria-pressed={perfReduced}
-        >
-          {perfReduced ? <Zap className="h-4 w-4" /> : <Gauge className="h-4 w-4" />}
-        </button>
-        {/* Theme toggle: cycles dark → light → system (system follows the OS),
-            persisted in localStorage and applied via data-theme on <html>. */}
-        <ThemeSwitcher
-          preference={themePreference}
-          theme={theme}
-          onCycle={onCycleTheme}
-        />
-        {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
-        <button
-          onClick={onOpenShortcuts}
-          className="rounded-md p-1 text-zinc-400 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
-          title="Keyboard shortcuts (?)"
-          aria-label="Keyboard shortcuts"
-        >
-          <Keyboard className="h-4 w-4" />
-        </button>
-        <RecentMenu
-          recents={recents}
-          onOpen={onOpenRecent}
-          onClear={onClearRecents}
-          onBeforeOpen={onBeforeOpenRecent}
-        />
-        {/* Running total of the active project's loaded-session spend (est.). */}
-        <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
-        {progress ? (
-          <span className="flex items-center gap-1.5 text-clay-300">
-            <Spinner className="h-3 w-3" />
-            indexing {progress.done}/{progress.total}
-          </span>
-        ) : (
-          <span>{sessionCount.toLocaleString()} sessions</span>
-        )}
-        <span>·</span>
-        <span>{projectCount} projects</span>
-        {/* Clear the saved remote-access token. Self-hides when none is stored
-            (the local default), so it never appears in an un-gated session. */}
-        <LogoutButton />
-      </div>
       {/*
-       * Settings lives OUTSIDE the `lg:flex`-gated secondary cluster (unlike
-       * perf/theme/shortcuts/recent/spend/counts, which are fine to condense
-       * away below 1024px — Settings is also reachable from the icon rail, but
-       * it shouldn't be TopBar-only-and-then-vanish). `ml-auto` here is inert
-       * once the secondary cluster's own `ml-auto` has already claimed the row's
-       * free space (≥1024px); below that the cluster is `hidden` and out of
-       * flow, so this becomes the row's sole right-pushed item (QA: gear was
-       * unreachable from the TopBar below ~1024px).
+       * Flexible middle. The Conductor-style tab strip lives here and is the ONLY
+       * zone allowed to absorb horizontal squeeze — `min-w-0` lets it shrink below
+       * its natural width and ChatTabs' own `dh-chattabs-scroll` scrolls the
+       * overflow. Rendered even with no tabs so it always acts as the flex spacer
+       * that right-aligns the controls below. This is what stops the right-hand
+       * controls (spend badge + Settings gear) from being pushed off-canvas with
+       * no scrollbar to recover them (QA BLOCKER: header overflow at 600–1494px).
        */}
-      <button
-        type="button"
-        onClick={() => onTab("settings")}
-        aria-current={navigationAriaCurrent(tab === "settings")}
-        className={cn(
-          "ml-auto rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
-          tab === "settings"
-            ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
-            : "text-zinc-400 hover:text-zinc-300",
-        )}
-        title="Settings"
-        aria-label="Settings"
-      >
-        <Settings className="h-4 w-4" />
-      </button>
+      <div className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {chatTabs && chatTabs.length > 0 && onSelectTab && onCloseTab && onNewTab ? (
+          <ChatTabs
+            tabs={chatTabs}
+            activeTabId={activeTabId}
+            onSelect={onSelectTab}
+            onClose={onCloseTab}
+            onNew={onNewTab}
+          />
+        ) : null}
+      </div>
+
+      {/*
+       * Right controls — `shrink-0` so they stay fully visible at every width.
+       * Search / command / work are always shown; the perf/theme/shortcuts/recent/
+       * spend/count cluster still condenses away below `lg` (1024px) via
+       * TOP_BAR_SECONDARY_CLASS; Settings is always present (also on the rail, but
+       * the header instance must never vanish).
+       */}
+      <div className="flex shrink-0 items-center gap-3">
+        <button
+          onClick={onOpenSearch}
+          className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+          title="Search sessions (⌘K)"
+        >
+          <Search className="h-3.5 w-3.5" />
+          <span className="hidden sm:inline">Search</span>
+          <kbd className="hidden rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400 sm:inline">⌘K</kbd>
+        </button>
+
+        <button
+          onClick={onOpenCommands}
+          className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+          title="Command palette (⌘⇧P)"
+          aria-label="Command palette (⌘⇧P)"
+        >
+          <CommandIcon className="h-3.5 w-3.5" />
+          <kbd className="hidden rounded bg-zinc-800 px-1 py-0.5 text-[10px] text-zinc-400 sm:inline">⌘⇧P</kbd>
+        </button>
+
+        {workModeAvailable ? (
+          <button
+            ref={workModeTriggerRef}
+            type="button"
+            onClick={onToggleWorkMode}
+            aria-label="Work mode"
+            aria-expanded={workModeOpen}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+              workModeOpen
+                ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                : "text-zinc-400 hover:text-zinc-300",
+            )}
+          >
+            <Folder className="h-3.5 w-3.5" />
+            Work
+          </button>
+        ) : null}
+
+        <div className={TOP_BAR_SECONDARY_CLASS}>
+          {/* Perf / reduced-motion toggle. Auto follows the OS until the first
+              click, then each click flips the effective state; tinted clay
+              while motion is being suppressed so the active state reads at a glance. */}
+          <button
+            onClick={onCyclePerf}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+              perfReduced
+                ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+                : "text-zinc-400 hover:text-zinc-300",
+            )}
+            title={PERF_META[perfPreference].title}
+            aria-label={PERF_META[perfPreference].label}
+            aria-pressed={perfReduced}
+          >
+            {perfReduced ? <Zap className="h-4 w-4" /> : <Gauge className="h-4 w-4" />}
+          </button>
+          {/* Theme toggle: cycles dark → light → system (system follows the OS),
+              persisted in localStorage and applied via data-theme on <html>. */}
+          <ThemeSwitcher
+            preference={themePreference}
+            theme={theme}
+            onCycle={onCycleTheme}
+          />
+          {/* Keyboard-shortcut cheat-sheet (also opens with "?"). */}
+          <button
+            onClick={onOpenShortcuts}
+            className="rounded-md p-1 text-zinc-400 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
+            title="Keyboard shortcuts (?)"
+            aria-label="Keyboard shortcuts"
+          >
+            <Keyboard className="h-4 w-4" />
+          </button>
+          <RecentMenu
+            recents={recents}
+            onOpen={onOpenRecent}
+            onClear={onClearRecents}
+            onBeforeOpen={onBeforeOpenRecent}
+          />
+          {/* Running total of the active project's loaded-session spend (est.). */}
+          <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
+          {progress ? (
+            <span className="flex items-center gap-1.5 text-clay-300">
+              <Spinner className="h-3 w-3" />
+              indexing {progress.done}/{progress.total}
+            </span>
+          ) : (
+            <span>{sessionCount.toLocaleString()} sessions</span>
+          )}
+          <span>·</span>
+          <span>{projectCount} projects</span>
+          {/* Clear the saved remote-access token. Self-hides when none is stored
+              (the local default), so it never appears in an un-gated session. */}
+          <LogoutButton />
+        </div>
+
+        {/* Settings — always visible (also on the icon rail, but the header
+            instance must not vanish). No `ml-auto`: the flex-1 middle spacer
+            already right-aligns this whole group. */}
+        <button
+          type="button"
+          onClick={() => onTab("settings")}
+          aria-current={navigationAriaCurrent(tab === "settings")}
+          className={cn(
+            "rounded-md p-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
+            tab === "settings"
+              ? "bg-clay-500/15 text-clay-300 ring-1 ring-clay-500/30"
+              : "text-zinc-400 hover:text-zinc-300",
+          )}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+      </div>
     </header>
   );
 }
