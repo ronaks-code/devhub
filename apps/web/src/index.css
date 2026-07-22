@@ -384,6 +384,30 @@ kbd {
   color: #8fe6bf;
   background: rgba(79, 214, 164, 0.12);
 }
+/* Light-theme text pairs for the two chips above — the pale dark-theme literals
+   (#ffab9d, #8fe6bf) sit around 1.5-1.8:1 on white. Darkened siblings keep the
+   coral/mint identity while clearing 4.5:1 on the same soft tinted background. */
+:root[data-theme="light"] .dh-provider-chip--anthropic {
+  color: #b3402b;
+}
+:root[data-theme="light"] .dh-provider-chip--openai {
+  color: #0f7a51;
+}
+
+/* Text-only siblings for the "Claude"/"Codex" word badges in HomePane's Recent
+   Activity row (bg stays the Tailwind bg-[#ff7f6e]/15 / bg-sky-500/15 tint). */
+.dh-badge-text-anthropic {
+  color: #ffab9d;
+}
+.dh-badge-text-openai {
+  color: #7dd3fc; /* sky-300 */
+}
+:root[data-theme="light"] .dh-badge-text-anthropic {
+  color: #b3402b; /* darkened coral, ~5:1 on white */
+}
+:root[data-theme="light"] .dh-badge-text-openai {
+  color: #0369a1; /* sky-700, ~5.9:1 on white */
+}
 
 /* Typographic role helpers (§1.1D) — roles that need more than the font shorthand. */
 .dh-label {
@@ -631,19 +655,29 @@ kbd {
 
 .dh-filter-chips {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  flex-wrap: nowrap;
+  gap: 3px;
   padding: 0 12px 8px;
+  /* At 1280px the 272px sidebar is tight for 5 chips ("Codex" used to orphan
+     onto its own line). Tightened gap/padding fit one line at that width;
+     scroll is the fallback for anything narrower rather than wrapping. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.dh-filter-chips::-webkit-scrollbar {
+  display: none;
 }
 .dh-chip {
   border: 1px solid transparent;
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 2px 7px;
   font-size: 9.5px;
   font-weight: 600;
   color: var(--dh-text-muted);
   background: transparent;
   cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .dh-chip:hover {
   color: var(--dh-text);
@@ -1101,6 +1135,12 @@ html[data-reduce-motion="true"] .dh-panel,
   height: 26px;
   flex-shrink: 0;
   background: var(--dh-glass-chrome-bg);
+  /* backdrop-filter promotes this to its own compositing layer, which can hold
+     onto the old paint for a frame or two after a live dark<->light toggle
+     flips --dh-glass-chrome-bg (no re-render triggers it, just the CSS var).
+     A transition forces the compositor to repaint the layer on the change
+     instead of waiting for an unrelated invalidation. */
+  transition: background-color 120ms ease;
   backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
   -webkit-backdrop-filter: blur(var(--dh-glass-chrome-blur)) saturate(1.2);
   border-top: 1px solid var(--dh-glass-border);

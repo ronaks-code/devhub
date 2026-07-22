@@ -165,12 +165,15 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                         <Cpu className="h-4 w-4 shrink-0 text-sky-400" />
                       )}
 
-                      {/* Tool badge */}
+                      {/* Tool badge. Bg stays the soft coral/sky tint in both
+                          themes; text color swaps to a light-theme variant via
+                          dh-badge-text-* (see index.css) so it stays legible on
+                          white — the pale dark-theme literals are ~1.5-1.8:1. */}
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           isClaude
-                            ? "bg-[#ff7f6e]/15 text-[#ffab9d]"
-                            : "bg-sky-500/15 text-sky-300"
+                            ? "bg-[#ff7f6e]/15 dh-badge-text-anthropic"
+                            : "bg-sky-500/15 dh-badge-text-openai"
                         }`}
                       >
                         {isClaude ? "Claude" : "Codex"}
