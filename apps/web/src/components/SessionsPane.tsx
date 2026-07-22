@@ -475,13 +475,13 @@ export function SessionsPane({
                       )}
                     </div>
                     <div className="mt-1 flex items-center gap-2.5 text-[10.5px] text-zinc-600">
-                      <span>{relativeTime(s.lastTimestamp)}</span>
-                      <span className="flex items-center gap-0.5">
+                      <span className="shrink-0">{relativeTime(s.lastTimestamp)}</span>
+                      <span className="flex shrink-0 items-center gap-0.5">
                         <MessageSquare className="h-3 w-3" />
                         {s.messageCount}
                       </span>
                       {totalTokens(s.usage) > 0 && (
-                        <span className="flex items-center gap-0.5">
+                        <span className="flex shrink-0 items-center gap-0.5">
                           <Coins className="h-3 w-3" />
                           {compactNumber(totalTokens(s.usage))}
                         </span>
@@ -491,17 +491,21 @@ export function SessionsPane({
                           Only shown once there's nonzero usage to price. */}
                       {totalTokens(s.usage) > 0 && (
                         <span
-                          className="flex items-center gap-0.5 text-emerald-500/80"
+                          className="flex shrink-0 items-center gap-0.5 text-emerald-500/80"
                           title="Approximate cost (estimated from list price)"
                         >
                           <DollarSign className="h-3 w-3" />
                           {formatUsd(costUsd(s.model, s.usage)).replace(/^\$/, "")}
                         </span>
                       )}
+                      {/* min-w-0 lets this item shrink within the row; truncate lives
+                          on the inner text span only, so the branch name gets a real
+                          ellipsis instead of a hard clip (a flex container can't apply
+                          text-overflow to its own children — it needs a block child). */}
                       {s.gitBranch ? (
-                        <span className="flex items-center gap-0.5 truncate">
-                          <GitBranch className="h-3 w-3" />
-                          {s.gitBranch}
+                        <span className="flex min-w-0 items-center gap-0.5" title={s.gitBranch}>
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{s.gitBranch}</span>
                         </span>
                       ) : null}
                     </div>

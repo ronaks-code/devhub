@@ -216,7 +216,7 @@ export function ArchiveTransfer({
             <select
               value={exportProjectId}
               onChange={(e) => setExportProjectId(e.target.value)}
-              className="rounded-lg bg-zinc-900 px-2.5 py-1.5 text-[13px] text-zinc-200 ring-1 ring-zinc-800 focus:outline-none focus:ring-clay-500/40"
+              className="dh-settings-select"
               aria-label="Scope the export to a project"
             >
               <option value="">All projects (full archive)</option>

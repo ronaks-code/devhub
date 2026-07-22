@@ -37,7 +37,7 @@ const COLS = 3; // rooms per building row
 const ROOM_W = 380;
 const PAD = 16; // room inner padding
 const HEADER_H = 50; // room label block
-const LINE_H = 13; // annotation line height
+const LINE_H = 15; // annotation line height (kept ahead of the m10 font-size bump below)
 const IDLE_COLS = 4; // idle desks per row inside a room
 const IDLE_BAY_W = (ROOM_W - PAD * 2) / IDLE_COLS;
 const IDLE_BAY_H = 60;
@@ -102,29 +102,34 @@ interface PlanLine {
   weight?: number;
 }
 
-/** The working-desk callout: only lines whose real field exists are emitted. */
+/** The working-desk callout: only lines whose real field exists are emitted.
+ *  Sizes are viewBox units, not screen px — at the default "fit whole plan"
+ *  zoom these get scaled down with everything else, so the floor here is
+ *  raised (was 9.5–11) and the clip widths pulled in to match, so the
+ *  now-wider glyphs still fit inside ROOM_W without spilling into the next
+ *  room. */
 function calloutLines(a: Agent, nowMs: number): PlanLine[] {
   const meta = statusMeta(a.status);
   const lines: PlanLine[] = [
-    { text: clip(a.name.toUpperCase(), 30), fill: "var(--dh-text-strong)", size: 11, weight: 700 },
+    { text: clip(a.name.toUpperCase(), 26), fill: "var(--dh-text-strong)", size: 13, weight: 700 },
   ];
   const provider = a.provider === "anthropic" ? "CLD" : a.provider === "openai" ? "CDX" : null;
   const idLine = [provider, a.model].filter(Boolean).join(" · ");
-  if (idLine) lines.push({ text: clip(idLine, 44), fill: "var(--dh-text-muted)", size: 9.5 });
+  if (idLine) lines.push({ text: clip(idLine, 38), fill: "var(--dh-text-muted)", size: 11 });
   const rt = runtime(a.startedAt, nowMs);
   const stat = [`${meta.glyph} ${meta.label}`];
   if (rt) stat.push(rt);
   if (a.costUsd != null) stat.push(`$${a.costUsd.toFixed(2)}`);
   if (a.tokens != null) stat.push(`${a.tokens.toLocaleString()} tk`);
-  lines.push({ text: clip(stat.join(" · "), 44), fill: meta.color, size: 9.5, weight: 600 });
-  if (a.assignment) lines.push({ text: clip(a.assignment, 44), fill: "var(--dh-text)", size: 10 });
+  lines.push({ text: clip(stat.join(" · "), 38), fill: meta.color, size: 11, weight: 600 });
+  if (a.assignment) lines.push({ text: clip(a.assignment, 38), fill: "var(--dh-text)", size: 11.5 });
   if (a.worktree)
     lines.push({
-      text: clip(`⎇ ${a.worktree}${a.diff ? ` · +${a.diff.add} −${a.diff.del}` : ""}`, 44),
+      text: clip(`⎇ ${a.worktree}${a.diff ? ` · +${a.diff.add} −${a.diff.del}` : ""}`, 38),
       fill: "var(--dh-link)",
-      size: 9.5,
+      size: 11,
     });
-  if (a.lastAction) lines.push({ text: clip(a.lastAction, 44), fill: "var(--dh-text-muted)", size: 9.5 });
+  if (a.lastAction) lines.push({ text: clip(a.lastAction, 38), fill: "var(--dh-text-muted)", size: 11 });
   return lines;
 }
 

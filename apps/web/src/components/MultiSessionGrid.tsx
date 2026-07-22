@@ -67,6 +67,7 @@ function GlassCard({
   const project = lastSegment(s.cwd);
   const canOpen = !!onOpen && !!s.sessionId;
   const duration = agoMs(s.startedAt, nowMs);
+  const silenceDuration = agoMs(s.statusUpdatedAt ?? s.updatedAt, nowMs);
   const footLabel = entry.branch ?? project;
 
   return (
@@ -100,7 +101,7 @@ function GlassCard({
 
       {/* Subline: project · status duration. */}
       <div className="dh-mono-ui truncate text-[var(--dh-text-muted)]">
-        {project} · {bucket === "needsYou" ? "waiting" : bucket === "stale" ? "silent" : bucket === "finished" ? "idle" : "running"} {duration}
+        {project} · {bucket === "needsYou" ? "waiting" : bucket === "stale" ? "silent" : bucket === "finished" ? "idle" : "running"} {bucket === "stale" ? silenceDuration : duration}
       </div>
 
       {/* Status banner — the loudest element on the card for anything needing eyes. */}
@@ -115,7 +116,7 @@ function GlassCard({
         <div className="flex items-center gap-1.5 rounded-[8px] bg-rose-500/12 px-2.5 py-1.5 text-[11.5px] text-rose-300 ring-1 ring-rose-500/25">
           <XCircle className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 truncate">
-            stale — busy but silent since {agoMs(s.statusUpdatedAt ?? s.updatedAt, nowMs)}
+            stale — busy but silent since {silenceDuration}
           </span>
         </div>
       ) : bucket === "finished" ? (
