@@ -92,6 +92,29 @@ fn finder_safe_path(inherited: Option<&OsStr>, home: Option<&Path>) -> OsString 
     std::env::join_paths(candidates).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
 }
 
+/// Locate a `node` binary across the paths a Finder-launched app can't see via
+/// its minimal PATH: arm64 Homebrew FIRST (this is an Apple Silicon default),
+/// then Intel Homebrew, then system dirs, then any `node` on the inherited PATH.
+/// Returns the first that exists. `DEVHUB_NODE_EXECUTABLE` overrides this entirely.
+/// (The old code hard-defaulted to the Intel `/usr/local/opt/node/bin/node`, which
+/// doesn't exist on an arm64 box after the Homebrew migration — the app crashed on
+/// launch with "Node executable is missing".)
+fn resolve_node_executable() -> Option<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from("/opt/homebrew/bin/node"),
+        PathBuf::from("/opt/homebrew/opt/node/bin/node"),
+        PathBuf::from("/usr/local/opt/node/bin/node"),
+        PathBuf::from("/usr/local/bin/node"),
+        PathBuf::from("/usr/bin/node"),
+    ];
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            candidates.push(dir.join("node"));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
 fn read_capped(stream: &mut TcpStream, cap: usize) -> Vec<u8> {
     let mut output = Vec::with_capacity(cap.min(4096));
     let mut chunk = [0_u8; 1024];
@@ -251,7 +274,12 @@ fn packaged_server_command(
 
     let node = std::env::var_os("DEVHUB_NODE_EXECUTABLE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/usr/local/opt/node/bin/node"));
+        .or_else(resolve_node_executable)
+        .ok_or_else(|| {
+            "Node executable not found — searched Homebrew (arm64 + Intel) and system \
+             locations plus PATH. Install Node or set DEVHUB_NODE_EXECUTABLE."
+                .to_string()
+        })?;
     if node.is_absolute() && !node.is_file() {
         return Err(format!("Node executable is missing: {}", node.display()));
     }
