@@ -71,7 +71,12 @@
  * per-file edits. Solid brand/status literals (clay-500, red-500, the -600s) are
  * untouched. New components still SHOULD prefer var(--bg)/--panel/--text.
  */
-:root,
+/* STANDALONE `:root[data-theme="dark"]` — exactly mirroring the surviving
+   `:root[data-theme="light"]` block below. The old selector grouped a bare `:root`
+   with the dark one (`:root, :root[data-theme="dark"]`); Tailwind v4/LightningCSS
+   treats the bare-`:root` half as a theme redefinition and DROPS the entire grouped
+   rule, so dark mode rendered leftover Tailwind default gray for every bg/text/
+   border-zinc-* utility (QA MAJOR). A standalone attribute-scoped rule is kept. */
 :root[data-theme="dark"] {
   --color-zinc-950: #131017; /* --bg (deep purple-charcoal void) */
   --color-zinc-900: #1a1521; /* --panel */
