@@ -107,6 +107,44 @@ function formatModelCost(n: number): string {
   return `$${Math.max(0, n).toFixed(2)}`;
 }
 
+/** True for a pseudo-model identifier that's internals, not a real billable
+ * model: the engine's own "unknown" bucket, or a bracket-wrapped marker like
+ * `<synthetic>`. No real model id looks like either shape, so this is a narrow
+ * rejection, never a guess about which name is "right" (QA m7). */
+function isPseudoModel(model: string): boolean {
+  const m = model.trim().toLowerCase();
+  return m === "unknown" || (m.startsWith("<") && m.endsWith(">"));
+}
+
+/**
+ * Merge pseudo-model rows into one honest "Other" slice (summed cost/tokens/
+ * sessions) instead of letting internals like "unknown"/"<synthetic>" leak into
+ * the donut legend as if they were models. Real rows pass through unchanged.
+ * Returns the raw pseudo names too, so the caller can still surface them in a
+ * tooltip rather than hiding them outright.
+ */
+function bucketPseudoModels(models: Stats["byModel"]): { rows: Stats["byModel"]; otherRawNames: string[] } {
+  const real: Stats["byModel"] = [];
+  const pseudo: Stats["byModel"] = [];
+  for (const m of models) {
+    (isPseudoModel(m.model) ? pseudo : real).push(m);
+  }
+  if (pseudo.length === 0) return { rows: real, otherRawNames: [] };
+  const merged = pseudo.reduce(
+    (acc, m) => ({ costUsd: acc.costUsd + m.costUsd, tokens: acc.tokens + m.tokens, sessions: acc.sessions + m.sessions }),
+    { costUsd: 0, tokens: 0, sessions: 0 },
+  );
+  return { rows: [...real, { model: "Other", ...merged }], otherRawNames: pseudo.map((m) => m.model) };
+}
+
+/** Trailing "-<2 hex chars>" machine/worktree suffix some running-session names
+ * carry (e.g. "00-6thsense-1e") — real identity, but noise on this glance card,
+ * which (unlike Live Ops) has no session index here to join a cleaner title
+ * from (QA m13). Only strips the exact pattern; never invents a name. */
+function dropMachineSuffix(name: string): string {
+  return name.replace(/-[0-9a-f]{2}$/i, "");
+}
+
 /** Map a running-session status to a dot/text color (violet-family, clay retired). */
 function statusColor(status: string): { dot: string; text: string } {
   const s = status.toLowerCase();
@@ -150,12 +188,21 @@ function RunningCard({ s }: { s: RunningSession }) {
   // D2: same fix as Ops Grid/Board/Drive — never trust a raw `name` that's really
   // a bare index; no session index is loaded here, so this only clears the "1"
   // case and falls back to the cwd basename (there's nothing richer to join to).
-  const project = resolveOpsTitle(s, undefined);
+  const rawTitle = resolveOpsTitle(s, undefined);
+  // The raw name can still carry a worktree/machine suffix resolveOpsTitle has
+  // no way to know about (QA m13) — drop it for display, keep the full value
+  // one hover away rather than silently discarding it.
+  const project = dropMachineSuffix(rawTitle);
   return (
     <div className="glass-card flex flex-col gap-2 p-3">
       <div className="flex items-center gap-2">
         <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100">{project}</span>
+        <span
+          className="min-w-0 flex-1 truncate text-[13px] font-medium text-zinc-100"
+          title={rawTitle !== project ? rawTitle : undefined}
+        >
+          {project}
+        </span>
         <span className={cn("text-[11px] font-medium capitalize", text)}>{s.status}</span>
       </div>
       {s.cwd ? (
@@ -209,7 +256,8 @@ function BudgetBar({ budget }: { budget: BudgetStatus }) {
 
 /** Cost-by-model conic donut (§3.6) over `stats.byModel`, cost-descending, with a legend. */
 function CostDonut({ models }: { models: Stats["byModel"] }) {
-  const withCost = [...models].filter((m) => m.costUsd > 0).sort((a, b) => b.costUsd - a.costUsd);
+  const { rows, otherRawNames } = bucketPseudoModels(models);
+  const withCost = rows.filter((m) => m.costUsd > 0).sort((a, b) => b.costUsd - a.costUsd);
   const total = withCost.reduce((n, m) => n + m.costUsd, 0);
 
   if (withCost.length === 0 || total <= 0) {
@@ -248,6 +296,9 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
               : provider === "openai"
                 ? "var(--dh-provider-openai)"
                 : "var(--dh-text-dim)";
+          // "Other" folds in the pseudo-model rows (QA m7) — keep the raw
+          // names one hover away instead of dropping them outright.
+          const title = m.model === "Other" && otherRawNames.length > 0 ? `Other (${otherRawNames.join(", ")})` : m.model;
           return (
             <li key={m.model} className="flex flex-col gap-0.5 text-[11px]">
               <div className="flex items-center gap-2">
@@ -256,7 +307,7 @@ function CostDonut({ models }: { models: Stats["byModel"] }) {
                   style={{ background: DONUT_PALETTE[i % DONUT_PALETTE.length] }}
                 />
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: providerDot }} title={provider} />
-                <span className="min-w-0 flex-1 truncate text-[color:var(--dh-text)]" title={m.model}>
+                <span className="min-w-0 flex-1 truncate text-[color:var(--dh-text)]" title={title}>
                   {m.model}
                 </span>
               </div>

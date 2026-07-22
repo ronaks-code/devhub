@@ -28,6 +28,31 @@ function utcDay(iso: string | null): string | null {
 const DRILL_FETCH_LIMIT = 500;
 
 /**
+ * Round a positive value UP to a "nice" axis number — 1/2/2.5/5/10 × 10^n — the
+ * standard d3-style axis-tick rounding. Used so the y-axis top reads "$5k"
+ * instead of the exact busiest day's cost, e.g. "$5273.70" (QA m9).
+ */
+function niceCeil(value: number): number {
+  if (value <= 0) return 0;
+  const exp = Math.floor(Math.log10(value));
+  const base = 10 ** exp;
+  const frac = value / base;
+  const nice = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 2.5 ? 2.5 : frac <= 5 ? 5 : 10;
+  return nice * base;
+}
+
+/** A nice axis value as a compact dollar figure — "$5k" / "$2.5k" / "$0" —
+ * never the raw decimals `formatUsd` uses for precise figures elsewhere. */
+function formatAxisUsd(n: number): string {
+  if (n <= 0) return "$0";
+  if (n >= 1000) {
+    const k = n / 1000;
+    return `$${k % 1 === 0 ? k.toFixed(0) : k.toFixed(1)}k`;
+  }
+  return `$${Math.round(n)}`;
+}
+
+/**
  * The usage-over-time bar chart for the Dashboard. Renders one bar per in-range
  * rolled-up day (oldest→newest), heights scaled to the period's busiest day. Each
  * bar is a focusable button: clicking it (or pressing Enter/Space while focused)
@@ -59,6 +84,7 @@ export function ActivityChart({
   // the card is titled "spend", but had no $ scale at all — just bars. Computed
   // from the real per-day cost, independent of the token-scaled bar heights.
   const maxCost = useMemo(() => Math.max(0, ...days.map((d) => d.costUsd)), [days]);
+  const axisMax = useMemo(() => niceCeil(maxCost), [maxCost]);
 
   return (
     <>
@@ -67,8 +93,8 @@ export function ActivityChart({
           className="flex h-full flex-col justify-between py-3 text-right text-[10px] leading-none tabular-nums text-zinc-600"
           aria-hidden
         >
-          <span>{formatUsd(maxCost)}</span>
-          <span>{formatUsd(maxCost / 2)}</span>
+          <span>{formatAxisUsd(axisMax)}</span>
+          <span>{formatAxisUsd(axisMax / 2)}</span>
           <span>$0</span>
         </div>
         <div className="flex h-full min-w-0 flex-1 items-end gap-0.5 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3">

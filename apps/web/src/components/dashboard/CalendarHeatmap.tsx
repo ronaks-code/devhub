@@ -107,6 +107,13 @@ export function CalendarHeatmap({
     // whose first day is in that month).
     const spans: { label: string; colIndex: number }[] = [];
     let lastMonth = -1;
+    // Guards against QA m3: two months can start in adjacent columns (a short
+    // month, or the grid's leading partial week), which rendered as "JulAug"
+    // with ~13px between labels. Only skip a label that would land within this
+    // many columns of the previously-RENDERED one; real gaps (52-65px) are
+    // untouched.
+    const MIN_LABEL_GAP_COLS = 3;
+    let lastRenderedCol = -Infinity;
 
     let colIndex = 0;
     for (let t = gridStart.getTime(); t <= end.getTime(); t += DAY_MS) {
@@ -128,10 +135,14 @@ export function CalendarHeatmap({
         col = [];
         colIndex++;
       }
-      // New month → record a label above this column (once per month).
+      // New month → record a label above this column (once per month), unless
+      // it would collide with the previously-rendered label.
       if (date.getMonth() !== lastMonth) {
         lastMonth = date.getMonth();
-        spans.push({ label: MONTH_LABELS[date.getMonth()]!, colIndex });
+        if (colIndex - lastRenderedCol >= MIN_LABEL_GAP_COLS) {
+          spans.push({ label: MONTH_LABELS[date.getMonth()]!, colIndex });
+          lastRenderedCol = colIndex;
+        }
       }
       col.push(cell);
     }

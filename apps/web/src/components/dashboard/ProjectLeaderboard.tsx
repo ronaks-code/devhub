@@ -216,10 +216,25 @@ export function ProjectLeaderboard({
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/30">
-      <table className="w-full border-collapse text-[12.5px]">
+    // Capped height + internal scroll (QA m8): this table's row count tracks the
+    // project count, so it routinely grows taller than its Cost-forecast row
+    // neighbor, stretching the grid row and leaving a void under the shorter
+    // card. `sticky` keeps the sortable header visible while scrolling.
+    <div className="max-h-[360px] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900/30">
+      {/* `table-fixed` + explicit column widths (QA M4): without it, the
+          unconstrained Cost/Tokens/Sessions/Last-active columns won out the
+          width fight and the Project column — the one that identifies the
+          row — shrank to 1-3 visible characters. */}
+      <table className="w-full table-fixed border-collapse text-[12.5px]">
+        <colgroup>
+          <col className="w-[38%]" />
+          <col className="w-[15%]" />
+          <col className="w-[15%]" />
+          <col className="w-[14%]" />
+          <col className="w-[18%]" />
+        </colgroup>
         <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-900/50">
+          <tr className="sticky top-0 z-10 border-b border-zinc-800 bg-zinc-900">
             <Th label="Project" col="name" sort={sort} dir={dir} onSort={onSort} />
             <Th label="Cost" col="cost" sort={sort} dir={dir} onSort={onSort} align="right" />
             <Th label="Tokens" col="tokens" sort={sort} dir={dir} onSort={onSort} align="right" />
@@ -240,10 +255,12 @@ export function ProjectLeaderboard({
                 )}
                 title={r.cwd ?? undefined}
               >
-                <td className="max-w-0 px-3 py-2">
-                  <div className="flex items-center gap-2">
+                <td className="px-3 py-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
-                    <span className="truncate font-medium text-zinc-200">{r.name}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium text-zinc-200" title={r.name}>
+                      {r.name}
+                    </span>
                   </div>
                 </td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums text-violet-300">
