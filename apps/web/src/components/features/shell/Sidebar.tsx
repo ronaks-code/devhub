@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DeckMark } from "../../DeckMark.js";
+import { startWindowDrag } from "../../../lib/windowDrag.js";
 import { LogoutButton } from "../../AuthGate.js";
 import { getToken } from "../../../lib/api.js";
 import { readCompat, writeCompat } from "../../../lib/compat-storage.js";
@@ -522,7 +523,7 @@ export function Sidebar({
       data-tauri-macos={macTauri ? "" : undefined}
     >
       {/* Icon rail — also the window drag grab-zone at the top-left (§4). */}
-      <div className="dh-iconrail" data-dh-iconrail="" data-tauri-drag-region>
+      <div className="dh-iconrail" data-dh-iconrail="" data-tauri-drag-region onMouseDown={startWindowDrag}>
         <div className="dh-logo" data-dh-logo="" aria-label={brand} title={brand}>
           <DeckMark size={26} />
         </div>
@@ -603,7 +604,7 @@ export function Sidebar({
           }
         }}
       >
-        <div className="dh-panel-header" data-tauri-drag-region>
+        <div className="dh-panel-header" data-tauri-drag-region onMouseDown={startWindowDrag}>
           <span className="dh-label">Sessions</span>
           {/* F6: this is the indexed Claude session TOTAL (api.health()'s
               sessionCount), not how many are currently running — "open" read as

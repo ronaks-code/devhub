@@ -23,6 +23,7 @@ import type { PerfPreference } from "../../../hooks/useReducedMotion";
 import type { ThemePreference } from "../../../hooks/useTheme";
 import type { Tab } from "../../../App";
 import { ChatTabs, type ChatTab } from "./ChatTabs";
+import { startWindowDrag } from "../../../lib/windowDrag";
 
 /**
  * TopBar — the 44px chrome row to the RIGHT of the full-height sidebar (§3.2/§4).
@@ -241,6 +242,7 @@ export function TopBar({
   return (
     <header
       data-tauri-drag-region
+      onMouseDown={startWindowDrag}
       className="glass-chrome flex h-11 w-full min-w-0 items-center gap-3 px-4"
       // .glass-chrome draws a full 1px border; the top bar wants ONLY the
       // --dh-glass-border bottom seam (§3.2), so reset the box border and keep
