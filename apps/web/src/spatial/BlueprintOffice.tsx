@@ -493,18 +493,14 @@ function RoomPlan({
   );
 }
 
-interface Rect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
 const clampN = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const MAX_ZOOM = 4;
-/** Legibility floor (screen px per viewBox unit): SVG text scales with the
- *  viewBox, so a tall plan fit into a short pane rendered 13px names at ~6-8px.
- *  The default view never scales below this — the sheet crops (top-aligned,
- *  pannable) instead of shrinking the drafting text into illegibility. */
+/** Legibility floor (screen px per plan unit): SVG text scales with the drawing,
+ *  so fitting a wide plan into a narrow pane would shrink 13px names to ~6-8px.
+ *  The fit-to-width base scale never drops below this — instead of shrinking the
+ *  drafting text into illegibility, the sheet grows past the pane and the stage
+ *  SCROLLS (vertically, and horizontally at the floor) so every room stays
+ *  reachable rather than cropped off-canvas. */
 const MIN_TEXT_SCALE = 0.8;
 
 /** Component-scoped color vars: the active/warning status inks the drafting
@@ -527,25 +523,27 @@ export function BlueprintOffice({
 }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Pan/zoom viewport. `zoom === 1` + `center === null` means "fit the whole
-  // plan" — the default. It auto-follows plan-size changes so the ENTIRE floor
-  // plan (every room, the legend, the title block) is always visible at any pane
-  // size; zoom + drag then let you read the fine drafting callouts.
+  // Zoom multiplier over the fit-to-WIDTH base scale. `zoom === 1` is the default
+  // "fit the plan to the pane width" view; the drafting sheet then SCROLLS
+  // vertically (and horizontally when zoomed, or when the legibility floor makes
+  // the sheet wider than the pane) so EVERY room is reachable regardless of floor
+  // count — nothing is cropped permanently off-canvas. Zoom in/out + the keyboard
+  // `z` reveal the fine callouts.
   const [zoom, setZoom] = useState(1);
-  const [center, setCenter] = useState<{ cx: number; cy: number } | null>(null);
   const [stageSize, setStageSize] = useState<{ w: number; h: number } | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const drag = useRef<{ startX: number; startY: number; cx: number; cy: number; scale: number } | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const effScaleRef = useRef<number | null>(null);
+  const drag = useRef<{ startX: number; startY: number; left: number; top: number } | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
-  // Track the stage's content box so the legibility floor (MIN_TEXT_SCALE) can
-  // be computed in real screen pixels. Guarded for jsdom/SSR (no observer ⇒
-  // floor stays 1 ⇒ prior fit-everything behavior).
+  // Track the stage's content box so the fit-to-width scale + legibility floor
+  // can be computed in real screen pixels. Guarded for jsdom/SSR (no observer ⇒
+  // stageSize stays null ⇒ the SVG renders the whole plan responsively).
   useEffect(() => {
     const el = stageRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -568,103 +566,79 @@ export function BlueprintOffice({
 
   const plan = useMemo(() => layoutPlan(rooms, byId, nowMs), [rooms, byId, nowMs]);
 
-  // Fit-zoom-out cap (the MAJOR legibility fix): when fitting the WHOLE plan
-  // would render below MIN_TEXT_SCALE screen-px per plan unit, the default view
-  // starts at this floor instead — top-aligned, with pan/wheel/zoom reaching the
-  // rest. The SVG still fits its container exactly; only the sheet is cropped.
-  const baseZoom = useMemo(() => {
-    if (!stageSize || stageSize.w <= 0 || stageSize.h <= 0) return 1;
-    const fit = Math.min(stageSize.w / plan.width, stageSize.h / plan.height);
-    return fit > 0 && fit < MIN_TEXT_SCALE ? Math.min(MIN_TEXT_SCALE / fit, MAX_ZOOM) : 1;
-  }, [stageSize, plan.width, plan.height]);
+  // Base scale (screen px per plan unit): fit the plan to the pane WIDTH, but
+  // never below the legibility floor. SVG text scales with the drawing, so on a
+  // narrow pane fitting to width alone would shrink 13px names into illegibility;
+  // there we hold the floor and let the sheet run wider than the pane (it scrolls
+  // horizontally too). Null in jsdom/SSR ⇒ the SVG renders the whole plan
+  // responsively (every room visible), preserving the pre-scroll behavior.
+  const baseScale = useMemo(() => {
+    if (!stageSize || stageSize.w <= 0) return null;
+    return Math.max(stageSize.w / plan.width, MIN_TEXT_SCALE);
+  }, [stageSize, plan.width]);
 
-  // The visible viewBox, derived from (user zoom × legibility floor) + center
-  // and clamped to the plan.
-  const view: Rect = useMemo(() => {
-    const w = plan.width / (zoom * baseZoom);
-    const h = plan.height / (zoom * baseZoom);
-    const cx = center?.cx ?? plan.width / 2;
-    // When the floor crops the sheet, default to the TOP of the plan (drawings
-    // read from the top-left), not a mid-sheet slice.
-    const cy = center?.cy ?? (baseZoom > 1 ? h / 2 : plan.height / 2);
-    const x = clampN(cx - w / 2, 0, Math.max(0, plan.width - w));
-    const y = clampN(cy - h / 2, 0, Math.max(0, plan.height - h));
-    return { x, y, w, h };
-  }, [plan.width, plan.height, zoom, baseZoom, center]);
+  // Effective scale + rendered sheet size (px). The viewBox stays the FULL plan,
+  // so the sheet is never cropped — it grows to its natural size and the stage
+  // scrolls to whatever doesn't fit.
+  const effScale = baseScale == null ? null : baseScale * zoom;
+  const sheetW = effScale == null ? null : plan.width * effScale;
+  const sheetH = effScale == null ? null : plan.height * effScale;
+  const canScroll =
+    !!stageSize &&
+    sheetW != null &&
+    sheetH != null &&
+    (sheetH > stageSize.h + 1 || sheetW > stageSize.w + 1);
+
+  useEffect(() => {
+    effScaleRef.current = effScale;
+  }, [effScale]);
 
   const resetView = useCallback(() => {
     setZoom(1);
-    setCenter(null);
+    scrollRef.current?.scrollTo({ top: 0, left: 0 });
   }, []);
 
-  /** Zoom to `nextZoom`, keeping the plan-space `anchor` fixed on screen. */
-  const zoomTo = useCallback(
-    (nextZoom: number, anchor?: { x: number; y: number }) => {
-      const z = clampN(nextZoom, 1, MAX_ZOOM);
-      if (z === 1) {
-        setZoom(1);
-        setCenter(null);
-        return;
-      }
-      const w = plan.width / (z * baseZoom);
-      const h = plan.height / (z * baseZoom);
-      const ax = anchor?.x ?? view.x + view.w / 2;
-      const ay = anchor?.y ?? view.y + view.h / 2;
-      // Keep the anchor at the same fractional position in the view rect. Because
-      // the view rect always carries the plan aspect and preserveAspectRatio is
-      // constant, equal fraction ⇒ equal screen position, so the point stays put.
-      const fx = view.w > 0 ? (ax - view.x) / view.w : 0.5;
-      const fy = view.h > 0 ? (ay - view.y) / view.h : 0.5;
-      setZoom(z);
-      setCenter({ cx: ax - fx * w + w / 2, cy: ay - fy * h + h / 2 });
-    },
-    [plan.width, plan.height, baseZoom, view],
-  );
-
-  /** Map client (screen) coords to plan (viewBox) coords via the live SVG CTM. */
-  const clientToPlan = useCallback((clientX: number, clientY: number): { x: number; y: number } | null => {
-    const svg = svgRef.current;
-    if (!svg || typeof svg.getScreenCTM !== "function") return null;
-    const ctm = svg.getScreenCTM();
-    if (!ctm || typeof DOMPoint === "undefined") return null;
-    const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
-    return { x: pt.x, y: pt.y };
+  const zoomTo = useCallback((nextZoom: number) => {
+    setZoom(clampN(nextZoom, 1, MAX_ZOOM));
   }, []);
 
-  // Wheel-zoom toward the cursor. A native non-passive listener lets us swallow
-  // the scroll (so the page doesn't move) while zooming the plan instead.
+  // Ctrl/⌘ + wheel zooms the plan; a plain wheel / trackpad scrolls the sheet
+  // natively (the whole point — vertical reach without hidden gestures). Only the
+  // zoom case swallows the event so the page doesn't move.
   useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
+    const el = scrollRef.current;
+    if (!el) return;
     const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return; // let the browser scroll the sheet
       e.preventDefault();
-      const anchor = clientToPlan(e.clientX, e.clientY) ?? undefined;
-      zoomTo(zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18), anchor);
+      zoomTo(zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18));
     };
-    stage.addEventListener("wheel", onWheel, { passive: false });
-    return () => stage.removeEventListener("wheel", onWheel);
-  }, [clientToPlan, zoomTo, zoom]);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomTo, zoom]);
 
-  // Drag-to-pan on the plan BACKGROUND (a click on a desk still selects it).
+  // Mouse drag-to-pan translates into native scroll (a click on a desk still
+  // selects it; touch keeps its native momentum scroll, so we ignore it here).
   const onPointerDown = (e: React.PointerEvent) => {
-    if (zoom === 1 && baseZoom === 1) return; // whole plan is visible — nothing to pan
+    if (!canScroll || e.pointerType !== "mouse") return;
     if ((e.target as Element).closest?.('[data-testid="office-desk"]')) return;
-    const svg = svgRef.current;
-    const scale = svg && typeof svg.getScreenCTM === "function" ? svg.getScreenCTM()?.a ?? 0 : 0;
-    if (!scale) return;
-    drag.current = { startX: e.clientX, startY: e.clientY, cx: view.x + view.w / 2, cy: view.y + view.h / 2, scale };
-    svg?.setPointerCapture?.(e.pointerId);
+    const el = scrollRef.current;
+    if (!el) return;
+    drag.current = { startX: e.clientX, startY: e.clientY, left: el.scrollLeft, top: el.scrollTop };
+    el.setPointerCapture?.(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const d = drag.current;
-    if (!d) return;
-    setCenter({ cx: d.cx - (e.clientX - d.startX) / d.scale, cy: d.cy - (e.clientY - d.startY) / d.scale });
+    const el = scrollRef.current;
+    if (!d || !el) return;
+    el.scrollLeft = d.left - (e.clientX - d.startX);
+    el.scrollTop = d.top - (e.clientY - d.startY);
   };
   const endDrag = (e: React.PointerEvent) => {
     if (!drag.current) return;
     drag.current = null;
     try {
-      svgRef.current?.releasePointerCapture?.(e.pointerId);
+      scrollRef.current?.releasePointerCapture?.(e.pointerId);
     } catch {
       /* pointer may already be released */
     }
@@ -729,18 +703,44 @@ export function BlueprintOffice({
         e.preventDefault();
         const room = kbRoom ?? plan.rooms[0];
         if (!room) return;
-        if (!kbRoom) setKb({ roomId: room.room.id, agentId: null });
-        const m = 28; // plan-unit margin around the zoomed room
-        const zEff = Math.min(plan.width / (room.w + m * 2), plan.height / (room.h + m * 2));
-        setZoom(clampN(zEff / baseZoom, 1, MAX_ZOOM));
-        setCenter({ cx: room.x + room.w / 2, cy: room.y + room.h / 2 });
+        // Focus the room (a NEW kb identity so the scroll-into-view effect fires)
+        // and zoom so it fills the pane with a margin; the effect scrolls to it.
+        setKb({ roomId: room.room.id, agentId: kbRoom ? kbAgent?.id ?? null : null });
+        if (baseScale != null && stageSize) {
+          const m = 28; // plan-unit margin around the zoomed room
+          const zEff = Math.min(
+            stageSize.w / ((room.w + m * 2) * baseScale),
+            stageSize.h / ((room.h + m * 2) * baseScale),
+          );
+          setZoom(clampN(zEff, 1, MAX_ZOOM));
+        }
       } else if (e.key === "Escape" && !selected) {
         setKb(null);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [plan, kbRoom, kbAgent, baseZoom, selected]);
+  }, [plan, kbRoom, kbAgent, baseScale, stageSize, selected]);
+
+  // Keep the keyboard-focused room in view as the sheet scrolls (h/l/j/k/z). Keyed
+  // on `kb` (nav) only — not the per-tick `plan` — so it never fights the user's
+  // own scrolling; the latest plan/scale are read from refs.
+  const planRef = useRef(plan);
+  planRef.current = plan;
+  useEffect(() => {
+    const el = scrollRef.current;
+    const scale = effScaleRef.current;
+    if (!el || scale == null || !kb) return;
+    const room = planRef.current.rooms.find((r) => r.room.id === kb.roomId);
+    if (!room) return;
+    const cx = (room.x + room.w / 2) * scale;
+    const cy = (room.y + room.h / 2) * scale;
+    el.scrollTo({
+      left: clampN(cx - el.clientWidth / 2, 0, Math.max(0, el.scrollWidth - el.clientWidth)),
+      top: clampN(cy - el.clientHeight / 2, 0, Math.max(0, el.scrollHeight - el.clientHeight)),
+      behavior: "smooth",
+    });
+  }, [kb]);
 
   const activeAgents = world.agents.filter(isWorking).length;
   const colLetters = "ABCDEFGH";
@@ -781,23 +781,29 @@ export function BlueprintOffice({
         </span>
       </div>
 
-      {/* The drafting sheet — a fit-to-container, scroll-free viewport. The whole
-          plan always fits; zoom controls / wheel / drag reveal the fine detail. */}
+      {/* The drafting sheet — fit-to-WIDTH inside a vertically (and, at the
+          legibility floor, horizontally) SCROLLING viewport, so no room is ever
+          cropped off-canvas no matter how many floors the office grows. The
+          overlays (zoom controls / stamp / legend) sit on the non-scrolling
+          stage so they stay pinned while the sheet scrolls under them. */}
       <div ref={stageRef} className="relative min-h-0 flex-1 overflow-hidden px-4 pb-4">
-        <svg
-          ref={svgRef}
-          viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
-          preserveAspectRatio="xMidYMid meet"
-          className={cn("dh-blueprint block h-full w-full select-none", zoom > 1 || baseZoom > 1 ? "cursor-grab" : undefined)}
-          style={{ touchAction: "none" }}
-          role="img"
-          aria-label="Office floor plan — rooms are departments, desks are agents"
+        <div
+          ref={scrollRef}
+          className={cn("h-full w-full overflow-auto", canScroll ? "cursor-grab" : undefined)}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onPointerLeave={endDrag}
         >
+          <svg
+            viewBox={`0 0 ${plan.width} ${plan.height}`}
+            preserveAspectRatio="xMidYMid meet"
+            className="dh-blueprint block select-none"
+            style={sheetW != null && sheetH != null ? { width: sheetW, height: sheetH } : { width: "100%", height: "auto" }}
+            role="img"
+            aria-label="Office floor plan — rooms are departments, desks are agents"
+          >
             <defs>
               <pattern id="dh-bp-grid" width={34} height={34} patternUnits="userSpaceOnUse">
                 <path d="M34 0H0V34" fill="none" stroke={DRAFT} strokeOpacity={0.13} strokeWidth={1} />
@@ -882,7 +888,8 @@ export function BlueprintOffice({
                 onSelect={setSelectedId}
               />
             ))}
-        </svg>
+          </svg>
+        </div>
 
         {/* Zoom / fit controls (always visible). */}
         <div className="glass-card absolute right-3 top-3 z-10 flex flex-col overflow-hidden p-1" role="group" aria-label="Plan zoom">
@@ -890,7 +897,7 @@ export function BlueprintOffice({
             [
               { icon: ZoomIn, label: "Zoom in", onClick: () => zoomTo(zoom * 1.4), disabled: zoom >= MAX_ZOOM },
               { icon: ZoomOut, label: "Zoom out", onClick: () => zoomTo(zoom / 1.4), disabled: zoom <= 1 },
-              { icon: Maximize, label: baseZoom > 1 ? "Reset view" : "Fit whole plan", onClick: resetView, disabled: zoom === 1 && center === null },
+              { icon: Maximize, label: zoom > 1 ? "Reset view" : "Fit to width", onClick: resetView, disabled: zoom === 1 },
             ] as const
           ).map(({ icon: Icon, label, onClick, disabled }) => (
             <button

@@ -3581,6 +3581,16 @@ html[data-reduce-motion="true"] {
   color: var(--dh-text-dim);
 }
 
+/* Query-Deck filter chips: one per section, on their own line beneath the
+   search. Reuses the shared `.dh-chip` pill token; wraps rather than scrolls
+   so every jump target stays reachable in the header. */
+.dh-settings-chips {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* IDE Rail: a vertical, grouped-feel nav down the left column. */
 .dh-settings-tablist {
   grid-area: nav;

@@ -382,10 +382,16 @@ export function mapMessagesToThreadItems(messages: readonly NormalizedMessage[])
         i++;
         continue;
       }
+      // Any OTHER/unknown native block type (e.g. a future 'file-history-delta'
+      // wrapped as {type:'unknown'}): collapse it to a labelled row instead of
+      // dumping '[role:type] {json}' as visible conversation text (QA: raw JSON
+      // leaked into the transcript for an uncovered message type).
       items.push({
         kind: "raw",
         id: `${key}-${i}`,
         raw: boundRawDiagnostic(`[${m.role}:${b.type}] ${JSON.stringify(b)}`),
+        collapsed: true,
+        summary: "System event",
       });
       i++;
     }

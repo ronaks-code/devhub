@@ -1146,6 +1146,24 @@ export function SettingsRoute({
             value={settingsQuery}
             onChange={(e) => setSettingsQuery(e.target.value)}
           />
+          {/* §3.4 Query-Deck filter chips: one per preserved section (the SAME
+              rail-ordered list the IDE-Rail uses — no invented sections). A chip
+              jumps to its section via the shared `openSection`, which also clears
+              any active search, so the chips and the search stay coherent. */}
+          <div className="dh-settings-chips" role="group" aria-label="Jump to a settings section">
+            {SETTINGS_TABS_DISPLAY.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className="dh-chip"
+                data-dh-settings-section-chip={tab.id}
+                aria-pressed={!searchActive && section === tab.id}
+                onClick={() => openSection(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </header>
 
         {/* §3.4 IDE-Rail: the ten preserved sections grouped under AGENTS/CONFIG/
