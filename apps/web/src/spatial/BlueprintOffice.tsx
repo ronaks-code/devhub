@@ -75,13 +75,13 @@ function runtime(startedAt: number | undefined, nowMs: number): string | null {
 function statusMeta(status: AgentStatus): { glyph: string; color: string; label: string } {
   switch (status) {
     case "working":
-      return { glyph: "●", color: "var(--dh-brand)", label: "ACTIVE" };
+      return { glyph: "●", color: "var(--bp-active)", label: "ACTIVE" };
     case "talking":
-      return { glyph: "◇", color: "var(--dh-brand)", label: "TALKING" };
+      return { glyph: "◇", color: "var(--bp-active)", label: "TALKING" };
     case "moving":
-      return { glyph: "→", color: "var(--dh-warning)", label: "MOVING" };
+      return { glyph: "→", color: "var(--bp-warning)", label: "MOVING" };
     case "blocked":
-      return { glyph: "⏸", color: "var(--dh-warning)", label: "BLOCKED" };
+      return { glyph: "⏸", color: "var(--bp-warning)", label: "BLOCKED" };
     case "done":
       return { glyph: "✓", color: "var(--dh-success)", label: "DONE" };
     default:
@@ -336,11 +336,17 @@ function RoomPlan({
   layout,
   totalRows,
   selectedId,
+  focused,
+  focusAgentId,
   onSelect,
 }: {
   layout: RoomLayout;
   totalRows: number;
   selectedId: string | null;
+  /** Keyboard focus (h/l): draws a dashed focus outline around the room. */
+  focused: boolean;
+  /** Keyboard-focused desk (j/k): gets the selection dash like a click. */
+  focusAgentId: string | null;
   onSelect: (id: string) => void;
 }) {
   const { room, agents, w, h, active, workBays, idleBays, rowIndex } = layout;
@@ -374,8 +380,18 @@ function RoomPlan({
           strokeWidth: active ? 1.4 : 1,
         }}
       />
+      {/* Keyboard room focus (h/l) — a visible dashed outline. */}
+      {focused ? (
+        <rect
+          x={2}
+          y={2}
+          width={w - 4}
+          height={h - 4}
+          style={{ fill: "none", stroke: "var(--dh-focus)", strokeWidth: 1.4, strokeDasharray: "7 5" }}
+        />
+      ) : null}
       {/* Label block. */}
-      <text x={PAD} y={24} fontSize={12} fontWeight={700} letterSpacing={3} style={{ fill: active ? "var(--dh-brand)" : "var(--dh-text)" }}>
+      <text x={PAD} y={24} fontSize={12} fontWeight={700} letterSpacing={3} style={{ fill: active ? "var(--bp-active)" : "var(--dh-text)" }}>
         {clip(label, 30)}
       </text>
       <text x={PAD} y={38} fontSize={8.5} letterSpacing={1.5} style={{ fill: "var(--dh-text-muted)" }}>
@@ -394,7 +410,7 @@ function RoomPlan({
             key={bay.agent.id}
             agent={bay.agent}
             working
-            selected={selectedId === bay.agent.id}
+            selected={selectedId === bay.agent.id || focusAgentId === bay.agent.id}
             onSelect={() => onSelect(bay.agent.id)}
           >
             <rect
@@ -435,7 +451,7 @@ function RoomPlan({
             <DeskGlyph
               agent={bay.agent}
               working={false}
-              selected={selectedId === bay.agent.id}
+              selected={selectedId === bay.agent.id || focusAgentId === bay.agent.id}
               onSelect={() => onSelect(bay.agent.id)}
             >
               <rect
@@ -485,6 +501,21 @@ interface Rect {
 }
 const clampN = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
 const MAX_ZOOM = 4;
+/** Legibility floor (screen px per viewBox unit): SVG text scales with the
+ *  viewBox, so a tall plan fit into a short pane rendered 13px names at ~6-8px.
+ *  The default view never scales below this — the sheet crops (top-aligned,
+ *  pannable) instead of shrinking the drafting text into illegibility. */
+const MIN_TEXT_SCALE = 0.8;
+
+/** Component-scoped color vars: the active/warning status inks the drafting
+ *  callouts use. Dark inherits the brand tokens; light overrides to darker
+ *  inks because 13px→~10px SVG status text in --dh-brand (#6366f1, 4.0:1) and
+ *  --dh-warning (#b07617, 3.5:1) sits under WCAG AA 4.5:1 on the near-white
+ *  board. #4f46e5 ≈ 5.7:1 and #92580a ≈ 5.2:1 against the light canvas. */
+const BP_THEME_CSS = `
+.dh-bp-root { --bp-active: var(--dh-brand); --bp-warning: var(--dh-warning); }
+:root[data-theme="light"] .dh-bp-root { --bp-active: #4f46e5; --bp-warning: #92580a; }
+`;
 
 export function BlueprintOffice({
   world,
@@ -502,6 +533,7 @@ export function BlueprintOffice({
   // size; zoom + drag then let you read the fine drafting callouts.
   const [zoom, setZoom] = useState(1);
   const [center, setCenter] = useState<{ cx: number; cy: number } | null>(null);
+  const [stageSize, setStageSize] = useState<{ w: number; h: number } | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const drag = useRef<{ startX: number; startY: number; cx: number; cy: number; scale: number } | null>(null);
@@ -509,6 +541,20 @@ export function BlueprintOffice({
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(t);
+  }, []);
+
+  // Track the stage's content box so the legibility floor (MIN_TEXT_SCALE) can
+  // be computed in real screen pixels. Guarded for jsdom/SSR (no observer ⇒
+  // floor stays 1 ⇒ prior fit-everything behavior).
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setStageSize({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
 
   const byId = useMemo(() => new Map(world.agents.map((a) => [a.id, a])), [world.agents]);
@@ -522,16 +568,29 @@ export function BlueprintOffice({
 
   const plan = useMemo(() => layoutPlan(rooms, byId, nowMs), [rooms, byId, nowMs]);
 
-  // The visible viewBox, derived from zoom + center and clamped to the plan.
+  // Fit-zoom-out cap (the MAJOR legibility fix): when fitting the WHOLE plan
+  // would render below MIN_TEXT_SCALE screen-px per plan unit, the default view
+  // starts at this floor instead — top-aligned, with pan/wheel/zoom reaching the
+  // rest. The SVG still fits its container exactly; only the sheet is cropped.
+  const baseZoom = useMemo(() => {
+    if (!stageSize || stageSize.w <= 0 || stageSize.h <= 0) return 1;
+    const fit = Math.min(stageSize.w / plan.width, stageSize.h / plan.height);
+    return fit > 0 && fit < MIN_TEXT_SCALE ? Math.min(MIN_TEXT_SCALE / fit, MAX_ZOOM) : 1;
+  }, [stageSize, plan.width, plan.height]);
+
+  // The visible viewBox, derived from (user zoom × legibility floor) + center
+  // and clamped to the plan.
   const view: Rect = useMemo(() => {
-    const w = plan.width / zoom;
-    const h = plan.height / zoom;
+    const w = plan.width / (zoom * baseZoom);
+    const h = plan.height / (zoom * baseZoom);
     const cx = center?.cx ?? plan.width / 2;
-    const cy = center?.cy ?? plan.height / 2;
+    // When the floor crops the sheet, default to the TOP of the plan (drawings
+    // read from the top-left), not a mid-sheet slice.
+    const cy = center?.cy ?? (baseZoom > 1 ? h / 2 : plan.height / 2);
     const x = clampN(cx - w / 2, 0, Math.max(0, plan.width - w));
     const y = clampN(cy - h / 2, 0, Math.max(0, plan.height - h));
     return { x, y, w, h };
-  }, [plan.width, plan.height, zoom, center]);
+  }, [plan.width, plan.height, zoom, baseZoom, center]);
 
   const resetView = useCallback(() => {
     setZoom(1);
@@ -547,8 +606,8 @@ export function BlueprintOffice({
         setCenter(null);
         return;
       }
-      const w = plan.width / z;
-      const h = plan.height / z;
+      const w = plan.width / (z * baseZoom);
+      const h = plan.height / (z * baseZoom);
       const ax = anchor?.x ?? view.x + view.w / 2;
       const ay = anchor?.y ?? view.y + view.h / 2;
       // Keep the anchor at the same fractional position in the view rect. Because
@@ -559,7 +618,7 @@ export function BlueprintOffice({
       setZoom(z);
       setCenter({ cx: ax - fx * w + w / 2, cy: ay - fy * h + h / 2 });
     },
-    [plan.width, plan.height, view],
+    [plan.width, plan.height, baseZoom, view],
   );
 
   /** Map client (screen) coords to plan (viewBox) coords via the live SVG CTM. */
@@ -588,7 +647,7 @@ export function BlueprintOffice({
 
   // Drag-to-pan on the plan BACKGROUND (a click on a desk still selects it).
   const onPointerDown = (e: React.PointerEvent) => {
-    if (zoom === 1) return; // whole plan is visible — nothing to pan
+    if (zoom === 1 && baseZoom === 1) return; // whole plan is visible — nothing to pan
     if ((e.target as Element).closest?.('[data-testid="office-desk"]')) return;
     const svg = svgRef.current;
     const scale = svg && typeof svg.getScreenCTM === "function" ? svg.getScreenCTM()?.a ?? 0 : 0;
@@ -621,12 +680,80 @@ export function BlueprintOffice({
     return () => window.removeEventListener("keydown", onKey);
   }, [selected]);
 
+  // Keyboard nav (§3.5): h/l cycle rooms, j/k cycle desks in the focused room,
+  // ⏎ opens the inspector, z zooms to the focused room. The focus is VISIBLE:
+  // the focused room gets a dashed outline, the focused desk the selection dash.
+  const [kb, setKb] = useState<{ room: number; desk: number | null } | null>(null);
+  const kbRoom = kb && kb.room < plan.rooms.length ? plan.rooms[kb.room] ?? null : null;
+  const kbAgent = kbRoom && kb?.desk != null ? kbRoom.agents[kb.desk] ?? null : null;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const nRooms = plan.rooms.length;
+      if (!nRooms) return;
+      if (e.key === "h" || e.key === "l") {
+        e.preventDefault();
+        const dir = e.key === "l" ? 1 : -1;
+        setKb((f) =>
+          f ? { room: (f.room + dir + nRooms) % nRooms, desk: null } : { room: dir === 1 ? 0 : nRooms - 1, desk: null },
+        );
+      } else if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const dir = e.key === "j" ? 1 : -1;
+        setKb((f) => {
+          const room = Math.min(f?.room ?? 0, nRooms - 1);
+          const n = plan.rooms[room]?.agents.length ?? 0;
+          if (!n) return { room, desk: null };
+          const desk = f?.desk == null ? (dir === 1 ? 0 : n - 1) : (f.desk + dir + n) % n;
+          return { room, desk };
+        });
+      } else if (e.key === "Enter") {
+        // A DOM-focused desk glyph already handles its own Enter.
+        if (kbAgent && !t?.closest?.('[data-testid="office-desk"]')) {
+          e.preventDefault();
+          setSelectedId(kbAgent.id);
+        }
+      } else if (e.key === "z") {
+        e.preventDefault();
+        const room = kbRoom ?? plan.rooms[0];
+        if (!room) return;
+        if (!kbRoom) setKb({ room: 0, desk: null });
+        const m = 28; // plan-unit margin around the zoomed room
+        const zEff = Math.min(plan.width / (room.w + m * 2), plan.height / (room.h + m * 2));
+        setZoom(clampN(zEff / baseZoom, 1, MAX_ZOOM));
+        setCenter({ cx: room.x + room.w / 2, cy: room.y + room.h / 2 });
+      } else if (e.key === "Escape" && !selected) {
+        setKb(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [plan, kbRoom, kbAgent, baseZoom, selected]);
+
   const activeAgents = world.agents.filter(isWorking).length;
-  const activeRooms = plan.rooms.filter((r) => r.active).length;
   const colLetters = "ABCDEFGH";
 
+  // Title-block facts (§3.5 corner stamp) — real data only, dash when unknown.
+  const worktrees = useMemo(() => {
+    const dirtyByTree = new Map<string, boolean>();
+    for (const a of world.agents) {
+      if (!a.worktree) continue;
+      const dirty = !!(a.diff && (a.diff.add > 0 || a.diff.del > 0));
+      dirtyByTree.set(a.worktree, (dirtyByTree.get(a.worktree) ?? false) || dirty);
+    }
+    return { n: dirtyByTree.size, dirty: [...dirtyByTree.values()].filter(Boolean).length };
+  }, [world.agents]);
+  const projectRooms = rooms.filter((r) => r.kind === "project");
+  const projectLine =
+    projectRooms.length > 1 ? `${projectRooms.length} ACTIVE` : projectRooms[0] ? clip(projectRooms[0].label.toUpperCase(), 20) : "—";
+  const revDate = world.ts ? new Date(world.ts).toISOString().slice(0, 10) : "—";
+
   return (
-    <div className="dh-aurora-bg--soft relative flex min-w-0 flex-1 flex-col overflow-hidden" data-testid="blueprint-office">
+    <div className="dh-bp-root dh-aurora-bg--soft relative flex min-w-0 flex-1 flex-col overflow-hidden" data-testid="blueprint-office">
+      <style>{BP_THEME_CSS}</style>
       {/* Header row (always visible). */}
       <div className="flex shrink-0 flex-wrap items-center gap-3 px-6 pb-2 pt-4">
         <h1 className="text-[17px] font-[680] tracking-[-0.01em] text-[var(--dh-text-strong)]">Office</h1>
@@ -652,7 +779,7 @@ export function BlueprintOffice({
           ref={svgRef}
           viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
           preserveAspectRatio="xMidYMid meet"
-          className={cn("dh-blueprint block h-full w-full select-none", zoom > 1 ? "cursor-grab" : undefined)}
+          className={cn("dh-blueprint block h-full w-full select-none", zoom > 1 || baseZoom > 1 ? "cursor-grab" : undefined)}
           style={{ touchAction: "none" }}
           role="img"
           aria-label="Office floor plan — rooms are departments, desks are agents"
@@ -741,6 +868,8 @@ export function BlueprintOffice({
                 layout={layout}
                 totalRows={plan.rows.length}
                 selectedId={selectedId}
+                focused={kbRoom?.room.id === layout.room.id}
+                focusAgentId={kbAgent?.id ?? null}
                 onSelect={setSelectedId}
               />
             ))}
@@ -752,7 +881,7 @@ export function BlueprintOffice({
             [
               { icon: ZoomIn, label: "Zoom in", onClick: () => zoomTo(zoom * 1.4), disabled: zoom >= MAX_ZOOM },
               { icon: ZoomOut, label: "Zoom out", onClick: () => zoomTo(zoom / 1.4), disabled: zoom <= 1 },
-              { icon: Maximize, label: "Fit whole plan", onClick: resetView, disabled: zoom === 1 && center === null },
+              { icon: Maximize, label: baseZoom > 1 ? "Reset view" : "Fit whole plan", onClick: resetView, disabled: zoom === 1 && center === null },
             ] as const
           ).map(({ icon: Icon, label, onClick, disabled }) => (
             <button
@@ -784,12 +913,20 @@ export function BlueprintOffice({
             OFFICE — PLAN 02
           </div>
           <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
+            <span>PROJECT</span>
+            <span className="text-[var(--dh-text)]">{projectLine}</span>
+          </div>
+          <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
             <span>AGENTS</span>
             <span className="text-[var(--dh-text)]">{world.agents.length} · {activeAgents} ACTIVE</span>
           </div>
           <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
-            <span>ROOMS</span>
-            <span className="text-[var(--dh-text)]">{rooms.length} · {activeRooms} ONLINE</span>
+            <span>WORKTREES</span>
+            <span className="text-[var(--dh-text)]">{worktrees.n > 0 ? `${worktrees.n} · ${worktrees.dirty} DIRTY` : "—"}</span>
+          </div>
+          <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
+            <span>REV</span>
+            <span className="text-[var(--dh-text)]">{world.rev} · {revDate}</span>
           </div>
           <div className="flex justify-between border-t px-2.5 py-1" style={{ borderColor: DRAFT_FAINT }}>
             <span>SOURCE</span>
@@ -809,6 +946,7 @@ export function BlueprintOffice({
             <span className="h-2 w-2 rounded-[2px]" style={{ background: DRAFT_DIM }} /> RESERVED
           </span>
           <span>1 DESK = 1 AGENT</span>
+          <span>H/L ROOMS · J/K DESKS · ⏎ INSPECT · Z ZOOM</span>
         </div>
       </div>
 

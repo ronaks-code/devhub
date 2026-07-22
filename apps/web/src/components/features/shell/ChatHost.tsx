@@ -106,6 +106,14 @@ export function ChatHost({
   // live connecting indicator instead of the dead-end "Reconnect to send" (F3).
   const [connection, setConnection] = useState<ComposerConnection>("reconnecting");
   const [gitBranch, setGitBranch] = useState<string | null>(null);
+  // Whether `cwd` is itself a (non-main) git worktree, and its path — derived by
+  // matching `cwd` against the real worktree list, so the header chip can honestly
+  // prefix `wt/` only when we ARE in a worktree (Aurora §3.3). Absent → plain branch.
+  const [isWorktree, setIsWorktree] = useState(false);
+  // The resumed session's own recorded cost (SessionSummary.costUsd, a display
+  // estimate). Null for a brand-new task with nothing to price yet — the chip
+  // omits rather than showing a fabricated $0.
+  const [sessionCost, setSessionCost] = useState<number | null>(null);
   // The RESUMED session's own recorded model (from the indexed store), distinct
   // from `defaultModel` (the app's current default-model setting). Browse's
   // InspectorDock shows the session's real model; a resumed chat must too (QF3
@@ -179,6 +187,8 @@ export function ChatHost({
         // on — set it even when the message tail comes back empty, so the dock
         // still reads the honest historical model rather than falling back.
         if (p.session.model) setResumedModel(p.session.model);
+        // The session's own recorded cost estimate (may be 0 before pricing lands).
+        if (typeof p.session.costUsd === "number") setSessionCost(p.session.costUsd);
         setHistory(p.messages);
         setHistoryTruncated(p.truncatedFromStart);
       })
@@ -212,6 +222,26 @@ export function ChatHost({
       })
       .catch(() => {
         if (!cancelled) setGitBranch(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cwd]);
+
+  // Detect whether `cwd` is a non-main worktree by matching it against the real
+  // worktree list (route may be unimplemented → degrades to "not a worktree").
+  useEffect(() => {
+    let cancelled = false;
+    const norm = (p: string) => p.replace(/\/+$/, "");
+    api
+      .gitWorktrees(cwd)
+      .then((list) => {
+        if (cancelled) return;
+        const match = (list ?? []).find((w) => norm(w.path) === norm(cwd));
+        setIsWorktree(match != null && match.isMain !== true);
+      })
+      .catch(() => {
+        if (!cancelled) setIsWorktree(false);
       });
     return () => {
       cancelled = true;
@@ -259,6 +289,13 @@ export function ChatHost({
           title={title}
           provider="anthropic"
           onFork={() => onFork?.(sessionId)}
+          branch={gitBranch}
+          isWorktree={isWorktree}
+          worktreePath={isWorktree ? cwd : undefined}
+          projectName={cwd.split("/").filter(Boolean).pop()}
+          model={resumedModel ?? defaultModel ?? undefined}
+          costUsd={sessionCost ?? undefined}
+          running={turnRunning}
         />
         <ChatWorktreePanel cwd={cwd} />
         <ThreadWorkspace

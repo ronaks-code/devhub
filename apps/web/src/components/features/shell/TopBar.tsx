@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
+  ChevronDown,
   Command as CommandIcon,
   Folder,
   Gauge,
@@ -14,13 +15,13 @@ import {
 import { cn } from "@/lib/utils";
 import { LogoutButton } from "../../AuthGate";
 import { DeckMark } from "../../DeckMark";
-import { SessionCostBadge } from "../../SessionCostBadge";
 import { ThemeSwitcher } from "../../ThemeSwitcher";
 import { Spinner } from "../../ui";
+import { StatusDot } from "../../ui/StatusDot";
+import { compactNumber } from "../../../lib/format";
 import type { RecentSession } from "../../../hooks/useRecentSessions";
 import type { PerfPreference } from "../../../hooks/useReducedMotion";
 import type { ThemePreference } from "../../../hooks/useTheme";
-import type { SessionSummary } from "../../../lib/types";
 import type { Tab } from "../../../App";
 import { ChatTabs, type ChatTab } from "./ChatTabs";
 
@@ -182,8 +183,15 @@ export interface TopBarProps {
   onOpenRecent: (projectId: string, sessionId: string) => void;
   onClearRecents: () => void;
   onBeforeOpenRecent: () => void;
-  projectSessions: SessionSummary[];
   projectName?: string | null;
+  /** Opens the ⌘P project switcher from the breadcrumb project segment (§3.2). */
+  onOpenProjectSwitcher?: () => void;
+  /** Live run-status counts (from the app-root poll) for the status pills (§3.2). */
+  runningCount?: number;
+  needsYouCount?: number;
+  /** Budget chip (§3.2): month-to-date spend and, if set, the monthly cap. */
+  budgetMonthToDateUsd?: number;
+  budgetMonthlyCapUsd?: number | null;
   workModeAvailable: boolean;
   workModeOpen: boolean;
   onToggleWorkMode: () => void;
@@ -215,8 +223,12 @@ export function TopBar({
   onOpenRecent,
   onClearRecents,
   onBeforeOpenRecent,
-  projectSessions,
   projectName,
+  onOpenProjectSwitcher,
+  runningCount = 0,
+  needsYouCount = 0,
+  budgetMonthToDateUsd,
+  budgetMonthlyCapUsd,
   workModeAvailable,
   workModeOpen,
   onToggleWorkMode,
@@ -230,19 +242,39 @@ export function TopBar({
   return (
     <header
       data-tauri-drag-region
-      className="flex h-11 w-full min-w-0 items-center gap-3 border-b border-[var(--dh-glass-border)] bg-transparent px-4"
+      className="glass-chrome flex h-11 w-full min-w-0 items-center gap-3 px-4"
+      // .glass-chrome draws a full 1px border; the top bar wants ONLY the
+      // --dh-glass-border bottom seam (§3.2), so reset the box border and keep
+      // the bottom edge. Inline beats the unlayered .glass-chrome rule.
+      style={{
+        borderWidth: 0,
+        borderBottomWidth: 1,
+        borderBottomStyle: "solid",
+        borderBottomColor: "var(--dh-glass-border)",
+      }}
     >
-      <div className="flex shrink-0 items-center gap-2" data-tauri-drag-region>
+      <div className="flex shrink-0 items-center gap-1.5 text-sm" data-tauri-drag-region>
         <DeckMark size={18} className="shrink-0" />
+        {/* ⬦ workspace / project breadcrumb (§3.2). The project segment is a
+            button that opens the ⌘P project switcher, not static text. */}
+        <span aria-hidden className="text-[var(--dh-text-disabled)]">⬦</span>
+        <span className="font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
         {projectName ? (
-          <span className="flex items-center gap-1.5 text-sm" data-tauri-drag-region>
-            <span className="font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
-            <span className="text-[var(--dh-text-disabled)]">/</span>
-            <span className="max-w-[180px] truncate font-medium text-[var(--dh-text-muted)]">{projectName}</span>
-          </span>
-        ) : (
-          <span className="text-sm font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
-        )}
+          <>
+            <span className="text-[var(--dh-text-disabled)]" data-tauri-drag-region>/</span>
+            <button
+              type="button"
+              onClick={onOpenProjectSwitcher}
+              disabled={!onOpenProjectSwitcher}
+              className="inline-flex max-w-[180px] items-center gap-1 rounded-md px-1.5 py-0.5 font-medium text-[var(--dh-text-muted)] transition hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50 disabled:pointer-events-none"
+              title="Switch project (⌘P)"
+              aria-haspopup="dialog"
+            >
+              <span className="min-w-0 truncate">{projectName}</span>
+              <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
+            </button>
+          </>
+        ) : null}
       </div>
 
       {/*
@@ -258,9 +290,12 @@ export function TopBar({
         data-tauri-drag-region
         className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        {chatTabs && chatTabs.length > 0 && onSelectTab && onCloseTab && onNewTab ? (
+        {/* Render whenever the handlers exist, even with zero tabs, so the
+            persistent "+" new-chat affordance is ALWAYS present (§3.2) and the
+            strip fills in as chats open — not gated on tab count. */}
+        {onSelectTab && onCloseTab && onNewTab ? (
           <ChatTabs
-            tabs={chatTabs}
+            tabs={chatTabs ?? []}
             activeTabId={activeTabId}
             onSelect={onSelectTab}
             onClose={onCloseTab}
@@ -356,8 +391,43 @@ export function TopBar({
             onClear={onClearRecents}
             onBeforeOpen={onBeforeOpenRecent}
           />
-          {/* Running total of the active project's loaded-session spend (est.). */}
-          <SessionCostBadge projectSessions={projectSessions} projectName={projectName} />
+          {/* Live run-status pills (§3.2) — same app-root poll the StatusBar reads. */}
+          <span
+            className={cn(
+              "inline-flex items-center gap-1.5",
+              runningCount > 0 ? "text-[var(--dh-success)]" : "text-zinc-400",
+            )}
+            title={`${runningCount} session${runningCount === 1 ? "" : "s"} running`}
+          >
+            <StatusDot status={runningCount > 0 ? "running" : "idle"} />
+            {`${runningCount} running`}
+          </span>
+          {needsYouCount > 0 ? (
+            <span
+              className="inline-flex items-center rounded-md bg-[color-mix(in_srgb,var(--dh-warning)_14%,transparent)] px-1.5 py-0.5 text-[var(--dh-warning)]"
+              role="status"
+              title={`${needsYouCount} session${needsYouCount === 1 ? "" : "s"} waiting on you`}
+            >
+              {`${needsYouCount} needs review`}
+            </span>
+          ) : null}
+          {/* Month-to-date budget chip (§3.2): "Jul $X" and "/ cap" only when a
+              monthly cap is set. Number is the same stats.budget source the
+              StatusBar and sidebar spend meter read — no fabricated %. */}
+          {typeof budgetMonthToDateUsd === "number" ? (
+            <span
+              className="inline-flex items-center gap-1 font-mono tabular-nums"
+              title="Month-to-date spend (all projects)"
+            >
+              <span className="uppercase tracking-wide text-zinc-500">
+                {new Date().toLocaleString("en-US", { month: "short" })}
+              </span>
+              <span className="text-zinc-300">{`$${compactNumber(budgetMonthToDateUsd)}`}</span>
+              {typeof budgetMonthlyCapUsd === "number" && budgetMonthlyCapUsd > 0 ? (
+                <span className="text-zinc-500">{`/ $${compactNumber(budgetMonthlyCapUsd)}`}</span>
+              ) : null}
+            </span>
+          ) : null}
           {progress ? (
             <span className="flex items-center gap-1.5 text-clay-300">
               <Spinner className="h-3 w-3" />

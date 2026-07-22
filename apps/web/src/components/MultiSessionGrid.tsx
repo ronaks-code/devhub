@@ -10,10 +10,13 @@ import {
   agoMs,
   buildOpsEntries,
   bucketStatusKind,
+  filterOpsEntries,
   indexSessions,
   lastSegment,
   type OpsEntry,
+  type OpsFilter,
 } from "./features/ops/opsHelpers";
+import { OpsFilterChips } from "./features/ops/OpsFilterChips";
 
 /**
  * Keep only ONE entry per sessionId (first wins — the server already sorts and
@@ -182,11 +185,17 @@ export function MultiSessionGrid({
     return () => clearInterval(t);
   }, []);
 
+  const [filter, setFilter] = useState<OpsFilter>("all");
+
   const sessionsById = useMemo(() => indexSessions(sessions), [sessions]);
   const entries = useMemo(() => buildOpsEntries(running, sessionsById), [running, sessionsById]);
+  const visible = useMemo(() => filterOpsEntries(entries, filter), [entries, filter]);
 
+  // Head counts stay backed by the FULL entry list (not the filtered view) so the
+  // meta line always agrees with the sidebar tiers / STALE badge.
   const runningCount = entries.filter((e) => e.bucket === "running").length;
   const needsYouCount = entries.filter((e) => e.bucket === "needsYou").length;
+  const staleCount = entries.filter((e) => e.bucket === "stale").length;
 
   return (
     <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
@@ -198,13 +207,11 @@ export function MultiSessionGrid({
           </h1>
           {entries.length > 0 ? (
             <span className="dh-mono-ui text-[var(--dh-text-muted)]">
-              {entries.length} sessions · {runningCount} running
-              {needsYouCount > 0 ? (
-                <span className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
-                  {needsYouCount} need you
-                </span>
-              ) : null}
+              {entries.length} sessions · {runningCount} running · {needsYouCount} waiting on you · {staleCount} stale
             </span>
+          ) : null}
+          {entries.length > 0 ? (
+            <OpsFilterChips entries={entries} filter={filter} onFilterChange={setFilter} />
           ) : null}
           {onRefresh ? (
             <button
@@ -230,9 +237,13 @@ export function MultiSessionGrid({
               hint="Live Claude Code and Codex sessions show up here the moment they start — busy, waiting, or needing your input."
             />
           </div>
+        ) : visible.length === 0 ? (
+          <div className="glass-card px-4 py-10 text-center text-[12px] text-[var(--dh-text-dim)]">
+            No sessions match this filter.
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
-            {entries.map((entry) => (
+            {visible.map((entry) => (
               <GlassCard
                 key={`${entry.running.pid}:${entry.running.sessionId}`}
                 entry={entry}

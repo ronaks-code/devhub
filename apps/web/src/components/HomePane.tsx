@@ -157,15 +157,16 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                       className="flex items-center gap-3 px-4 py-3"
                     >
                       {/* Icon */}
-                      {/* Provider identity stays coral (Claude) vs sky (Codex) —
-                          never the Nebula brand indigo (which clay-* now maps to). */}
+                      {/* Provider identity stays coral (Claude) vs mint (Codex) via
+                          the --dh-provider-* tokens — never the Nebula brand indigo
+                          (which clay-* now maps to). */}
                       {isClaude ? (
                         <Bot className="h-4 w-4 shrink-0 text-[var(--dh-provider-anthropic)]" />
                       ) : (
-                        <Cpu className="h-4 w-4 shrink-0 text-sky-400" />
+                        <Cpu className="h-4 w-4 shrink-0 text-[var(--dh-provider-openai)]" />
                       )}
 
-                      {/* Tool badge. Bg stays the soft coral/sky tint in both
+                      {/* Tool badge. Bg stays the soft coral/mint tint in both
                           themes; text color swaps to a light-theme variant via
                           dh-badge-text-* (see index.css) so it stays legible on
                           white — the pale dark-theme literals are ~1.5-1.8:1. */}
@@ -173,7 +174,7 @@ export function HomePane({ onNewChat }: { onNewChat: () => void }) {
                         className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           isClaude
                             ? "bg-[#ff7f6e]/15 dh-badge-text-anthropic"
-                            : "bg-sky-500/15 dh-badge-text-openai"
+                            : "bg-[#4fd6a4]/15 dh-badge-text-openai"
                         }`}
                       >
                         {isClaude ? "Claude" : "Codex"}

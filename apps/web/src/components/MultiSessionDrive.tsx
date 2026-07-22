@@ -42,7 +42,7 @@ function statusStyle(s: RunningSession): { dot: string; text: string; label: str
   if (status === "busy") return { dot: "bg-clay-500 animate-pulse", text: "text-clay-300", label: "busy" };
   if (status === "waiting") return { dot: "bg-amber-400", text: "text-amber-300", label: "waiting" };
   if (status === "idle") return { dot: "bg-zinc-500", text: "text-zinc-400", label: "idle" };
-  return { dot: "bg-sky-400", text: "text-sky-300", label: status || "running" };
+  return { dot: "bg-[var(--dh-provider-openai)]", text: "text-[var(--dh-provider-openai)]", label: status || "running" };
 }
 
 /**

@@ -210,3 +210,37 @@ export function buildOpsEntries(
     return (b.running.startedAt ?? 0) - (a.running.startedAt ?? 0);
   });
 }
+
+/**
+ * The Live Ops head filter (§3.7 chips: All / Claude / Codex / Needs me). A pure
+ * VIEW filter over the already-built entries — it never touches the joins or the
+ * bucket classification, so the head's total counts (which stay backed by the full
+ * `entries` list) keep agreeing with the sidebar tiers regardless of the filter.
+ */
+export type OpsFilter = "all" | "anthropic" | "openai" | "needsYou";
+
+/** Apply an `OpsFilter` to a built entry list (identity for "all"). */
+export function filterOpsEntries(entries: OpsEntry[], filter: OpsFilter): OpsEntry[] {
+  switch (filter) {
+    case "anthropic":
+    case "openai":
+      return entries.filter((e) => e.provider === filter);
+    case "needsYou":
+      return entries.filter((e) => e.bucket === "needsYou");
+    default:
+      return entries;
+  }
+}
+
+/** Per-filter match counts for the chip badges (backed by the full entry list). */
+export function opsFilterCounts(entries: OpsEntry[]): Record<OpsFilter, number> {
+  let anthropic = 0;
+  let openai = 0;
+  let needsYou = 0;
+  for (const e of entries) {
+    if (e.provider === "anthropic") anthropic += 1;
+    else if (e.provider === "openai") openai += 1;
+    if (e.bucket === "needsYou") needsYou += 1;
+  }
+  return { all: entries.length, anthropic, openai, needsYou };
+}

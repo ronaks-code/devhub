@@ -60,8 +60,7 @@ import { SearchPalette } from "./components/SearchPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { mergeToast, ToastStack, type ToastItem } from "./components/Toast";
 import { AuthGate, LogoutButton } from "./components/AuthGate";
-import { SessionCostBadge } from "./components/SessionCostBadge";
-import { ResponsiveShell, useResponsiveShell } from "./components/ResponsiveShell";
+import { ResponsiveShell, useResponsiveShell, useMediaQuery, INSPECTOR_QUERY } from "./components/ResponsiveShell";
 import { AppShell } from "./components/features/shell/AppShell";
 import { resolveShellChromeMode } from "./components/features/shell/DevHubShell";
 import {
@@ -215,6 +214,16 @@ export function PaneFallback() {
 }
 
 const BASE_TAIL = 2 * 1024 * 1024;
+
+// The Claude model ids the Launchpad card offers (§3.3b). Mirrors the same known
+// list the ChatPane / SettingsPane model pickers use; the chosen id persists to
+// settings.defaultModel via saveSettings, so there's one stored source of truth.
+const LAUNCHPAD_CLAUDE_MODELS = [
+  "claude-opus-4-8",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "claude-fable-5",
+];
 
 /** Sentinel id for the ephemeral "new chat, no session id yet" tab (see `chatTabs`). */
 const NEW_CHAT_TAB_ID = "__new-chat__";
@@ -1346,6 +1355,9 @@ export default function App() {
   // Responsive Browse layout: 3 panes on wide screens, a single active pane with
   // a breadcrumb on narrow ones. The stage auto-advances as the user drills in.
   const shell = useResponsiveShell({ hasProject: !!projectId, hasSession: !!sessionId });
+  // Only float the Browse inspector dock as a 4th column once the viewport is wide
+  // enough that it won't squeeze the transcript below a readable width (§3.8).
+  const inspectorFitsAsColumn = useMediaQuery(INSPECTOR_QUERY);
   // The open session's title for the transcript breadcrumb crumb (when loaded).
   const sessionTitle = page ? displaySessionTitle(page.session, project?.name) : null;
 
@@ -1366,6 +1378,19 @@ export default function App() {
   // run-status groups + spend meter today, and the TopBar pills / StatusBar next.
   // Joined to sessions by sessionId; SessionSummary itself has no status/provider.
   const { stats: liveStats, running: liveRunning, refresh: refreshLive } = useStatsPolling();
+
+  // Per-provider spend to date for the Launchpad cards (§3.3b), aggregated from the
+  // SAME real stats.byModel the dashboard uses — never a fabricated figure. Models
+  // that look like OpenAI/Codex bucket to codex; everything else to claude. A
+  // provider with no priced sessions stays 0 and its card omits the stat.
+  const providerSpend = useMemo(() => {
+    const acc = { claude: 0, codex: 0 };
+    for (const row of liveStats?.byModel ?? []) {
+      if (/gpt|codex|\bo[1-9]\b/i.test(row.model)) acc.codex += row.costUsd;
+      else acc.claude += row.costUsd;
+    }
+    return acc;
+  }, [liveStats]);
 
   const taskRailMode = resolveTaskRailMode(settings);
   const taskRailModel = useMemo<TaskRailModel>(() => {
@@ -1729,11 +1754,18 @@ export default function App() {
       mechanics={settings?.defaultMechanics ?? "claude"}
       onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
       claudeModel={settings?.defaultModel ?? undefined}
+      claudeModels={LAUNCHPAD_CLAUDE_MODELS}
+      onClaudeModelChange={(m) => saveSettings({ defaultModel: m })}
+      claudeSpend={providerSpend.claude}
+      codexSpend={providerSpend.codex}
       recents={recents}
       onOpenRecent={openSession}
       onLaunch={(draft) => startNewChat(draft)}
       onBrowse={() => { setChatSeed(null); setTab("browse"); }}
       onOpenCodexHistory={() => { setChatSeed(null); setTab("codex-history"); }}
+      onSecondOpinion={
+        recents[0] ? () => openCrossProviderFork(recents[0]!.sessionId) : undefined
+      }
       worktrees={worktrees}
     />
   );
@@ -1869,8 +1901,19 @@ export default function App() {
             onOpenRecent={openSession}
             onClearRecents={clearRecents}
             onBeforeOpenRecent={() => setWorkModeOpen(false)}
-            projectSessions={sessions}
             projectName={project?.name}
+            onOpenProjectSwitcher={() =>
+              openHeaderOverlay(setWorkModeOpen, () => {
+                setSearchOpen(false);
+                setCommandOpen(false);
+                setShortcutOpen(false);
+                setProjectSwitcherOpen(true);
+              })
+            }
+            runningCount={statusBarData.runningCount}
+            needsYouCount={statusBarData.needsYouCount}
+            budgetMonthToDateUsd={liveStats?.budget?.monthToDateUsd}
+            budgetMonthlyCapUsd={liveStats?.budget?.monthlyBudgetUsd ?? null}
             workModeAvailable={workModeAvailable}
             workModeOpen={workModeOpen}
             onToggleWorkMode={() => toggleWorkModeOverlay(
@@ -1911,6 +1954,7 @@ export default function App() {
               // would duplicate the sidebar's own project/session columns).
               onSelectSession={selectChatTab}
               onNewTask={() => startNewChat()}
+              onShowShortcuts={() => setShortcutOpen(true)}
               mechanics={settings?.defaultMechanics ?? "claude"}
               onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
               modelLabel={settings?.defaultModel ? `model ${settings.defaultModel}` : undefined}
@@ -2289,11 +2333,12 @@ export default function App() {
                       WORKTREE (branch + change summary), SESSION state (model), and the
                       CHANGED-FILES list — NO diff-forward UI. Browse is read-only history,
                       so every row is backed by real repo/session data or omitted.
-                      Wrapped in a display:contents span whose CSS hides the dock below
-                      1440: Browse keeps its Projects+Sessions explorer columns, so on
-                      compact desktops the dock must yield its 300px to the transcript
-                      (QA B3: the transcript was a ~50px sliver at 1280). */}
-                  {inspectorDockMode === "devhub" && inspectorVisible ? (
+                      Gated on INSPECTOR_QUERY (≥1760, see ResponsiveShell): Browse keeps its
+                      Projects+Sessions explorer columns, so on narrower desktops the dock
+                      must yield its 300px to the transcript. The old CSS-only 1440 gate
+                      still left the transcript a ~185px sliver at 1440 (QA §3.8), so the
+                      dock is now withheld until the viewport can spare it. */}
+                  {inspectorDockMode === "devhub" && inspectorVisible && inspectorFitsAsColumn ? (
                     <span className="dh-browse-inspector">
                     {page ? (
                       <InspectorDock

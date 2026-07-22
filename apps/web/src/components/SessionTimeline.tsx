@@ -45,7 +45,7 @@ function classify(m: NormalizedMessage): TickKind {
 const TICK_COLOR: Record<TickKind, string> = {
   user: "bg-clay-500",
   assistant: "bg-zinc-500",
-  tool: "bg-sky-500",
+  tool: "bg-[var(--dh-provider-openai)]",
   error: "bg-red-500",
   other: "bg-zinc-700",
 };
@@ -196,7 +196,7 @@ export function SessionTimeline({
             {classify(current) === "error" ? (
               <AlertCircle className="h-3 w-3 text-red-400" />
             ) : classify(current) === "tool" ? (
-              <Wrench className="h-3 w-3 text-sky-400" />
+              <Wrench className="h-3 w-3 text-[var(--dh-provider-openai)]" />
             ) : null}
             {current.role}
           </span>

@@ -395,7 +395,12 @@ export interface AppSettings {
 /** Baseline settings applied under any value the user hasn't explicitly set. */
 export const DEFAULT_SETTINGS: AppSettings = {
   defaultMechanics: "claude",
-  theme: "system",
+  // Dark is the intended out-of-box look (light/system are opt-in via Settings).
+  // Shipping "system" here made a fresh profile silently adopt+persist the OS
+  // scheme on first load — on an OS-light machine the app flashed dark then
+  // flipped to light with no user action. "dark" keeps the App adopt guard
+  // (t !== preference) a no-op on fresh installs, so nothing flips or persists.
+  theme: "dark",
   density: "comfortable",
   lastProjectId: null,
   monthlyBudgetUsd: null,

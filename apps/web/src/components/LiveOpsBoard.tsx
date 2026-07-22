@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, ArrowUpRight, Coins, RadioTower, RefreshCw, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertCircle, ArrowUpRight, Coins, RadioTower, RefreshCw, X, XCircle } from "lucide-react";
 import type { RunningSession, SessionSummary } from "../lib/types";
 import { formatUsd } from "../lib/format";
 import { cn } from "../lib/utils";
@@ -10,11 +10,14 @@ import {
   agoMs,
   buildOpsEntries,
   bucketStatusKind,
+  filterOpsEntries,
   indexSessions,
   lastSegment,
   type OpsBucket,
   type OpsEntry,
+  type OpsFilter,
 } from "./features/ops/opsHelpers";
+import { OpsFilterChips } from "./features/ops/OpsFilterChips";
 
 /** The four Attention-Board columns, left→right (the "what needs my eyes" order). */
 const COLUMNS: ReadonlyArray<{ bucket: OpsBucket; label: string; tint: string; dot: string }> = [
@@ -29,14 +32,18 @@ function BoardCard({
   entry,
   nowMs,
   onOpen,
+  onDismiss,
 }: {
   entry: OpsEntry;
   nowMs: number;
   onOpen?: (cwd: string | null, sessionId: string) => void;
+  /** Hide this card from the board locally (no server-side state). */
+  onDismiss?: (sessionId: string) => void;
 }) {
   const { running: s, bucket } = entry;
   const project = lastSegment(s.cwd);
   const canOpen = !!onOpen && !!s.sessionId;
+  const canDismiss = !!onDismiss && !!s.sessionId;
   const sub = entry.branch ? `⎇ ${entry.branch}` : project;
 
   return (
@@ -80,15 +87,30 @@ function BoardCard({
         <div className="dh-mono-ui truncate text-[var(--dh-text-muted)]">running {agoMs(s.startedAt, nowMs)}</div>
       )}
 
-      {canOpen ? (
-        <button
-          type="button"
-          onClick={() => onOpen!(s.cwd, s.sessionId)}
-          className="mt-0.5 inline-flex items-center gap-1 self-start rounded-[7px] bg-[var(--dh-hover)] px-2 py-0.5 text-[11px] font-medium text-[var(--dh-text)] ring-1 ring-[var(--dh-glass-border)] transition hover:ring-[var(--dh-glass-border-hi)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]"
-        >
-          <ArrowUpRight className="h-3 w-3" />
-          Open
-        </button>
+      {canOpen || canDismiss ? (
+        <div className="mt-0.5 flex items-center gap-1.5">
+          {canOpen ? (
+            <button
+              type="button"
+              onClick={() => onOpen!(s.cwd, s.sessionId)}
+              className="inline-flex items-center gap-1 rounded-[7px] bg-[var(--dh-hover)] px-2 py-0.5 text-[11px] font-medium text-[var(--dh-text)] ring-1 ring-[var(--dh-glass-border)] transition hover:ring-[var(--dh-glass-border-hi)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]"
+            >
+              <ArrowUpRight className="h-3 w-3" />
+              Open
+            </button>
+          ) : null}
+          {canDismiss ? (
+            <button
+              type="button"
+              onClick={() => onDismiss!(s.sessionId)}
+              title="Dismiss from this board (local only)"
+              className="inline-flex items-center gap-1 rounded-[7px] px-2 py-0.5 text-[11px] font-medium text-[var(--dh-text-muted)] transition hover:bg-[var(--dh-hover)] hover:text-[var(--dh-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]"
+            >
+              <X className="h-3 w-3" />
+              Dismiss
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );
@@ -97,23 +119,41 @@ function BoardCard({
 /** One board column: header (dot + label + count) over a stack of compact cards. */
 function BoardColumn({
   column,
+  hint,
   entries,
   nowMs,
   onOpen,
+  onDismiss,
+  columnRef,
 }: {
   column: (typeof COLUMNS)[number];
+  /** Keyboard hint shown in the header (press this digit to jump to the column). */
+  hint: string;
   entries: OpsEntry[];
   nowMs: number;
   onOpen?: (cwd: string | null, sessionId: string) => void;
+  onDismiss?: (sessionId: string) => void;
+  columnRef?: (el: HTMLDivElement | null) => void;
 }) {
   return (
-    <div className={cn("flex min-w-0 flex-col gap-2.5 rounded-[16px] p-2.5", column.tint)}>
+    <div
+      ref={columnRef}
+      tabIndex={-1}
+      aria-label={`${column.label} — press ${hint} to jump here`}
+      className={cn(
+        "flex min-w-0 scroll-mt-4 flex-col gap-2.5 rounded-[16px] p-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--dh-focus)]",
+        column.tint,
+      )}
+    >
       <div className="flex items-center gap-2 px-1">
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", column.dot)} aria-hidden />
         <span className="dh-label flex-1">{column.label}</span>
         <span className="dh-nums rounded-full bg-[var(--dh-control)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--dh-text-muted)]">
           {entries.length}
         </span>
+        <kbd aria-hidden title={`Press ${hint} to jump to this column`}>
+          {hint}
+        </kbd>
       </div>
       <div className="flex flex-col gap-2.5">
         {entries.length === 0 ? (
@@ -127,6 +167,7 @@ function BoardColumn({
               entry={entry}
               nowMs={nowMs}
               onOpen={onOpen}
+              onDismiss={onDismiss}
             />
           ))
         )}
@@ -163,18 +204,58 @@ export function LiveOpsBoard({
     return () => clearInterval(t);
   }, []);
 
+  const [filter, setFilter] = useState<OpsFilter>("all");
+  // Locally-dismissed sessionIds (client-only — there's no server "dismiss" API;
+  // this just hides a card from MY board until the tab is reloaded).
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const dismiss = (sessionId: string) =>
+    setDismissed((prev) => {
+      const next = new Set(prev);
+      next.add(sessionId);
+      return next;
+    });
+
   const sessionsById = useMemo(() => indexSessions(sessions), [sessions]);
   const entries = useMemo(() => buildOpsEntries(running, sessionsById), [running, sessionsById]);
+  const visible = useMemo(
+    () =>
+      filterOpsEntries(entries, filter).filter(
+        (e) => !e.running.sessionId || !dismissed.has(e.running.sessionId),
+      ),
+    [entries, filter, dismissed],
+  );
 
   const byBucket = useMemo(() => {
     const map: Record<OpsBucket, OpsEntry[]> = { needsYou: [], running: [], stale: [], finished: [] };
-    for (const e of entries) map[e.bucket].push(e);
+    for (const e of visible) map[e.bucket].push(e);
     return map;
-  }, [entries]);
+  }, [visible]);
 
-  const runningCount = byBucket.running.length;
-  const needsYouCount = byBucket.needsYou.length;
-  const staleCount = byBucket.stale.length;
+  // Head counts stay backed by the FULL entry list so the meta line keeps agreeing
+  // with the sidebar tiers / STALE badge regardless of the active filter.
+  const runningCount = entries.filter((e) => e.bucket === "running").length;
+  const needsYouCount = entries.filter((e) => e.bucket === "needsYou").length;
+  const staleCount = entries.filter((e) => e.bucket === "stale").length;
+
+  // Column jump: press 1–4 to scroll a column into view (useful once the four
+  // columns stack on narrow widths). Ignored while typing in a field.
+  const columnRefs = useRef<Array<HTMLDivElement | null>>([]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      const idx = ["1", "2", "3", "4"].indexOf(e.key);
+      if (idx === -1) return;
+      const el = columnRefs.current[idx];
+      if (!el) return;
+      e.preventDefault();
+      el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+      el.focus({ preventScroll: true });
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
@@ -188,6 +269,9 @@ export function LiveOpsBoard({
             <span className="dh-mono-ui text-[var(--dh-text-muted)]">
               {entries.length} sessions · {runningCount} running · {needsYouCount} waiting on you · {staleCount} stale
             </span>
+          ) : null}
+          {entries.length > 0 ? (
+            <OpsFilterChips entries={entries} filter={filter} onFilterChange={setFilter} />
           ) : null}
           {onRefresh ? (
             <button
@@ -215,13 +299,18 @@ export function LiveOpsBoard({
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {COLUMNS.map((column) => (
+            {COLUMNS.map((column, i) => (
               <BoardColumn
                 key={column.bucket}
                 column={column}
+                hint={String(i + 1)}
                 entries={byBucket[column.bucket]}
                 nowMs={nowMs}
                 onOpen={onOpenSession}
+                onDismiss={dismiss}
+                columnRef={(el) => {
+                  columnRefs.current[i] = el;
+                }}
               />
             ))}
           </div>

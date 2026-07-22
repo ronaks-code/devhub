@@ -149,7 +149,7 @@ describe("TranscriptIndex provider-index wiring", () => {
     }
 
     expect("close" in store).toBe(false);
-    expect(index.settings.get("theme")).toBe("system");
+    expect(index.settings.get("theme")).toBe("dark");
     expect(index.getSessionSummary("missing-session")).toBeUndefined();
     index.close();
 

@@ -6,7 +6,7 @@ import { compactNumber } from "../../lib/format";
 import { cn } from "../../lib/utils";
 import { Spinner } from "../ui";
 
-/** Error rate at/above this is "high" and gets the loud amber/red treatment. */
+/** Error rate at/above this is "high" and gets the loud (deep-rose) treatment. */
 const HIGH_ERROR_RATE = 0.1;
 
 /** Cap how many tools the card lists — a real project's tail can run 30+ deep
@@ -109,7 +109,7 @@ function normalize(s: ToolStat): ToolRow | null {
 /**
  * Dashboard widget: per-tool usage analytics (GET /api/stats/tools). Each row is
  * one tool with a usage bar (relative to the busiest tool), its invocation count,
- * an error-rate chip (loud amber/red once it crosses {@link HIGH_ERROR_RATE}), and
+ * an error-rate chip (rose, loud once it crosses {@link HIGH_ERROR_RATE}), and
  * its average duration when the server reports one. Sorted by invocation count
  * descending so the workhorses lead.
  *
@@ -188,8 +188,9 @@ export function ToolAnalytics() {
                 <span className="truncate font-medium text-zinc-200" title={r.tool}>
                   {friendlyToolName(r.tool)}
                 </span>
-                {/* Error-rate chip. Loud amber/red once it crosses the "high"
-                    threshold so failing tools jump out; a quiet zinc otherwise.
+                {/* Error-rate chip (§3.6: error rate > 0 in rose). Any nonzero rate
+                    reads rose — loud once it crosses the "high" threshold so failing
+                    tools jump out, lighter below it; a quiet zinc at exactly 0%.
                     When the server reported NO error signal (older un-reindexed
                     data returns count only), show a muted "—" so a missing rate
                     reads as "not yet available" rather than a real 0%. */}
@@ -198,9 +199,9 @@ export function ToolAnalytics() {
                     className={cn(
                       "inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium tabular-nums",
                       high
-                        ? "bg-red-500/15 text-red-300"
+                        ? "bg-rose-500/15 text-rose-200"
                         : r.errorRate > 0
-                          ? "bg-amber-500/10 text-amber-300/90"
+                          ? "bg-rose-500/10 text-rose-300/90"
                           : "bg-zinc-800/70 text-zinc-500",
                     )}
                     title={`${(r.errorRate * 100).toFixed(1)}% of invocations errored`}
@@ -235,11 +236,11 @@ export function ToolAnalytics() {
                 <span title="invocation count">{compactNumber(r.count)}</span>
               </span>
             </div>
-            {/* Usage bar relative to the busiest tool. Tinted red when the tool's
+            {/* Usage bar relative to the busiest tool. Tinted rose when the tool's
                 error rate is high so the bar itself reads the warning. */}
             <div className="h-2 overflow-hidden rounded-full bg-zinc-900 ring-1 ring-zinc-800">
               <div
-                className={cn("h-full rounded-full", high ? "bg-red-500/80" : "bg-violet-500")}
+                className={cn("h-full rounded-full", high ? "bg-rose-500/80" : "bg-violet-500")}
                 style={{ width: `${(r.count / maxCount) * 100}%` }}
               />
             </div>

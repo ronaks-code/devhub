@@ -97,7 +97,14 @@ export const SETTINGS_TABS: ReadonlyArray<SettingsTabItem<SettingsSection>> = Ob
  * unmounted panels. Pure data, unit-testable via `matchSettingsSections`.
  */
 const SECTION_KEYWORDS: Record<SettingsSection, string> = {
-  preferences: "appearance theme dark light model density provider claude codex mechanics connection api host bearer token",
+  // The Preferences panel also mounts the maintenance utilities (RebuildIndex /
+  // IntegrityPanel / ArchiveTransfer), so its keywords must cover those controls
+  // too — otherwise "index", "export", "archive" etc. find nothing though the
+  // settings are right there.
+  preferences:
+    "appearance theme dark light model density provider claude codex mechanics connection api host bearer token " +
+    "rebuild search index integrity health repair drift audit " +
+    "backup archive transfer export import download restore portable maintenance",
   budget: "budget spend cap cost money monthly usd forecast pacing",
   memory: "memory claude.md context instructions project global",
   mcp: "mcp servers model context protocol tools",
@@ -331,6 +338,26 @@ export function SettingsRoute({
 
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestVersion = useRef(0);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // §3.4 Query-Deck: a plain "/" focuses the settings search — the near-universal
+  // "focus search" shortcut. Ignored while the user is typing in a field (so "/"
+  // still types literally, and Shift+/ "?" still reaches the global shortcut
+  // cheat-sheet), and it never steals a "/" from an input the user is already in.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t?.isContentEditable) return;
+      const input = searchRef.current;
+      if (!input) return;
+      e.preventDefault();
+      input.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const settings = applySettingsEdits(serverSettings, edits);
   const hasUnsavedEdits = serverSettings != null && (Object.keys(edits).length > 0 || connDirty);
@@ -733,10 +760,12 @@ export function SettingsRoute({
         <header className="dh-settings-header">
           <h1 className="dh-settings-title">Settings</h1>
           <input
+            ref={searchRef}
             type="search"
             className="dh-settings-search"
-            placeholder="Search settings…"
+            placeholder="Search settings… (press /)"
             aria-label="Search settings"
+            aria-keyshortcuts="/"
             value={settingsQuery}
             onChange={(e) => setSettingsQuery(e.target.value)}
           />
@@ -750,7 +779,20 @@ export function SettingsRoute({
           </div>
         )}
 
-        {section === "preferences" ? (
+        {visibleTabs.length === 0 ? (
+          // Zero matches: the content pane must agree with the nav, not keep
+          // showing the previously selected (and now-filtered-out) section.
+          <div
+            className="dh-settings-panel"
+            role="status"
+            data-dh-settings-panel="empty"
+            data-dh-settings-panel-empty=""
+          >
+            <p className="dh-settings-nav-empty">
+              No settings match “{settingsQuery.trim()}”. Clear the search to see every section.
+            </p>
+          </div>
+        ) : section === "preferences" ? (
           <TabPanel id={SETTINGS_TABLIST_ID} tabId="preferences">
             {preferencesBody}
           </TabPanel>

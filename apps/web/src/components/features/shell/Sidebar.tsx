@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
+  ChevronDown,
   Folder,
   Hexagon,
   History,
@@ -132,6 +133,8 @@ export interface SidebarProps {
   onMechanicsChange?: (m: "claude" | "codex") => void;
   modelLabel?: string;
   spend?: SidebarSpend;
+  /** Opens the shared ShortcutOverlay (the rail's dashed `?` chip, §3.1). */
+  onShowShortcuts?: () => void;
   /**
    * True while the active project's session list is (re)fetching. Cold start
    * can take 10-20s while the index rebuilds; without this the panel showed a
@@ -159,6 +162,33 @@ const NAV_ICONS: Record<string, { icon: LucideIcon; chord: string }> = {
 };
 
 const COLLAPSE_KEY = "devhub:sidebar-collapsed";
+const GROUPS_COLLAPSED_KEY = "devhub:sidebar-groups-collapsed";
+
+/** Parse the persisted {groupId: true} collapsed-group map (tolerant of junk). */
+function readCollapsedGroups(): Record<string, boolean> {
+  const raw = readCompat(GROUPS_COLLAPSED_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * True ONLY in the macOS Tauri desktop build, where the native traffic-lights
+ * (Overlay title-bar style) render over the window's top-left — which is this
+ * sidebar. We require BOTH the Tauri runtime AND a Mac UA: the plain web build
+ * (even in a Mac browser) has no native chrome, so it must apply NO inset (§4).
+ * Computed once; the Tauri globals are injected before the app script runs.
+ */
+function isMacTauriChrome(): boolean {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+  const tauri = "__TAURI__" in window || "__TAURI_INTERNALS__" in window;
+  const mac = /Mac/i.test(navigator.userAgent);
+  return tauri && mac;
+}
 
 function relTime(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -207,10 +237,28 @@ export function Sidebar({
   modelLabel,
   spend,
   loading,
+  onShowShortcuts,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState<boolean>(() => readCompat(COLLAPSE_KEY) === "1");
+  // macOS Tauri only: reserve a top drag-strip so the native traffic-lights don't
+  // cover the logo / nav icons / Sessions header (§4). No inset in the web build.
+  const [macTauri] = useState<boolean>(() => isMacTauriChrome());
   const [filter, setFilter] = useState("");
   const [chip, setChip] = useState<ChipFilter>("all");
+  const filterInputRef = useRef<HTMLInputElement>(null);
+  // Per-group collapse state (§3.1), keyed by the stable group id (review/stale/
+  // running/idle). Persisted so a collapsed group stays folded across launches.
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
+    () => readCollapsedGroups(),
+  );
+  const toggleGroup = useCallback((id: string) => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      if (!next[id]) delete next[id];
+      writeCompat(GROUPS_COLLAPSED_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
 
   // 1s tick for the tier-2 "running {elapsed}" timers — armed only while a
   // running card actually carries a real startedAt (no rows → no interval).
@@ -249,6 +297,19 @@ export function Sidebar({
         return;
       }
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+      // `/` focuses the session filter (the kbd hint in the filter well). If the
+      // panel is collapsed there's no input to focus, so open it first.
+      if (e.key === "/") {
+        e.preventDefault();
+        if (collapsed) {
+          toggleCollapsed();
+          // The input mounts on the next paint once the panel un-collapses.
+          requestAnimationFrame(() => filterInputRef.current?.focus());
+        } else {
+          filterInputRef.current?.focus();
+        }
+        return;
+      }
       if (chordArmed) {
         const dest = destinations.find((d) => NAV_ICONS[d.id]?.chord === e.key);
         if (dest) {
@@ -271,7 +332,7 @@ export function Sidebar({
       window.removeEventListener("keydown", onKey);
       if (chordTimer) clearTimeout(chordTimer);
     };
-  }, [destinations, onSelectDestination, toggleCollapsed]);
+  }, [destinations, onSelectDestination, toggleCollapsed, collapsed]);
 
   const q = filter.trim().toLowerCase();
   const filteredGroups = useMemo(() => {
@@ -304,7 +365,11 @@ export function Sidebar({
       : null;
 
   return (
-    <div className={cn("dh-sidebar", collapsed && "dh-sidebar--collapsed")} data-dh-sidebar="">
+    <div
+      className={cn("dh-sidebar", collapsed && "dh-sidebar--collapsed")}
+      data-dh-sidebar=""
+      data-tauri-macos={macTauri ? "" : undefined}
+    >
       {/* Icon rail — also the window drag grab-zone at the top-left (§4). */}
       <div className="dh-iconrail" data-dh-iconrail="" data-tauri-drag-region>
         <div className="dh-logo" data-dh-logo="" aria-label={brand} title={brand}>
@@ -359,6 +424,17 @@ export function Sidebar({
             <span className="dh-navicon-chord" aria-hidden>g,</span>
           </button>
         ) : null}
+        {onShowShortcuts ? (
+          <button
+            type="button"
+            className="dh-help-chip"
+            aria-label="Keyboard shortcuts"
+            title="Keyboard shortcuts"
+            onClick={onShowShortcuts}
+          >
+            ?
+          </button>
+        ) : null}
       </div>
 
       {/* Panel — sessions cockpit. */}
@@ -385,6 +461,7 @@ export function Sidebar({
         <label className="dh-panel-filter">
           <Search size={12} strokeWidth={2} aria-hidden />
           <input
+            ref={filterInputRef}
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
@@ -418,13 +495,22 @@ export function Sidebar({
           ) : filteredGroups.length === 0 ? (
             <p className="dh-sempty">{q || chip !== "all" ? "No matching sessions" : "No sessions"}</p>
           ) : (
-            filteredGroups.map((g) => (
+            filteredGroups.map((g) => {
+              const groupCollapsed = !!collapsedGroups[g.id];
+              return (
               <div key={g.id} className="dh-sgroup" data-dh-sgroup="">
-                <div className="dh-sgroup-head">
+                <button
+                  type="button"
+                  className="dh-sgroup-head"
+                  aria-expanded={!groupCollapsed}
+                  data-dh-collapsed={groupCollapsed ? "" : undefined}
+                  onClick={() => toggleGroup(g.id)}
+                >
+                  <ChevronDown className="dh-sgroup-caret" size={12} strokeWidth={2.5} aria-hidden />
                   <span className="dh-label">{g.label}</span>
                   <span className="dh-sgroup-count">{g.rows.length}</span>
-                </div>
-                {g.rows.map((r) => {
+                </button>
+                {groupCollapsed ? null : g.rows.map((r) => {
                   const selected = r.id === selectedSessionId;
                   const tier = g.tier ?? "recent";
                   const open = () => onSelectSession(r.id);
@@ -521,7 +607,8 @@ export function Sidebar({
                   );
                 })}
               </div>
-            ))
+              );
+            })
           )}
 
           {worktrees && worktrees.length > 0 ? (

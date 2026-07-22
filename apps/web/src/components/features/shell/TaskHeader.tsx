@@ -31,9 +31,35 @@ export interface TaskHeaderProps {
   claudeModel?: ClaudeModelReport;
   /** Route a provider change to the cross-provider fork flow (M7); never mutates source. */
   onFork?: () => void;
+  /**
+   * Aurora §3.3 session chips. Every field is optional and maps to a REAL source;
+   * anything absent simply doesn't render (no invented value). `branch`/`isWorktree`
+   * come from git status + the worktree list; `projectName` from the session cwd;
+   * `model` from the resumed/default model; `costUsd` from the session summary;
+   * `running` from the same live turn state the transcript already tracks.
+   */
+  branch?: string | null;
+  isWorktree?: boolean;
+  worktreePath?: string;
+  projectName?: string;
+  model?: string;
+  costUsd?: number;
+  running?: boolean;
 }
 
-export function TaskHeader({ title, provider, claudeModel, onFork }: TaskHeaderProps) {
+export function TaskHeader({
+  title,
+  provider,
+  claudeModel,
+  onFork,
+  branch,
+  isWorktree,
+  worktreePath,
+  projectName,
+  model,
+  costUsd,
+  running,
+}: TaskHeaderProps) {
   const identity = providerIdentity(provider);
   // Claude divergence is Claude-only. A Codex task computes nothing here, so no Claude
   // copy can ever leak beside a Codex task.
@@ -56,9 +82,46 @@ export function TaskHeader({ title, provider, claudeModel, onFork }: TaskHeaderP
         >
           {identity.label}
         </span>
+
+        {/* Session chips (Aurora §3.3). Each renders ONLY when its real source is
+            present — an absent field is omitted, never faked with a placeholder. */}
+        <div className="dh-task-header-chips" data-dh-task-chips="">
+          {branch ? (
+            <span
+              className={`dh-task-chip dh-task-chip--branch${isWorktree ? " dh-task-chip--worktree" : ""}`}
+              data-dh-task-chip="branch"
+              title={isWorktree && worktreePath ? worktreePath : undefined}
+            >
+              ⎇ {isWorktree ? `wt/${branch}` : branch}
+            </span>
+          ) : null}
+          {projectName ? (
+            <span className="dh-task-chip" data-dh-task-chip="project">
+              {projectName}
+            </span>
+          ) : null}
+          {model ? (
+            <span className="dh-task-chip" data-dh-task-chip="model">
+              {model}
+            </span>
+          ) : null}
+          {typeof costUsd === "number" && costUsd > 0 ? (
+            <span className="dh-task-chip" data-dh-task-chip="cost">
+              ${costUsd.toFixed(2)}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div className="dh-task-header-actions">
+        {/* Live run-state pill: the highest-signal element on the header, from the
+            same turn state the transcript uses. Idle renders nothing. */}
+        {running ? (
+          <span className="dh-task-run-pill" data-dh-task-run-pill="running" role="status">
+            <span className="dh-task-run-dot" aria-hidden />
+            agent running
+          </span>
+        ) : null}
         {/* Provider change is only a fork; the source task is never mutated. */}
         <button
           type="button"

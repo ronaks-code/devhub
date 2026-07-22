@@ -1090,7 +1090,7 @@ describe("settings store", () => {
 
     // Fresh DB => defaults (and undefined for keys with no default).
     expect(engine.getSettings()).toEqual(DEFAULT_SETTINGS);
-    expect(engine.settings.get("theme")).toBe("system");
+    expect(engine.settings.get("theme")).toBe("dark");
     expect(engine.settings.get("defaultModel")).toBeUndefined();
 
     // setAll merges only the provided keys; JSON-typed values round-trip.

@@ -62,6 +62,19 @@ export function useMediaQuery(query: string): boolean {
 const WIDE_QUERY = "(min-width: 1280px)";
 
 /**
+ * At/above this the Browse inspector dock (worktree + changed-files metadata) may
+ * render as a 4th column alongside projects+sessions+transcript. Below it the dock
+ * is withheld so the transcript keeps a readable width.
+ *
+ * Why 1760: the fixed chrome LEFT of the transcript is the Aurora rail (324) +
+ * projects column (288) + sessions column (320), and the dock itself is 300 wide.
+ * That leaves the transcript at `viewport − 1232`. Showing the dock at the old
+ * 1440 breakpoint squeezed the transcript to ~185px (QA §3.8). Gating at 1760
+ * keeps the transcript at ≥ ~500px whenever the dock is visible.
+ */
+export const INSPECTOR_QUERY = "(min-width: 1760px)";
+
+/**
  * `useResponsiveShell` derives the right narrow-viewport stage from selection
  * state and exposes navigation helpers, so the host can keep the stage in sync
  * with what the user picked without duplicating the logic.

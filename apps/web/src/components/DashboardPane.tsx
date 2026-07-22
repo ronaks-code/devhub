@@ -503,7 +503,7 @@ function DashboardBody({
           <Card>
             <CardHead icon={<Coins className="h-3.5 w-3.5" />} title="Window spend" scope={heroScope} />
             <div
-              className="dh-nums leading-none"
+              className="dh-nums dh-kpi-num leading-none"
               style={{
                 fontSize: "38px",
                 fontWeight: 600,
@@ -525,7 +525,7 @@ function DashboardBody({
           {/* Month-to-date + pacing */}
           <Card>
             <CardHead icon={<TrendingUp className="h-3.5 w-3.5" />} title="Month to date" scope={mtdScope} />
-            <div className="dh-nums text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
+            <div className="dh-nums dh-kpi-num text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
               {formatUsd(stats.budget.monthToDateUsd)}
             </div>
             {typeof projectedUsd === "number" ? (
@@ -538,7 +538,7 @@ function DashboardBody({
           {/* All-time */}
           <Card>
             <CardHead icon={<Activity className="h-3.5 w-3.5" />} title="All time" scope="ALL-TIME · ALL PROJECTS" />
-            <div className="dh-nums text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
+            <div className="dh-nums dh-kpi-num text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
               {formatUsd(estTotalCost)}
             </div>
             <dl className="mt-0.5 flex flex-col gap-1 text-[11px] text-[color:var(--dh-text-muted)]">
@@ -558,8 +558,11 @@ function DashboardBody({
           </Card>
         </div>
 
-        {/* Mid grid — daily spend area + cost-by-model donut */}
-        <div className="grid grid-cols-1 gap-3.5 lg:[grid-template-columns:1fr_330px]">
+        {/* Mid grid — daily spend area + cost-by-model donut. `items-start` (same
+            rationale as row 5): the donut card is taller than the daily-spend chart,
+            so without it the grid stretches Daily spend to match and leaves an empty
+            band under the chart. Top-align each card to its own content height. */}
+        <div className="grid grid-cols-1 items-start gap-3.5 lg:[grid-template-columns:1fr_330px]">
           <Card>
             <CardHead
               icon={<TrendingUp className="h-3.5 w-3.5" />}

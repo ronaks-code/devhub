@@ -98,7 +98,7 @@ export function TaskCard({ block }: { block: PairedToolUse }) {
   };
 
   return (
-    <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60" open>
+    <details className="my-1.5 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/40 open:bg-zinc-900/60">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-xs font-medium">
         <Bot className="h-3.5 w-3.5 shrink-0 text-[var(--dh-brand)]" />
         <span className="text-[var(--dh-brand)]">Task</span>

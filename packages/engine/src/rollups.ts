@@ -71,8 +71,13 @@ export function dailyUsage(db: SqliteDatabase, opts: DailyUsageOptions = {}): Da
     params.push(opts.since);
   }
   if (opts.until) {
-    clauses.push("lastTs <= ?");
-    params.push(opts.until);
+    // `until` is an INCLUSIVE calendar day. `lastTs` is a full ISO timestamp
+    // (`YYYY-MM-DDTHH:MM:SS...`), so a raw `lastTs <= '2026-07-21'` drops every
+    // session later than midnight on the final day — i.e. all of "today" — making
+    // the bound read as exclusive and the dashboard hero disagree with month-to-date.
+    // Compare on the calendar-day slice so the whole `until` day is included.
+    clauses.push("substr(lastTs, 1, 10) <= ?");
+    params.push(opts.until.slice(0, 10));
   }
   if (opts.projectId) {
     clauses.push("projectId = ?");

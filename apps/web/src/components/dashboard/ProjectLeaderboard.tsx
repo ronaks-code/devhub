@@ -20,6 +20,9 @@ interface Row {
   sessions: number;
   /** ISO of last activity (for relative display + recency sort), or null. */
   lastActivity: string | null;
+  /** Parent-dir segment shown as a 2nd-line disambiguator when the name collides
+   * with another project's (D5). Null unless there's a same-name sibling. */
+  parent: string | null;
 }
 
 /**
@@ -51,6 +54,7 @@ function buildRows(projects: ProjectSummary[], stats: Stats | null): Row[] {
       tokens: totalTokens(p.totalUsage),
       sessions: p.sessionCount,
       lastActivity: p.lastActivity,
+      parent: null,
     };
   });
 }
@@ -62,7 +66,10 @@ function buildRows(projects: ProjectSummary[], stats: Stats | null): Row[] {
  * under two different parent directories). Never merges them: that would mix
  * two real projects' spend into one line. Instead, append the real,
  * distinguishing parent-directory segment so the list never reads as if it
- * has a phantom duplicate.
+ * has a phantom duplicate. The parent is kept in its own `parent` field (not
+ * appended to `name`) so the table can render it on a dedicated 2nd line — the
+ * fixed-width name column truncated an appended "(parent)" suffix, hiding the very
+ * disambiguator that makes the row distinguishable.
  */
 function disambiguateNames(rows: Row[]): Row[] {
   const counts = new Map<string, number>();
@@ -71,7 +78,7 @@ function disambiguateNames(rows: Row[]): Row[] {
     if ((counts.get(r.name) ?? 0) <= 1) return r;
     const segments = r.cwd?.replace(/[/\\]+$/, "").split(/[/\\]/).filter(Boolean) ?? [];
     const parent = segments.length >= 2 ? segments[segments.length - 2] : null;
-    return parent ? { ...r, name: `${r.name} (${parent})` } : r;
+    return parent ? { ...r, parent } : r;
   });
 }
 
@@ -258,9 +265,19 @@ export function ProjectLeaderboard({
                 <td className="px-3 py-2">
                   <div className="flex min-w-0 items-center gap-2">
                     <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-violet-400/80" />
-                    <span className="min-w-0 flex-1 truncate font-medium text-zinc-200" title={r.name}>
-                      {r.name}
-                    </span>
+                    <div className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate font-medium text-zinc-200" title={r.name}>
+                        {r.name}
+                      </span>
+                      {r.parent ? (
+                        <span
+                          className="truncate text-[10.5px] leading-tight text-zinc-500"
+                          title={r.cwd ?? undefined}
+                        >
+                          {r.parent}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 </td>
                 <td className="px-3 py-2 text-right font-medium tabular-nums text-violet-300">
