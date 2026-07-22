@@ -11,9 +11,9 @@ import { readCompat, writeCompat } from "../lib/compat-storage";
  * into a concrete "dark" | "light" and writes `data-theme` accordingly so every
  * token-driven surface flips at once — no per-component color hardcoding.
  *
- *   - "system" → follow the OS color scheme (the default).
- *   - "dark"   → force dark regardless of the OS.
+ *   - "dark"   → force dark regardless of the OS (the DEFAULT when nothing is stored).
  *   - "light"  → force light regardless of the OS.
+ *   - "system" → follow the OS color scheme (opt-in, chosen in Settings).
  *
  * Plain words: a switch that flips the whole app between the dark clay look and a
  * readable light version, or lets your computer decide. Your choice is remembered
@@ -37,10 +37,12 @@ function isThemePreference(v: unknown): v is ThemePreference {
   return typeof v === "string" && (PREFS as readonly string[]).includes(v);
 }
 
-/** Read the persisted preference; tolerant of missing/garbage values. */
+/** Read the persisted preference; tolerant of missing/garbage values. Defaults to
+ *  "dark" (the intended out-of-box look) when nothing is stored — light/system are
+ *  opt-in via Settings. */
 function readPreference(): ThemePreference {
   const raw = readCompat(STORAGE_KEY);
-  return isThemePreference(raw) ? raw : "system";
+  return isThemePreference(raw) ? raw : "dark";
 }
 
 function writePreference(pref: ThemePreference): void {

@@ -254,7 +254,10 @@ export function TopBar({
        * controls (spend badge + Settings gear) from being pushed off-canvas with
        * no scrollbar to recover them (QA BLOCKER: header overflow at 600–1494px).
        */}
-      <div className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        data-tauri-drag-region
+        className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         {chatTabs && chatTabs.length > 0 && onSelectTab && onCloseTab && onNewTab ? (
           <ChatTabs
             tabs={chatTabs}
