@@ -8,12 +8,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppSettings } from "../../../lib/api.js";
 import {
+  SETTINGS_ROWS,
   SETTINGS_TABS,
+  SETTINGS_TABS_DISPLAY,
   SettingsRoute,
   connectionSyncLabel,
   describeClearLocalDataConfirmation,
   isSettingsSecondaryApplied,
+  matchSettingRows,
   providerCapabilityRows,
+  providerSpendSegments,
   resolveSettingsSecondaryMode,
 } from "./SettingsRoute.js";
 
@@ -102,6 +106,77 @@ describe("SettingsRoute — preserved workflow tabs", () => {
     const html = render();
     expect((html.match(/role="tablist"/g) ?? []).length).toBe(1);
     expect((html.match(/role="tab"/g) ?? []).length).toBe(10);
+  });
+});
+
+// --- §3.4 Query-Deck: row-granularity grouped search ------------------------------
+
+describe("matchSettingRows — row-granularity grouped hits", () => {
+  it("returns no groups for an empty/whitespace query (caller shows the tabbed surface)", () => {
+    expect(matchSettingRows(SETTINGS_ROWS, "")).toEqual([]);
+    expect(matchSettingRows(SETTINGS_ROWS, "   ")).toEqual([]);
+  });
+
+  it("matches individual rows and groups them under their section header", () => {
+    const groups = matchSettingRows(SETTINGS_ROWS, "theme");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.group).toBe("Appearance");
+    expect(groups[0]!.rows.map((r) => r.id)).toEqual(["theme"]);
+  });
+
+  it("hides non-matching rows within a section (only the matching row survives)", () => {
+    // "density" lives in Appearance alongside "theme"; a "density" query must NOT
+    // drag the unrelated "theme" row along.
+    const groups = matchSettingRows(SETTINGS_ROWS, "density");
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.group).toBe("Appearance");
+    expect(groups[0]!.rows.map((r) => r.id)).toEqual(["density"]);
+  });
+
+  it("matches across sections via keywords and preserves group order", () => {
+    const groups = matchSettingRows(SETTINGS_ROWS, "codex");
+    const groupNames = groups.map((g) => g.group);
+    // Providers & models comes before any later group in SETTINGS_SEARCH_GROUP_ORDER.
+    expect(groupNames[0]).toBe("Providers & models");
+    // The Providers group surfaces the native-codex control + the codex-mentioning rows.
+    const providerRowIds = groups.find((g) => g.group === "Providers & models")!.rows.map((r) => r.id);
+    expect(providerRowIds).toContain("native-codex");
+  });
+
+  it("only reorders existing sections — every display tab is one of the ten sections", () => {
+    expect(SETTINGS_TABS_DISPLAY.map((t) => t.id).sort()).toEqual(SETTINGS_TABS.map((t) => t.id).sort());
+    expect(SETTINGS_TABS_DISPLAY).toHaveLength(10);
+  });
+});
+
+// --- §3.4/§3.6 spend-meter split bar: real per-provider spend, never fabricated ---
+
+describe("providerSpendSegments — Claude/Codex split from real byModel", () => {
+  it("returns a zero total and no segments for empty/absent data", () => {
+    expect(providerSpendSegments(null)).toEqual({ segments: [], totalUsd: 0 });
+    expect(providerSpendSegments([])).toEqual({ segments: [], totalUsd: 0 });
+  });
+
+  it("classifies models into Claude / Codex / Other and sizes segments by real spend", () => {
+    const { segments, totalUsd } = providerSpendSegments([
+      { model: "claude-opus-4-8", costUsd: 6 },
+      { model: "gpt-5-codex", costUsd: 3 },
+      { model: "some-unknown-model", costUsd: 1 },
+    ]);
+    expect(totalUsd).toBe(10);
+    const claude = segments.find((s) => s.key === "anthropic")!;
+    const codex = segments.find((s) => s.key === "openai")!;
+    const other = segments.find((s) => s.key === "other")!;
+    expect(claude.usd).toBe(6);
+    expect(codex.usd).toBe(3);
+    expect(other.usd).toBe(1);
+    expect(Math.round(claude.pct)).toBe(60);
+    expect(Math.round(codex.pct)).toBe(30);
+  });
+
+  it("drops zero-spend segments so the bar never shows an empty provider slice", () => {
+    const { segments } = providerSpendSegments([{ model: "claude-sonnet-4-6", costUsd: 4 }]);
+    expect(segments.map((s) => s.key)).toEqual(["anthropic"]);
   });
 });
 
@@ -288,11 +363,14 @@ describe("SettingsRoute — live interaction (mounted DOM)", () => {
     preferencesTab.focus();
     expect(preferencesTab).toHaveAttribute("tabindex", "0");
 
+    // §3.4 IDE-Rail groups reorder the tabs into AGENTS/CONFIG/DATA display order
+    // ([preferences, permissions, memory, mcp, hooks, webhooks, agents, skills,
+    // plugins, budget]); keyboard roving follows that visual order.
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: "Budget" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Permissions" })).toHaveAttribute("aria-selected", "true");
 
     await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: "Plugins" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Budget" })).toHaveAttribute("aria-selected", "true");
 
     await user.keyboard("{Home}");
     expect(screen.getByRole("tab", { name: "Preferences" })).toHaveAttribute("aria-selected", "true");
@@ -342,6 +420,34 @@ describe("SettingsRoute — live interaction (mounted DOM)", () => {
     const confirmation = describeClearLocalDataConfirmation();
     await user.click(screen.getByRole("button", { name: confirmation.confirmLabel }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("searching shows only matching controls grouped under their section header, hiding the rest", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    // Baseline: the Theme control is visible on the default Preferences panel.
+    expect(screen.getByLabelText("Theme")).toBeInTheDocument();
+
+    await user.type(screen.getByRole("searchbox", { name: "Search settings" }), "token");
+
+    // The Connection group's real controls render inline…
+    expect(screen.getByLabelText("API token")).toBeInTheDocument();
+    expect(screen.getByLabelText("API host")).toBeInTheDocument();
+    // …grouped under a section header…
+    expect(screen.getByRole("region", { name: /Settings matching token/i })).toBeInTheDocument();
+    // …and the unrelated Theme control is hidden (not a whole section in full).
+    expect(screen.queryByLabelText("Theme")).not.toBeInTheDocument();
+  });
+
+  it("clearing the search (or opening a section) returns to the tabbed surface", async () => {
+    const user = userEvent.setup();
+    rtlRender(createElement(SettingsRoute, { authoritativeSettings: BASE_SETTINGS }));
+    const search = screen.getByRole("searchbox", { name: "Search settings" });
+    await user.type(search, "zzzznomatch");
+    expect(screen.getByText(/No settings match/i)).toBeInTheDocument();
+    await user.clear(search);
+    // Back to the Preferences panel with its live Theme control.
+    expect(screen.getByLabelText("Theme")).toBeInTheDocument();
   });
 
   it("typing an API host updates the connection field live", async () => {

@@ -1164,6 +1164,29 @@ export default function App() {
     [projects, openSession],
   );
 
+  // Open a running session from Live Ops as a LIVE CHAT tab (Aurora §3.7:
+  // "click card → opens the session as a chat tab"), NOT the read-only Browse
+  // transcript. Like the LiveOpsBoard, the card only knows the session's cwd, so
+  // resolve cwd → project, then set the project AND the chat seed together: the
+  // seed is only honored once `chatSeed.projectId === projectId` (see `activeSeed`
+  // below), so they must move in one render. Mirrors `handleContinue`'s seed shape.
+  // If the cwd matches no known project we can't seed a project-scoped chat, so we
+  // fall back to `openSessionByCwd`'s Browse path — the click is never a dead end.
+  const openSessionChatByCwd = useCallback(
+    (cwd: string | null, sid: string) => {
+      const match = cwd && sid ? projects.find((p) => p.cwd === cwd) : null;
+      if (match) {
+        setProjectId(match.id);
+        setChatSeed({ sessionId: sid, projectId: match.id });
+        setChatSessionId(null);
+        setTab("chat");
+      } else {
+        openSessionByCwd(cwd, sid);
+      }
+    },
+    [projects, openSessionByCwd],
+  );
+
   // ── Deep-link URL routing ────────────────────────────────────────────────
   // Reflect the current view (tab + project + session) in the URL query so a
   // copied link reopens the same place and back/forward walks history. Restore
@@ -2163,7 +2186,7 @@ export default function App() {
                 <MultiSessionGrid
                   running={liveRunning}
                   sessions={sessions ?? undefined}
-                  onOpenSession={openSessionByCwd}
+                  onOpenSession={openSessionChatByCwd}
                   onRefresh={refreshLive}
                 />
               </Suspense>
@@ -2173,14 +2196,14 @@ export default function App() {
               <OpsRoute
                 running={liveRunning}
                 sessions={sessions ?? undefined}
-                onOpenSession={openSessionByCwd}
+                onOpenSession={openSessionChatByCwd}
                 onRefresh={refreshLive}
               />
             ) : (
               <LiveOpsBoard
                 running={liveRunning}
                 sessions={sessions ?? undefined}
-                onOpenSession={openSessionByCwd}
+                onOpenSession={openSessionChatByCwd}
                 onRefresh={refreshLive}
               />
             )}

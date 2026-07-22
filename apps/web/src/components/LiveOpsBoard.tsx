@@ -181,7 +181,8 @@ function BoardColumn({
  * signal, split into four columns — Needs you / Running / Stale·Failed / Recently
  * finished. Each card is the compact form of the Glass-Grid card. Reads the SAME
  * app-root running poll the shell already runs (no competing poll), joined to the
- * indexed sessions for cost/title/branch. Clicking Open routes to the session.
+ * indexed sessions for cost/title/branch. Clicking Open opens the session as a
+ * live chat tab (Aurora §3.7), not the read-only Browse transcript.
  */
 export function LiveOpsBoard({
   running,
@@ -193,7 +194,7 @@ export function LiveOpsBoard({
   running?: RunningSession[] | null;
   /** Indexed sessions, joined by sessionId for cost/title/branch. */
   sessions?: readonly SessionSummary[];
-  /** Open a running session in Browse, given its cwd + session id. */
+  /** Open a running session as a live chat tab, given its cwd + session id. */
   onOpenSession?: (cwd: string | null, sessionId: string) => void;
   /** Force an immediate refresh of the app-root poll. */
   onRefresh?: () => void;

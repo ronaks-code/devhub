@@ -22,7 +22,8 @@ import { CalendarHeatmap, type HeatmapMetric } from "./dashboard/CalendarHeatmap
 import { ActivityChart } from "./dashboard/ActivityChart";
 import { HourHeatmap } from "./dashboard/HourHeatmap";
 import { TopSpenders } from "./dashboard/TopSpenders";
-import { CostForecast } from "./dashboard/CostForecast";
+import { CostForecast, projectEndOfPeriod } from "./dashboard/CostForecast";
+import { addDaysYmd, formatDayLabel, ymdSpanDays } from "./dashboard/dateMath";
 import { ProjectLeaderboard } from "./dashboard/ProjectLeaderboard";
 import { DirtyRepos } from "./dashboard/DirtyRepos";
 import { ToolAnalytics } from "./dashboard/ToolAnalytics";
@@ -76,6 +77,44 @@ const DASH_POLL_MS = 5000;
 /** This month's short label (e.g. "JUL"), used in the MTD scope tags. */
 function monthLabel(): string {
   return new Date().toLocaleString(undefined, { month: "short" }).toUpperCase();
+}
+
+/** The last day of the current UTC month, as "Jul 31" — the pacing line's target.
+ * UTC to match `projectEndOfPeriod`'s elapsed-month math and the engine's
+ * UTC-calendar budget window. */
+function monthEndLabel(): string {
+  const now = new Date();
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0));
+  return end.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/**
+ * The current window's spend vs the immediately-prior equal-length window, both
+ * summed from the SAME daily rollup series (the year-long fetch the heatmap
+ * already loads). Returns null — render nothing, never a fabricated delta — when:
+ * the window is open-ended ("All": no prior window exists), the year series
+ * hasn't loaded, the prior window isn't fully covered by the fetched year, or
+ * prior spend is $0 (a % of zero is undefined).
+ */
+export function priorWindowDelta(
+  currentCost: number,
+  period: PeriodRange,
+  year: { since: string; days: DailyUsage[] } | null,
+): { pct: number; priorCost: number; priorSince: string; priorUntil: string; windowDays: number } | null {
+  if (!period.since || !period.until || !year) return null;
+  const windowDays = ymdSpanDays(period.since, period.until);
+  if (windowDays <= 0) return null;
+  const priorUntil = addDaysYmd(period.since, -1);
+  const priorSince = addDaysYmd(period.since, -windowDays);
+  // The prior window must sit fully inside the fetched year, or "0 spend" could
+  // just mean "days we never fetched".
+  if (priorSince < year.since) return null;
+  let priorCost = 0;
+  for (const d of year.days) {
+    if (d.date >= priorSince && d.date <= priorUntil) priorCost += d.costUsd;
+  }
+  if (priorCost <= 0) return null;
+  return { pct: ((currentCost - priorCost) / priorCost) * 100, priorCost, priorSince, priorUntil, windowDays };
 }
 
 /**
@@ -353,18 +392,23 @@ export function DashboardPane({
 
   // The heatmap always wants ~1 year of daily activity, independent of the period
   // selector above. Fetched once (and on tab return) rather than polled tightly.
-  const [yearRollups, setYearRollups] = useState<DailyUsage[] | null>(null);
+  // The fetch's lower bound rides along so consumers (the hero card's
+  // prior-window delta) can tell "fetched and $0" from "never fetched".
+  const [yearRollups, setYearRollups] = useState<{ since: string; days: DailyUsage[] } | null>(null);
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       if (typeof document !== "undefined" && document.hidden) return;
+      const since = oneYearAgoYmd();
       api
-        .rollups(oneYearAgoYmd())
+        .rollups(since)
         .then((r) => {
-          if (!cancelled) setYearRollups(r);
+          if (!cancelled) setYearRollups({ since, days: r });
         })
         .catch(() => {
-          if (!cancelled) setYearRollups([]);
+          // Keep the heatmap's loaded-empty behavior. The prior-window delta
+          // still omits itself here (an empty series sums to $0 prior spend).
+          if (!cancelled) setYearRollups({ since, days: [] });
         });
     };
     load();
@@ -460,7 +504,7 @@ function DashboardBody({
   onPeriod: (range: PeriodRange) => void;
   rollups: DailyUsage[] | null;
   rollupsError: boolean;
-  yearRollups: DailyUsage[] | null;
+  yearRollups: { since: string; days: DailyUsage[] } | null;
   heatmapMetric: HeatmapMetric;
   onHeatmapMetric: (m: HeatmapMetric) => void;
   onOpenSession?: (projectId: string, sessionId: string) => void;
@@ -472,15 +516,12 @@ function DashboardBody({
     let tk = 0;
     let cost = 0;
     let sessions = 0;
-    let maxTk = 0;
     for (const d of days) {
-      const t = dayTokens(d);
-      tk += t;
+      tk += dayTokens(d);
       cost += d.costUsd;
       sessions += d.sessions;
-      if (t > maxTk) maxTk = t;
     }
-    return { days, tokens: tk, cost, sessions, maxTokens: Math.max(1, maxTk) };
+    return { days, tokens: tk, cost, sessions };
   }, [rollups]);
 
   const windowLabel = periodScopeLabel(period.id).toUpperCase();
@@ -491,9 +532,17 @@ function DashboardBody({
   const heroScope = rollupsError ? "ALL-TIME · ALL PROJECTS" : `${windowLabel} · ALL PROJECTS`;
   const heroSessions = rollupsError ? stats.totalSessions : usage.sessions;
   const mtdScope = `${monthLabel()} MTD · ALL PROJECTS`;
-  // `projectedUsd` is a web-side BudgetStatus extra (the engine Stats.budget type
-  // omits it); read it defensively so pacing shows only when the server sends it.
-  const projectedUsd = (stats.budget as BudgetStatus).projectedUsd;
+  // Pacing = the SAME projection the Cost-forecast card renders (one shared
+  // function over the same polled budget status — never two "projected" numbers).
+  const projectedUsd = projectEndOfPeriod(stats.budget as BudgetStatus);
+
+  // ▲/▼ vs the immediately-prior equal-length window, from the same rollup
+  // series (year fetch). Null (rendered as nothing) whenever the prior window
+  // isn't honestly derivable. Skipped when the hero fell back to all-time.
+  const delta = useMemo(
+    () => (rollupsError ? null : priorWindowDelta(usage.cost, period, yearRollups)),
+    [rollupsError, usage.cost, period, yearRollups],
+  );
 
   return (
     <div className="dh-aurora-bg--soft min-w-0 flex-1 overflow-y-auto">
@@ -527,6 +576,23 @@ function DashboardBody({
             </div>
             <div className="text-[11px] text-[color:var(--dh-text-muted)]">
               <span className="dh-nums">{heroSessions.toLocaleString()}</span> sessions
+              {delta ? (
+                <>
+                  {" · "}
+                  <span
+                    className={cn(
+                      "dh-nums font-medium",
+                      // Spend UP reads as bad (rose), DOWN as good (mint/teal).
+                      delta.pct > 0 ? "text-rose-300" : delta.pct < 0 ? "text-teal-300" : "text-[color:var(--dh-text-muted)]",
+                    )}
+                    title={`prior ${delta.windowDays}d (${formatDayLabel(delta.priorSince)} – ${formatDayLabel(delta.priorUntil)}): ${formatUsd(delta.priorCost)}`}
+                  >
+                    {delta.pct > 0 ? "▲" : delta.pct < 0 ? "▼" : ""}{" "}
+                    {`${Math.abs(delta.pct) >= 10 ? Math.round(Math.abs(delta.pct)) : Math.abs(delta.pct).toFixed(1)}%`} vs
+                    prior {delta.windowDays}d
+                  </span>
+                </>
+              ) : null}
             </div>
             <BudgetBar budget={stats.budget} />
           </Card>
@@ -537,9 +603,10 @@ function DashboardBody({
             <div className="dh-nums dh-kpi-num text-[26px] font-semibold leading-none text-[color:var(--dh-text-strong)]">
               {formatUsd(stats.budget.monthToDateUsd)}
             </div>
-            {typeof projectedUsd === "number" ? (
+            {stats.budget.monthToDateUsd > 0 ? (
               <div className="text-[11px] text-[color:var(--dh-text-muted)]">
-                pacing <span className="dh-nums text-[color:var(--dh-text)]">{formatUsd(projectedUsd)}</span> by month end
+                pacing <span className="dh-nums text-[color:var(--dh-text)]">{formatUsd(projectedUsd)}</span> by{" "}
+                {monthEndLabel()}
               </div>
             ) : null}
           </Card>
@@ -587,7 +654,7 @@ function DashboardBody({
                 <Spinner className="h-5 w-5" />
               </div>
             ) : usage.days.length > 0 ? (
-              <ActivityChart days={usage.days} maxTokens={usage.maxTokens} onOpenSession={onOpenSession} />
+              <ActivityChart days={usage.days} onOpenSession={onOpenSession} />
             ) : (
               <div className="py-6 text-center text-[12px] text-[color:var(--dh-text-dim)]">No usage in this period.</div>
             )}
@@ -679,7 +746,7 @@ function DashboardBody({
                 <Spinner className="h-5 w-5" />
               </div>
             ) : (
-              <CalendarHeatmap days={yearRollups} metric={heatmapMetric} />
+              <CalendarHeatmap days={yearRollups.days} metric={heatmapMetric} />
             )}
           </Card>
 
@@ -708,7 +775,7 @@ function DashboardBody({
         <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
           <Card>
             <CardHead icon={<TrendingUp className="h-3.5 w-3.5" />} title="Cost forecast" />
-            <CostForecast onOpenSession={onOpenSession} />
+            <CostForecast onOpenSession={onOpenSession} budget={stats.budget} />
           </Card>
           <Card>
             <CardHead icon={<FolderGit2 className="h-3.5 w-3.5" />} title="Project detail" />

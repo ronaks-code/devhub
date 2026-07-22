@@ -161,6 +161,43 @@ describe("Sidebar cockpit (§3.1)", () => {
     expect(html.split("dh-srowc-right").length - 1).toBe(2); // …or the relative time
   });
 
+  it("renders recent rows as two lines: title + the real context that exists (§3.1)", () => {
+    const iso = new Date(Date.now() - 5 * 60_000).toISOString();
+    const html = render({
+      selectedSessionId: null,
+      groups: [
+        {
+          id: "idle",
+          label: "Recent",
+          tier: "recent",
+          rows: [
+            {
+              id: "r-ctx",
+              title: "Landed the fix",
+              provider: "anthropic",
+              subtitle: "devhub · ⎇ feat/aurora",
+              branch: "feat/aurora",
+              timestamp: iso,
+              costUsd: 0.5,
+            },
+            // A bare row with no context must invent none (never truncate a lie in).
+            { id: "r-bare", title: "No context", provider: "openai" },
+          ],
+        },
+      ],
+    });
+    // Line 2 carries the REAL project · branch context (from the row subtitle)…
+    expect(html).toContain("devhub · ⎇ feat/aurora");
+    // …the relative time (5m) and the cost ($0.50) — both real, drawn from data.
+    expect(html).toContain("5m");
+    expect(html).toContain("$0.50");
+    // Still a recent one-liner class, still tagged as the recent tier.
+    expect(html).toContain("dh-srowc");
+    expect(html.split('data-dh-tier="recent"').length - 1).toBe(2);
+    // The bare row fabricates no line-2 context.
+    expect(html).not.toContain("undefined");
+  });
+
   it("renders a reason line only when one exists (no placeholder lies)", () => {
     const html = render();
     expect(html.split("dh-scard-reason").length - 1).toBe(1); // only the waiting card

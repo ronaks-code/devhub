@@ -24,6 +24,17 @@ export interface SettingsTabItem<TId extends string = string> {
   label: string;
 }
 
+/**
+ * A rail grouping (§3.4 IDE-Rail): an uppercase mono header (`AGENTS`/`CONFIG`/
+ * `DATA`) above the tabs that belong to it. Purely presentational — the tablist
+ * still owns exactly one roving tabstop across ALL tabs, so keyboard nav and the
+ * `role="tab"` count are unchanged whether or not groups are supplied.
+ */
+export interface SettingsTabGroup<TId extends string = string> {
+  label: string;
+  tabIds: ReadonlyArray<TId>;
+}
+
 /** A single roving-tabstop `role="tablist"` (Left/Right/Home/End), one tab active. */
 export function Tabs<TId extends string>({
   id,
@@ -31,14 +42,76 @@ export function Tabs<TId extends string>({
   tabs,
   active,
   onSelect,
+  groups,
+  footer,
 }: {
   id: string;
   label: string;
   tabs: ReadonlyArray<SettingsTabItem<TId>>;
   active: TId;
   onSelect: (id: TId) => void;
+  /**
+   * Optional rail groupings. When present, tabs render under their group header
+   * in the concatenated `tabIds` order; the `tabs` array MUST already be in that
+   * same order so keyboard roving (which walks `tabs`) matches the visual order.
+   * Omit for the flat (ungrouped) list.
+   */
+  groups?: ReadonlyArray<SettingsTabGroup<TId>>;
+  /** Optional mono rail footer (e.g. app version / config path), rendered last. */
+  footer?: ReactNode;
 }): ReactNode {
   const activeIndex = Math.max(tabs.findIndex((t) => t.id === active), 0);
+  const byId = new Map(tabs.map((t) => [t.id, t] as const));
+
+  const renderTab = (tab: SettingsTabItem<TId>) => {
+    const i = tabs.findIndex((t) => t.id === tab.id);
+    return (
+      <button
+        key={tab.id}
+        type="button"
+        role="tab"
+        id={`${id}-${tab.id}`}
+        aria-selected={tab.id === active}
+        aria-controls={`${id}-${tab.id}-panel`}
+        tabIndex={i === activeIndex ? 0 : -1}
+        className="dh-settings-tab"
+        data-dh-settings-tab={tab.id}
+        onClick={() => onSelect(tab.id)}
+      >
+        {tab.label}
+      </button>
+    );
+  };
+
+  const body =
+    groups && groups.length > 0
+      ? groups.map((group) => {
+          const groupTabs = group.tabIds
+            .map((tid) => byId.get(tid))
+            .filter((t): t is SettingsTabItem<TId> => Boolean(t));
+          if (groupTabs.length === 0) return null;
+          return (
+            <div key={group.label} role="presentation" className="dh-settings-tab-group" data-dh-settings-tab-group={group.label}>
+              <span
+                className="dh-settings-tab-group-label"
+                style={{
+                  padding: "10px 11px 4px",
+                  fontSize: "10px",
+                  fontWeight: 700,
+                  letterSpacing: "0.09em",
+                  textTransform: "uppercase",
+                  color: "var(--dh-text-dim)",
+                  fontFamily: "var(--font-mono, ui-monospace, monospace)",
+                }}
+              >
+                {group.label}
+              </span>
+              {groupTabs.map((t) => renderTab(t))}
+            </div>
+          );
+        })
+      : tabs.map((tab) => renderTab(tab));
+
   return (
     <div
       role="tablist"
@@ -56,22 +129,12 @@ export function Tabs<TId extends string>({
         if (target) onSelect(target.id);
       }}
     >
-      {tabs.map((tab, i) => (
-        <button
-          key={tab.id}
-          type="button"
-          role="tab"
-          id={`${id}-${tab.id}`}
-          aria-selected={tab.id === active}
-          aria-controls={`${id}-${tab.id}-panel`}
-          tabIndex={i === activeIndex ? 0 : -1}
-          className="dh-settings-tab"
-          data-dh-settings-tab={tab.id}
-          onClick={() => onSelect(tab.id)}
-        >
-          {tab.label}
-        </button>
-      ))}
+      {body}
+      {footer ? (
+        <div role="presentation" className="dh-settings-rail-footer" data-dh-settings-rail-footer="">
+          {footer}
+        </div>
+      ) : null}
     </div>
   );
 }

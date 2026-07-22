@@ -13,7 +13,6 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { LogoutButton } from "../../AuthGate";
 import { DeckMark } from "../../DeckMark";
 import { ThemeSwitcher } from "../../ThemeSwitcher";
 import { Spinner } from "../../ui";
@@ -451,9 +450,7 @@ export function TopBar({
           )}
           <span>·</span>
           <span>{projectCount} projects</span>
-          {/* Clear the saved remote-access token. Self-hides when none is stored
-              (the local default), so it never appears in an un-gated session. */}
-          <LogoutButton />
+          {/* Log out moved to the sidebar rail's account popover (§3.1). */}
         </div>
 
         {/* Settings — always visible (also on the icon rail, but the header

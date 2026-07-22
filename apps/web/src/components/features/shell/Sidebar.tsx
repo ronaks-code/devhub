@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Bot,
   ChevronDown,
+  CircleUserRound,
   Folder,
   Hexagon,
   History,
@@ -19,6 +20,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DeckMark } from "../../DeckMark.js";
+import { LogoutButton } from "../../AuthGate.js";
+import { getToken } from "../../../lib/api.js";
 import { readCompat, writeCompat } from "../../../lib/compat-storage.js";
 import { ProviderChip, type ChipProvider } from "../../ui/ProviderChip.js";
 import { StatusDot, type StatusKind } from "../../ui/StatusDot.js";
@@ -222,6 +225,98 @@ const CHIP_FILTERS = [
 ] as const;
 type ChipFilter = (typeof CHIP_FILTERS)[number]["id"];
 
+/**
+ * Numeric row-jump chip (§3.1, opt-5): a small 1-9 kbd shown on the first nine
+ * visible session rows ONLY while the panel has focus. Inline-styled so the row
+ * layout stays self-contained (no new global CSS class to drift).
+ */
+const ROW_JUMP_KBD_STYLE: CSSProperties = {
+  flexShrink: 0,
+  fontFamily: "var(--font-mono)",
+  fontSize: "9px",
+  lineHeight: 1,
+  padding: "1px 4px",
+  borderRadius: "4px",
+  color: "var(--dh-text-muted)",
+  background: "var(--dh-control)",
+  border: "1px solid var(--dh-border-subtle)",
+};
+
+/**
+ * Rail-bottom account popover (§3.1). A small avatar button anchored at the icon
+ * rail's bottom; clicking it opens a popover to the right of the rail. The only
+ * real action is Log out — reused from AuthGate, so it self-hides when no access
+ * token is stored (the local default). The status line reflects the REAL token
+ * state (getToken()); nothing here is fabricated — this local tool has no user
+ * profile, so we show the honest access state, not an invented name/email.
+ */
+function RailAuthMenu() {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const hasToken = typeof window !== "undefined" && !!getToken();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        className="dh-navicon"
+        data-dh-navicon=""
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Account"
+        title="Account"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <CircleUserRound size={18} strokeWidth={2} aria-hidden />
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Account"
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: "calc(100% + 6px)",
+            zIndex: 60,
+            width: 220,
+            padding: 10,
+            borderRadius: 12,
+            background: "var(--dh-surface)",
+            border: "1px solid var(--dh-glass-border)",
+            boxShadow: "0 12px 32px rgba(0,0,0,0.5)",
+          }}
+        >
+          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--dh-text-strong)" }}>
+            {hasToken ? "Remote access" : "Local access"}
+          </div>
+          <p style={{ margin: "4px 0 8px", fontSize: 11, lineHeight: 1.4, color: "var(--dh-text-muted)" }}>
+            {hasToken
+              ? "A saved access token is in use on this device."
+              : "No access token stored — this server isn’t locked."}
+          </p>
+          <LogoutButton className="w-full justify-start" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function Sidebar({
   brand = "DevHub",
   destinations,
@@ -246,6 +341,12 @@ export function Sidebar({
   const [filter, setFilter] = useState("");
   const [chip, setChip] = useState<ChipFilter>("all");
   const filterInputRef = useRef<HTMLInputElement>(null);
+  // Row-jump (§3.1 opt-5): the 1-9 chips + digit handler are armed ONLY while
+  // focus is somewhere inside the panel, so they never fight the app's global
+  // shortcuts. `panelRef` scopes the focusin/focusout so tabbing between rows
+  // keeps the chips up, and tabbing out (to the rail or chat) drops them.
+  const [panelFocused, setPanelFocused] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
   // Per-group collapse state (§3.1), keyed by the stable group id (review/stale/
   // running/idle). Persisted so a collapsed group stays folded across launches.
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
@@ -357,6 +458,53 @@ export function Sidebar({
       .filter((g) => g.rows.length > 0);
   }, [groups, q, chip]);
 
+  // Map the first 9 VISIBLE session rows (render order, skipping collapsed
+  // groups) to their 1-9 jump index. Collapsed groups aren't rendered, so their
+  // rows earn no number — the digits only ever target a row you can actually see.
+  const jumpIndexById = useMemo(() => {
+    const m = new Map<string, number>();
+    let n = 0;
+    for (const g of filteredGroups) {
+      if (collapsedGroups[g.id]) continue;
+      for (const r of g.rows) {
+        if (n >= 9) break;
+        n += 1;
+        m.set(r.id, n);
+      }
+      if (n >= 9) break;
+    }
+    return m;
+  }, [filteredGroups, collapsedGroups]);
+
+  // Digit 1-9 opens the numbered row — but ONLY while the panel holds focus and
+  // you're not typing in the filter input. Listening solely during panel-focus is
+  // what keeps this from stomping any global 1-9 shortcut elsewhere in the app.
+  useEffect(() => {
+    if (!panelFocused) return;
+    const idToIndex = jumpIndexById;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable);
+      if (typing) return;
+      if (e.key < "1" || e.key > "9") return;
+      const want = Number(e.key);
+      for (const [id, idx] of idToIndex) {
+        if (idx === want) {
+          e.preventDefault();
+          onSelectSession(id);
+          return;
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [panelFocused, jumpIndexById, onSelectSession]);
+
   const iconDests = destinations.filter((d) => d.id !== "settings" && NAV_ICONS[d.id]);
   const settingsDest = destinations.find((d) => d.id === "settings");
   // Only a real budget CAP makes a "% of budget" meaningful — with no cap set,
@@ -427,6 +575,7 @@ export function Sidebar({
             <span className="dh-navicon-chord" aria-hidden>g,</span>
           </button>
         ) : null}
+        <RailAuthMenu />
         {onShowShortcuts ? (
           <button
             type="button"
@@ -441,7 +590,19 @@ export function Sidebar({
       </div>
 
       {/* Panel — sessions cockpit. */}
-      <div className="dh-panel" data-dh-panel="">
+      <div
+        className="dh-panel"
+        data-dh-panel=""
+        ref={panelRef}
+        onFocus={() => setPanelFocused(true)}
+        onBlur={(e) => {
+          // Only drop the row-jump chips when focus truly leaves the panel — not
+          // when it just hops between rows (relatedTarget still inside panelRef).
+          if (!panelRef.current?.contains(e.relatedTarget as Node | null)) {
+            setPanelFocused(false);
+          }
+        }}
+      >
         <div className="dh-panel-header" data-tauri-drag-region>
           <span className="dh-label">Sessions</span>
           {/* F6: this is the indexed Claude session TOTAL (api.health()'s
@@ -517,24 +678,62 @@ export function Sidebar({
                   const selected = r.id === selectedSessionId;
                   const tier = g.tier ?? "recent";
                   const open = () => onSelectSession(r.id);
-                  // Tier 3 — settled history collapses to a quiet one-line row.
+                  const jump = panelFocused ? jumpIndexById.get(r.id) : undefined;
+                  // Tier 3 — settled history. Still a compact TWO-line row (§3.1
+                  // legibility: never truncate to one), just denser than the
+                  // attention/active cards. Line 1 = title (+ cost when it exists);
+                  // line 2 = the REAL context that exists — project · branch
+                  // (from the row's subtitle) and the relative time. Any field
+                  // that's genuinely absent is omitted, never faked.
                   if (tier === "recent") {
+                    const rel = relTime(r.timestamp);
+                    const cost = typeof r.costUsd === "number" ? `$${r.costUsd.toFixed(2)}` : null;
+                    const ctx = r.subtitle ?? (r.branch ? `⎇ ${r.branch}` : "");
+                    const hasLine2 = !!ctx || !!rel;
                     return (
                       <button
                         key={r.id}
                         type="button"
                         className={cn("dh-srowc", selected && "dh-srowc--selected")}
+                        // Override the base one-line flex-row into a compact
+                        // two-line stack (inline beats the unlayered .dh-srowc rule).
+                        style={{ flexDirection: "column", alignItems: "stretch", gap: "2px", paddingTop: "5px", paddingBottom: "5px" }}
                         data-dh-srow=""
                         data-dh-tier="recent"
                         data-dh-selected={selected ? "" : undefined}
                         aria-current={selected ? "page" : undefined}
                         onClick={open}
                       >
-                        {r.status ? <StatusDot status={r.status} /> : <span className="dh-srowc-dotpad" aria-hidden />}
-                        <span className="dh-srowc-title">{r.title}</span>
-                        <span className="dh-srowc-right">
-                          {typeof r.costUsd === "number" ? `$${r.costUsd.toFixed(2)}` : relTime(r.timestamp)}
+                        <span style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", minWidth: 0 }}>
+                          {r.status ? <StatusDot status={r.status} /> : <span className="dh-srowc-dotpad" aria-hidden />}
+                          <span className="dh-srowc-title">{r.title}</span>
+                          {jump ? <kbd className="dh-rowjump" style={ROW_JUMP_KBD_STYLE} aria-hidden>{jump}</kbd> : null}
+                          {cost ? <span className="dh-srowc-right">{cost}</span> : null}
                         </span>
+                        {hasLine2 ? (
+                          <span style={{ display: "flex", alignItems: "center", gap: "6px", width: "100%", minWidth: 0, paddingLeft: "12px" }}>
+                            {ctx ? (
+                              <span
+                                className="dh-srowc-sub"
+                                style={{
+                                  flex: "1 1 auto",
+                                  minWidth: 0,
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                  fontFamily: "var(--font-mono)",
+                                  fontSize: "10px",
+                                  color: "var(--dh-text-muted)",
+                                }}
+                              >
+                                {ctx}
+                              </span>
+                            ) : (
+                              <span style={{ flex: "1 1 auto" }} aria-hidden />
+                            )}
+                            {rel ? <span className="dh-srowc-right">{rel}</span> : null}
+                          </span>
+                        ) : null}
                       </button>
                     );
                   }
@@ -566,6 +765,7 @@ export function Sidebar({
                       <span className="dh-scard-line1">
                         {r.status ? <StatusDot status={r.status} /> : null}
                         <span className="dh-scard-title">{r.title}</span>
+                        {jump ? <kbd className="dh-rowjump" style={ROW_JUMP_KBD_STYLE} aria-hidden>{jump}</kbd> : null}
                         {el ? (
                           <span className="dh-scard-timer">{`running ${el}`}</span>
                         ) : r.timestamp ? (

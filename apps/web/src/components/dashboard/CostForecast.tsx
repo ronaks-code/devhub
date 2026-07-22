@@ -40,9 +40,11 @@ function median(nums: number[]): number {
  * Project end-of-period spend from the run rate so far this month. Prefers a
  * server-provided `projectedUsd`; otherwise extrapolates linearly from the elapsed
  * fraction of the current UTC month. Mirrors BudgetSettings' projection so the two
- * surfaces agree.
+ * surfaces agree. Exported as THE projection: the Month-to-date KPI card's pacing
+ * line reuses this exact function so the dashboard never shows two different
+ * "projected" numbers for the same month.
  */
-function projectEndOfPeriod(status: BudgetStatus, now: Date = new Date()): number {
+export function projectEndOfPeriod(status: BudgetStatus, now: Date = new Date()): number {
   if (typeof status.projectedUsd === "number" && Number.isFinite(status.projectedUsd)) {
     return status.projectedUsd;
   }
@@ -71,33 +73,45 @@ function projectEndOfPeriod(status: BudgetStatus, now: Date = new Date()): numbe
  */
 export function CostForecast({
   onOpenSession,
+  budget,
 }: {
   /** Open a session in the Browse view: (projectId, sessionId). */
   onOpenSession?: (projectId: string, sessionId: string) => void;
+  /**
+   * Host-provided budget status (e.g. the dashboard's polled `stats.budget`).
+   * When given, it is THE source — no separate /api/budget fetch — so this
+   * card's MTD/Projected figures match the KPI cards exactly. Standalone hosts
+   * omit it and the card fetches its own.
+   */
+  budget?: BudgetStatus;
 }) {
-  const [status, setStatus] = useState<BudgetStatus | null>(null);
+  const [fetched, setFetched] = useState<BudgetStatus | null>(null);
   // null = loading, [] = loaded-empty, otherwise the sampled sessions.
   const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
   const [sessionsError, setSessionsError] = useState(false);
 
   // Budget status (MTD / projection / cap). A 404 just leaves `status` null —
-  // we still render the anomaly view from per-session costs.
+  // we still render the anomaly view from per-session costs. Skipped entirely
+  // when the host already supplies the status.
   useEffect(() => {
+    if (budget) return;
     let cancelled = false;
     api
       .getBudget()
       .then((b) => {
-        if (!cancelled) setStatus(b.status);
+        if (!cancelled) setFetched(b.status);
       })
       .catch((e) => {
         // NotImplementedError (older server) is expected — degrade quietly. Any
         // other error also just drops the budget panel; the anomaly view stays.
-        if (!cancelled && !(e instanceof NotImplementedError)) setStatus(null);
+        if (!cancelled && !(e instanceof NotImplementedError)) setFetched(null);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [budget]);
+
+  const status = budget ?? fetched;
 
   // Sessions sample for the anomaly scan (reuses the same source TopSpenders uses).
   useEffect(() => {
