@@ -1834,6 +1834,10 @@ export default function App() {
             onFork={openCrossProviderFork}
             initialDraft={resumeSeed ? undefined : launchDraft}
             onSessionChange={handleChatSession}
+            externallyRunning={
+              !!resumeSeed?.sessionId &&
+              indexRunningBySession(liveRunning).has(resumeSeed.sessionId)
+            }
           />
         ) : (
           launchpad

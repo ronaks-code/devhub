@@ -300,6 +300,9 @@ export function Sidebar({
       // `/` focuses the session filter (the kbd hint in the filter well). If the
       // panel is collapsed there's no input to focus, so open it first.
       if (e.key === "/") {
+        // On the Settings route its own query-deck "/" owns the key — don't steal
+        // it to the sessions filter (QA: settings search "/" never fired).
+        if (destinations.some((d) => d.id === "settings" && d.current)) return;
         e.preventDefault();
         if (collapsed) {
           toggleCollapsed();

@@ -351,7 +351,19 @@ export function TopBar({
           </button>
         ) : null}
 
-        <div className={TOP_BAR_SECONDARY_CLASS}>
+        {/* When chat tabs are open the tab strip is the priority in the middle;
+            the ambient spend/count/toggle cluster would otherwise collapse the
+            tab middle to 0px at 1360–1500 (QA: tabs invisible at 1440). So with
+            tabs open the cluster defers to ≥1560px (where there's room for BOTH);
+            with no tabs it shows at ≥1360 as before. Spend/counts also live in the
+            StatusBar and theme in Settings, so nothing is lost when it condenses. */}
+        <div
+          className={
+            (chatTabs?.length ?? 0) > 0
+              ? TOP_BAR_SECONDARY_CLASS.replace("min-[1360px]:flex", "min-[1560px]:flex")
+              : TOP_BAR_SECONDARY_CLASS
+          }
+        >
           {/* Perf / reduced-motion toggle. Auto follows the OS until the first
               click, then each click flips the effective state; tinted clay
               while motion is being suppressed so the active state reads at a glance. */}

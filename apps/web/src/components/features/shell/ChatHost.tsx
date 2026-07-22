@@ -72,6 +72,11 @@ export interface ChatHostProps {
   initialDraft?: string;
   /** Report the live session id up to the shell so a new session becomes a chat tab (Aurora §3.2). */
   onSessionChange?: (sessionId: string) => void;
+  /** True when this session is in the app-root running set (driven by an EXTERNAL
+   *  process, e.g. the CLI) — so the TaskHeader "● running" pill reflects it even
+   *  when this panel isn't the one driving the turn (QA: pill absent for a session
+   *  the sidebar shows as running). */
+  externallyRunning?: boolean;
 }
 
 export function ChatHost({
@@ -85,6 +90,7 @@ export function ChatHost({
   showInspector = false,
   initialDraft,
   onSessionChange,
+  externallyRunning = false,
 }: ChatHostProps) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   // History (from the indexed store's bounded tail) and live (pushed over the
@@ -295,7 +301,7 @@ export function ChatHost({
           projectName={cwd.split("/").filter(Boolean).pop()}
           model={resumedModel ?? defaultModel ?? undefined}
           costUsd={sessionCost ?? undefined}
-          running={turnRunning}
+          running={turnRunning || externallyRunning}
         />
         <ChatWorktreePanel cwd={cwd} />
         <ThreadWorkspace
