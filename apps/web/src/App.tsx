@@ -846,10 +846,16 @@ export default function App() {
     (e: import("./lib/types").NotifyEvent) => {
       const title = e.title || (e.level === "warning" ? "Session waiting for you" : "Session update");
       const body = e.body || (e.project ? `in ${e.project}` : undefined);
-      const onClick =
-        e.projectId && e.sessionId
+      // Make EVERY session notification clickable (deep-link to the session). The
+      // server sends `sessionId` + `cwd` (not `projectId`), so prefer projectId when
+      // present, otherwise resolve via cwd (openSessionByCwd is never a dead end).
+      // Previously this only fired when projectId existed — which it never does on a
+      // server notify event — so notifications were inert. That was the bug.
+      const onClick = e.sessionId
+        ? e.projectId
           ? () => openSessionRef.current(e.projectId!, e.sessionId!)
-          : undefined;
+          : () => openSessionByCwdRef.current(e.cwd ?? null, e.sessionId!)
+        : undefined;
       const id = ++toastSeq.current;
       // Cap the visible stack at 4 (drop the oldest) so a burst stays unobtrusive.
       setToasts((prev) => [...prev.slice(-3), { id, title, body, level: e.level, onClick }]);
@@ -1163,6 +1169,11 @@ export default function App() {
     },
     [projects, openSession],
   );
+
+  // Latest openSessionByCwd, read by the stable SSE notify handler (which only has a
+  // cwd, not a projectId) so a notification toast can deep-link on click.
+  const openSessionByCwdRef = useRef(openSessionByCwd);
+  openSessionByCwdRef.current = openSessionByCwd;
 
   // Open a running session from Live Ops as a LIVE CHAT tab (Aurora §3.7:
   // "click card → opens the session as a chat tab"), NOT the read-only Browse

@@ -57,6 +57,12 @@ export interface NotifyEvent {
   /** When present, the toast/notification deep-links to this session on click. */
   sessionId?: string;
   projectId?: string;
+  /**
+   * Session working directory. The server emits `cwd` (not `projectId`) on notify
+   * events, so the click handler resolves cwd -> project to deep-link. Without this
+   * the notification isn't clickable at all (the whole reason toasts were inert).
+   */
+  cwd?: string | null;
   /** Project name/cwd for a nicer message, when the server includes it. */
   project?: string;
 }
