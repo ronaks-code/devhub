@@ -241,6 +241,7 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <header
+      data-dh-drag=""
       onMouseDown={startWindowDrag}
       className="glass-chrome flex h-11 w-full min-w-0 items-center gap-3 px-4"
       // .glass-chrome draws a full 1px border; the top bar wants ONLY the

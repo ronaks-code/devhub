@@ -657,6 +657,17 @@ kbd {
   margin-left: auto;
 }
 
+/* Window-drag chrome (§4): the top bar, icon rail, panel header, and status bar
+ * initiate a native window drag via startWindowDrag. Per Tauri's window-customization
+ * guidance, a drag surface must NOT let a mousedown begin a text selection — an
+ * in-progress selection swallows the gesture and the window won't move. Disable
+ * selection + use the default arrow (not a text I-beam) on every drag surface. */
+[data-dh-drag] {
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+}
+
 /* macOS Tauri chrome inset (§4): the native traffic-lights overlay the window's
  * top-left, which is this sidebar. Push the rail's logo/nav and the panel header
  * down so the top ~38px stays a clean, interactive-target-free drag strip and no
