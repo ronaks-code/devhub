@@ -159,6 +159,12 @@ export class Engine {
       );
       withMtime.sort((a, b) => b.m - a.m);
       const sorted = withMtime.map((x) => x.f);
+      // PERF: the archive backfill below stats EVERY session on EVERY launch (a
+      // per-file `hasArchive` check), which is pure wasted boot I/O once it's run.
+      // indexSession already archives new/changed files itself, so the backfill only
+      // ever mattered for sessions indexed BEFORE archiving existed — a one-time
+      // migration. Gate it behind a persisted flag so it runs once, then never again.
+      const needsArchiveBackfill = !this.settings.getFlag("archiveBackfillDone");
       let done = 0;
       for (const f of sorted) {
         // Isolate per-file failures: one corrupt/locked transcript logs a warning
@@ -168,23 +174,25 @@ export class Engine {
         } catch (err) {
           console.warn(`[engine] skipping unindexable session ${f}:`, err);
         }
-        // One-time backfill: indexSession only archives when a file is new/changed,
-        // so a session indexed before archiving existed would never get a copy.
-        // Archive any discovered session still lacking one, independent of index
-        // freshness. archiveSession is a cheap no-op skip when the source is huge.
-        try {
-          const sessionId = path.basename(f, ".jsonl");
-          if (!(await hasArchive(sessionId))) {
-            await archiveSession(f, sessionId);
+        // One-time backfill (see note above): archive any discovered session still
+        // lacking a copy. archiveSession is a cheap no-op skip when the source is huge.
+        if (needsArchiveBackfill) {
+          try {
+            const sessionId = path.basename(f, ".jsonl");
+            if (!(await hasArchive(sessionId))) {
+              await archiveSession(f, sessionId);
+            }
+          } catch (err) {
+            console.warn(`[engine] failed to backfill archive for ${f}:`, err);
           }
-        } catch (err) {
-          console.warn(`[engine] failed to backfill archive for ${f}:`, err);
         }
         done++;
         if (done % 10 === 0 || done === sorted.length) {
           this.emit({ kind: "index-progress", done, total: sorted.length });
         }
       }
+      // The one-time archive backfill just completed a full pass — never redo it.
+      if (needsArchiveBackfill) this.settings.setFlag("archiveBackfillDone", true);
       this.ready = true;
       this.emit({ kind: "ready" });
     } finally {

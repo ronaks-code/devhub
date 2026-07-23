@@ -330,10 +330,12 @@ fn packaged_server_command(
     desktop_token: &str,
 ) -> Result<Command, String> {
     let root = resource_dir.join("sidecar");
-    let entry = root.join("node_modules/tsx/dist/cli.mjs");
-    let server = root.join("src/index.ts");
+    // PERF: run the COMPILED server (`node dist/index.js`) — no `tsx` transpilation on
+    // every launch (the main slow-boot cost). prepare-sidecar.mjs builds dist/ and
+    // repoints the bundled engine's exports at its compiled dist.
+    let entry = root.join("dist/index.js");
     let web = root.join("web");
-    for required in [&entry, &server, &web.join("index.html")] {
+    for required in [&entry, &web.join("index.html")] {
         if !required.exists() {
             return Err(format!(
                 "Packaged DevHub resource is missing: {}",
@@ -357,7 +359,6 @@ fn packaged_server_command(
     let mut command = Command::new(node);
     command
         .arg(entry)
-        .arg(server)
         .current_dir(&root)
         .env("DEVHUB_WEB_DIST", web);
     apply_child_environment(&mut command, host, port, Some(desktop_token));

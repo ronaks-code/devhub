@@ -1,4 +1,4 @@
-import { access, cp, lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { access, cp, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -11,6 +11,19 @@ const webDist = path.join(repoRoot, "apps", "web", "dist");
 
 await rm(output, { recursive: true, force: true });
 await mkdir(path.dirname(output), { recursive: true });
+
+// PERF: compile the server + engine to plain JS so the packaged sidecar runs
+// `node dist/index.js` directly instead of transpiling TypeScript through `tsx` on
+// every launch (a large, repeated CPU cost — the app's slow-boot culprit). The
+// compiled `dist/` is what the desktop shell actually executes now.
+const build = spawnSync(
+  "pnpm",
+  ["--filter", "@devhub/engine", "--filter", "@devhub/server", "build"],
+  { cwd: repoRoot, stdio: "inherit", env: process.env },
+);
+if (build.status !== 0) {
+  throw new Error(`sidecar TypeScript build failed with status ${build.status ?? "unknown"}`);
+}
 
 const deploy = spawnSync(
   "pnpm",
@@ -35,16 +48,35 @@ if (deploy.status !== 0) {
 // node_modules tree instead of a symlinked .pnpm graph that it will not bundle.
 
 // The deployed server is a relocatable pnpm package containing its workspace
-// engine dependency and tsx runtime. Keep the Vite build beside it so Fastify
-// can serve UI + HTTP/SSE/WebSocket APIs from one localhost origin.
+// engine dependency (compiled) and its runtime deps. Keep the Vite build beside it
+// so Fastify can serve UI + HTTP/SSE/WebSocket APIs from one localhost origin.
 await cp(webDist, path.join(output, "web"), { recursive: true });
+
+// PERF (compiled-JS runtime): the deployed @devhub/engine keeps its dev exports
+// pointing at raw `./src/*.ts`. The packaged server runs as compiled `dist/index.js`
+// via `node` (no tsx), and node's TS type-stripping REFUSES .ts files under
+// node_modules — so `import "@devhub/engine"` would crash. Rewrite the bundled
+// engine's exports to its already-shipped compiled `./dist/*.js`. Source packages
+// are untouched, so the tsx-based dev server keeps resolving `./src`.
+const enginePkgPath = path.join(nodeModules, "@devhub", "engine", "package.json");
+const enginePkg = JSON.parse(await readFile(enginePkgPath, "utf8"));
+enginePkg.exports = {
+  ".": "./dist/index.js",
+  "./types": "./dist/types.js",
+  "./driver": "./dist/driver/types.js",
+  "./provider-status-contract": "./dist/provider-status-contract.js",
+  "./providers": "./dist/providers/index.js",
+};
+if (enginePkg.main) enginePkg.main = "./dist/index.js";
+await writeFile(enginePkgPath, JSON.stringify(enginePkg, null, 2));
+
 await Promise.all([
-  assertRegularFile(path.join(nodeModules, "tsx", "dist", "cli.mjs")),
-  assertRegularFile(path.join(nodeModules, "@devhub", "engine", "package.json")),
+  assertRegularFile(path.join(nodeModules, "@devhub", "engine", "dist", "index.js")),
   assertRegularFile(path.join(nodeModules, "fastify", "package.json")),
   assertRegularFile(path.join(nodeModules, "@fastify", "cors", "package.json")),
   assertRegularFile(path.join(nodeModules, "@fastify", "websocket", "package.json")),
-  access(path.join(output, "src", "index.ts")),
+  access(path.join(output, "dist", "index.js")),
+  access(path.join(output, "dist", "app.js")),
   access(path.join(output, "web", "index.html")),
 ]);
 await assertNoSymlinks(nodeModules);

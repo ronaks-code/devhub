@@ -56,6 +56,22 @@ export class SettingsStore {
     this.upsert.run(key as string, JSON.stringify(value ?? null));
   }
 
+  /**
+   * Read an internal boolean flag — a persisted key that is NOT part of the public
+   * AppSettings surface (e.g. one-time migration markers). Defaults to false.
+   */
+  getFlag(key: string): boolean {
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key = ?")
+      .get(key) as { value: string | null } | undefined;
+    return row?.value != null && parseValue(row.value) === true;
+  }
+
+  /** Persist an internal boolean flag (see {@link getFlag}). */
+  setFlag(key: string, value: boolean): void {
+    this.upsert.run(key, JSON.stringify(value));
+  }
+
   /** Full settings object: stored values layered over DEFAULT_SETTINGS. */
   getAll(): AppSettings {
     const out: AppSettings = {
