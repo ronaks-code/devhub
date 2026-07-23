@@ -868,7 +868,13 @@ export default function App() {
         Notification.permission === "granted"
       ) {
         try {
-          const n = new Notification(title, { body, tag: e.sessionId ?? undefined });
+          const n = new Notification(title, {
+            body,
+            tag: e.sessionId ?? undefined,
+            // Explicit DevHub Deck logo so the notification never falls back to a
+            // stale/default icon (served from apps/web/public).
+            icon: "/notification-icon.png",
+          });
           if (onClick) {
             n.onclick = () => {
               window.focus();
