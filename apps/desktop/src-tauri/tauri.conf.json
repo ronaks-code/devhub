@@ -10,25 +10,7 @@
     "beforeBuildCommand": "pnpm --filter @devhub/web build && pnpm --filter @devhub/desktop prepare:sidecar"
   },
   "app": {
-    "windows": [
-      {
-        "title": "DevHub",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 920,
-        "minHeight": 600,
-        "visible": false,
-        "resizable": true,
-        "fullscreen": false,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "trafficLightPosition": {
-          "x": 19,
-          "y": 19
-        },
-        "dragDropEnabled": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }

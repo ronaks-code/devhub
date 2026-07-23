@@ -528,12 +528,30 @@ pub fn run() {
                 ensure_server(&resource_dir, &host, port, desktop_token.as_deref())
                     .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
             let start_ui = || -> Result<(), Box<dyn std::error::Error>> {
-                let window = app.get_webview_window("main").ok_or_else(|| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "Tauri did not create the main DevHub window",
-                    )
-                })?;
+                // Create the main window in Rust (not tauri.conf.json) so we can enable
+                // accept_first_mouse: clicking the *inactive* window clicks THROUGH to the
+                // webview, so the title-bar / sidebar drag (and any control) responds on the
+                // FIRST click even when DevHub isn't focused. macOS otherwise eats that first
+                // click just to focus the window (Tauri #4316 / #11605), which read as "I
+                // click once and it won't move". The config file can't express this attribute,
+                // so every other option here mirrors the former tauri.conf.json window block.
+                let mut builder =
+                    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                        .title("DevHub")
+                        .inner_size(1400.0, 900.0)
+                        .min_inner_size(920.0, 600.0)
+                        .resizable(true)
+                        .visible(false)
+                        .disable_drag_drop_handler()
+                        .accept_first_mouse(true);
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true)
+                        .traffic_light_position(tauri::LogicalPosition::new(19.0_f64, 19.0_f64));
+                }
+                let window = builder.build()?;
                 if !cfg!(debug_assertions) {
                     let url = format!("http://{host}:{port}").parse::<tauri::Url>()?;
                     window.navigate(url)?;
