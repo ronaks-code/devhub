@@ -68,6 +68,12 @@ enginePkg.exports = {
   "./providers": "./dist/providers/index.js",
 };
 if (enginePkg.main) enginePkg.main = "./dist/index.js";
+// CRITICAL: pnpm hardlinks the deployed package.json to the SOURCE via its
+// content-addressable store, so writing in place would mutate packages/engine/
+// package.json too (flipping dev/test resolution to ./dist). Delete first to break
+// the hardlink, then write a fresh inode — the bundled copy points at dist, source
+// keeps its ./src dev exports.
+await rm(enginePkgPath, { force: true });
 await writeFile(enginePkgPath, JSON.stringify(enginePkg, null, 2));
 
 await Promise.all([
