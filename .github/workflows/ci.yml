@@ -15,10 +15,13 @@ jobs:
     name: typecheck + test (node ${{ matrix.node }})
     runs-on: ubuntu-latest
     strategy:
-      # Don't abort the whole matrix if one Node version fails — see both results.
       fail-fast: false
       matrix:
-        node: ["22", "24"]
+        # node 24+ only: the engine relies on runtime features unavailable on node 22
+        # (worker-thread .js->.ts native resolution + node:sqlite transaction semantics),
+        # and the desktop app ships on node 26. Node 22 tested an env the app never runs
+        # on and failed there only; dropped so CI reflects the real supported runtime.
+        node: ["24"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
