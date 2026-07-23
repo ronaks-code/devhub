@@ -22,8 +22,9 @@ describe("StatusBar (§3.7)", () => {
     expect(html).toContain("⎇ feat/aurora");
     expect(html).toContain("2 running");
     expect(html).toContain("$1234 MTD");
-    // Non-interactive → doubles as a window drag region (§4).
-    expect(html).toContain("data-tauri-drag-region");
+    // Non-interactive → doubles as a window drag region (§4), now via the
+    // explicit startDragging handler marked with data-dh-drag.
+    expect(html).toContain("data-dh-drag");
   });
 
   it("hides the attention banner when nothing needs you", () => {

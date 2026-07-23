@@ -241,7 +241,6 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <header
-      data-tauri-drag-region
       onMouseDown={startWindowDrag}
       className="glass-chrome flex h-11 w-full min-w-0 items-center gap-3 px-4"
       // .glass-chrome draws a full 1px border; the top bar wants ONLY the
@@ -254,7 +253,7 @@ export function TopBar({
         borderBottomColor: "var(--dh-glass-border)",
       }}
     >
-      <div className="flex shrink-0 items-center gap-1.5 text-sm" data-tauri-drag-region>
+      <div className="flex shrink-0 items-center gap-1.5 text-sm">
         <DeckMark size={18} className="shrink-0" />
         {/* ⬦ workspace / project breadcrumb (§3.2). The project segment is a
             button that opens the ⌘P project switcher, not static text. */}
@@ -262,7 +261,7 @@ export function TopBar({
         <span className="font-semibold tracking-tight text-[var(--dh-text-strong)]">DevHub</span>
         {projectName ? (
           <>
-            <span className="text-[var(--dh-text-disabled)]" data-tauri-drag-region>/</span>
+            <span className="text-[var(--dh-text-disabled)]">/</span>
             <button
               type="button"
               onClick={onOpenProjectSwitcher}
@@ -288,7 +287,6 @@ export function TopBar({
        * no scrollbar to recover them (QA BLOCKER: header overflow at 600–1494px).
        */}
       <div
-        data-tauri-drag-region
         className="flex min-w-0 flex-1 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {/* Render whenever the handlers exist, even with zero tabs, so the
@@ -312,7 +310,7 @@ export function TopBar({
        * TOP_BAR_SECONDARY_CLASS; Settings is always present (also on the rail, but
        * the header instance must never vanish).
        */}
-      <div data-tauri-drag-region className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         <button
           onClick={onOpenSearch}
           className="inline-flex items-center gap-2 rounded-lg bg-zinc-900 px-2.5 py-1 text-[12px] text-zinc-400 ring-1 ring-zinc-800 transition hover:text-zinc-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50"
@@ -359,7 +357,6 @@ export function TopBar({
             with no tabs it shows at ≥1360 as before. Spend/counts also live in the
             StatusBar and theme in Settings, so nothing is lost when it condenses. */}
         <div
-          data-tauri-drag-region
           className={
             (chatTabs?.length ?? 0) > 0
               ? TOP_BAR_SECONDARY_CLASS.replace("min-[1360px]:flex", "min-[1560px]:flex")

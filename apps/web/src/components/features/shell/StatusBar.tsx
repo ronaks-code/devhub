@@ -1,4 +1,5 @@
 import { StatusDot } from "../../ui/StatusDot.js";
+import { startWindowDrag } from "../../../lib/windowDrag.js";
 
 /**
  * StatusBar — the 26px ambient status strip under the main surface only (§2.1/§3.7).
@@ -38,8 +39,8 @@ export function StatusBar({
 }: StatusBarProps) {
   const oldest = ago(oldestNeedsYouAt);
   return (
-    <div className="dh-statusbar-inner" data-tauri-drag-region>
-      <div className="dh-status-left" data-tauri-drag-region>
+    <div className="dh-statusbar-inner" data-dh-drag="" onMouseDown={startWindowDrag}>
+      <div className="dh-status-left">
         {projectName ? <span className="dh-status-seg">{projectName}</span> : null}
         {branch ? <span className="dh-status-seg dh-status-branch">{`⎇ ${branch}`}</span> : null}
       </div>
@@ -50,7 +51,7 @@ export function StatusBar({
         </span>
       ) : null}
 
-      <div className="dh-status-right" data-tauri-drag-region>
+      <div className="dh-status-right">
         <span className="dh-status-seg">
           <StatusDot status={runningCount > 0 ? "running" : "idle"} />
           {`${runningCount} running`}

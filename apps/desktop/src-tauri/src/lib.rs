@@ -169,6 +169,76 @@ fn port_open(host: &str, port: u16) -> bool {
         })
 }
 
+/// True if we can actually bind `host:port` right now. Stronger than `port_open`
+/// (which only detects a live listener) — used to pick a real fallback port.
+fn port_bindable(host: &str, port: u16) -> bool {
+    std::net::TcpListener::bind((host, port)).is_ok()
+}
+
+/// The canonical port if free, else the next bindable port in a small band above
+/// it. `None` only if the whole band is taken (effectively never).
+fn find_free_port(host: &str, start: u16) -> Option<u16> {
+    (start..=start.saturating_add(20)).find(|&candidate| port_bindable(host, candidate))
+}
+
+/// PIDs listening on `port` (Unix `lsof`).
+fn listeners_on_port(port: u16) -> Vec<i32> {
+    Command::new("lsof")
+        .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+        .output()
+        .ok()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .filter_map(|token| token.parse::<i32>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// True if `pid`'s command line is a DevHub packaged sidecar (it runs our
+/// `sidecar/src/index.ts` entry). Timing-independent — unlike the HTTP health probe,
+/// this identifies a slow, cold, or force-quit-orphaned sidecar reliably.
+fn pid_is_devhub_sidecar(pid: i32) -> bool {
+    Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains("sidecar/src/index.ts"))
+        .unwrap_or(false)
+}
+
+/// Best-effort reclaim of a port held by a *stale DevHub sidecar* — an orphan from a
+/// prior launch that did not shut down cleanly (e.g. a force-quit). We kill ONLY when
+/// the occupant is confirmed DevHub — either it answers the identity probe, or a
+/// listening PID's command line is our sidecar entry — so a foreign process is never
+/// touched. Keeps the canonical 8787 across restarts and stops orphaned sidecars from
+/// piling up on the machine. Returns true if the port is free afterwards.
+fn reclaim_stale_devhub_port(host: &str, port: u16) -> bool {
+    let pids = listeners_on_port(port);
+    if pids.is_empty() {
+        return !port_open(host, port);
+    }
+    let is_devhub = health_ok(host, port) || pids.iter().any(|&pid| pid_is_devhub_sidecar(pid));
+    if !is_devhub {
+        return false; // occupied by something that isn't DevHub — leave it alone
+    }
+    for pid in pids {
+        #[cfg(unix)]
+        unsafe {
+            // Each sidecar is its own process group leader (see apply_child_environment),
+            // so -pid reaches its tsx/node descendants; also signal the pid directly.
+            let _ = libc::kill(-pid, libc::SIGTERM);
+            let _ = libc::kill(pid, libc::SIGTERM);
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while port_open(host, port) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    !port_open(host, port)
+}
+
 fn find_repo_root(start: &Path) -> Option<PathBuf> {
     start
         .ancestors()
@@ -352,24 +422,35 @@ fn ensure_server(
     host: &str,
     port: u16,
     desktop_token: Option<&str>,
-) -> Result<Child, String> {
-    if port_open(host, port) {
-        return Err(format!(
-            "Port {port} is already occupied; DevHub requires an app-owned server"
-        ));
-    }
+) -> Result<(Child, u16), String> {
     if env_flag("CLAUDE_UI_NO_SPAWN") {
         return Err(format!(
             "CLAUDE_UI_NO_SPAWN is set but no DevHub server is available on {host}:{port}"
         ));
     }
 
-    let mut child = spawn_server(resource_dir, host, port, desktop_token)?;
-    if let Err(error) = wait_for_server(&mut child, host, port) {
+    // Previously an occupied port hard-panicked the whole app on launch ("DevHub
+    // quit unexpectedly" — the #1 crash, caused by an orphaned sidecar squatting
+    // 8787 after a prior quit). Now we recover: reclaim a stale DevHub orphan to
+    // keep the canonical port, and if the port is genuinely taken by something
+    // else, fall back to the next free port. The app never dies over a busy port.
+    let bind_port = if port_open(host, port) {
+        if reclaim_stale_devhub_port(host, port) {
+            port
+        } else {
+            find_free_port(host, port)
+                .ok_or_else(|| format!("No free port available near {port}"))?
+        }
+    } else {
+        port
+    };
+
+    let mut child = spawn_server(resource_dir, host, bind_port, desktop_token)?;
+    if let Err(error) = wait_for_server(&mut child, host, bind_port) {
         stop_child(&mut child);
         return Err(error);
     }
-    Ok(child)
+    Ok((child, bind_port))
 }
 
 fn stop_child(child: &mut Child) {
@@ -440,8 +521,12 @@ pub fn run() {
                         .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?,
                 )
             };
-            let mut child = ensure_server(&resource_dir, &host, port, desktop_token.as_deref())
-                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            // `port` is rebound to the port the server actually came up on (the
+            // requested one, or a fallback if it was occupied), so the window URL,
+            // tray, and notifications all target the live server.
+            let (mut child, port) =
+                ensure_server(&resource_dir, &host, port, desktop_token.as_deref())
+                    .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
             let start_ui = || -> Result<(), Box<dyn std::error::Error>> {
                 let window = app.get_webview_window("main").ok_or_else(|| {
                     std::io::Error::new(
