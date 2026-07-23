@@ -163,7 +163,10 @@ describe("App New Task dispatch", () => {
     await waitFor(() => expect(api.sessions).toHaveBeenCalledWith(PROJECT.id));
 
     await user.click(await screen.findByRole("button", { name: "New Claude Session" }));
-    expect(await screen.findByRole("form", { name: "New native Codex task setup" }))
+    // Generous timeout: the form renders after an async default-model resolution, which
+    // the default 1s findBy timeout can miss on a slow CI runner (flaky red, passes
+    // locally). 5s is comfortably above CI variance without masking a real hang.
+    expect(await screen.findByRole("form", { name: "New native Codex task setup" }, { timeout: 5000 }))
       .toBeInTheDocument();
 
     const workingFolder = screen.getByLabelText("Working folder");
@@ -181,7 +184,7 @@ describe("App New Task dispatch", () => {
     await waitFor(() => expect(api.sessions).toHaveBeenCalledWith(PROJECT.id));
 
     await user.click(await screen.findByRole("button", { name: "New Claude Session" }));
-    expect(await screen.findByTestId("fresh-claude-chat")).toHaveAttribute("data-instance", "1");
+    expect(await screen.findByTestId("fresh-claude-chat", {}, { timeout: 5000 })).toHaveAttribute("data-instance", "1");
     expect(screen.getByTestId("fresh-claude-chat")).toHaveAttribute("data-session-id", "");
 
     // Aurora Cockpit Sidebar renamed the rail's new-session control ("New task" →
