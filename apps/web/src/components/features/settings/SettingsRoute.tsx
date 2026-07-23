@@ -8,6 +8,7 @@ import { formatUsd } from "../../../lib/format.js";
 import { providerFromModel } from "../ops/opsHelpers.js";
 import { Spinner } from "../../ui.js";
 import { McpManager } from "../../config/McpManager.js";
+import { UpdateCheck } from "./UpdateCheck.js";
 import { HooksEditor } from "../../config/HooksEditor.js";
 import { PermissionsEditor } from "../../config/PermissionsEditor.js";
 import { AgentsLibrary } from "../../config/AgentsLibrary.js";
@@ -176,6 +177,7 @@ export const SETTINGS_ROWS: ReadonlyArray<SettingRowDef> = Object.freeze([
   { id: "rebuild-index", group: "Data & maintenance", label: "Rebuild search index", keywords: "rebuild search index reindex maintenance", kind: "control" },
   { id: "integrity", group: "Data & maintenance", label: "Integrity", keywords: "integrity health repair drift audit maintenance", kind: "control" },
   { id: "archive", group: "Data & maintenance", label: "Archive & transfer", keywords: "backup archive transfer export import download restore portable maintenance data", kind: "control" },
+  { id: "check-updates", group: "Data & maintenance", label: "Check for updates", keywords: "update upgrade version check install release download latest maintenance", kind: "control" },
   // Preserved editor surfaces — a jump row per section (they aren't decomposed here).
   { id: "budget", group: "Budget", label: "Budget thresholds & enforcement", keywords: "budget spend cap forecast pacing warn threshold enforce meter", kind: "section", section: "budget" },
   { id: "memory", group: "Memory", label: "Memory / CLAUDE.md", keywords: "memory claude.md context instructions project global", kind: "section", section: "memory" },
@@ -952,6 +954,8 @@ export function SettingsRoute({
         return <IntegrityPanel />;
       case "archive":
         return <ArchiveTransfer />;
+      case "check-updates":
+        return <UpdateCheck />;
       default:
         return null;
     }

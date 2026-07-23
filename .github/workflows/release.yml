@@ -1,0 +1,53 @@
+name: release
+
+# Publish a signed DevHub desktop build to GitHub Releases. The Tauri updater in the
+# app points at this repo's "latest" release (releases/latest/download/latest.json),
+# so tagging a version here is what makes Settings -> "Check for updates" find it.
+#
+# To cut a release: bump the version in apps/desktop/src-tauri/tauri.conf.json, then
+#   git tag v0.1.1 && git push origin v0.1.1
+# (the tag must be a HIGHER semver than the installed app for the updater to offer it).
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  release:
+    runs-on: macos-14 # Apple silicon runner -> aarch64 build for M-series Macs
+    permissions:
+      contents: write # create the release + upload assets
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The private half of the updater signing keypair (public half is baked into
+          # tauri.conf.json). Generated with an empty password.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "DevHub ${{ github.ref_name }}"
+          releaseBody: "Automated DevHub desktop release. Updates install in-app via Settings -> Check for updates."
+          releaseDraft: false
+          prerelease: false
+          args: --target aarch64-apple-darwin

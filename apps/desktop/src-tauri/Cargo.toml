@@ -32,3 +32,7 @@ tauri-plugin-global-shortcut = "2"
 # Native desktop notifications fired when a session finishes a turn (see
 # src/notify.rs). 2.x tracks the Tauri v2 series this app is on.
 tauri-plugin-notification = "2"
+# In-app auto-update: check GitHub Releases, download + install a signed update, and
+# relaunch (process plugin). Powers Settings -> "Check for updates".
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
