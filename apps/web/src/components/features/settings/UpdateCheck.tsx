@@ -1,12 +1,20 @@
 import { useState } from "react";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { Field } from "./settings-ui.js";
 
 /**
  * Settings → "Check for updates". In the desktop app this checks GitHub Releases via
  * the Tauri updater, downloads + installs the signed update, and relaunches. In the
- * plain web build the updater plugin isn't present, so it shows a note instead. The
- * plugin modules are imported dynamically (only inside Tauri) so the web bundle never
- * pulls them in; an async click handler has no live-gesture constraint, unlike drag.
+ * plain web build the updater plugin isn't present, so it shows a note instead.
+ *
+ * CRITICAL — import `check`/`relaunch` STATICALLY, not with `await import(...)` inside
+ * the handler. `downloadAndInstall()` replaces the app bundle on disk, so a dynamic
+ * import AFTER it (to get `relaunch`) tries to fetch a chunk that no longer exists and
+ * fails with "Importing a module script failed" (found via live E2E). Static imports
+ * are resolved when Settings mounts — before any swap — so `relaunch` is already in
+ * memory. Importing the modules in a plain browser is a harmless no-op (calls are
+ * guarded by the Tauri check below).
  */
 export function UpdateCheck() {
   const [status, setStatus] = useState<string>("");
@@ -18,7 +26,6 @@ export function UpdateCheck() {
     setBusy(true);
     setStatus("Checking for updates…");
     try {
-      const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
       if (!update) {
         setStatus("You're on the latest version.");
@@ -27,7 +34,6 @@ export function UpdateCheck() {
       setStatus(`Update ${update.version} available — downloading…`);
       await update.downloadAndInstall();
       setStatus("Update installed — restarting…");
-      const { relaunch } = await import("@tauri-apps/plugin-process");
       await relaunch();
     } catch (err) {
       setStatus(`Update check failed: ${(err as Error)?.message ?? String(err)}`);
