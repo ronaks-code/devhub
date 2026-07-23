@@ -1,10 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Default permissions. remote.urls is REQUIRED: the webview loads the app-owned sidecar UI from http://127.0.0.1:<port> (a REMOTE origin to Tauri), and capabilities are local-origin-only by default, so without it every IPC command (incl. window start_dragging) is ACL-rejected. Port varies (8787 or fallback) -> wildcard. Loopback + app-owned + token-gated = the app's own trusted UI.",
   "windows": [
     "main"
   ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*",
+      "http://localhost:*"
+    ]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

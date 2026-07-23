@@ -4,36 +4,29 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 /**
  * Explicit macOS/Tauri window dragging for the chrome (top bar + sidebar + status bar).
  *
- * Why not `data-tauri-drag-region`: DevHub's web UI is served over HTTP by the app's
- * own sidecar, and Tauri's automatic drag-region handling is unreliable for
- * externally-loaded content + the `Overlay` title-bar style.
- *
- * CRITICAL — `startDragging()` MUST be called SYNCHRONOUSLY inside the `mousedown`
- * handler. macOS attaches the window-move to the *live* mouse-down gesture; if the
- * call is deferred (e.g. behind an `await import(...)`) the OS has already finished
- * processing the event and the drag never attaches — the window drags once (or not
- * at all) and then "loses the ability to move" (Tauri issues #10767 / #11605). So we
- * static-import `getCurrentWindow` and call through synchronously, matching the
- * official window-customization docs. `getCurrentWindow()` only touches
- * `__TAURI_INTERNALS__` when invoked, so the static import is a safe no-op in the
- * plain web build (guarded below anyway).
+ * Two things are load-bearing and were each, in turn, the reason drag didn't work:
+ *  1. `startDragging()` MUST be called SYNCHRONOUSLY inside the mousedown handler —
+ *     macOS attaches the window-move to the live gesture, so an `await import(...)`
+ *     first would drop it. Hence the static import + direct call here.
+ *  2. The command is ACL-gated. Because the UI is served from the app's sidecar over
+ *     http://127.0.0.1:<port> (a REMOTE origin to Tauri), the "main" capability must
+ *     declare that origin in `remote.urls` (see capabilities/default.json) or every
+ *     IPC call — including this one — is rejected with "not allowed by ACL".
  *
  * Interactive targets (buttons/links/inputs/tabs, or anything opting out via
  * `data-no-drag`) never start a drag, so clicking a control still works. A
- * double-click toggles maximize (macOS-standard) instead of dragging.
+ * double-click on the chrome toggles maximize (macOS convention). No-op outside Tauri.
  */
 const INTERACTIVE_SELECTOR =
   "button, a, input, textarea, select, label, [role='button'], [role='tab'], [role='menuitem'], [data-no-drag]";
 
 export function startWindowDrag(e: ReactMouseEvent): void {
-  // Primary (left) button only, and no-op outside a Tauri webview.
-  if (e.buttons !== 1) return;
+  if (e.button !== 0) return; // primary (left) button only
   if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
   const target = e.target as HTMLElement | null;
   if (target?.closest(INTERACTIVE_SELECTOR)) return;
   try {
     const appWindow = getCurrentWindow();
-    // Double-click on the chrome maximizes (macOS convention); otherwise drag.
     if (e.detail === 2) {
       void appWindow.toggleMaximize();
     } else {
