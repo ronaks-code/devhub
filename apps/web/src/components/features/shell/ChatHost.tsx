@@ -17,6 +17,7 @@ import {
   Composer,
   composerFooterContext,
   computeSendDisabledReason,
+  isBuiltinCommand,
   resolveSendState,
   type ComposerConnection,
 } from "./Composer.js";
@@ -383,22 +384,6 @@ export function ChatHost({
   // Keep the ref pointed at the latest runPrompt for the turn-end queue dispatch.
   runPromptRef.current = runPrompt;
 
-  const send = useCallback(() => {
-    const text = draft.trim();
-    if (!text) return;
-    // A turn is in flight → QUEUE the follow-up (shown in ThreadWorkspace's dimmed
-    // tray) instead of dropping it; it runs as its own turn on the next turn-end.
-    if (turnRunning) {
-      setQueued((q) => [...q, { id: String(++queueIdRef.current), text }]);
-      clearDraft();
-      return;
-    }
-    // No live socket yet → keep the draft so the text isn't lost.
-    if (!connRef.current) return;
-    runPrompt(text);
-    clearDraft();
-  }, [draft, turnRunning, runPrompt, clearDraft]);
-
   // Start a fresh chat on the SAME cwd (built-in `/clear`). Mirrors ChatPane's
   // `newChat`: tear the socket down and dial a clean one, drop the session id +
   // both transcript halves + the follow-up queue + any resumed session metadata,
@@ -420,6 +405,56 @@ export function ChatHost({
     setQueued([]);
     clearDraft();
   }, [connect, clearDraft]);
+
+  // Execute a built-in slash command as a UI action — NEVER forwarded to the
+  // agent. ONE shared implementation used by BOTH the Composer picker
+  // (onBuiltinCommand) and send()'s backstop below, so a bare built-in behaves
+  // identically whether it's picked from the menu or typed with a trailing space.
+  const runBuiltinCommand = useCallback(
+    (name: string) => {
+      if (name === "clear") {
+        newChat();
+      } else if (name === "help") {
+        onShowShortcuts?.();
+      } else if (name === "model") {
+        // GUARD (HIGH): onOpenModelPicker navigates to Settings, which UNMOUNTS
+        // ChatHost — closing the socket (killing a running turn) AND destroying
+        // the in-memory queue. Only open it when nothing would be lost: no running
+        // turn AND an empty queue. Otherwise no-op (drop the /model) rather than
+        // silently losing work. (0.1.8 replaces this with an in-place overlay
+        // picker that doesn't unmount.)
+        if (!turnRunning && queueRef.current.length === 0) onOpenModelPicker?.();
+      }
+    },
+    [newChat, onShowShortcuts, onOpenModelPicker, turnRunning],
+  );
+
+  const send = useCallback(() => {
+    const text = draft.trim();
+    if (!text) return;
+    // Backstop: a bare built-in ("/clear", "/help", "/model" — with or without
+    // trailing whitespace) EXECUTES here, never forwarded to the agent. The
+    // Composer intercepts these while the picker is open, but a trailing space
+    // closes the picker, so Enter would otherwise send "/clear" as a literal
+    // prompt. Same runBuiltinCommand (incl. the /model guard) as the picker path.
+    const builtin = /^\/(\S+)$/.exec(text);
+    if (builtin && isBuiltinCommand(builtin[1]!)) {
+      runBuiltinCommand(builtin[1]!);
+      clearDraft();
+      return;
+    }
+    // A turn is in flight → QUEUE the follow-up (shown in ThreadWorkspace's dimmed
+    // tray) instead of dropping it; it runs as its own turn on the next turn-end.
+    if (turnRunning) {
+      setQueued((q) => [...q, { id: String(++queueIdRef.current), text }]);
+      clearDraft();
+      return;
+    }
+    // No live socket yet → keep the draft so the text isn't lost.
+    if (!connRef.current) return;
+    runPrompt(text);
+    clearDraft();
+  }, [draft, turnRunning, runPrompt, clearDraft, runBuiltinCommand]);
 
   const items = useMemo(() => mapMessagesToThreadItems(messages), [messages]);
   // Claude has no native interrupt until M4 (`persistentClaude` stays false), so a
@@ -499,14 +534,10 @@ export function ChatHost({
               onDraftChange={setDraft}
               onSend={send}
               onReconnect={connect}
-              onBuiltinCommand={(name) => {
-                // Built-ins EXECUTE a UI action (never forwarded to the agent).
-                // `/clear` is fully handled here; `/help` and `/model` defer to
-                // App-provided handlers (no-op if App hasn't wired them yet).
-                if (name === "clear") newChat();
-                else if (name === "help") onShowShortcuts?.();
-                else if (name === "model") onOpenModelPicker?.();
-              }}
+              // Built-ins EXECUTE a UI action (never forwarded to the agent), via
+              // the SAME shared runBuiltinCommand the send() backstop uses — so the
+              // /model unmount guard applies on both paths.
+              onBuiltinCommand={runBuiltinCommand}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
