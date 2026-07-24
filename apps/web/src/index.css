@@ -3554,6 +3554,16 @@ html[data-reduce-motion="true"] {
   grid-template-areas: "header header" "nav panel";
   gap: 18px 22px;
   max-width: 1000px;
+  /* Fill the pane's bounded height and scroll INTERNALLY. The pane wrapper
+     (flex min-w-0 flex-1 flex-col) provides height but no overflow, so tall settings
+     content was clipped with no scrollbar. flex:1 + min-height:0 lets this grid shrink
+     below its content inside the flex column so overflow-y can actually scroll; the
+     sticky left nav sticks within this scroll container. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-bottom: 28px;
 }
 
 .dh-settings-header {
