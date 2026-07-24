@@ -49,6 +49,17 @@ export interface RequestAction {
 }
 
 /**
+ * A follow-up prompt the user typed while the current turn is still running — it has
+ * NOT been sent yet. Rendered as a dimmed PENDING item in a tray above the composer
+ * (after the live turn), with a cancel control. The parent owns the queue; this
+ * component is presentation-only over it.
+ */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+}
+
+/**
  * One item in the vertical narrative. Completed and active work share this one union
  * so they render in a single transcript, not in split panes/dashboards.
  */
@@ -263,6 +274,53 @@ function StreamingBlock({ content }: { content?: ReactNode }) {
   );
 }
 
+/**
+ * The pending-follow-up tray: prompts the user typed while a turn is still running,
+ * shown just above the composer (after the live turn) as dimmed, visually-distinct
+ * PENDING items — each tagged "Queued" with a cancel control so the user can see and
+ * pull back what will send next. Presentation-only; the parent owns the queue and the
+ * cancel behavior. Renders no `<svg>`/`<img>` (the cancel glyph is text) so the
+ * component's no-image invariant holds.
+ */
+function QueuedMessages({
+  queued,
+  onCancelQueued,
+}: {
+  queued: QueuedMessage[];
+  onCancelQueued?: (id: string) => void;
+}) {
+  return (
+    <div
+      className="dh-thread-queue"
+      data-dh-thread-queue=""
+      role="list"
+      aria-label="Queued messages"
+    >
+      {queued.map((q) => (
+        <div key={q.id} className="dh-thread-queued" data-dh-queued="" role="listitem">
+          <span className="dh-queued-tag" data-dh-queued-tag="">
+            Queued
+          </span>
+          <span className="dh-queued-text" data-dh-queued-text="">
+            {q.text}
+          </span>
+          {onCancelQueued ? (
+            <button
+              type="button"
+              className="dh-queued-cancel"
+              data-dh-queued-cancel=""
+              aria-label="Cancel queued message"
+              onClick={() => onCancelQueued(q.id)}
+            >
+              {"×"}
+            </button>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** The `<summary>` for a collapsed raw diagnostic: its first line, short enough to
  *  read as a slim row rather than a wall of text. The full bounded content is one
  *  click away — nothing real is dropped, only de-emphasized (M8). */
@@ -369,6 +427,19 @@ export interface ThreadWorkspaceProps {
    * resumed-but-empty task omits it and keeps the deliberate blank canvas.
    */
   emptyState?: ReactNode;
+  /**
+   * Follow-ups the user typed while the current turn is still running. They have NOT
+   * been sent yet — rendered as dimmed, visually-distinct PENDING items in a tray
+   * just above the composer (after the live turn), each with a cancel control. The
+   * PARENT owns this queue (ThreadWorkspace is presentation-only over it): omit or
+   * pass an empty array when nothing is queued. See ChatHost wiring note in the batch
+   * report — ChatHost currently sends immediately and does not queue, so this stays
+   * empty until it grows a `queued`/`onCancelQueued` implementation (the legacy
+   * `ChatPane` already has a working queue to port).
+   */
+  queued?: QueuedMessage[];
+  /** Remove a queued follow-up before it is sent. Omit to hide the cancel control. */
+  onCancelQueued?: (id: string) => void;
 }
 
 /**
@@ -440,6 +511,8 @@ export function ThreadWorkspace({
   onLoadOlder,
   loadingOlder = false,
   emptyState,
+  queued,
+  onCancelQueued,
 }: ThreadWorkspaceProps) {
   const isEmpty = items.length === 0;
   // The native-scroll transcript container (`overflow-y: auto`, never a shadcn
@@ -577,6 +650,13 @@ export function ThreadWorkspace({
       >
         {workingText}
       </div>
+
+      {/* Pending follow-ups (typed while a turn runs, not yet sent) sit AFTER the
+          live turn and just ABOVE the composer, so they read as "these send next"
+          rather than as already-sent conversation. Absent/empty → nothing renders. */}
+      {queued && queued.length > 0 ? (
+        <QueuedMessages queued={queued} onCancelQueued={onCancelQueued} />
+      ) : null}
 
       {/* The composer renders even when the transcript is empty. */}
       {composerSlot ?? <ComposerSlot sendState={sendState} placeholder={placeholder} canSend={canSend} />}

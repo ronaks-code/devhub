@@ -4,11 +4,14 @@ import {
   ChevronDown,
   CircleUserRound,
   Folder,
+  FolderGit2,
+  FolderOpen,
   Hexagon,
   History,
   Home,
   Inbox,
   LayoutDashboard,
+  Lock,
   Plus,
   Radio,
   Rocket,
@@ -20,12 +23,14 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DeckMark } from "../../DeckMark.js";
+import { ModelBadge } from "../../ModelBadge.js";
 import { startWindowDrag } from "../../../lib/windowDrag.js";
 import { LogoutButton } from "../../AuthGate.js";
 import { getToken } from "../../../lib/api.js";
 import { readCompat, writeCompat } from "../../../lib/compat-storage.js";
 import { ProviderChip, type ChipProvider } from "../../ui/ProviderChip.js";
 import { StatusDot, type StatusKind } from "../../ui/StatusDot.js";
+import { attentionPillLabel } from "../../../lib/sessionStatus.js";
 
 /**
  * Sidebar — the Aurora Cockpit rail+panel (§3.1). A 52px icon rail (glassless,
@@ -136,6 +141,9 @@ export interface SidebarProps {
   mechanics: "claude" | "codex";
   onMechanicsChange?: (m: "claude" | "codex") => void;
   modelLabel?: string;
+  /** Raw default-model id (e.g. "claude-opus-4-8"); rendered as a ModelBadge (provider
+   * mark + clean name) in the footer. Falls back to modelLabel text when absent. */
+  model?: string | null;
   spend?: SidebarSpend;
   /** Opens the shared ShortcutOverlay (the rail's dashed `?` chip, §3.1). */
   onShowShortcuts?: () => void;
@@ -331,6 +339,7 @@ export function Sidebar({
   mechanics,
   onMechanicsChange,
   modelLabel,
+  model,
   spend,
   loading,
   onShowShortcuts,
@@ -529,7 +538,9 @@ export function Sidebar({
         </div>
         {iconDests.map((d) => {
           const meta = NAV_ICONS[d.id]!;
-          const Icon = meta.icon;
+          // The Browse (folder) destination reads as an OPEN folder while you're in
+          // it — a small, familiar affordance that the closed folder alone misses.
+          const Icon = d.id === "browse" && d.current ? FolderOpen : meta.icon;
           return (
             <button
               key={d.id}
@@ -795,11 +806,18 @@ export function Sidebar({
                         </span>
                       ) : null}
                       <span className="dh-scard-meta">
-                        {tier === "attention" && r.status ? (
-                          <span className="dh-spill" data-status={r.status}>
-                            {r.status === "failed" ? "stalled" : "waiting"}
-                          </span>
-                        ) : null}
+                        {(() => {
+                          // Accurate, human status chip. Never calls an exited run
+                          // "stalled" (see attentionPillLabel); the color stays keyed
+                          // to r.status via data-status so the CSS is untouched.
+                          const pill =
+                            tier === "attention" ? attentionPillLabel(r.status, r.reason) : null;
+                          return pill && r.status ? (
+                            <span className="dh-spill" data-status={r.status}>
+                              {pill}
+                            </span>
+                          ) : null;
+                        })()}
                         {r.branch ? <span className="dh-scard-branch">{`⎇ ${r.branch}`}</span> : null}
                         {r.model ? <span className="dh-scard-model">{r.model}</span> : null}
                         <ProviderChip provider={r.provider} />
@@ -818,14 +836,24 @@ export function Sidebar({
           {worktrees && worktrees.length > 0 ? (
             <div className="dh-sgroup" data-dh-worktrees="">
               <div className="dh-sgroup-head">
+                <FolderGit2 size={12} strokeWidth={2} aria-hidden style={{ color: "var(--dh-text-disabled)" }} />
                 <span className="dh-label">Worktrees</span>
                 <span className="dh-sgroup-count">{worktrees.length}</span>
               </div>
               {worktrees.map((w) => (
                 <div key={w.path} className="dh-wtrow" data-dh-wtrow="" title={w.path}>
+                  {/* The "⎇ {branch}" glyph stays (a snapshot test asserts it); the
+                      folder-icon polish lives on the group header + the locked tag.
+                      See report: swapping this glyph for a lucide <GitBranch> is the
+                      cleaner finish but needs Sidebar.test.ts updated (out of scope). */}
                   <span className="dh-wtrow-branch">{`⎇ ${w.branch ?? "detached"}`}</span>
                   {w.isMain ? <span className="dh-wtrow-tag">main</span> : null}
-                  {w.locked ? <span className="dh-wtrow-tag">locked</span> : null}
+                  {w.locked ? (
+                    <span className="dh-wtrow-tag" style={{ display: "inline-flex", alignItems: "center", gap: "3px" }}>
+                      <Lock size={8} strokeWidth={2.5} aria-hidden />
+                      locked
+                    </span>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -847,7 +875,11 @@ export function Sidebar({
               </button>
             ))}
           </div>
-          {modelLabel ? <div className="dh-footer-model">{modelLabel}</div> : null}
+          {model ? (
+            <div className="dh-footer-model"><ModelBadge model={model} /></div>
+          ) : modelLabel ? (
+            <div className="dh-footer-model">{modelLabel}</div>
+          ) : null}
           {spend ? (
             <div className="dh-spend" data-dh-spend="">
               <div className="dh-spend-label">

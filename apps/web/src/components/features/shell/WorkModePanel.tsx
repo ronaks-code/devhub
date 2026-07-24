@@ -73,16 +73,72 @@ export interface WorkModePanelProps {
   /** The resolved `workMode` feature flag. `false` hides this panel entirely. */
   enabled: boolean;
   task: WorkModeTaskView | null;
+  /**
+   * True while the real task is still being fetched/created (#9). With no task
+   * yet, a truthy `loading` shows the panel chrome + a loading skeleton so Work
+   * opens instantly; a settled `false` with no task renders nothing (never fake
+   * placeholder content). Defaults false, so a plain `<WorkModePanel task={null}>`
+   * behaves exactly as before.
+   */
+  loading?: boolean;
   /** Return to the normal Code surface. */
   onDismiss?: () => void;
   className?: string;
 }
 
-/** Renders nothing when `enabled` is false OR there is no task to show — Work mode
- * never fabricates placeholder task content when it has no real backing task. */
-export function WorkModePanel({ enabled, task, onDismiss, className }: WorkModePanelProps) {
+/** Renders nothing when `enabled` is false OR (once settled) there is no task to
+ * show — Work mode never fabricates placeholder task content when it has no real
+ * backing task. While a task is still loading it shows a skeleton instead of a
+ * blank multi-second gap (#9). */
+export function WorkModePanel({ enabled, task, loading = false, onDismiss, className }: WorkModePanelProps) {
   const headingId = useId();
-  if (!enabled || !task) return null;
+  if (!enabled) return null;
+  if (!task) {
+    // No real task yet. If we're still fetching one, show the panel chrome with a
+    // compact loading skeleton so Work opens INSTANTLY (#9) instead of showing
+    // nothing until the network lands. Once settled with still no task, render
+    // nothing — Work mode never fabricates placeholder task content.
+    if (!loading) return null;
+    return (
+      <section
+        aria-labelledby={headingId}
+        aria-busy="true"
+        data-work-mode-panel=""
+        data-work-mode-loading=""
+        className={className ?? "rounded-xl border border-zinc-800 bg-zinc-950 p-4 text-sm text-zinc-200"}
+      >
+        <div className="flex items-center gap-2" role="tablist" aria-label="Task mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected="false"
+            data-work-mode-tab="code"
+            onClick={onDismiss}
+            className="rounded-md border border-zinc-700 px-3 py-1 text-xs text-zinc-400"
+          >
+            {WORK_MODE_COPY.modeLabelCode}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected="true"
+            data-work-mode-tab="work"
+            className="rounded-md border border-clay-500 bg-clay-500/10 px-3 py-1 text-xs font-medium text-clay-200"
+          >
+            {WORK_MODE_COPY.modeLabelWork}
+          </button>
+        </div>
+        <div className="mt-4 space-y-3" aria-hidden="true">
+          <div className="h-4 w-2/3 animate-pulse rounded bg-zinc-800" />
+          <div className="h-3 w-1/2 animate-pulse rounded bg-zinc-800/70" />
+          <div className="h-24 w-full animate-pulse rounded bg-zinc-900" />
+        </div>
+        <p id={headingId} className="mt-3 text-xs text-zinc-500">
+          Loading Work mode…
+        </p>
+      </section>
+    );
+  }
 
   const progressPercent = task.outcome.total > 0
     ? Math.round((task.outcome.current / task.outcome.total) * 100)

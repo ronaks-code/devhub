@@ -55,10 +55,13 @@ describe("Composer — measured geometry (stable slot)", () => {
     expect(tag).toContain("data-dh-surface");
   });
 
-  it("renders no provider logo (no svg/img)", () => {
+  it("renders the provider logo + clean model name in the footer (ModelBadge, #7)", () => {
     const html = render({ provider: "openai", footer: { model: "gpt-5-codex", permissionMode: "workspace-write" } });
-    expect(html).not.toContain("<svg");
+    // #7: the footer now shows a provider mark (inline SVG) + a human model name
+    // ("GPT-5 Codex") instead of a raw id. Inline SVG only — never an external <img>.
+    expect(html).toContain("<svg");
     expect(html).not.toContain("<img");
+    expect(html).toContain("GPT-5 Codex");
   });
 });
 
@@ -135,15 +138,17 @@ describe("Composer — provider-native footer context (never cross-mapped)", () 
     expect(codex.modeValue).toBe("Default");
   });
 
-  it("renders the provider identity as quiet text and the footer context compactly", () => {
+  it("renders the model badge (provider mark + clean name) and the footer context compactly", () => {
     const html = render({
       provider: "anthropic",
       footer: { model: "claude-sonnet-4", mode: "default", permissionMode: "plan", folder: "~/proj" },
     });
-    expect(html).toContain("Anthropic · Claude");
+    // #7: footer shows the ModelBadge — a provider mark (inline SVG) + a clean model
+    // name ("Sonnet 4") — replacing the old "Anthropic · Claude" identity + raw id.
+    expect(html).toContain("Sonnet 4");
+    expect(html).toContain("<svg");
     expect(html).toContain("Permission mode");
     expect(html).toContain("plan");
-    expect(html).toContain("claude-sonnet-4");
     expect(html).toContain('data-dh-composer-footer=""');
   });
 
@@ -165,9 +170,11 @@ describe("Composer — send disabled reasons (accessible)", () => {
     expect(computeSendDisabledReason({ draft: "hi", sendSupported: false })).toBe(R.unsupported);
     expect(computeSendDisabledReason({ draft: "hi", connection: "disconnected" })).toBe(R.disconnectedStale);
     expect(computeSendDisabledReason({ draft: "hi", connection: "stale" })).toBe(R.disconnectedStale);
-    // A dialing socket (first connect or a backoff retry) gets its own honest
-    // "Connecting…" reason, distinct from the terminal disconnected copy (F3).
-    expect(computeSendDisabledReason({ draft: "hi", connection: "reconnecting" })).toBe(R.reconnecting);
+    // Optimistic send (0.1.6 #12): a dialing socket does NOT block send. ws.ts queues
+    // the send and flushes it on connect (order-preserved, no dup), so a fresh chat is
+    // sendable instantly. Only terminal states (disconnected/stale) block; the live
+    // "Connecting…" notice is shown separately off `connection`, not this disabled-reason.
+    expect(computeSendDisabledReason({ draft: "hi", connection: "reconnecting" })).toBeNull();
     expect(computeSendDisabledReason({ draft: "hi", hasWriterLease: false })).toBe(R.missingWriterLease);
     expect(computeSendDisabledReason({ draft: "hi", hasBlockingRequest: true })).toBe(R.blockingRequest);
     expect(computeSendDisabledReason({ draft: "   " })).toBe(R.empty);

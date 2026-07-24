@@ -1,12 +1,23 @@
-import { type ChangeEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  type ChangeEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import {
   PERMISSION_FIELD_LABEL,
   providerIdentity,
   type ProviderId,
 } from "../providers/provider-capabilities.js";
-import { detectMention } from "../../MentionPicker.js";
-import { filterCommands } from "../../SlashPalette.js";
+import { MentionPicker, detectMention } from "../../MentionPicker.js";
+import { SlashPalette, filterCommands } from "../../SlashPalette.js";
+import { ModelBadge } from "../../ModelBadge.js";
+import { api, type FileEntry } from "../../../lib/api.js";
 
 /**
  * Composer — the canonical, geometry-stable task composer (M6 slice 5).
@@ -19,15 +30,21 @@ import { filterCommands } from "../../SlashPalette.js";
  *
  * This is a from-scratch reimplementation of the legacy `ChatPane` composer against
  * the SAME registries/hooks (`useDraft`, `usePromptHistory`, `detectMention`,
- * `filterCommands`, snippets) — it does NOT edit the user-owned `ChatPane.tsx` or
- * `SlashPalette.tsx`. All behavior that is not pure presentation is expressed as pure
- * functions so it can be asserted without a DOM: `decideComposerKey` (Enter/Shift+Enter/
- * boundary history/picker ownership), `computeSendDisabledReason`, `resolveSendState`
- * (honest Stop gating), and the provider-native footer/`computePickerState` helpers.
+ * `filterCommands`, snippets) — it does NOT edit the user-owned `ChatPane.tsx`. Pure
+ * decision logic is exported so it can be asserted without a DOM: `decideComposerKey`
+ * (Enter/Shift+Enter/boundary history/picker ownership), `computeSendDisabledReason`,
+ * `resolveSendState` (honest Stop gating), and the provider-native footer/
+ * `computePickerState` helpers.
+ *
+ * When wired live (a host passes `onDraftChange`, making the textarea controlled) the
+ * composer OWNS its own slash/mention pickers: typing a leading `/` opens a ranked
+ * command menu and an `@`-token opens the file picker, both with arrow/enter/click
+ * insert — rendered as an overlay above the stable slot so geometry never shifts. The
+ * footer shows a `ModelBadge` (provider mark + clean model name) in place of the old
+ * raw id/label string.
  *
  * Mounted only behind the default-off `composerSurface` slice flag; flag-off keeps the
- * legacy `ChatPane` composer as the immediate, non-destructive rollback. Renders no
- * `<svg>`/`<img>` (provider identity is quiet text, never a logo).
+ * legacy `ChatPane` composer as the immediate, non-destructive rollback.
  */
 
 export type { ProviderId };
@@ -114,15 +131,22 @@ export interface ComposerSendContext {
 /**
  * The first-unmet blocking reason, in a deterministic precedence, or null when the
  * message can be sent. Structural blockers (pending creation, unsupported) come first,
- * then transport (disconnected/stale), then the write lease, then a pending request,
- * then an empty draft. CSS state never substitutes for these — the button carries a
- * real `disabled` + accessible reason.
+ * then terminal transport (disconnected/stale), then the write lease, then a pending
+ * request, then an empty draft. CSS state never substitutes for these — the button
+ * carries a real `disabled` + accessible reason.
+ *
+ * A DIALING socket (`reconnecting` — first connect or a backoff retry) is deliberately
+ * NOT a blocking reason (#12): the transport (`openChat` in `lib/ws.ts`) queues sends
+ * placed before the socket is OPEN and flushes them, in order, on connect — so a fresh
+ * chat accepts an OPTIMISTIC send immediately instead of feeling dead for the second
+ * or two until `onOpen`. The composer still shows a live "Connecting…" notice, but the
+ * draft is sendable. Only the TERMINAL states (`disconnected` = the socket gave up, with
+ * a real Reconnect action; `stale` = a superseded revision) keep the send blocked.
  */
 export function computeSendDisabledReason(ctx: ComposerSendContext): string | null {
   const R = DISABLED_REASON;
   if (ctx.taskState === "pending-creation") return R.pendingCreation;
   if (ctx.sendSupported === false) return R.unsupported;
-  if (ctx.connection === "reconnecting") return R.reconnecting;
   if (ctx.connection === "disconnected" || ctx.connection === "stale") return R.disconnectedStale;
   if (ctx.hasWriterLease === false) return R.missingWriterLease;
   if (ctx.hasBlockingRequest === true) return R.blockingRequest;
@@ -298,6 +322,12 @@ export interface ComposerProps {
   connection?: ComposerConnection;
   /** Compact provider-native context (folder/permission/model/mode). */
   footer?: ComposerFooterInput;
+  /**
+   * Slash commands the session advertises (without the leading `/`), merged with
+   * the always-available built-ins by `filterCommands`. Empty/omitted still yields
+   * the built-in command menu, so `/` is never dead.
+   */
+  slashCommands?: string[];
   /** Placeholder override. */
   placeholder?: string;
   /**
@@ -324,13 +354,15 @@ function FooterContext({ provider, footer }: { provider?: ProviderId; footer?: C
   const ctx = composerFooterContext(provider, footer ?? {});
   const pairs: Array<{ label: string; value: string }> = [];
   if (ctx.folderValue) pairs.push({ label: "Folder", value: ctx.folderValue });
-  if (ctx.modelValue) pairs.push({ label: "Model", value: ctx.modelValue });
   if (ctx.modeValue) pairs.push({ label: "Mode", value: ctx.modeValue });
   if (ctx.permissionValue) pairs.push({ label: ctx.permissionLabel, value: ctx.permissionValue });
   return (
     <div className="dh-composer-context" data-dh-composer-context="" data-dh-provider={provider}>
+      {/* The model indicator: a provider mark + clean model name (ModelBadge),
+          replacing the old raw "Anthropic · Claude" / raw-id text. Falls back to
+          the quiet identity label only when no model is known yet. */}
       <span className="dh-composer-identity" data-dh-composer-identity="">
-        {ctx.identityLabel}
+        {ctx.modelValue ? <ModelBadge model={ctx.modelValue} /> : ctx.identityLabel}
       </span>
       {pairs.map((p) => (
         <span key={p.label} className="dh-composer-ctx-item" data-dh-composer-ctx-item="">
@@ -350,6 +382,7 @@ export function Composer({
   disabledReason = null,
   connection = "connected",
   footer,
+  slashCommands = [],
   placeholder,
   onDraftChange,
   onKeyDown,
@@ -363,12 +396,199 @@ export function Composer({
   const disconnected = connection !== "connected";
   const reconnecting = connection === "reconnecting";
 
+  // --- Live slash/mention pickers -------------------------------------------
+  // The pickers are only meaningful when a host wires `onDraftChange` (the
+  // textarea is controlled, so we can read the live value + caret). In the
+  // uncontrolled presentation-only mode there's nothing to derive from, so the
+  // whole picker layer stays inert and the render is byte-for-byte as before.
+  const live = onDraftChange != null;
+  const cwd = footer?.folder ?? null;
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(0);
+  // Escape suppresses the picker until the next edit/caret move re-derives it, so
+  // it can be dismissed without destroying the typed draft.
+  const [suppressed, setSuppressed] = useState(false);
+  const [mentionEntries, setMentionEntries] = useState<FileEntry[]>([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [mentionError, setMentionError] = useState<string | null>(null);
+
+  const pickerState = useMemo(
+    () =>
+      live && !suppressed
+        ? computePickerState(draft, caret, slashCommands)
+        : ({ picker: "none", matches: [], mention: null } as ComposerPickerState),
+    [live, suppressed, draft, caret, slashCommands],
+  );
+  const slashQuery = pickerState.picker === "slash" ? (/^\/(\S*)$/.exec(draft)?.[1] ?? "") : "";
+  const mentionQuery = pickerState.mention?.query ?? null;
+  const listCount =
+    pickerState.picker === "slash"
+      ? pickerState.matches.length
+      : pickerState.picker === "mention"
+        ? mentionEntries.length
+        : 0;
+
+  // Fetch fuzzy file matches for the active "@" mention (debounced), backed by the
+  // same GET /api/files ChatPane uses. Needs a known cwd (from the footer folder);
+  // a failure degrades to an inline hint and never breaks typing.
+  useEffect(() => {
+    if (mentionQuery == null || !cwd) {
+      setMentionEntries([]);
+      setMentionError(null);
+      return;
+    }
+    let cancelled = false;
+    setMentionLoading(true);
+    setMentionError(null);
+    const t = window.setTimeout(() => {
+      api
+        .listFiles(cwd, mentionQuery)
+        .then((rows) => {
+          if (cancelled) return;
+          const entries: FileEntry[] = (rows as unknown[]).map((r) =>
+            typeof r === "string" ? { path: r } : (r as FileEntry),
+          );
+          setMentionEntries(entries);
+          setMentionLoading(false);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setMentionEntries([]);
+          setMentionError("File search is unavailable here.");
+          setMentionLoading(false);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [mentionQuery, cwd]);
+
+  // Keep the highlighted row valid as the filtered list changes.
+  useEffect(() => {
+    setActiveIndex((i) => (i >= listCount ? 0 : i));
+  }, [listCount]);
+
+  // Read the live caret from the textarea after any caret-moving interaction so
+  // mention detection tracks where the user is typing.
+  const syncCaret = useCallback(() => {
+    const el = textareaRef.current;
+    if (el) setCaret(el.selectionStart ?? el.value.length);
+  }, []);
+
+  // Move the DOM caret to `pos` after a programmatic insert and refocus, keeping
+  // the derived caret state in lockstep.
+  const focusCaret = useCallback((pos: number) => {
+    setCaret(pos);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        el.selectionStart = el.selectionEnd = pos;
+      }
+    });
+  }, []);
+
+  const pickSlash = useCallback(
+    (command: string) => {
+      const next = applySlashInsert(command);
+      onDraftChange?.(next);
+      setActiveIndex(0);
+      focusCaret(next.length);
+    },
+    [onDraftChange, focusCaret],
+  );
+
+  const pickMention = useCallback(
+    (entry: FileEntry) => {
+      const m = pickerState.mention;
+      if (!m) return;
+      const next = applyMentionInsert(draft, m, entry.path, entry.dir);
+      onDraftChange?.(next);
+      setActiveIndex(0);
+      const inserted = `@${entry.path}${entry.dir ? "/" : " "}`;
+      focusCaret(m.start + inserted.length);
+    },
+    [pickerState.mention, draft, onDraftChange, focusCaret],
+  );
+
+  // Compose the composer's own keydown handling with the host's. An open picker
+  // OWNS arrows/Enter/Tab/Escape (so focus stays in the textarea) and those keys
+  // are NOT forwarded; every other key falls through to the host's `onKeyDown`
+  // (Enter-to-send, history recall, …).
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // An open picker OWNS arrows/Enter/Tab/Escape the WHOLE time it's open —
+      // including while the debounced file search is still loading and `listCount`
+      // is 0. Gating these on `listCount > 0` used to let Enter/Tab/Arrows leak to
+      // the host mid-search (the mention picker shows "Searching…" the instant
+      // detectMention matches, ~120ms before entries arrive), which sent the draft
+      // with an incomplete "@partial" mention. Now we prevent-default + swallow the
+      // key regardless; the row-move and accept only fire once results are present
+      // (inner `listCount > 0` guards, which also avoid a `% 0` NaN). Escape still
+      // dismisses so a literal "@text" can be sent deliberately.
+      if (pickerState.picker !== "none") {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          if (listCount > 0) setActiveIndex((i) => (i + 1) % listCount);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          if (listCount > 0) setActiveIndex((i) => (i - 1 + listCount) % listCount);
+          return;
+        }
+        if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+          e.preventDefault();
+          if (listCount > 0) {
+            if (pickerState.picker === "slash") {
+              const pick = pickerState.matches[activeIndex] ?? pickerState.matches[0];
+              if (pick) pickSlash(pick);
+            } else {
+              const pick = mentionEntries[activeIndex] ?? mentionEntries[0];
+              if (pick) pickMention(pick);
+            }
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setSuppressed(true);
+          return;
+        }
+      }
+      onKeyDown?.(e);
+    },
+    [pickerState, listCount, activeIndex, mentionEntries, pickSlash, pickMention, onKeyDown],
+  );
+
+  const pickerNode =
+    pickerState.picker === "slash" ? (
+      <SlashPalette
+        query={slashQuery}
+        commands={slashCommands}
+        activeIndex={activeIndex}
+        onPick={pickSlash}
+      />
+    ) : pickerState.picker === "mention" ? (
+      <MentionPicker
+        query={mentionQuery ?? ""}
+        entries={mentionEntries}
+        activeIndex={activeIndex}
+        loading={mentionLoading}
+        error={mentionError}
+        onPick={pickMention}
+      />
+    ) : null;
+
   return (
     // The stable geometry slot. Its data attrs are CONSTANT — they never depend on
     // sendState, draft content, or disabled state — so the container tag is byte-identical
     // across every transition (the slice's stable-composer invariant).
     <div
       className="dh-composer"
+      style={{ position: "relative" }}
       data-dh-composer=""
       data-dh-surface=""
       data-dh-composer-width={COMPOSER_GEOMETRY.width}
@@ -376,6 +596,13 @@ export function Composer({
       data-dh-composer-gutter={COMPOSER_GEOMETRY.bottomGutter}
       data-dh-composer-radius={COMPOSER_GEOMETRY.radius}
     >
+      {/* Slash/mention picker overlay — floats ABOVE the composer so the measured
+          98px slot never grows. Only live (controlled) mode renders it. */}
+      {live && pickerNode ? (
+        <div className="absolute inset-x-0 bottom-full z-30 mb-2" data-dh-composer-picker="">
+          {pickerNode}
+        </div>
+      ) : null}
       {/* Explicit accessible label element (not placeholder-only). */}
       <label className="dh-sr-only" htmlFor={TEXTAREA_ID}>
         {COMPOSER_COPY.textareaLabel}
@@ -383,6 +610,7 @@ export function Composer({
       {/* The draft is ALWAYS editable — even while disconnected — and is owned by
           `useDraft`, never cleared until a send is accepted. */}
       <textarea
+        ref={textareaRef}
         id={TEXTAREA_ID}
         className="dh-composer-input"
         data-dh-composer-input=""
@@ -390,14 +618,21 @@ export function Composer({
         placeholder={resolvedPlaceholder}
         // Uncontrolled (defaultValue) when no live host wires onDraftChange — the
         // original presentation-only contract, byte-for-byte. A real host supplies
-        // onDraftChange and switches this to a controlled value.
+        // onDraftChange and switches this to a controlled value; typing then also
+        // re-derives the picker (and clears an Escape dismissal).
         {...(onDraftChange
           ? {
               value: draft,
-              onChange: (e: ChangeEvent<HTMLTextAreaElement>) => onDraftChange(e.target.value),
+              onChange: (e: ChangeEvent<HTMLTextAreaElement>) => {
+                onDraftChange(e.target.value);
+                setSuppressed(false);
+                setCaret(e.target.selectionStart ?? e.target.value.length);
+              },
             }
           : { defaultValue: draft })}
-        onKeyDown={onKeyDown}
+        onKeyDown={live ? handleKeyDown : onKeyDown}
+        onSelect={live ? syncCaret : undefined}
+        onClick={live ? syncCaret : undefined}
         rows={2}
       />
 

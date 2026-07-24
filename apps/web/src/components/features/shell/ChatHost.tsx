@@ -12,7 +12,7 @@ import {
   mapMessagesToThreadItems,
 } from "../../../lib/m6-compose.js";
 import { TaskHeader } from "./TaskHeader.js";
-import { ThreadWorkspace, type ComposerSendState } from "./ThreadWorkspace.js";
+import { ThreadWorkspace, type ComposerSendState, type QueuedMessage } from "./ThreadWorkspace.js";
 import {
   Composer,
   composerFooterContext,
@@ -46,10 +46,13 @@ import { ChatWorktreePanel } from "../../ChatWorktreePanel.js";
  * never a fabricated tool card.
  */
 
-// Bounded history tail for the indexed-store hydrate of a resumed session (the
-// same 2MB starting window Browse uses). Bounded on purpose: a huge session must
+// Initial history tail for the indexed-store hydrate of a resumed session (#12).
+// Deliberately SMALL — Browse opens the full 2MB window, but a chat wants to
+// paint fast: a small recent-tail fetch returns/parses/renders quickly so opening
+// a session shows its latest messages near-instantly, then "load older" (below)
+// doubles the window on demand. Still bounded on purpose: a huge session must
 // never dump its whole file into one render (QA B1 crashed the renderer that way).
-const HYDRATE_TAIL_BYTES = 2 * 1024 * 1024;
+const HYDRATE_INITIAL_TAIL_BYTES = 384 * 1024;
 export interface ChatHostProps {
   cwd: string;
   projectId: string;
@@ -104,7 +107,7 @@ export function ChatHost({
   // Grown (doubled) by "load older", mirroring Browse's `handleLoadMore` — the
   // same bytes-window pagination legacy `TranscriptPane` already uses, just
   // applied to this host's hydrate fetch instead of App.tsx's `tailBytes` state.
-  const [hydrateTailBytes, setHydrateTailBytes] = useState(HYDRATE_TAIL_BYTES);
+  const [hydrateTailBytes, setHydrateTailBytes] = useState(HYDRATE_INITIAL_TAIL_BYTES);
   const [historyTruncated, setHistoryTruncated] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [turnRunning, setTurnRunning] = useState(false);
@@ -127,9 +130,59 @@ export function ChatHost({
   // shows a real model in Browse). Null until the hydrate below lands, or for a
   // brand-new task (nothing to hydrate).
   const [resumedModel, setResumedModel] = useState<string | null>(null);
+  // The session-advertised slash commands (from the `session` init frame): the
+  // CLI's built-ins (/compact …) PLUS any project skills. Fed to the Composer so
+  // typing "/" shows the session's ACTUAL commands, not just the 3 hardcoded
+  // built-ins (#5). Empty until the first `session` frame lands.
+  const [slashCommands, setSlashCommands] = useState<string[]>([]);
 
   const { draft, setDraft, clearDraft } = useDraft(projectId, sessionId ?? initialSessionId);
   const connRef = useRef<ChatConn | null>(null);
+  // Set when the socket DROPS unexpectedly (auto-reconnect pending). On recovery
+  // this tells us the server canceled the in-flight turn on close — so its
+  // turn-end will never arrive and a stuck `turnRunning` must be force-cleared.
+  const reconnectedRef = useRef(false);
+
+  // ── Queued follow-ups (0.1.6 queued-messages) ─────────────────────────────
+  // Messages typed while a turn is running are QUEUED (not dropped) and run as
+  // their own turns as the current one finishes — ported from ChatPane's proven
+  // queue. Rendered as a dimmed "pending" tray by ThreadWorkspace (its `queued` /
+  // `onCancelQueued` props). The queue is held entirely client-side: today's
+  // per-turn server only ever sees one prompt at a time (the head is dispatched
+  // on turn-end), so cancelling is purely a local drop.
+  const [queued, setQueued] = useState<QueuedMessage[]>([]);
+  // A ref mirror of `queued` so the turn-end dispatch (fired from the stable
+  // socket closure) reads the CURRENT queue, not a stale render's snapshot.
+  const queueRef = useRef<QueuedMessage[]>([]);
+  useEffect(() => {
+    queueRef.current = queued;
+  }, [queued]);
+  // Monotonic id source for queued messages (React keys + cancellation targets).
+  const queueIdRef = useRef(0);
+  // Latest runPrompt, so a queued dispatch picks up the CURRENT sessionId/model
+  // (a new chat only learns its id after the first turn's `session` frame).
+  const runPromptRef = useRef<(text: string) => void>(() => {});
+
+  // Dispatch the head of the queue as its own turn — called on a clean turn-end.
+  // Shifting the head and clearing its pending bubble in the same commit reads as
+  // the queued message simply starting. No-op when the queue is empty.
+  const dispatchNext = useCallback(() => {
+    const head = queueRef.current[0];
+    if (!head) return;
+    const rest = queueRef.current.slice(1);
+    queueRef.current = rest;
+    setQueued(rest);
+    runPromptRef.current(head.text);
+  }, []);
+
+  // Cancel a single queued follow-up before it is sent (local drop; see above).
+  const cancelQueued = useCallback((id: string) => {
+    setQueued((q) => {
+      const next = q.filter((it) => it.id !== id);
+      queueRef.current = next;
+      return next;
+    });
+  }, []);
 
   // Seed the Launchpad hero draft exactly once, on first mount, and only when this
   // task's own persisted draft is still empty — a resumed session with an
@@ -153,14 +206,54 @@ export function ChatHost({
     setConnection("reconnecting");
     connRef.current = openChat({
       onOpen: () => setConnection("connected"),
-      onConnectionState: (s) => setConnection(s === "open" ? "connected" : "reconnecting"),
-      onError: () => setConnection("disconnected"),
-      onSession: (sid) => setSessionId(sid),
+      onConnectionState: (s) => {
+        if (s === "open") {
+          setConnection("connected");
+          // Recovered after a mid-turn DROP: the server canceled the in-flight
+          // turn on socket close, so its turn-end will NEVER arrive. Force-clear
+          // the stuck running gate (otherwise every later message would queue
+          // forever behind a turn that can't end — the reported HIGH bug), then
+          // flush any follow-ups the user queued during the outage. The dispatched
+          // prompt re-sends the live sessionId, continuing the same CLI session.
+          // Mirrors ChatPane's reconnect-after-drop recovery.
+          if (reconnectedRef.current) {
+            reconnectedRef.current = false;
+            setTurnRunning(false);
+            dispatchNext();
+          }
+          return;
+        }
+        // s === "reconnecting": an unexpected drop; the socket is auto-redialing.
+        // Remember it so the recovery branch above clears the canceled turn.
+        reconnectedRef.current = true;
+        setConnection("reconnecting");
+      },
+      onError: () => {
+        setConnection("disconnected");
+        // A server error frame ends the turn; clear the running gate so the user
+        // isn't stuck (and a queue behind it isn't stranded). Deliberately does
+        // NOT dispatchNext — an errored turn keeps its follow-ups pending.
+        setTurnRunning(false);
+      },
+      onSession: (sid, init) => {
+        setSessionId(sid);
+        // Capture the session's advertised slash commands so the composer's "/"
+        // menu lists real skills/commands, not just the built-ins (#5).
+        if (Array.isArray(init?.slashCommands)) setSlashCommands(init.slashCommands);
+      },
       onMessage: (m) => setLive((prev) => [...prev, m]),
       onResult: () => setTurnRunning(false),
-      onTurnEnd: () => setTurnRunning(false),
+      onTurnEnd: () => {
+        setTurnRunning(false);
+        // Clean finish → kick off the next queued follow-up, if any. A failed
+        // turn ends via onError (below) and deliberately does NOT auto-fire the
+        // queue (matching ChatPane): the pending messages stay for the user.
+        dispatchNext();
+      },
     });
-  }, []);
+    // dispatchNext is stable (its deps are [] — it reads refs), so listing it
+    // here never re-creates connect or churns the socket.
+  }, [dispatchNext]);
 
   useEffect(() => {
     connect();
@@ -254,20 +347,40 @@ export function ChatHost({
     };
   }, [cwd]);
 
-  const send = useCallback(() => {
-    const text = draft.trim();
-    if (!text || !connRef.current) return;
+  // Dispatch a prompt as a turn over the live socket. Shared by `send` (the first
+  // prompt) and `dispatchNext` (each queued follow-up) so both use the SAME
+  // current cwd/sessionId/model/permission.
+  const runPrompt = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || !connRef.current) return;
     connRef.current.send({
       t: "prompt",
       cwd,
-      prompt: text,
+      prompt: trimmed,
       sessionId: sessionId ?? undefined,
       model: defaultModel ?? undefined,
       permissionMode: defaultPermissionMode,
     });
     setTurnRunning(true);
+  }, [cwd, sessionId, defaultModel, defaultPermissionMode]);
+  // Keep the ref pointed at the latest runPrompt for the turn-end queue dispatch.
+  runPromptRef.current = runPrompt;
+
+  const send = useCallback(() => {
+    const text = draft.trim();
+    if (!text) return;
+    // A turn is in flight → QUEUE the follow-up (shown in ThreadWorkspace's dimmed
+    // tray) instead of dropping it; it runs as its own turn on the next turn-end.
+    if (turnRunning) {
+      setQueued((q) => [...q, { id: String(++queueIdRef.current), text }]);
+      clearDraft();
+      return;
+    }
+    // No live socket yet → keep the draft so the text isn't lost.
+    if (!connRef.current) return;
+    runPrompt(text);
     clearDraft();
-  }, [draft, cwd, sessionId, defaultModel, defaultPermissionMode, clearDraft]);
+  }, [draft, turnRunning, runPrompt, clearDraft]);
 
   const items = useMemo(() => mapMessagesToThreadItems(messages), [messages]);
   // Claude has no native interrupt until M4 (`persistentClaude` stays false), so a
@@ -310,6 +423,8 @@ export function ChatHost({
           truncatedFromStart={historyTruncated}
           onLoadOlder={loadOlderHistory}
           loadingOlder={loadingOlder}
+          queued={queued}
+          onCancelQueued={cancelQueued}
           emptyState={
             // Only for a brand-new chat (no resumed session, nothing sent yet):
             // an inviting prompt instead of a blank void (QA MAJOR). A resumed
@@ -340,6 +455,7 @@ export function ChatHost({
               sendState={sendState}
               disabledReason={disabledReason}
               connection={connection}
+              slashCommands={slashCommands}
               footer={{ model: footer.modelValue, permissionMode: footer.permissionValue, folder: footer.folderValue }}
               onDraftChange={setDraft}
               onSend={send}

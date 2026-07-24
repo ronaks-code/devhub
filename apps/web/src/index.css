@@ -2511,7 +2511,13 @@ html[data-reduce-motion="true"] {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  align-items: flex-start;
+  /* Center the transcript + composer column (both capped at their measured max
+   * widths) instead of pinning them to the left wall, and keep horizontal
+   * breathing room so content never touches the window edges on any width. The
+   * pad grows with the viewport but is capped so a wide window doesn't overpad. */
+  align-items: center;
+  padding-inline: clamp(16px, 4vw, 48px);
+  box-sizing: border-box;
 }
 
 /* Native scroll — deliberately NOT a shadcn ScrollArea (invariant 8). */
@@ -2564,7 +2570,9 @@ html[data-reduce-motion="true"] {
 
 .dh-thread-item {
   list-style: none;
-  padding-bottom: 16px;
+  /* Vertical rhythm between turns — enough separation that adjacent turns read as
+   * distinct without feeling sprawling. Part of each item's measured height. */
+  padding-bottom: 20px;
 }
 
 /* Unframed assistant prose: no background, no border, no radius. */
@@ -2579,7 +2587,7 @@ html[data-reduce-motion="true"] {
   background: var(--dh-chat-ai-bubble);
   border: 1px solid var(--dh-glass-border);
   border-radius: 5px 15px 15px 15px;
-  padding: 8px 12px;
+  padding: 10px 14px;
 }
 
 /* User content: the one surfaced right-aligned bubble, capped at the measured max.
@@ -2595,7 +2603,7 @@ html[data-reduce-motion="true"] {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 5px;
+  margin-bottom: 6px;
 }
 .dh-who-line--user {
   flex-direction: row-reverse;
@@ -2637,7 +2645,7 @@ html[data-reduce-motion="true"] {
   border: 1px solid var(--dh-chat-user-border);
   color: var(--dh-text-strong);
   border-radius: 15px 15px 5px 15px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   font-size: 14px;
   line-height: 22px;
 }
@@ -2757,6 +2765,78 @@ html[data-reduce-motion="true"] {
 }
 .dh-thread-raw-collapsed .dh-thread-raw {
   margin-top: 4px;
+}
+
+/* Queued follow-ups: prompts the user typed while a turn is still running. They are
+ * NOT sent yet — a dimmed, visually-distinct PENDING tray that sits just above the
+ * composer (after the live turn), centered in the same column as the transcript. The
+ * muted fill + dashed border + "Queued" tag keep it from reading as already-sent
+ * conversation; each row carries a cancel control. Height-capped so a long queue
+ * scrolls internally instead of pushing the composer off-screen. */
+.dh-thread-queue {
+  width: 100%;
+  max-width: var(--dh-transcript-width);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.dh-thread-queued {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--dh-glass-border);
+  border-radius: 10px;
+  background: var(--dh-chat-user-bubble);
+  /* Dimmed so the whole row reads as pending, not live. */
+  opacity: 0.55;
+}
+.dh-queued-tag {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dh-text-muted);
+  border: 1px solid var(--dh-border-subtle);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.dh-queued-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--dh-text);
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dh-queued-cancel {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: none;
+  background: none;
+  color: var(--dh-text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dh-queued-cancel:hover {
+  color: var(--dh-text);
+  background: var(--dh-header);
+}
+.dh-queued-cancel:focus-visible {
+  outline: 2px solid var(--dh-focus);
 }
 
 /* ActivityTimeline: inline compact activity + expandable plan (never a dashboard). */

@@ -339,6 +339,9 @@ export function TopBar({
             onClick={onToggleWorkMode}
             aria-label="Work mode"
             aria-expanded={workModeOpen}
+            // #9: "Work" alone was cryptic. Spell out what the mode actually is so
+            // the button's purpose is obvious on hover.
+            title="Work mode — this project's scoped task: folder scope, permission mode, deliverables, and progress"
             className={cn(
               "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-clay-500/50",
               workModeOpen

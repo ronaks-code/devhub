@@ -42,10 +42,17 @@ export function WorkModeSurface({
   className,
 }: WorkModeSurfaceProps) {
   const [task, setTask] = useState<WorkModeTaskView | null>(null);
+  // #9: opening Work used to show NOTHING until getOrCreateTask's round-trip
+  // landed (the panel `return null`s without a task), so clicking it read as a
+  // multi-second freeze. Surface a loading state so the panel can render its
+  // chrome + a skeleton and populate progressively — without ever fabricating
+  // task content (a settled null still renders nothing).
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (!enabled || folderRoot.length === 0) {
       setTask(null);
+      setLoading(false);
       return;
     }
     let cancelled = false;
@@ -57,12 +64,32 @@ export function WorkModeSurface({
       folderScope: { root: folderRoot },
       permissionProfile: { allowedActions: ["progress:update", "artifact:record", "deliverable:add"] },
     };
-    void client.getOrCreateTask(input).then((dto) => {
-      if (cancelled) return;
-      setTask(dto ? toWorkModeTaskView(dto, title) : null);
-    });
+    // Only show the skeleton if the fetch is genuinely slow (>150ms): a fast
+    // response paints the real panel with no skeleton flash, while a slow one
+    // (the #9 freeze) gets an instant-feeling panel with a pending state instead
+    // of a blank multi-second gap.
+    const slowTimer = setTimeout(() => {
+      if (!cancelled) setLoading(true);
+    }, 150);
+    void client
+      .getOrCreateTask(input)
+      .then((dto) => {
+        if (cancelled) return;
+        setTask(dto ? toWorkModeTaskView(dto, title) : null);
+      })
+      .catch(() => {
+        // A failed fetch settles to "no task" (renders nothing) rather than
+        // leaving a permanent loading skeleton up.
+        if (!cancelled) setTask(null);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        clearTimeout(slowTimer);
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
+      clearTimeout(slowTimer);
     };
   }, [enabled, provider, home, nativeTaskId, folderRoot, taskId, title, client]);
 
@@ -70,6 +97,7 @@ export function WorkModeSurface({
     <WorkModePanel
       enabled={enabled}
       task={task}
+      loading={loading}
       onDismiss={onDismiss}
       {...(className !== undefined ? { className } : {})}
     />

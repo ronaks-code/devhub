@@ -843,20 +843,26 @@ export default function App() {
   // Handle a `notify` SSE event: show a transient toast, and (when the tab is
   // hidden) fire a browser Notification so a finished/waiting session is noticed
   // even when the app isn't focused. Stable identity so the SSE effect below need
-  // not re-subscribe; it reads latest navigation via openSessionRef.
+  // not re-subscribe; it reads latest navigation via the openSessionChatBy* refs.
   const handleNotify = useCallback(
     (e: import("./lib/types").NotifyEvent) => {
       const title = e.title || (e.level === "warning" ? "Session waiting for you" : "Session update");
       const body = e.body || (e.project ? `in ${e.project}` : undefined);
       // Make EVERY session notification clickable (deep-link to the session). The
       // server sends `sessionId` + `cwd` (not `projectId`), so prefer projectId when
-      // present, otherwise resolve via cwd (openSessionByCwd is never a dead end).
-      // Previously this only fired when projectId existed — which it never does on a
-      // server notify event — so notifications were inert. That was the bug.
+      // present, otherwise resolve via cwd.
+      //
+      // Open it in the normal single-column LIVE CHAT surface — NOT the Browse
+      // explorer. Routing a toast click through openSession/openSessionByCwd used to
+      // jump to the `browse` tab, whose 3–4 column Projects/Sessions/Transcript
+      // (/Inspector) layout "appeared" out of nowhere over the single chat view the
+      // user actually works in (#11 "random columns"). openSessionChatBy* land on the
+      // Chat tab exactly like clicking a Live-Ops card, so a notification opens its
+      // session cleanly without ever spawning stray explorer columns.
       const onClick = e.sessionId
         ? e.projectId
-          ? () => openSessionRef.current(e.projectId!, e.sessionId!)
-          : () => openSessionByCwdRef.current(e.cwd ?? null, e.sessionId!)
+          ? () => openSessionChatByProjectRef.current(e.projectId!, e.sessionId!)
+          : () => openSessionChatByCwdRef.current(e.cwd ?? null, e.sessionId!)
         : undefined;
       const id = ++toastSeq.current;
       // Cap the visible stack at 4 (drop the oldest) so a burst stays unobtrusive.
@@ -1196,11 +1202,6 @@ export default function App() {
     [projectId],
   );
 
-  // Latest openSession, read by the SSE notify handler so it can navigate without
-  // forcing the EventSource to re-subscribe whenever openSession's identity changes.
-  const openSessionRef = useRef(openSession);
-  openSessionRef.current = openSession;
-
   // Open a running session from the LiveOpsBoard, which only knows the session's
   // cwd (not a projectId). Resolve the cwd to a known project before navigating;
   // if it doesn't match any known project, we just switch to Browse (the session
@@ -1217,11 +1218,6 @@ export default function App() {
     },
     [projects, openSession],
   );
-
-  // Latest openSessionByCwd, read by the stable SSE notify handler (which only has a
-  // cwd, not a projectId) so a notification toast can deep-link on click.
-  const openSessionByCwdRef = useRef(openSessionByCwd);
-  openSessionByCwdRef.current = openSessionByCwd;
 
   // Open a running session from Live Ops as a LIVE CHAT tab (Aurora §3.7:
   // "click card → opens the session as a chat tab"), NOT the read-only Browse
@@ -1245,6 +1241,36 @@ export default function App() {
     },
     [projects, openSessionByCwd],
   );
+
+  // Open a session as a LIVE CHAT tab given a known project id — the projectId
+  // branch of a notification deep-link (#11). Mirrors openSessionChatByCwd's
+  // single-column chat landing (set project + resume seed together, land on Chat)
+  // so a toast click never opens the Browse multi-pane explorer.
+  const openSessionChatByProject = useCallback(
+    (pid: string, sid: string) => {
+      // Only a KNOWN project can seed a project-scoped chat (the seed is ignored
+      // unless chatSeed.projectId === the adopted projectId). If the id isn't a
+      // loaded project, seeding would strand on the Launchpad — so fall back to the
+      // normal opener (best effort), mirroring openSessionChatByCwd's no-dead-end rule.
+      if (!projects.some((p) => p.id === pid)) {
+        openSession(pid, sid);
+        return;
+      }
+      setProjectId(pid);
+      setChatSeed({ sessionId: sid, projectId: pid });
+      setChatSessionId(null);
+      setTab("chat");
+    },
+    [projects, openSession],
+  );
+
+  // Latest chat-openers, read by the stable SSE notify handler so a notification
+  // toast can deep-link into the live Chat surface on click without forcing the
+  // EventSource to re-subscribe when these callbacks' identities change.
+  const openSessionChatByCwdRef = useRef(openSessionChatByCwd);
+  openSessionChatByCwdRef.current = openSessionChatByCwd;
+  const openSessionChatByProjectRef = useRef(openSessionChatByProject);
+  openSessionChatByProjectRef.current = openSessionChatByProject;
 
   // ── Deep-link URL routing ────────────────────────────────────────────────
   // Reflect the current view (tab + project + session) in the URL query so a
@@ -2043,6 +2069,7 @@ export default function App() {
               onShowShortcuts={() => setShortcutOpen(true)}
               mechanics={settings?.defaultMechanics ?? "claude"}
               onMechanicsChange={(m) => saveSettings({ defaultMechanics: m })}
+              model={settings?.defaultModel ?? null}
               modelLabel={settings?.defaultModel ? `model ${settings.defaultModel}` : undefined}
               spend={
                 liveStats?.budget
