@@ -1,3 +1,5 @@
+import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   Suspense,
   lazy,
@@ -900,6 +902,46 @@ export default function App() {
     }, 1500);
     return () => window.clearTimeout(t);
   }, []);
+
+  // Auto-check for a newer release shortly after launch (desktop only). If one exists,
+  // surface a sticky, clickable toast to install + restart — never auto-installs while
+  // you're mid-work. Uses the static-imported check/relaunch so relaunch survives the
+  // bundle swap (see UpdateCheck.tsx). Silent on offline / no-release-yet.
+  useEffect(() => {
+    if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+    let cancelled = false;
+    const t = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const update = await checkForUpdate();
+          if (cancelled || !update) return;
+          pushToast({
+            title: `DevHub ${update.version} is available`,
+            body: "Click to install and restart.",
+            level: "info",
+            duration: 0,
+            actionLabel: "Install & restart →",
+            onClick: () => {
+              void (async () => {
+                try {
+                  await update.downloadAndInstall();
+                  await relaunch();
+                } catch {
+                  /* user can retry from Settings → Check for updates */
+                }
+              })();
+            },
+          });
+        } catch {
+          /* offline / no release yet — stay quiet */
+        }
+      })();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t);
+    };
+  }, [pushToast]);
 
   // live updates via SSE
   useEffect(() => {
