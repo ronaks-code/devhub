@@ -102,6 +102,25 @@ export function describeRunReason(
   return undefined;
 }
 
+/**
+ * Whether a run's OS PROCESS is gone (exited) rather than merely stale/silent.
+ *
+ * `deriveRunStatus` folds BOTH "process exited" (`alive === false`) and "still
+ * alive but stalled" (`stale`) into the single `"failed"` status, losing the
+ * distinction the sidebar needs to say "Exited" vs "No response". This carries
+ * that distinction as DATA (the real `alive` flag) so the sidebar pill no longer
+ * has to REGEX-SNIFF `describeRunReason`'s wording to recover it — editing that
+ * wording can no longer silently mislabel a run.
+ *
+ * Uses `alive === false` exactly (the same signal `describeRunReason` keys its
+ * "Process exited" wording on), so the on-screen label is byte-identical to the
+ * old text-sniffing path. A `status: "dead"` entry always carries `alive: false`
+ * (see the RunningSession contract), so it's covered.
+ */
+export function isRunExited(r: RunningSession | null | undefined): boolean {
+  return !!r && r.alive === false;
+}
+
 /** Index the running list by sessionId for O(1) joins against the session list. */
 export function indexRunningBySession(
   running: readonly RunningSession[] | null | undefined,

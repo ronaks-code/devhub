@@ -15,7 +15,7 @@ import {
   type ProviderId,
 } from "../providers/provider-capabilities.js";
 import { MentionPicker, detectMention } from "../../MentionPicker.js";
-import { SlashPalette, filterCommands } from "../../SlashPalette.js";
+import { SlashPalette, filterCommands, BUILTIN_COMMANDS } from "../../SlashPalette.js";
 import { ModelBadge } from "../../ModelBadge.js";
 import { api, type FileEntry } from "../../../lib/api.js";
 
@@ -250,6 +250,19 @@ export function applySlashInsert(command: string): string {
   return `/${command} `;
 }
 
+/** The built-in command names, precomputed for O(1) membership checks. */
+const BUILTIN_COMMAND_NAMES = new Set(BUILTIN_COMMANDS.map((b) => b.name));
+
+/**
+ * A built-in slash command (`/clear`, `/model`, `/help`) EXECUTES a UI action
+ * rather than being inserted as text and forwarded to the agent. This mirrors the
+ * legacy `ChatPane.insertSlash`: built-ins run their action + clear the draft;
+ * only session-advertised commands are inserted as `/name ` text.
+ */
+export function isBuiltinCommand(command: string): boolean {
+  return BUILTIN_COMMAND_NAMES.has(command);
+}
+
 /** Replace the detected mention token with the picked path (dir keeps the `/` open). */
 export function applyMentionInsert(
   text: string,
@@ -342,6 +355,15 @@ export interface ComposerProps {
   onKeyDown?: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend?: () => void;
   /**
+   * Invoked when the user picks a BUILT-IN slash command (`clear`/`model`/`help`,
+   * name without the leading `/`) instead of inserting it as text. The host runs the
+   * corresponding UI action (start a fresh chat, open the model picker, show help).
+   * When omitted, a built-in pick still clears the draft + closes the picker (it just
+   * has no host action to run) — it is NEVER forwarded to the agent as a raw `/clear`
+   * prompt. Non-built-in commands are unaffected and keep inserting as `/name ` text.
+   */
+  onBuiltinCommand?: (name: string) => void;
+  /**
    * Manual reconnect for the disconnected state (F3): renders a REAL Reconnect
    * button in the connection notice instead of dead "Reconnect to send" copy.
    * Omitted → the plain notice text, exactly as before.
@@ -388,6 +410,7 @@ export function Composer({
   onKeyDown,
   onSend,
   onReconnect,
+  onBuiltinCommand,
 }: ComposerProps): ReactNode {
   const isStop = sendState === "stop";
   // Stop is always actionable (a real interrupt path). Only a real Send can be blocked.
@@ -492,12 +515,22 @@ export function Composer({
 
   const pickSlash = useCallback(
     (command: string) => {
+      // Built-in (`/clear`, `/model`, `/help`): EXECUTE a UI action, never insert.
+      // Clearing the draft also closes the picker (a leading "/" no longer matches
+      // `computePickerState`), so the menu dismisses cleanly and nothing is forwarded
+      // to the agent. Non-built-ins keep inserting as `/name ` text, exactly as before.
+      if (isBuiltinCommand(command)) {
+        onDraftChange?.("");
+        setActiveIndex(0);
+        onBuiltinCommand?.(command);
+        return;
+      }
       const next = applySlashInsert(command);
       onDraftChange?.(next);
       setActiveIndex(0);
       focusCaret(next.length);
     },
-    [onDraftChange, focusCaret],
+    [onDraftChange, focusCaret, onBuiltinCommand],
   );
 
   const pickMention = useCallback(

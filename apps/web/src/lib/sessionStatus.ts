@@ -9,24 +9,24 @@ import type { StatusKind } from "../components/ui/StatusDot.js";
  * it called a FINISHED/exited session "stalled", which reads as "stuck/crashed"
  * when the run simply ended.
  *
- * The Sidebar only has the derived `StatusKind` + the composed `reason` line to work
- * from (the raw `alive`/`stale`/`exited` flags live upstream in m6-compose's
- * `deriveRunStatus`, which folds BOTH "process exited" and "stale/silent" into the
- * single `failed` status). So we recover the honest distinction from the reason text
- * m6-compose already wrote, and never label an exited run "stalled".
+ * `deriveRunStatus` (m6-compose) folds BOTH "process exited" and "stale/silent"
+ * into the single `failed` status. The Sidebar recovers the distinction from the
+ * `exited` boolean the caller threads onto each `SidebarRow` (m6-compose's
+ * `isRunExited`, off the run's real `alive` flag) — NOT by sniffing the reason
+ * text, which used to mean a reworded reason line could silently mislabel a run.
+ * An exited run reads "Exited"; a still-alive-but-stalled one reads "No response".
  *
  * Returns null when there is no attention-worthy state to badge (running/idle).
  */
 export function attentionPillLabel(
   status: StatusKind | undefined,
-  reason: string | undefined,
+  exited: boolean | undefined,
 ): string | null {
   if (status === "waiting") return "Needs you";
   if (status === "failed") {
     // An exited run ENDED — it is not stalled. A non-exited "failed" is the
     // busy-but-silent / stale case, which reads clearest as "no response".
-    if (reason && /exit/i.test(reason)) return "Exited";
-    return "No response";
+    return exited ? "Exited" : "No response";
   }
   return null;
 }

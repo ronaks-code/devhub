@@ -99,6 +99,7 @@ import {
   describeRunReason,
   groupSessionsByRunStatus,
   indexRunningBySession,
+  isRunExited,
   LEGACY_SESSION_PROVIDER,
   legacyDestinationForTarget,
   mapMessagesToThreadItems,
@@ -1553,6 +1554,9 @@ export default function App() {
         branch: s.gitBranch ?? undefined,
         model: s.model ?? run?.model ?? undefined,
         reason: run ? describeRunReason(run, status) : undefined,
+        // Real exited-vs-stale signal (run's `alive` flag) so the sidebar pill
+        // picks "Exited" vs "No response" from data, not from `reason` wording.
+        exited: isRunExited(run),
         startedAt: run?.startedAt ?? undefined,
       };
     };
@@ -1942,6 +1946,11 @@ export default function App() {
             onFork={openCrossProviderFork}
             initialDraft={resumeSeed ? undefined : launchDraft}
             onSessionChange={handleChatSession}
+            // /help slash-command → the shared shortcuts overlay (same handler the
+            // sidebar uses). /model → open Settings (where the provider-aware model
+            // picker lives) as an interim until the per-chat model picker (0.1.8).
+            onShowShortcuts={() => setShortcutOpen(true)}
+            onOpenModelPicker={() => setTab("settings")}
             externallyRunning={
               !!resumeSeed?.sessionId &&
               indexRunningBySession(liveRunning).has(resumeSeed.sessionId)

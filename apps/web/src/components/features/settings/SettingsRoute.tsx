@@ -6,6 +6,8 @@ import type { DevHubFeatureFlags } from "@devhub/engine/providers";
 import { readCompat, writeCompat } from "../../../lib/compat-storage.js";
 import { formatUsd } from "../../../lib/format.js";
 import { providerFromModel } from "../ops/opsHelpers.js";
+import { formatModelName } from "../../ModelBadge.js";
+import { modelsForMechanics } from "../../../lib/models.js";
 import { Spinner } from "../../ui.js";
 import { McpManager } from "../../config/McpManager.js";
 import { UpdateCheck } from "./UpdateCheck.js";
@@ -227,12 +229,6 @@ export function matchSettingRows(
   return ordered;
 }
 
-const MODELS = [
-  "claude-opus-4-8",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "claude-fable-5",
-] as const;
 const THEMES = ["dark", "light", "system"] as const;
 const DENSITIES = ["comfortable", "compact"] as const;
 
@@ -776,18 +772,27 @@ export function SettingsRoute({
             />
           </Field>
         );
-      case "default-model":
+      case "default-model": {
+        // Provider-aware: show the models for the CURRENT mechanics so a Codex
+        // user never sees Claude ids (and vice-versa).
+        const models = modelsForMechanics(settings.defaultMechanics ?? "claude");
+        const stored = settings.defaultModel ?? "";
+        // If the stored id doesn't belong to the current provider, show that
+        // provider's first model — without overwriting the stored value unless
+        // the user actually picks one.
+        const shown = models.includes(stored) ? stored : models[0]!;
         return (
           <Field id="dh-settings-default-model" label="Default model" hint="Used when starting a new chat.">
             <Select
               id="dh-settings-default-model"
-              value={settings.defaultModel ?? MODELS[0]}
+              value={shown}
               describedBy="dh-settings-default-model-hint"
-              options={MODELS.map((m) => ({ value: m, label: m }))}
+              options={models.map((m) => ({ value: m, label: formatModelName(m) }))}
               onChange={(v) => patch("defaultModel", v)}
             />
           </Field>
         );
+      }
       case "default-mechanics":
         return (
           <div className="dh-settings-switch-row" data-dh-settings-switch="defaultMechanics">

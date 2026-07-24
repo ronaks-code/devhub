@@ -80,6 +80,21 @@ export interface ChatHostProps {
    *  when this panel isn't the one driving the turn (QA: pill absent for a session
    *  the sidebar shows as running). */
   externallyRunning?: boolean;
+  /**
+   * Open the app's keyboard-shortcuts / help overlay — invoked when the user runs
+   * the built-in `/help` slash command. App owns that overlay (`shortcutOpen`), so
+   * it must pass this (e.g. `() => setShortcutOpen(true)`); omitted → `/help` is a
+   * no-op here rather than a broken agent prompt.
+   */
+  onShowShortcuts?: () => void;
+  /**
+   * Open a model picker — invoked when the user runs the built-in `/model` slash
+   * command. There is no ChatHost-route model picker overlay today (unlike the
+   * legacy `ChatPane`, which owns its own), so App must wire this to a real picker;
+   * omitted → `/model` is a no-op here rather than fabricating a picker that does
+   * nothing.
+   */
+  onOpenModelPicker?: () => void;
 }
 
 export function ChatHost({
@@ -94,6 +109,8 @@ export function ChatHost({
   initialDraft,
   onSessionChange,
   externallyRunning = false,
+  onShowShortcuts,
+  onOpenModelPicker,
 }: ChatHostProps) {
   const [sessionId, setSessionId] = useState<string | null>(initialSessionId ?? null);
   // History (from the indexed store's bounded tail) and live (pushed over the
@@ -382,6 +399,28 @@ export function ChatHost({
     clearDraft();
   }, [draft, turnRunning, runPrompt, clearDraft]);
 
+  // Start a fresh chat on the SAME cwd (built-in `/clear`). Mirrors ChatPane's
+  // `newChat`: tear the socket down and dial a clean one, drop the session id +
+  // both transcript halves + the follow-up queue + any resumed session metadata,
+  // and clear the draft. `sessionId` going null means the next prompt opens a NEW
+  // CLI session (runPrompt sends `sessionId ?? undefined`), and the fresh `session`
+  // frame re-advertises this project's slash commands.
+  const newChat = useCallback(() => {
+    connect();
+    setSessionId(null);
+    setHistory([]);
+    setLive([]);
+    setHistoryTruncated(false);
+    setTurnRunning(false);
+    setResumedModel(null);
+    setSessionCost(null);
+    setSlashCommands([]);
+    reconnectedRef.current = false;
+    queueRef.current = [];
+    setQueued([]);
+    clearDraft();
+  }, [connect, clearDraft]);
+
   const items = useMemo(() => mapMessagesToThreadItems(messages), [messages]);
   // Claude has no native interrupt until M4 (`persistentClaude` stays false), so a
   // running turn correctly stays `send` — the honest gated state, not a faked Stop.
@@ -460,6 +499,14 @@ export function ChatHost({
               onDraftChange={setDraft}
               onSend={send}
               onReconnect={connect}
+              onBuiltinCommand={(name) => {
+                // Built-ins EXECUTE a UI action (never forwarded to the agent).
+                // `/clear` is fully handled here; `/help` and `/model` defer to
+                // App-provided handlers (no-op if App hasn't wired them yet).
+                if (name === "clear") newChat();
+                else if (name === "help") onShowShortcuts?.();
+                else if (name === "model") onOpenModelPicker?.();
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();

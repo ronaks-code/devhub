@@ -7,6 +7,7 @@ import {
   describeRunReason,
   groupSessionsByRunStatus,
   indexRunningBySession,
+  isRunExited,
   legacyDestinationForTarget,
   LEGACY_SESSION_PROVIDER,
   mapMessagesToThreadItems,
@@ -82,6 +83,19 @@ describe("describeRunReason (§3.1v2 Needs-you reason line)", () => {
   });
   it("returns undefined when there is no explainable signal (no fabricated reason)", () => {
     expect(describeRunReason(running({ status: "busy", alive: true }), "running")).toBeUndefined();
+  });
+});
+
+describe("isRunExited (exited-vs-stale carried as data, not sniffed text)", () => {
+  it("is true only when the process is gone (alive === false)", () => {
+    expect(isRunExited(running({ alive: false, status: "dead" }))).toBe(true);
+    expect(isRunExited(running({ alive: false, status: "busy" }))).toBe(true);
+  });
+  it("is false for a still-alive-but-stale run and for any live/absent run", () => {
+    expect(isRunExited(running({ stale: true, alive: true }))).toBe(false);
+    expect(isRunExited(running({ status: "busy", alive: true }))).toBe(false);
+    expect(isRunExited(null)).toBe(false);
+    expect(isRunExited(undefined)).toBe(false);
   });
 });
 

@@ -84,6 +84,13 @@ export interface SidebarRow {
    * `waitingFor`/`alive`/`stale` fields (see m6-compose `describeRunReason`).
    */
   reason?: string;
+  /**
+   * True when a `failed`-status run EXITED (process gone) vs merely went stale/
+   * silent. Set by the caller from the run's real `alive` flag (m6-compose
+   * `isRunExited`). Lets the attention pill say "Exited" vs "No response" from
+   * DATA instead of sniffing the `reason` text.
+   */
+  exited?: boolean;
   /** Epoch ms the live run started (RunningSession.startedAt) — drives the tier-2 timer. */
   startedAt?: number | null;
 }
@@ -811,7 +818,7 @@ export function Sidebar({
                           // "stalled" (see attentionPillLabel); the color stays keyed
                           // to r.status via data-status so the CSS is untouched.
                           const pill =
-                            tier === "attention" ? attentionPillLabel(r.status, r.reason) : null;
+                            tier === "attention" ? attentionPillLabel(r.status, r.exited) : null;
                           return pill && r.status ? (
                             <span className="dh-spill" data-status={r.status}>
                               {pill}
