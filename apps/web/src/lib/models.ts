@@ -12,26 +12,25 @@
 
 export type Mechanics = "claude" | "codex";
 
-/** Anthropic (Claude Code) model ids. */
+/** Anthropic (Claude Code) model ids — current lineup (Fable 5 frontier, Opus 4.8,
+ * Sonnet 5 GA 2026-06-30, Haiku 4.5). Sonnet 5 replaces the retired Sonnet 4.6. */
 export const CLAUDE_MODELS = [
   "claude-opus-4-8",
-  "claude-sonnet-4-6",
+  "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5",
 ] as const;
 
 /**
- * OpenAI / Codex model ids. MUST mirror the `OpenAIModel` union in
- * `packages/engine/src/openai-session.ts`. Do not add ids the engine
- * doesn't declare.
+ * OpenAI / Codex model ids — the GPT-5.6 family (released 2026-07-09, available on
+ * Codex): `gpt-5.6` (Sol, most capable / agentic-coding default), `gpt-5.6-terra`
+ * (balanced), `gpt-5.6-luna` (budget). Kept in sync with the `OpenAIModel` union in
+ * `packages/engine/src/openai-session.ts`.
  */
 export const CODEX_MODELS = [
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-4.1",
-  "gpt-4.1-mini",
-  "o3",
-  "o4-mini",
+  "gpt-5.6",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
 ] as const;
 
 /** Models available for a given mechanics/provider ("claude" is the default). */

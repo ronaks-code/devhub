@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { makeLineHandler } from "../src/driver/cli.js";
+import { makeLineHandler, normalizeClaudeModel } from "../src/driver/cli.js";
 import type { NormalizedMessage } from "../src/types.js";
 import type { SessionInit, TurnHandlers, TurnResult } from "../src/driver/types.js";
 
@@ -250,5 +250,23 @@ describe("driver line parser: malformed / partial / unknown lines are tolerated"
     // normalizeLine still returns a message (empty blocks); the point is it never throws.
     expect(() => c).not.toThrow();
     expect(c.messages.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("normalizeClaudeModel", () => {
+  it("maps a retired model id to its successor", () => {
+    expect(normalizeClaudeModel("claude-sonnet-4-6")).toBe("claude-sonnet-5");
+  });
+
+  it("passes current and unknown model ids through unchanged", () => {
+    for (const id of [
+      "claude-opus-4-8",
+      "claude-sonnet-5",
+      "claude-haiku-4-5-20251001",
+      "claude-fable-5",
+      "some-future-model",
+    ]) {
+      expect(normalizeClaudeModel(id)).toBe(id);
+    }
   });
 });

@@ -49,6 +49,11 @@ function newSessionId(): string {
 }
 
 const MODELS: OpenAIModel[] = [
+  // Current lineup (GPT-5.6 family, 2026-07-09).
+  "gpt-5.6",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  // Retained so stored sessions on prior models still validate.
   "gpt-5.4",
   "gpt-5.4-mini",
   "gpt-4.1",

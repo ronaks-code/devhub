@@ -287,6 +287,23 @@ export function encodeUserMessage(text: string): string {
   );
 }
 
+/**
+ * Retired Claude model ids mapped to their supported successor. A persisted default
+ * (app-wide or per-project) can still carry a model that has since been dropped from
+ * the UI's offered lists (see apps/web/src/lib/models.ts); forwarding it verbatim to
+ * `claude --model` launches a model the runtime will eventually reject, while the UI
+ * shows the successor — a silent disagreement. Remapping at the launch boundary keeps
+ * a never-touched setting working without a storage migration. Append-only.
+ */
+const RETIRED_CLAUDE_MODELS: Readonly<Record<string, string>> = {
+  "claude-sonnet-4-6": "claude-sonnet-5",
+};
+
+/** Map a retired Claude model id to its successor; pass everything else through. */
+export function normalizeClaudeModel(model: string): string {
+  return RETIRED_CLAUDE_MODELS[model] ?? model;
+}
+
 export class CliDriver implements AgentDriver {
   runTurn(req: TurnRequest, handlers: TurnHandlers): RunningTurn {
     const args = ["-p", req.prompt, "--output-format", "stream-json", "--verbose"];
@@ -298,7 +315,7 @@ export class CliDriver implements AgentDriver {
     // --fork-session). No-op unless req.fork && req.sessionId — non-fork turns keep
     // the exact same argv as before. See driver/fork.ts.
     args.push(...forkCliArgs(req));
-    if (req.model) args.push("--model", req.model);
+    if (req.model) args.push("--model", normalizeClaudeModel(req.model));
     args.push("--permission-mode", req.permissionMode ?? "acceptEdits");
 
     // Optionally sandbox the spawn (env-scrub always; macOS Seatbelt wrapper when
@@ -407,7 +424,7 @@ export class PersistentSession {
     const includePartial = req.includePartial !== false;
     if (includePartial) args.push("--include-partial-messages");
     if (req.sessionId) args.push("--resume", req.sessionId);
-    if (req.model) args.push("--model", req.model);
+    if (req.model) args.push("--model", normalizeClaudeModel(req.model));
     args.push("--permission-mode", req.permissionMode ?? "acceptEdits");
 
     this.child = spawn(CLAUDE_BIN, args, {

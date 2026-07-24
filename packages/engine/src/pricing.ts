@@ -54,6 +54,7 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-fable-5": row(10, 50),
   "claude-opus-4-8": row(5, 25),
   "claude-sonnet-4-6": row(3, 15),
+  "claude-sonnet-5": row(3, 15),
   "claude-haiku-4-5": row(1, 5),
 };
 

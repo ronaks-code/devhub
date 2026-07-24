@@ -31,7 +31,7 @@ import { EmptyState, IconButton, Spinner } from "./ui";
 
 const MODELS = [
   "claude-opus-4-8",
-  "claude-sonnet-4-6",
+  "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
   "claude-fable-5",
 ] as const;

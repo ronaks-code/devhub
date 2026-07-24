@@ -18,6 +18,11 @@ import { EmptyState, IconButton, Spinner } from "./ui";
 // ---------------------------------------------------------------------------
 
 const OPENAI_MODELS = [
+  // Current lineup (GPT-5.6 family, 2026-07-09): Sol (default), Terra, Luna.
+  "gpt-5.6",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  // Retained so stored sessions on prior models still resolve.
   "gpt-5.4-mini",
   "gpt-5.4",
   "gpt-4.1",
@@ -27,7 +32,7 @@ const OPENAI_MODELS = [
 ] as const;
 
 type OpenAIModel = (typeof OPENAI_MODELS)[number];
-const DEFAULT_MODEL: OpenAIModel = "gpt-5.4-mini";
+const DEFAULT_MODEL: OpenAIModel = "gpt-5.6";
 
 export const OPENAI_CHAT_TITLE = "OpenAI Chat — development only";
 export const OPENAI_CHAT_WARNING =

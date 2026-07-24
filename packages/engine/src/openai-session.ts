@@ -13,6 +13,12 @@ import https from "node:https";
 // ---------------------------------------------------------------------------
 
 export type OpenAIModel =
+  // Current lineup (GPT-5.6 family, 2026-07-09): Sol (default/most capable),
+  // Terra (balanced), Luna (budget). `gpt-5.6` aliases Sol.
+  | "gpt-5.6"
+  | "gpt-5.6-terra"
+  | "gpt-5.6-luna"
+  // Retained for historical/stored sessions that ran on prior models.
   | "gpt-5.4"
   | "gpt-5.4-mini"
   | "gpt-4.1"
@@ -123,7 +129,7 @@ export class OpenAISession extends EventEmitter {
 
   constructor(opts: OpenAISessionOptions = {}) {
     super();
-    this.model = opts.model ?? "gpt-4.1";
+    this.model = opts.model ?? "gpt-5.6";
     this.cwd = opts.cwd ?? process.cwd();
     this.systemPrompt = opts.systemPrompt ?? DEFAULT_OPENAI_CHAT_SYSTEM_PROMPT;
   }
