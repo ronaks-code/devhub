@@ -15,24 +15,18 @@ import {
 } from "react";
 import {
   Bot,
-  Command as CommandIcon,
   Folder,
-  Gauge,
   Hexagon,
   History,
   Home,
   Inbox,
-  Keyboard,
   LayoutDashboard,
   MessagesSquare,
   Radio,
   Rocket,
-  Search,
   Settings,
   Sparkles,
   Timer,
-  Trash2,
-  Zap,
 } from "lucide-react";
 import {
   api,
@@ -61,7 +55,7 @@ import { InboxPane } from "./components/InboxPane";
 import { SearchPalette } from "./components/SearchPalette";
 import { ProjectSwitcher } from "./components/ProjectSwitcher";
 import { mergeToast, ToastStack, type ToastItem } from "./components/Toast";
-import { AuthGate, LogoutButton } from "./components/AuthGate";
+import { AuthGate } from "./components/AuthGate";
 import { ResponsiveShell, useResponsiveShell, useMediaQuery, INSPECTOR_QUERY } from "./components/ResponsiveShell";
 import { AppShell } from "./components/features/shell/AppShell";
 import { resolveShellChromeMode } from "./components/features/shell/DevHubShell";
@@ -119,13 +113,12 @@ import { useStatsPolling } from "./hooks/useStatsPolling";
 // tests + callers) stay valid after the TopBar extraction (§3.2).
 export { TopBar, navigationAriaCurrent, TOP_BAR_SECONDARY_CLASS };
 import { buildFileChanges } from "./components/FileChangeSummary";
-import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { FirstRun, EmptyIndexHint, hasSeenOnboarding, markOnboardingSeen } from "./components/FirstRun";
 import { EmptyState, Spinner } from "./components/ui";
 import { DashboardSkeleton } from "./components/Skeleton";
-import { useRecentSessions, type RecentSession } from "./hooks/useRecentSessions";
+import { useRecentSessions } from "./hooks/useRecentSessions";
 import { useFetchErrorToasts } from "./hooks/useFetchErrorToasts";
-import { useReducedMotion, type PerfPreference } from "./hooks/useReducedMotion";
+import { useReducedMotion } from "./hooks/useReducedMotion";
 import { useTheme, type ThemePreference } from "./hooks/useTheme";
 import { parseRoute, useUrlRouter, type RouteState, type RouteTab } from "./lib/router";
 import { readCompat, writeCompat } from "./lib/compat-storage";
