@@ -481,7 +481,6 @@ function DashboardBody({
   stats,
   tokens,
   estTotalCost,
-  projectCost,
   maxProjectTokens,
   liveSessions,
   period,

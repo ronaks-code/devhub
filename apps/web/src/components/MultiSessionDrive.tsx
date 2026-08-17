@@ -9,7 +9,7 @@ import { LiveBubble, LiveStream } from "./LiveBubble";
 import { Markdown } from "./Markdown";
 import { cn } from "../lib/utils";
 import { EmptyState, IconButton, Spinner } from "./ui";
-import { indexSessions, lastSegment, resolveOpsTitle } from "./features/ops/opsHelpers";
+import { indexSessions, resolveOpsTitle } from "./features/ops/opsHelpers";
 
 /** How often to re-poll /api/running for the picker (paused while hidden). */
 const POLL_MS = 4000;

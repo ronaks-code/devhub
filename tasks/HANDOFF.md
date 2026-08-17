@@ -1,16 +1,60 @@
 # DevHub M0-M8 handoff
 
-Updated: 2026-07-14 13:20 PDT
-Stage: build
+Updated: 2026-08-17 (status correction)
+Original: 2026-07-14 13:20 PDT
+Stage: **PAUSED — see below before acting on anything in this file**
 Goal: deliver the literal mandatory DONE checklist in the authoritative `/goal` prompt for a provider-native DevHub supporting real Codex and Claude runtimes.
 
-## Current snapshot
+> ## ⚠️ STOP — this handoff is stale, and following it cost 33 commits
+>
+> Everything below the "Current snapshot" heading describes a campaign that is no
+> longer running. Both branches this file names as live were deleted from origin:
+>
+> | branch this file names | actual state |
+> |---|---|
+> | `campaign/auto-improve` | **deleted from origin** |
+> | `wip/devhub` | **deleted from origin** |
+>
+> When those branches went, the 33 commits on that line lost their only ref and
+> became **unreachable** — `git fsck` listed `e28cfa11` as dangling. That is 2,163
+> insertions across 7 files, including `store-active-read.ts` (623 lines) and
+> `store-active-cache.test.ts` (1,023 lines of tests), none of it patch-equivalent
+> to anything on `main`. A `git gc` would have deleted it permanently.
+>
+> **It is now preserved on `rescue/e28cfa11-provider-cache`, pushed to origin.**
+>
+> Do NOT execute the "immediate next action" below as written — it points at a
+> commit that is no longer on any live line of development.
 
-- Fixed progress: **33%** on one M0-M8 hard-gate denominator. M0-M2 are complete; partial M3-M5 work receives no percentage credit.
-- Tested branch: `campaign/auto-improve` at `6b2293b5254d85c7b36f272388157fe99ca4ea45`; remote matches exactly.
-- WIP branch: `wip/devhub` at `641af8e8868a2cd42ea032a2558ae16ec2556b07`; remote matches exactly.
-- Immediate next action: independently SPEC-review and QUALITY/SECURITY-review E commit `e28cfa11abc00e5b040334cc8229c081e49dec45`; repair until both GO, then promote that exact diff and rerun 348/348 on tested main.
-- This is **not software-complete** and is **not blocked on Ronak** for current M5 work.
+## Current snapshot (corrected 2026-08-17)
+
+- `main` has **moved on** to different work: `cdb8ae9` docs(tasks), `1d1f1fc`
+  desktop 0.1.7 → 0.1.8, `754d6a0` new model lineup (Claude Sonnet 5, GPT-5.6).
+  The M0-M8 campaign is not what `main` is currently pursuing.
+- `main` is **green**: typecheck 5/5, engine 2251 tests / 83 files, server 301 tests
+  / 22 files, lint 13 warnings 0 errors, build succeeds. Verified 2026-08-17.
+- The rescued line sits **33 commits ahead** of `main` on its own history and
+  **241 commits behind** it. It is not a fast-forward and never will be.
+- Nothing here is blocked on Ronak. It is blocked on a decision: land the rescued
+  work, cherry-pick from it, or abandon it deliberately.
+
+## The decision this file is actually waiting on
+
+Pick one and record it here, so the next person does not rediscover this:
+
+1. **Land it** — rebase or cherry-pick `rescue/e28cfa11-provider-cache` onto current
+   `main`. 241 commits of drift means real conflicts; budget for it.
+2. **Harvest it** — take only `store-active-read.ts` and its test file, which are the
+   substantive artifacts, and leave the campaign scaffolding behind.
+3. **Abandon it** — fine, but say so explicitly here and delete the rescue branch on
+   purpose rather than letting it rot into a second orphan.
+
+Doing nothing is the one option that has already failed once.
+
+## Historical record below
+
+Everything from here down is the original 2026-07-14 handoff, preserved verbatim for
+provenance. Read it as history, not as instructions.
 
 ## DONE
 
